@@ -119,9 +119,11 @@ contest source, attachment, and configuration rows remain.
 verified revision per problem/source commit. `exports` owns its cached
 `domjudge` and `icpc-2025-09` projections. `export_jobs` owns request attempts:
 distinct requests retain distinct job IDs even when they finish by referencing
-the same cached projection. Direct Polygon Replica package downloads create no
-`exports` row. Contest child packages are Contest-owned temporary bundle
-members and do not enter `exports` or `export_jobs`.
+the same cached projection. A Native preparation attempt finishes with a
+materialization reference and a null `export_id`; it does not add a second
+archive. Direct Polygon Replica package downloads create no job or `exports`
+row. Contest child packages are Contest-owned temporary bundle members and do
+not enter `exports` or `export_jobs`.
 
 Contest build admission inserts the job, ordered roster items, selected
 verified-revision identities, and frozen archive checksums in one

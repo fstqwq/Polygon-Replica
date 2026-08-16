@@ -190,13 +190,13 @@ class ProblemPackageService:
             raise ValueError("problem not found")
         return self._published_revision_for_problem(problem)
 
-    def verified_revision_history(
+    def available_verified_revision_history(
         self,
         problem_id: int,
         *,
         limit: int = 40,
     ) -> list[VerifiedRevision]:
-        return self.store.verified_revision_history(
+        return self.store.available_verified_revision_history(
             int(problem_id),
             limit=max(1, int(limit)),
         )

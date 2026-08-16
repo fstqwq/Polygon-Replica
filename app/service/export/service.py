@@ -10,7 +10,11 @@ from pathlib import Path
 
 from app.config import ConfigValues
 from app.db import DB
-from app.service.disk.export_store import ExportJobRow, ExportStore
+from app.service.disk.export_store import (
+    ExportJobRow,
+    ExportStore,
+    MaterializationPackageRow,
+)
 from app.service.export.adapters import (
     PackageAdapter,
     PackageAdapterRegistry,
@@ -26,6 +30,8 @@ from app.service.platform.workspace_path import (
 )
 from app.service.problem_package.service import ProblemPackageService
 from app.service.statement.tex_compile import TexCompileService
+
+NATIVE_PACKAGE_FORMAT = "native"
 
 
 class PackageBuildBusy(RuntimeError):
@@ -49,9 +55,14 @@ class ExportService:
             config_values,
             tex_compile_service,
         )
+        self._job_formats = (
+            NATIVE_PACKAGE_FORMAT,
+            *self.package_adapters.formats,
+        )
         self._store = ExportStore(
             db,
-            package_formats=tuple(self.package_adapters.formats),
+            job_formats=self._job_formats,
+            package_formats=self.package_adapters.formats,
         )
         self._package_locks_guard = threading.Lock()
         self._package_locks: dict[tuple[str, str], threading.Lock] = {}
@@ -59,6 +70,16 @@ class ExportService:
     @property
     def package_formats(self) -> tuple[PackageFormat, ...]:
         return self.package_adapters.formats
+
+    def require_job_format(self, package_format: str) -> str:
+        if package_format == NATIVE_PACKAGE_FORMAT:
+            return NATIVE_PACKAGE_FORMAT
+        return self.package_adapters.require_format(package_format)
+
+    def package_format_display_name(self, package_format: str) -> str:
+        if package_format == NATIVE_PACKAGE_FORMAT:
+            return "Native"
+        return self.package_adapters.require(package_format).display_name
 
     def _package_lock(
         self,
@@ -105,6 +126,16 @@ class ExportService:
     ) -> list[ExportJobRow]:
         return self._store.problem_export_jobs(int(problem_id), limit=limit)
 
+    def materialization_packages(
+        self,
+        problem_id: int,
+        materialization_ids: list[str],
+    ) -> list[MaterializationPackageRow]:
+        return self._store.materialization_packages(
+            int(problem_id),
+            materialization_ids,
+        )
+
     def latest_succeeded_export_job(
         self,
         problem_id: int,
@@ -132,7 +163,7 @@ class ExportService:
         package_format: str,
         source_commit: str,
     ) -> None:
-        resolved_format = self.package_adapters.require_format(package_format)
+        resolved_format = self.require_job_format(package_format)
         self._store.create_export_job(
             job_id=job_id,
             problem_id=int(problem_id),
@@ -160,7 +191,7 @@ class ExportService:
         job_id: str,
         *,
         verified_revision_id: str,
-        export_id: str,
+        export_id: str | None,
         warning: str,
     ) -> None:
         self._store.mark_export_job_succeeded(

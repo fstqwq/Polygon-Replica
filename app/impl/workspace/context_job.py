@@ -1,9 +1,10 @@
 from pathlib import Path
 
 from app.runtime import ApplicationRuntime
+from app.service.export.service import NATIVE_PACKAGE_FORMAT
 from app.service.platform.worker_queue import WorkerFuture
-from app.service.repository.revision import workspace_verification_source
 from app.service.problem_package.service import PublishedRevision
+from app.service.repository.revision import workspace_verification_source
 from app.service.verification.lifecycle import VerificationAdmission
 from app.service.verification.types import Kind
 
@@ -208,7 +209,7 @@ def _run_export_create_worker(
 ) -> None:
     if not export_job_id:
         raise ValueError("export_job_id is required")
-    package_format = application_runtime.export_service.package_adapters.require_format(
+    package_format = application_runtime.export_service.require_job_format(
         requested_format
     )
     effective_source_commit = revision.source_commit
@@ -224,6 +225,14 @@ def _run_export_create_worker(
             actor_user_id=actor_user_id,
             actor_username=user,
         )
+        if package_format == NATIVE_PACKAGE_FORMAT:
+            application_runtime.export_service.mark_export_job_succeeded(
+                export_job_id,
+                verified_revision_id=verified_revision["id"],
+                export_id=None,
+                warning="",
+            )
+            return
         application_runtime.export_service.mark_export_job_packaging(
             export_job_id,
             verified_revision_id=verified_revision["id"],

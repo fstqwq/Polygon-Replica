@@ -5399,7 +5399,9 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             html,
         )
 
-    def test_packages_page_exposes_formats_and_verified_revision_to_readers(self) -> None:
+    def test_packages_page_lists_only_available_revision_packages_for_readers(
+        self,
+    ) -> None:
         from app.impl.run_export.artifact import verified_revision_file
 
         workspace_service.ensure_user("bob")
@@ -5412,39 +5414,77 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
         problem_id = int(alice_ctx["problem"]["id"])
         actor_user_id = int(alice_ctx["user"]["id"])
-        verified_revision_id = f"pm-visible-{uuid.uuid4().hex[:8]}"
-        source_commit = "9" * 40
-        db_execute(
-            """
-            INSERT INTO problem_package_materializations(
-                id,problem_id,source_commit,revision_number,source_digest,
-                archive_rel_path,archive_sha256,archive_size_bytes,
-                verification_id,status,created_at,checked_at,unavailable_reason
-            ) VALUES(?,?,?,?,?,?,?,?,?,'available',?,?,'')
-            """,
-            [
-                verified_revision_id,
-                problem_id,
-                source_commit,
-                9,
-                "a" * 64,
-                f"materializations/{problem_id}/{source_commit}/verified-revision.zip",
-                "b" * 64,
-                123,
-                canonical_test_verification_id(
-                    f"ver-package-visible-{uuid.uuid4().hex[:8]}"
-                ),
-                "2026-08-11T00:00:00Z",
-                "2026-08-11T00:00:01Z",
-            ],
-        )
+        revision_ids = {
+            revision: f"pm-visible-v{revision}-{uuid.uuid4().hex[:8]}"
+            for revision in (1, 2, 3, 4)
+        }
+        verification_ids: dict[int, str] = {}
+        source_commits = {revision: str(revision) * 40 for revision in range(1, 6)}
+        for revision in (1, 2, 3, 4):
+            verification_id = canonical_test_verification_id(
+                f"ver-package-visible-v{revision}-{uuid.uuid4().hex[:8]}"
+            )
+            verification_ids[revision] = verification_id
+            db_execute(
+                """
+                INSERT INTO problem_package_materializations(
+                    id,problem_id,source_commit,revision_number,source_digest,
+                    archive_rel_path,archive_sha256,archive_size_bytes,
+                    verification_id,status,created_at,checked_at,unavailable_reason
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                [
+                    revision_ids[revision],
+                    problem_id,
+                    source_commits[revision],
+                    revision,
+                    f"{revision:x}" * 64,
+                    (
+                        f"materializations/{problem_id}/{source_commits[revision]}"
+                        "/verified-revision.zip"
+                    ),
+                    f"{revision + 4:x}" * 64,
+                    100 + revision,
+                    verification_id,
+                    "unavailable" if revision == 1 else "available",
+                    f"2026-08-1{revision}T00:00:00Z",
+                    f"2026-08-1{revision}T00:00:01Z",
+                    "fixture unavailable" if revision == 1 else "",
+                ],
+            )
+        package_rows = [
+            ("e-v4-domjudge", 4, "domjudge", "sample-domjudge-v4.zip"),
+            ("e-v4-icpc", 4, "icpc-2025-09", "sample-icpc-v4.zip"),
+            ("e-v3-domjudge", 3, "domjudge", "sample-domjudge-v3.zip"),
+        ]
+        for export_id, revision, package_format, filename in package_rows:
+            db_execute(
+                """
+                INSERT INTO exports(
+                    id,problem_id,materialization_id,export_type,filename,
+                    archive_rel_path,sha256,size_bytes,source_commit,created_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?)
+                """,
+                [
+                    export_id,
+                    problem_id,
+                    revision_ids[revision],
+                    package_format,
+                    filename,
+                    f"exports/{export_id}/{filename}",
+                    "e" * 64,
+                    200 + revision,
+                    source_commits[revision],
+                    f"2026-08-1{revision}T00:00:02Z",
+                ],
+            )
         export_job_id = f"exp-visible-{uuid.uuid4().hex[:8]}"
         runtime.export_service.create_export_job(
             job_id=export_job_id,
             problem_id=problem_id,
             actor_user_id=actor_user_id,
             package_format="domjudge",
-            source_commit=source_commit,
+            source_commit=source_commits[5],
         )
         runtime.export_service.mark_export_job_failed(
             export_job_id,
@@ -5454,20 +5494,12 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         with (
             patch.object(
                 runtime.problem_package_service,
-                "published_revision",
-                return_value=SimpleNamespace(
-                    revision_number=9,
-                    source_commit=source_commit,
-                ),
-            ),
-            patch.object(
-                runtime.problem_package_service,
                 "published_readiness",
                 return_value={
                     "problem_id": problem_id,
-                    "status": "missing",
-                    "published_revision_number": 9,
-                    "published_commit": source_commit,
+                    "status": "none",
+                    "published_revision_number": 5,
+                    "published_commit": source_commits[5],
                     "verified_revision_number": None,
                     "verified_revision_id": "",
                     "missing_reason": "not verified",
@@ -5480,16 +5512,28 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 "bob",
             )
         html = page.body.decode("utf-8", errors="replace")
-        self.assertIn('name="format" value="domjudge"', html)
-        self.assertIn('name="format" value="icpc-2025-09"', html)
-        self.assertIn("Building a package will first run a complete verification", html)
-        self.assertIn(
-            f"/problems/alice/sample/verified-revisions/{verified_revision_id}/package",
-            html,
-        )
+        self.assertIn('<option value="domjudge">DOMjudge</option>', html)
+        self.assertIn('<option value="icpc-2025-09">ICPC 2025-09</option>', html)
+        self.assertIn("<strong>v5</strong>", html)
+        for revision in (2, 3, 4):
+            self.assertIn(
+                f"/problems/alice/sample/verified-revisions/"
+                f"{revision_ids[revision]}/package",
+                html,
+            )
+        self.assertNotIn(revision_ids[1], html)
+        for export_id, _revision, _package_format, filename in package_rows:
+            self.assertIn(
+                f"/problems/alice/sample/exports/{export_id}/{filename}",
+                html,
+            )
+        for source_commit in source_commits.values():
+            self.assertNotIn(source_commit, html)
+        for verification_id in verification_ids.values():
+            self.assertNotIn(verification_id, html)
         self.assertNotIn("package failed for alice", html)
         verified_revision = runtime.problem_package_service.verified_revision(
-            verified_revision_id
+            revision_ids[4]
         )
         self.assertIsNotNone(verified_revision)
         archive = Path(runtime.settings.artifacts_root) / "fixture-verified-revision.zip"
@@ -5507,36 +5551,93 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             response = verified_revision_file(
                 "alice/sample",
                 "bob",
-                verified_revision_id,
+                revision_ids[4],
             )
         self.assertEqual(response.media_type, "application/zip")
         self.assertIn(
-            "sample-polygon-replica-v9.zip",
+            "sample-polygon-replica-v4.zip",
             str(response.headers.get("content-disposition") or ""),
         )
 
-        with patch.object(
-            runtime.problem_package_service,
-            "published_readiness",
-            return_value={
-                "problem_id": problem_id,
-                "published_commit": source_commit,
-                "published_revision_number": 9,
-                "verified_revision_number": 9,
-                "verified_revision_id": verified_revision_id,
-                "status": "ready",
-                "missing_reason": "",
-            },
-        ):
-            ready_page = export_page(
-                _request("/problems/alice/sample/export"),
-                "alice/sample",
-                "bob",
-            )
-        self.assertNotIn(
-            "Building a package will first run a complete verification",
-            ready_page.body.decode("utf-8", errors="replace"),
+    def test_package_create_reuses_existing_current_package(self) -> None:
+        context = workspace_service.workspace_context(
+            "alice/sample",
+            "alice",
+            include_recent=False,
         )
+        problem_id = int(context["problem"]["id"])
+        verified_revision_id = "pm-current-package"
+        readiness = {
+            "problem_id": problem_id,
+            "published_commit": "a" * 40,
+            "published_revision_number": 3,
+            "verified_revision_number": 3,
+            "verified_revision_id": verified_revision_id,
+            "status": "ready",
+            "missing_reason": "",
+        }
+        verified_revision = {
+            "id": verified_revision_id,
+            "problem_id": problem_id,
+            "source_commit": "a" * 40,
+            "revision_number": 3,
+            "source_digest": "b" * 64,
+            "archive_rel_path": "materializations/current.zip",
+            "archive_sha256": "c" * 64,
+            "archive_size_bytes": 100,
+            "verification_id": "ver-current-package",
+            "status": "available",
+            "created_at": "2026-08-16T00:00:00Z",
+            "checked_at": "2026-08-16T00:00:00Z",
+            "unavailable_reason": "",
+        }
+        with (
+            patch.object(
+                runtime.problem_package_service,
+                "published_readiness",
+                return_value=readiness,
+            ),
+            patch.object(
+                runtime.problem_package_service,
+                "verified_revision",
+                return_value=verified_revision,
+            ),
+            patch.object(
+                runtime.export_service,
+                "materialization_packages",
+                return_value=[
+                    {
+                        "export_id": "e-current",
+                        "materialization_id": verified_revision_id,
+                        "export_type": "domjudge",
+                        "filename": "sample-domjudge-v3.zip",
+                    }
+                ],
+            ),
+            patch.object(
+                runtime.export_service,
+                "export_archive_path",
+                return_value=Path("/tmp/sample-domjudge-v3.zip"),
+            ),
+            patch(
+                "app.impl.run_export.export.start_export_job"
+            ) as start_export,
+        ):
+            response = export_create(
+                _request(
+                    "/problems/alice/sample/export/create",
+                    method="POST",
+                ),
+                "alice/sample",
+                "alice",
+                format="domjudge",
+            )
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(
+            response.headers["location"],
+            "/problems/alice/sample/exports/e-current/sample-domjudge-v3.zip",
+        )
+        start_export.assert_not_called()
 
     def test_package_export_busy_returns_conflict(self) -> None:
         context = workspace_service.workspace_context(
@@ -5550,6 +5651,10 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ):
             with self.assertRaises(HTTPException) as raised:
                 export_create(
+                    _request(
+                        "/problems/alice/sample/export/create",
+                        method="POST",
+                    ),
                     "alice/sample",
                     "alice",
                     format="domjudge",

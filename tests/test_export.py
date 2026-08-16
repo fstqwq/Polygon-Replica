@@ -337,6 +337,52 @@ class TestPublishedRevisionExport(E2ETestBase):
                 runtime.export_inflight.discard(key)
                 runtime.export_workers.discard(worker)
 
+    def test_native_package_job_finishes_with_the_verified_revision(self) -> None:
+        problem_id, commit, verified_revision = self._verified_revision()
+        actor = db_fetch_one("SELECT id FROM users WHERE username=?", [self.user])
+        self.assertIsNotNone(actor)
+
+        class CompletedWorker:
+            @staticmethod
+            def is_alive() -> bool:
+                return False
+
+        def submit(*, fn, **_kwargs):
+            fn()
+            return CompletedWorker(), True, "queued"
+
+        with (
+            patch.object(runtime.worker_queue_service, "submit", side_effect=submit),
+            patch.object(
+                runtime.verified_revision_workflow,
+                "ensure",
+                return_value=verified_revision,
+            ),
+            patch.object(runtime.export_service, "create_export") as create_export,
+        ):
+            started = workspace_context_job.start_export_job(
+                runtime,
+                self.problem,
+                self.user,
+                actor_user_id=int(actor["id"]),
+                problem_id=problem_id,
+                requested_format="native",
+                export_job_id="export-native-verified-revision",
+            )
+
+        self.assertTrue(started)
+        row = db_fetch_one(
+            """SELECT status,source_commit,materialization_id,export_id
+               FROM export_jobs WHERE id=?""",
+            ["export-native-verified-revision"],
+        )
+        self.assertIsNotNone(row)
+        self.assertEqual(str(row["status"]), "succeeded")
+        self.assertEqual(str(row["source_commit"]), commit)
+        self.assertEqual(str(row["materialization_id"]), verified_revision["id"])
+        self.assertIsNone(row["export_id"])
+        create_export.assert_not_called()
+
     def test_same_published_commit_package_exports_fail_fast(self) -> None:
         _workspace, problem_id, commit = self._publish_problem()
         actor = db_fetch_one("SELECT id FROM users WHERE username=?", [self.user])

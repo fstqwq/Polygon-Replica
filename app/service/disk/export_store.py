@@ -42,6 +42,13 @@ class ExportArchiveRow(TypedDict):
     size_bytes: int
 
 
+class MaterializationPackageRow(TypedDict):
+    export_id: str
+    materialization_id: str
+    export_type: str
+    filename: str
+
+
 def _job_row(row) -> ExportJobRow:
     return {
         "id": str(row["id"]),
@@ -63,12 +70,22 @@ def _job_row(row) -> ExportJobRow:
 
 
 class ExportStore:
-    def __init__(self, db: DB, *, package_formats: tuple[str, ...]):
+    def __init__(
+        self,
+        db: DB,
+        *,
+        job_formats: tuple[str, ...],
+        package_formats: tuple[str, ...],
+    ) -> None:
+        if not job_formats:
+            raise ValueError("at least one export job format is required")
         if not package_formats:
             raise ValueError("at least one package format is required")
         self.db = db
+        self._job_formats = job_formats
         self._package_formats = package_formats
-        self._format_placeholders = ",".join("?" for _ in package_formats)
+        self._job_format_placeholders = ",".join("?" for _ in job_formats)
+        self._package_format_placeholders = ",".join("?" for _ in package_formats)
 
     def latest_succeeded_export_job(
         self,
@@ -96,20 +113,54 @@ class ExportStore:
     ) -> list[ExportJobRow]:
         params: list[object] = [
             int(problem_id),
-            *self._package_formats,
+            *self._job_formats,
             max(1, int(limit)),
         ]
         rows = self.db.fetch_all(
             """SELECT j.*,e.filename,e.sha256,e.size_bytes
                FROM export_jobs j LEFT JOIN exports e ON e.id=j.export_id
                WHERE j.problem_id=? AND j.export_type IN ("""
-            + self._format_placeholders
+            + self._job_format_placeholders
             + ")"
             + """
                ORDER BY j.created_at DESC,j.id DESC LIMIT ?""",
             params,
         )
         return [_job_row(row) for row in rows]
+
+    def materialization_packages(
+        self,
+        problem_id: int,
+        materialization_ids: list[str],
+    ) -> list[MaterializationPackageRow]:
+        ids = list(dict.fromkeys(materialization_ids))
+        result: list[MaterializationPackageRow] = []
+        for offset in range(0, len(ids), 300):
+            chunk = ids[offset : offset + 300]
+            if not chunk:
+                continue
+            materialization_placeholders = ",".join("?" for _ in chunk)
+            rows = self.db.fetch_all(
+                """SELECT id,materialization_id,export_type,filename
+                   FROM exports
+                   WHERE problem_id=?
+                     AND materialization_id IN ("""
+                + materialization_placeholders
+                + ") AND export_type IN ("
+                + self._package_format_placeholders
+                + ") ORDER BY materialization_id,export_type",
+                [int(problem_id), *chunk, *self._package_formats],
+            )
+            result.extend(
+                {
+                    "export_id": str(row["id"]),
+                    "materialization_id": str(row["materialization_id"]),
+                    "export_type": str(row["export_type"]),
+                    "filename": str(row["filename"]),
+                }
+                for row in rows
+            )
+        return result
 
     def export_job(
         self,
@@ -125,7 +176,7 @@ class ExportStore:
             """SELECT j.*,e.filename,e.sha256,e.size_bytes
                FROM export_jobs j LEFT JOIN exports e ON e.id=j.export_id
                WHERE j.id=? AND j.problem_id=? AND j.export_type IN ("""
-            + self._format_placeholders
+            + self._package_format_placeholders
             + ")",
             params,
         )
@@ -183,7 +234,7 @@ class ExportStore:
         job_id: str,
         *,
         materialization_id: str,
-        export_id: str,
+        export_id: str | None,
         warning: str,
     ) -> None:
         now = now_iso()
@@ -212,9 +263,9 @@ class ExportStore:
                 """UPDATE export_jobs SET status='failed',error='interrupted by application restart',finished_at=?
                    WHERE status IN ('queued','running')
                      AND export_type IN ("""
-                + self._format_placeholders
+                + self._job_format_placeholders
                 + ")",
-                [now_iso(), *self._package_formats],
+                [now_iso(), *self._job_formats],
             )
             return max(0, int(cursor.rowcount))
         return self.db.write_transaction(transaction)
@@ -226,7 +277,7 @@ class ExportStore:
             """SELECT filename,export_type,archive_rel_path,materialization_id,sha256,size_bytes
                FROM exports
                WHERE id=? AND problem_id=? AND export_type IN ("""
-            + self._format_placeholders
+            + self._package_format_placeholders
             + ")",
             [export_id, int(problem_id), *self._package_formats],
         )
@@ -245,7 +296,7 @@ class ExportStore:
         row = self.db.fetch_one(
             """SELECT id,problem_id FROM exports
                WHERE id=? AND export_type IN ("""
-            + self._format_placeholders
+            + self._package_format_placeholders
             + ")",
             [export_id, *self._package_formats],
         )

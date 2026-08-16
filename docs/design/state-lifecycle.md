@@ -47,7 +47,7 @@ Persisted files belong to one of three classes:
 | Preview | One workspace and its statement/sample inputs | Preview request | Cache |
 | Workspace verification | One workspace snapshot and selected verification targets | Verification admission and activation | Cleanup-safe database record; program input, output, answer, feedback, transcript, and logs are cache |
 | Verified revision | One official problem version and a successful full verification of that exact source | Package export verification phase | Derived; reusable while its source snapshot and verified test data remain intact |
-| Polygon Replica package | One verified revision | Direct download | The verified revision's own downloadable serialization; no export job |
+| Polygon Replica package | One verified revision | Direct download | The verified revision's own downloadable serialization; preparing a missing revision may use a job but creates no projection |
 | DOMjudge package | One verified revision; standalone exports use its canonical problem slug | Package projection | Derived; reusable for the same verified revision and format |
 | ICPC Problem Package 2025-09 | One verified revision | Package projection | Derived; reusable for the same verified revision |
 | Contest output | Contest definition/source where needed plus a frozen mapping of roster entries to verified revisions | Contest build request | Derived |
@@ -108,11 +108,13 @@ reads a user's changing workspace. For that version:
 3. If the stored payload is unavailable or fails integrity checking, the
    service invalidates it and its projections, then repeats the full
    verification in that same export job.
-4. Once the verified revision is ready, the requested DOMjudge or ICPC 2025-09
-   projection is built or reused.
+4. A Native request finishes when the verified revision is ready. A DOMjudge or
+   ICPC 2025-09 request then builds or reuses the requested projection.
 
-The Polygon Replica package is a direct download of the verified revision. It
-does not create an export job. A projection consumes only an integrity-checked
+The Polygon Replica package is a direct download of the verified revision. A
+request that must first prepare that revision has a Package Export attempt, but
+it creates no projection row or second archive. Downloading an already verified
+revision creates no job. A projection consumes only an integrity-checked
 verified-revision reader and caller-owned staging; it cannot read Git,
 workspaces, verification tables, or runtime cache, and cannot start
 verification.

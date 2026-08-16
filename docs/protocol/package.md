@@ -114,30 +114,37 @@ Admission freezes the current published `main` commit and permits only one
 Package Export for the same problem/commit at a time. A competing request fails
 immediately instead of waiting.
 
-The job proceeds through these observable phases:
+Derived-package jobs proceed through these observable phases:
 
 ```text
 queued -> verifying -> packaging -> complete
 ```
+
+A Native job omits `packaging` because the verified revision is the package it
+prepares.
 
 For the frozen commit, the worker:
 
 1. reuses the verified revision when its complete integrity check succeeds;
 2. otherwise removes an unavailable or corrupt payload and its projections,
    runs one full verification, and rebuilds the same verified-revision identity;
-3. builds or reuses the requested projection.
+3. finishes immediately for a Native request, or builds or reuses the requested
+   DOMjudge or ICPC 2025-09 projection.
 
-The supported Package Export formats are `domjudge` and `icpc-2025-09`.
-Separate request attempts keep separate job IDs even when they resolve to the
-same cached projection. Problem-level projection cache identity is the verified
-revision and target format. A standalone DOMjudge package always derives its
-short name from the public slug segment; Contest label projections are
-temporary Contest-owned children and are not stored in this cache.
+The problem Packages page accepts `native`, `domjudge`, and `icpc-2025-09`.
+`native` prepares the verified revision when necessary and creates no row in
+`exports`; the Agent Package Export API continues to expose only the two derived
+formats. Separate request attempts keep separate job IDs even when they resolve
+to the same cached projection. Problem-level projection cache identity is the
+verified revision and target format. A standalone DOMjudge package always
+derives its short name from the public slug segment; Contest label projections
+are temporary Contest-owned children and are not stored in this cache.
 
 The Polygon Replica package is downloaded directly from verified-revision
-history. That read creates neither an export job nor a projection row. Package
-Export always targets the published revision frozen at request time; it does not
-accept a historical revision selector.
+history. That read creates neither an export job nor a projection row. Preparing
+a missing current verified revision through the Native action creates a job but
+not a projection. Package Export always targets the published revision frozen at
+request time; it does not accept a historical revision selector.
 
 ## Projection boundary
 

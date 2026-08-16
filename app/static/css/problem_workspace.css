@@ -1,4 +1,49 @@
-/* Problem shell, access, workspace review, and merge. */
+/* Problem shell, packages, access, workspace review, and merge. */
+.package-create-section {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+}
+
+.package-create-revision {
+  flex: 0 0 auto;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.package-create-revision,
+.package-verify-form {
+  display: inline-flex;
+  align-items: baseline;
+}
+
+.package-create-revision {
+  gap: var(--space-1);
+}
+
+.package-verify-form {
+  gap: 0;
+  margin: 0;
+}
+
+.package-create-form {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  margin-left: auto;
+}
+
+.package-create-form > label {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: var(--space-2);
+  white-space: nowrap;
+}
+
+.package-create-form select {
+  width: 150px;
+}
+
 .workspace-revision {
   border: 0;
   background: transparent;

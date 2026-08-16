@@ -117,7 +117,7 @@ class ProblemPackageStore:
         )
         return None if row is None else _materialization(row)
 
-    def verified_revision_history(
+    def available_verified_revision_history(
         self,
         problem_id: int,
         *,
@@ -126,8 +126,8 @@ class ProblemPackageStore:
         rows = self.db.fetch_all(
             """
             SELECT * FROM problem_package_materializations
-            WHERE problem_id=?
-            ORDER BY created_at DESC,id DESC
+            WHERE problem_id=? AND status='available'
+            ORDER BY revision_number DESC,created_at DESC,id DESC
             LIMIT ?
             """,
             [int(problem_id), max(1, int(limit))],

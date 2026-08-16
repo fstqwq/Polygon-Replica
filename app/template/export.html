@@ -3,67 +3,73 @@
 <h1 class="page-title">Packages</h1>
 {% include "_flash_message.html" %}
 
-<section class="content-section">
-  <h2>Current published revision</h2>
-  {% if published_revision_number %}
-  <p><strong>v{{ published_revision_number }}</strong> &middot; <code>{{ published_commit }}</code></p>
-  <p>
-    Verified revision:
-    <strong>{{ verified_readiness.status }}</strong>
-    {% if verified_readiness.verified_revision_number %}
-      (v{{ verified_readiness.verified_revision_number }})
-    {% endif %}
-    {% if verified_readiness.missing_reason %}&middot; {{ verified_readiness.missing_reason }}{% endif %}
-  </p>
-  {% if verified_readiness.status != 'ready' %}
-  <p class="muted">Building a package will first run a complete verification of this published revision.</p>
-  {% endif %}
-  <div class="form-row">
-    {% for adapter in package_adapters %}
-    <form method="post" action="{{ problem_href('export_create') }}">
-      <input type="hidden" name="format" value="{{ adapter.format }}" />
-      <button class="btn primary-action" type="submit" {% if not ctx.access.can_create_packages %}disabled title="{{ ctx.access.package_create_block_reason }}"{% endif %}>Build {{ adapter.display_name }} package</button>
+<div class="content-section package-create-section">
+  {% if current_package.revision_number %}
+  <div class="package-create-revision">
+    <span>Current revision: <strong>v{{ current_package.revision_number }}</strong></span>
+    {% if current_package.native_available %}
+    <span class="muted">(Verified)</span>
+    {% else %}
+    <form class="package-verify-form" method="post" action="{{ current_package.create_href }}">
+      <input type="hidden" name="format" value="native" />
+      <span aria-hidden="true">(</span><button class="linkish-button" type="submit" {% if not ctx.access.can_create_packages %}disabled title="{{ ctx.access.package_create_block_reason }}"{% endif %}>Verify this version</button><span aria-hidden="true">)</span>
     </form>
-    {% endfor %}
+    {% endif %}
   </div>
+  <form class="form-row package-create-form" method="post" action="{{ current_package.create_href }}">
+    <label>
+      Format
+      <select name="format">
+        {% for format in current_package.external_formats %}
+        <option value="{{ format.id }}">{{ format.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button class="btn primary-action" type="submit" {% if not ctx.access.can_create_packages %}disabled title="{{ ctx.access.package_create_block_reason }}"{% endif %}>Create</button>
+  </form>
   {% else %}
-  <p class="muted">No published revision is available.</p>
+  <span class="muted">No published revision is available.</span>
   {% endif %}
-</section>
+</div>
 
 <section class="content-section">
-  <h2>Verified revision history</h2>
-  {% if verified_revisions %}
+  <h2>Revisions</h2>
+  {% if revision_rows %}
   <div class="table-scroll"><table class="table-base">
-    <tr><th>Revision</th><th>Commit</th><th>Verification</th><th>Created</th><th>Status</th><th>Package</th></tr>
-    {% for row in verified_revisions %}
+    <tr><th>Revision</th><th>Verified</th><th>External Packages</th></tr>
+    {% for row in revision_rows %}
     <tr>
-      <td>v{{ row.revision_number }}</td>
-      <td><code>{{ row.source_commit }}</code></td>
-      <td>{{ row.verification_id }}</td>
-      <td>{{ row.created_at|local_time }}</td>
-      <td>{{ row.status|status_label }}{% if row.reason %}: {{ row.reason }}{% endif %}</td>
-      <td>{% if row.can_download %}<a href="{{ problem_href('verified_revision_file', verified_revision_id=row.id) }}">Download Polygon Replica package</a>{% else %}-{% endif %}</td>
+      <td>v{{ row.revision_number }}{% if row.current %} <span class="muted">Current</span>{% endif %}</td>
+      <td><a href="{{ row.native_download_href }}">Download</a></td>
+      <td>
+        {% if row.additional_packages %}
+          {% for package in row.additional_packages %}
+            {{ package.name }} &middot; <a href="{{ package.download_href }}">Download</a>{% if not loop.last %}<br />{% endif %}
+          {% endfor %}
+        {% else %}
+          &mdash;
+        {% endif %}
+      </td>
     </tr>
     {% endfor %}
   </table></div>
-  {% else %}<p class="muted">No verified revisions.</p>{% endif %}
+  {% else %}<p class="muted">No verified revisions are available.</p>{% endif %}
 </section>
 
 <section class="content-section">
-  <h2>Package export activity</h2>
+  <h2>Recent attempts</h2>
   {% if activity_rows %}
   <div class="table-scroll"><table class="table-base">
-    <tr><th>Time</th><th>Status</th><th>Phase</th><th>Format</th><th>Source</th><th>Detail</th><th>Open</th></tr>
+    <tr><th>Time</th><th>Format</th><th>Status</th><th>Detail</th></tr>
     {% for row in activity_rows %}
     <tr>
       <td class="table-cell-nowrap">{{ row.created_at|local_time }}</td>
-      <td>{{ row.status|status_label }}</td><td>{{ row.phase }}</td>
-      <td>{{ row.format_display }}</td><td>{{ row.source_display }}</td><td>{{ row.detail }}</td>
-      <td>{% if row.export_id %}<a href="{{ problem_href('export_file', export_id=row.export_id, filename=row.filename) }}">zip</a>{% else %}-{% endif %}</td>
+      <td>{{ row.format_display }}</td>
+      <td>{{ row.status|status_label }}</td>
+      <td>{{ row.detail }}</td>
     </tr>
     {% endfor %}
   </table></div>
-  {% else %}<p class="muted">No package exports.</p>{% endif %}
+  {% else %}<p class="muted">No recent package attempts.</p>{% endif %}
 </section>
 {% endblock %}
