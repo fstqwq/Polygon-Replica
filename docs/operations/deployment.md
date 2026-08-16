@@ -183,19 +183,26 @@ sudo systemctl stop polygon-replica.service
 cd /opt/polygon-replica
 sudo -u polygon git pull --ff-only
 agent_grants_backup="/var/backups/polygon-replica/metadata-pre-agent-grants-$(date -u +%Y%m%dT%H%M%SZ).db"
-sqlite3 /var/lib/polygon-replica/metadata.db ".backup '$agent_grants_backup'"
-sqlite3 "$agent_grants_backup" 'PRAGMA integrity_check'
 sudo -u polygon .venv/bin/python scripts/upgrade_agent_identity_grants.py \
-  --db /var/lib/polygon-replica/metadata.db
-sqlite3 /var/lib/polygon-replica/metadata.db \
-  'PRAGMA foreign_key_check; PRAGMA integrity_check'
+  --db /var/lib/polygon-replica/metadata.db \
+  --backup "$agent_grants_backup"
 ```
 
-Use the configured SQLite path if it differs. The procedure converts every
-still-effective problem bearer authorization to one grant with the same scope,
-creation time, and expiry, discards obsolete delivery requests, and removes the
-old token table. It is atomic and intentionally refuses an already-upgraded or
-unexpected schema. Deploy the matching Polygon Agent CLI at the same time.
+Use the configured SQLite path if it differs. The procedure discards every old
+Agent registration code, session, token, access request, and authorization;
+none of that identity-header state is migrated. It then installs the empty
+grant schema and hashed credential column. The change is atomic and
+intentionally refuses an already-upgraded or unexpected schema. The migration
+uses Python's SQLite backup API, verifies the independent copy before changing
+the source, and writes a `.sha256` sidecar. Deploy the matching Polygon Agent
+CLI at the same time. Each existing CLI must run `init` with a fresh
+registration URL to create a new session, then request any required permissions
+again.
+
+The bearer credential is replayable by design. Keep the application data root
+and database private to the runtime user. The host installer applies mode
+`0700` to `/var/lib/polygon-replica`, and the systemd unit uses `UMask=0077` so
+new database, WAL, and SHM files are not readable by other local users.
 
 Systemd:
 

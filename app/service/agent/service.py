@@ -23,6 +23,7 @@ from app.service.repository.workspace import WorkspaceService
 _DEFAULT_REGISTER_TTL_SEC = 900
 _DEFAULT_REQUEST_TTL_SEC = 900
 _ALLOWED_APPROVAL_TTLS = {3600, 86400, 604800, 2592000}
+_AGENT_CREDENTIAL_PREFIX = "polygon_agent_"
 
 
 @dataclass(frozen=True)
@@ -130,15 +131,16 @@ class AgentService:
     def _require_active_session(
         self,
         *,
-        agent_session_id: str,
-        identity_hash: str,
+        credential: str,
     ) -> AgentSessionRow:
-        session = self._store.session_by_id(str(agent_session_id or ""))
+        supplied = str(credential or "")
+        if not supplied.startswith(_AGENT_CREDENTIAL_PREFIX):
+            raise PermissionError("agent credential is invalid")
+        session = self._store.active_session_by_credential_sha256(
+            sha256_hex_text(supplied)
+        )
         if session is None or session["revoked_at"]:
-            raise PermissionError("agent session is invalid")
-        supplied_hash = str(identity_hash or "")
-        if not secrets.compare_digest(session["identity_hash"], supplied_hash):
-            raise PermissionError("agent identity mismatch")
+            raise PermissionError("agent credential is invalid")
         return session
 
     def _touch_session(
@@ -154,12 +156,10 @@ class AgentService:
     def session_identity(
         self,
         *,
-        agent_session_id: str,
-        identity_hash: str,
+        credential: str,
     ) -> AgentSessionIdentity:
         session = self._require_active_session(
-            agent_session_id=agent_session_id,
-            identity_hash=identity_hash,
+            credential=credential,
         )
         self._touch_session(session["id"])
         return AgentSessionIdentity(
@@ -172,13 +172,11 @@ class AgentService:
     def require_general_scope(
         self,
         *,
-        agent_session_id: str,
-        identity_hash: str,
+        credential: str,
         minimum_scope: str,
     ) -> AgentSessionIdentity:
         identity = self.session_identity(
-            agent_session_id=agent_session_id,
-            identity_hash=identity_hash,
+            credential=credential,
         )
         safe_minimum = self.access_query.canonical_agent_scope(minimum_scope)
         if identity.general_scope == "none" or not self.access_query.agent_scope_allows(
@@ -281,14 +279,12 @@ class AgentService:
     def problem_identity(
         self,
         *,
-        agent_session_id: str,
-        identity_hash: str,
+        credential: str,
         problem: str,
         minimum_scope: str,
     ) -> AgentProblemIdentity:
         session = self.session_identity(
-            agent_session_id=agent_session_id,
-            identity_hash=identity_hash,
+            credential=credential,
         )
         return self.problem_identity_for_session(
             session,
@@ -325,6 +321,7 @@ class AgentService:
         agent_name: str,
         desktop_id: str,
         init_ts: str,
+        existing_session_id: str,
     ) -> dict[str, object]:
         now_text = now_iso()
         claimed = self._store.claim_registration_code(
@@ -343,23 +340,39 @@ class AgentService:
             desktop_id=desktop_id,
             init_ts=init_ts,
         )
+        credential = _AGENT_CREDENTIAL_PREFIX + secrets.token_urlsafe(32)
+        credential_sha256 = sha256_hex_text(credential)
+        if existing_session_id:
+            reconnected = self._store.rotate_session_credential(
+                session_id=existing_session_id,
+                user_id=claimed["user_id"],
+                identity_hash=identity_hash,
+                credential_sha256=credential_sha256,
+                last_seen_at=now_text,
+            )
+            if not reconnected:
+                raise PermissionError("existing agent session does not match")
+            existing = self._store.session_by_id(existing_session_id)
+            if existing is None:
+                raise RuntimeError("reconnected agent session is unavailable")
+            return {
+                "agent_session_id": existing["id"],
+                "user": existing["username"],
+                "server_name": "Polygon Replica",
+                "credential": credential,
+            }
         existing = self._store.active_session_by_identity(
             user_id=claimed["user_id"],
             identity_hash=identity_hash,
         )
         if existing is not None:
-            self._store.touch_session(existing["id"], last_seen_at=now_text)
-            return {
-                "agent_session_id": existing["id"],
-                "user": existing["username"],
-                "server_name": "Polygon Replica",
-                "identity_hash": identity_hash,
-            }
+            raise PermissionError("existing agent session requires reconnect")
         session_id = f"as-{secrets.token_hex(24)}"
         self._store.insert_session(
             session_id=session_id,
             user_id=claimed["user_id"],
             identity_hash=identity_hash,
+            credential_sha256=credential_sha256,
             agent_name=str(agent_name or "").strip(),
             desktop_id=str(desktop_id or "").strip(),
             init_ts=str(init_ts or "").strip(),
@@ -369,22 +382,17 @@ class AgentService:
             "agent_session_id": session_id,
             "user": claimed["username"],
             "server_name": "Polygon Replica",
-            "identity_hash": identity_hash,
+            "credential": credential,
         }
 
     def request_problem_access(
         self,
         *,
-        agent_session_id: str,
-        identity_hash: str,
+        session: AgentSessionIdentity,
         problem: str,
         requested_scope: str,
         ttl_sec: int = _DEFAULT_REQUEST_TTL_SEC,
     ) -> dict[str, object]:
-        session = self.session_identity(
-            agent_session_id=agent_session_id,
-            identity_hash=identity_hash,
-        )
         safe_problem = self._require_problem_slug(problem)
         safe_scope = self.access_query.canonical_agent_scope(requested_scope)
         try:
@@ -448,14 +456,9 @@ class AgentService:
     def poll_access_request(
         self,
         *,
-        agent_session_id: str,
-        identity_hash: str,
+        session: AgentSessionIdentity,
         request_id: str,
     ) -> dict[str, object]:
-        session = self.session_identity(
-            agent_session_id=agent_session_id,
-            identity_hash=identity_hash,
-        )
         row = self._store.access_request_by_id(request_id)
         if row is None or row["agent_session_id"] != session.agent_session_id:
             raise LookupError("access request not found")
@@ -551,13 +554,8 @@ class AgentService:
     def session_status(
         self,
         *,
-        agent_session_id: str,
-        identity_hash: str,
+        session: AgentSessionIdentity,
     ) -> dict[str, object]:
-        session = self.session_identity(
-            agent_session_id=agent_session_id,
-            identity_hash=identity_hash,
-        )
         row = self._store.session_by_id(session.agent_session_id)
         if row is None:
             raise PermissionError("agent session is invalid")
@@ -574,15 +572,14 @@ class AgentService:
     def create_problem(
         self,
         *,
-        agent_session_id: str,
-        identity_hash: str,
+        session: AgentSessionIdentity,
         problem: str,
     ) -> dict[str, object]:
-        session = self.require_general_scope(
-            agent_session_id=agent_session_id,
-            identity_hash=identity_hash,
-            minimum_scope="commit",
-        )
+        if session.general_scope == "none" or not self.access_query.agent_scope_allows(
+            session.general_scope,
+            "commit",
+        ):
+            raise AgentGeneralPermissionRequired(required_scope="commit")
         safe_problem = self._require_problem_slug(problem)
         expected_owner = session.username.lower()
         if not safe_problem.startswith(f"{expected_owner}/"):

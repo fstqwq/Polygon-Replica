@@ -135,8 +135,13 @@ that transaction and must match the frozen identities and checksums.
 
 `agent_sessions` owns the connected desktop identity and its non-expiring
 `none`, `readonly`, `workspace`, or `commit` general scope. Ordinary Agent API
-authentication requires the session ID and identity hash headers. A
-disconnected session is not an actor.
+authentication uses a random `polygon_agent_...` bearer credential. SQLite
+stores only its SHA-256 verifier; the raw credential exists only in the Agent
+state file and is returned only when a registration URL creates or reconnects
+a session. The identity hash describes stable client metadata and is used to
+validate an explicit reconnect, never as an authentication secret. A
+disconnected session is not an actor. The identity-header release boundary
+does not preserve old sessions or grants; those clients register new sessions.
 
 `agent_problem_grants` stores independent user approvals. Multiple rows may
 target the same session and problem; each retains its own scope, creation time,

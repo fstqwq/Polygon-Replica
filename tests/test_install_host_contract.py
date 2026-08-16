@@ -18,6 +18,7 @@ class TestInstallHostContract(unittest.TestCase):
         self.assertIn("@RUNTIME_GROUP@", unit)
         self.assertIn("@WORKING_DIRECTORY@", unit)
         self.assertIn("@UVICORN_EXECUTABLE@", unit)
+        self.assertIn("UMask=0077", unit)
         self.assertNotIn("User=judgehost", unit)
         self.assertIn('Refusing to run Polygon-Replica as root.', installer)
         self.assertIn('systemd-analyze verify "$TMP_SERVICE_UNIT"', installer)
@@ -25,6 +26,8 @@ class TestInstallHostContract(unittest.TestCase):
         self.assertIn('mktemp /etc/.polygon-replica.env.XXXXXX', installer)
         self.assertIn('mv -f "$TMP_INSTALLED_ENV_FILE" "$ENV_FILE"', installer)
         self.assertNotIn('install -m 0644 "$TMP_ENV_FILE" "$ENV_FILE"', installer)
+        self.assertIn("/var/lib/polygon-replica", installer)
+        self.assertIn('"${SUDO[@]}" chmod 0700', installer)
 
     def test_rendered_unit_quotes_spaces_and_escapes_specifiers(self) -> None:
         root = Path(__file__).resolve().parents[1]

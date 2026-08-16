@@ -128,8 +128,8 @@ class TestPublicContracts(unittest.TestCase):
         ):
             with self.subTest(obsolete=obsolete):
                 self.assertNotIn(obsolete, source)
-        self.assertIn("X-Polygon-Agent-Session-ID", source)
-        self.assertIn("X-Polygon-Agent-Identity-Hash", source)
+        self.assertIn('getlist("Authorization")', source)
+        self.assertIn("credential_sha256", source)
         self.assertIn("agent_problem_grants", source)
 
     def test_agent_problem_routes_require_explicit_problem_scope(self) -> None:

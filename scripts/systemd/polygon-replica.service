@@ -8,6 +8,7 @@ User=@RUNTIME_USER@
 Group=@RUNTIME_GROUP@
 WorkingDirectory=@WORKING_DIRECTORY@
 EnvironmentFile=/etc/polygon-replica.env
+UMask=0077
 ExecStart=@UVICORN_EXECUTABLE@ app.main:app --host 127.0.0.1 --port 8001 --timeout-keep-alive 30 --proxy-headers --forwarded-allow-ips=*
 Restart=always
 RestartSec=2

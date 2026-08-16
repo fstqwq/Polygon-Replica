@@ -14,10 +14,6 @@ from app.service.auth.model import AuthSessionIdentity
 from app.service.repository.workspace import WorkspaceContext
 
 
-AGENT_SESSION_HEADER = "X-Polygon-Agent-Session-ID"
-AGENT_IDENTITY_HEADER = "X-Polygon-Agent-Identity-Hash"
-
-
 def current_web_user(request: Request) -> AuthSessionIdentity:
     identity = session_identity(request)
     if identity is None:
@@ -25,35 +21,32 @@ def current_web_user(request: Request) -> AuthSessionIdentity:
     return identity
 
 
-def _identity_headers(request: Request) -> tuple[str, str]:
-    session_values = request.headers.getlist(AGENT_SESSION_HEADER)
-    identity_values = request.headers.getlist(AGENT_IDENTITY_HEADER)
-    if len(session_values) != 1 or len(identity_values) != 1:
+def _bearer_credential(request: Request) -> str:
+    values = request.headers.getlist("Authorization")
+    if len(values) != 1:
         raise HTTPException(
             status_code=401,
-            detail={"error": "agent_identity_required"},
+            detail={"error": "agent_credential_required"},
         )
-    session_id = session_values[0]
-    identity_hash = identity_values[0]
-    if not session_id or not identity_hash:
+    scheme, separator, credential = values[0].partition(" ")
+    if scheme.lower() != "bearer" or separator != " " or not credential:
         raise HTTPException(
             status_code=401,
-            detail={"error": "agent_identity_required"},
+            detail={"error": "agent_credential_required"},
         )
-    return session_id, identity_hash
+    return credential
 
 
 def require_agent_session(request: Request) -> AgentSessionIdentity:
-    session_id, identity_hash = _identity_headers(request)
+    credential = _bearer_credential(request)
     try:
         return runtime().agent_service.session_identity(
-            agent_session_id=session_id,
-            identity_hash=identity_hash,
+            credential=credential,
         )
     except PermissionError as exc:
         raise HTTPException(
             status_code=401,
-            detail={"error": "agent_identity_invalid"},
+            detail={"error": "agent_credential_invalid"},
         ) from exc
 
 
@@ -62,11 +55,10 @@ def require_agent_general(
     *,
     min_scope: str,
 ) -> AgentSessionIdentity:
-    session_id, identity_hash = _identity_headers(request)
+    credential = _bearer_credential(request)
     try:
         return runtime().agent_service.require_general_scope(
-            agent_session_id=session_id,
-            identity_hash=identity_hash,
+            credential=credential,
             minimum_scope=min_scope,
         )
     except AgentGeneralPermissionRequired as exc:
@@ -81,7 +73,7 @@ def require_agent_general(
     except PermissionError as exc:
         raise HTTPException(
             status_code=401,
-            detail={"error": "agent_identity_invalid"},
+            detail={"error": "agent_credential_invalid"},
         ) from exc
 
 
@@ -100,12 +92,11 @@ def require_agent_problem(
     *,
     min_scope: str,
 ) -> AgentProblemIdentity:
-    session_id, identity_hash = _identity_headers(request)
+    credential = _bearer_credential(request)
     problem = explicit_problem_query(request)
     try:
         return runtime().agent_service.problem_identity(
-            agent_session_id=session_id,
-            identity_hash=identity_hash,
+            credential=credential,
             problem=problem,
             minimum_scope=min_scope,
         )
@@ -131,7 +122,7 @@ def require_agent_problem(
     except PermissionError as exc:
         raise HTTPException(
             status_code=401,
-            detail={"error": "agent_identity_invalid"},
+            detail={"error": "agent_credential_invalid"},
         ) from exc
 
 

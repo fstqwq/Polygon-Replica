@@ -121,7 +121,11 @@ RUNTIME_DIRS=(
   /var/backups/polygon-replica
 )
 "${SUDO[@]}" install -d -m 0755 "${RUNTIME_DIRS[@]}"
-"${SUDO[@]}" chmod 0700 /var/backups/polygon-replica
+"${SUDO[@]}" chmod 0700 \
+  /var/lib/polygon-replica \
+  /var/lib/polygon-replica/tls \
+  /var/lib/polygon-replica/contest-sources \
+  /var/backups/polygon-replica
 "${SUDO[@]}" chown -R "${RUNTIME_USER}:${RUNTIME_GROUP}" \
   /srv/polygon-replica \
   /var/lib/polygon-replica \

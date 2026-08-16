@@ -66,31 +66,44 @@ class TestAgentAPI(E2ETestBase):
         self.assertEqual(int(payload.get("expires_in") or 0), 900)
         return payload
 
-    def _register_agent(self, client: TestClient, register_url: str, *, desktop_id: str = "D-test") -> dict[str, object]:
+    def _register_agent(
+        self,
+        client: TestClient,
+        register_url: str,
+        *,
+        desktop_id: str = "D-test",
+        existing_session_id: str = "",
+    ) -> dict[str, object]:
         path = str(urlparse(register_url).path or "")
+        request = {
+            "agent_name": "cursor-polygon-skill",
+            "desktop_id": desktop_id,
+            "init_ts": "2026-04-12T10:00:00Z",
+        }
+        if existing_session_id:
+            request["existing_session_id"] = existing_session_id
         resp = client.post(
             path,
-            json={
-                "agent_name": "cursor-polygon-skill",
-                "desktop_id": desktop_id,
-                "init_ts": "2026-04-12T10:00:00Z",
-            },
+            json=request,
         )
         self.assertEqual(resp.status_code, 200, resp.text)
         payload = resp.json()
         self.assertRegex(str(payload.get("agent_session_id") or ""), r"^as-[0-9a-f]{48}$")
-        self.assertRegex(str(payload.get("identity_hash") or ""), r"^[0-9a-f]{64}$")
+        self.assertRegex(
+            str(payload.get("credential") or ""),
+            r"^polygon_agent_[A-Za-z0-9_-]{43}$",
+        )
+        self.assertNotIn("identity_hash", payload)
         return payload
 
     @staticmethod
-    def _identity_headers(
+    def _credential_headers(
         agent_session_id: str,
-        identity_hash: str,
+        credential: str,
     ) -> dict[str, str]:
-        return {
-            "X-Polygon-Agent-Session-ID": agent_session_id,
-            "X-Polygon-Agent-Identity-Hash": identity_hash,
-        }
+        if not agent_session_id:
+            raise AssertionError("test session id is required")
+        return {"Authorization": f"Bearer {credential}"}
 
     def _set_general_scope(
         self,
@@ -114,13 +127,13 @@ class TestAgentAPI(E2ETestBase):
         *,
         auth_cookie: str,
         agent_session_id: str,
-        identity_hash: str,
+        credential: str,
         scope: str = "readonly",
         ttl: str = "86400",
         problem: str | None = None,
     ) -> tuple[str, AgentTestGrant]:
         problem_slug = problem or self.problem
-        headers = self._identity_headers(agent_session_id, identity_hash)
+        headers = self._credential_headers(agent_session_id, credential)
         request_resp = client.post(
             "/agent/v1/auth/request-access",
             json={
@@ -197,15 +210,15 @@ class TestAgentAPI(E2ETestBase):
         with TestClient(app, raise_server_exceptions=False) as client:
             connect = self._connect_agent(client, auth_cookie)
             register = self._register_agent(client, str(connect["register_url"]))
-            headers = self._identity_headers(
+            headers = self._credential_headers(
                 str(register["agent_session_id"]),
-                str(register["identity_hash"]),
+                str(register["credential"]),
             )
             self._approve_grant(
                 client,
                 auth_cookie=auth_cookie,
                 agent_session_id=str(register["agent_session_id"]),
-                identity_hash=str(register["identity_hash"]),
+                credential=str(register["credential"]),
                 scope="commit",
             )
             denied = client.post(
@@ -261,7 +274,7 @@ class TestAgentAPI(E2ETestBase):
             bad_identity = client.post(
                 "/agent/v1/problems",
                 json={"problem": f"{username}/other"},
-                headers=self._identity_headers(
+                headers=self._credential_headers(
                     str(register["agent_session_id"]),
                     "bad",
                 ),
@@ -280,7 +293,7 @@ class TestAgentAPI(E2ETestBase):
                 client,
                 auth_cookie=auth_cookie,
                 agent_session_id=str(register["agent_session_id"]),
-                identity_hash=str(register["identity_hash"]),
+                credential=str(register["credential"]),
                 scope="commit",
             )
             problem_id = workspace_service.known_problem_id(self.problem)
@@ -469,7 +482,7 @@ class TestAgentAPI(E2ETestBase):
                 client,
                 auth_cookie=auth_cookie,
                 agent_session_id=str(register["agent_session_id"]),
-                identity_hash=str(register["identity_hash"]),
+                credential=str(register["credential"]),
             )
             other_problem = f"{username}/other-export"
             workspace_service.ensure_problem(other_problem)
@@ -552,7 +565,7 @@ class TestAgentAPI(E2ETestBase):
             self.assertNotIn("Back to Settings", ok.text)
             self.assertNotIn("Disconnected at", ok.text)
 
-    def test_agent_register_code_is_one_time_and_reuses_session_identity(self) -> None:
+    def test_agent_register_code_is_one_time_and_reconnect_rotates_credential(self) -> None:
         username = self.random_id("agent-reg")
         _password, auth_cookie = self._issue_auth_cookie(username)
         self._grant_problem_owner(username)
@@ -560,11 +573,56 @@ class TestAgentAPI(E2ETestBase):
         with TestClient(app, raise_server_exceptions=False) as client:
             first_connect = self._connect_agent(client, auth_cookie)
             first_register = self._register_agent(client, str(first_connect["register_url"]))
+            first_session_id = str(first_register["agent_session_id"])
+            first_credential = str(first_register["credential"])
+            persisted = db_fetch_one(
+                """
+                SELECT identity_hash,credential_sha256
+                FROM agent_sessions WHERE id=?
+                """,
+                [first_session_id],
+            )
+            self.assertEqual(
+                str(persisted["credential_sha256"]),
+                hashlib.sha256(first_credential.encode("utf-8")).hexdigest(),
+            )
+            self.assertNotEqual(str(persisted["credential_sha256"]), first_credential)
+            self.assertNotEqual(str(persisted["identity_hash"]), first_credential)
+            self._set_general_scope(
+                client,
+                auth_cookie=auth_cookie,
+                agent_session_id=first_session_id,
+                scope="workspace",
+            )
 
             reused_connect = self._connect_agent(client, auth_cookie)
-            reused_register = self._register_agent(client, str(reused_connect["register_url"]))
+            reused_register = self._register_agent(
+                client,
+                str(reused_connect["register_url"]),
+                existing_session_id=str(first_register["agent_session_id"]),
+            )
             self.assertEqual(str(first_register["agent_session_id"]), str(reused_register["agent_session_id"]))
-            self.assertEqual(str(first_register["identity_hash"]), str(reused_register["identity_hash"]))
+            self.assertNotEqual(str(first_register["credential"]), str(reused_register["credential"]))
+            old_credential = client.get(
+                "/agent/v1/auth/status",
+                headers=self._credential_headers(
+                    str(first_register["agent_session_id"]),
+                    str(first_register["credential"]),
+                ),
+            )
+            self.assertEqual(old_credential.status_code, 401)
+            current_credential = client.get(
+                "/agent/v1/auth/status",
+                headers=self._credential_headers(
+                    str(reused_register["agent_session_id"]),
+                    str(reused_register["credential"]),
+                ),
+            )
+            self.assertEqual(current_credential.status_code, 200)
+            self.assertEqual(
+                current_credential.json().get("general_scope"),
+                "workspace",
+            )
 
             reused_attempt = client.post(
                 str(urlparse(str(first_connect["register_url"])).path or ""),
@@ -590,7 +648,7 @@ class TestAgentAPI(E2ETestBase):
                 client,
                 auth_cookie=auth_cookie,
                 agent_session_id=str(register["agent_session_id"]),
-                identity_hash=str(register["identity_hash"]),
+                credential=str(register["credential"]),
             )
             before = db_fetch_one(
                 "SELECT COUNT(*) AS n FROM workspaces WHERE user_id=?",
@@ -606,7 +664,7 @@ class TestAgentAPI(E2ETestBase):
             wrong_identity = client.get(
                 "/agent/v1/workspace/status",
                 params={"problem": self.problem},
-                headers=self._identity_headers(
+                headers=self._credential_headers(
                     str(register["agent_session_id"]),
                     "wrong",
                 ),
@@ -685,15 +743,15 @@ class TestAgentAPI(E2ETestBase):
             connect = self._connect_agent(client, auth_cookie)
             register = self._register_agent(client, str(connect["register_url"]))
             session_id = str(register["agent_session_id"])
-            headers = self._identity_headers(
+            headers = self._credential_headers(
                 session_id,
-                str(register["identity_hash"]),
+                str(register["credential"]),
             )
             self._approve_grant(
                 client,
                 auth_cookie=auth_cookie,
                 agent_session_id=session_id,
-                identity_hash=str(register["identity_hash"]),
+                credential=str(register["credential"]),
                 scope="readonly",
                 problem=roster_items[0][2],
             )
@@ -799,8 +857,8 @@ class TestAgentAPI(E2ETestBase):
             connect = self._connect_agent(client, auth_cookie)
             register = self._register_agent(client, str(connect["register_url"]))
             session_id = str(register["agent_session_id"])
-            identity_hash = str(register["identity_hash"])
-            headers = self._identity_headers(session_id, identity_hash)
+            credential = str(register["credential"])
+            headers = self._credential_headers(session_id, credential)
 
             runtime.agent_service.store.touch_session(session_id, last_seen_at=stale_seen)
             empty_status = client.get(
@@ -870,7 +928,7 @@ class TestAgentAPI(E2ETestBase):
                 client,
                 auth_cookie=auth_cookie,
                 agent_session_id=session_id,
-                identity_hash=identity_hash,
+                credential=credential,
                 scope="workspace",
             )
             workspace_status = client.get(
@@ -929,17 +987,14 @@ class TestAgentAPI(E2ETestBase):
             self.assertEqual(general_status.status_code, 200, general_status.text)
             self.assertEqual(general_status.json().get("general_scope"), "workspace")
 
-            bad_identity = client.get(
+            bad_credential = client.get(
                 "/agent/v1/auth/status",
-                headers=self._identity_headers(session_id, "bad"),
+                headers=self._credential_headers(session_id, "bad"),
             )
-            self.assertEqual(bad_identity.status_code, 401)
+            self.assertEqual(bad_credential.status_code, 401)
 
-            bad_session = client.get(
-                "/agent/v1/auth/status",
-                headers=self._identity_headers("as-missing", identity_hash),
-            )
-            self.assertEqual(bad_session.status_code, 401)
+            missing_credential = client.get("/agent/v1/auth/status")
+            self.assertEqual(missing_credential.status_code, 401)
 
             disconnect = client.post(
                 f"/agent/disconnect/{session_id}",
@@ -988,9 +1043,9 @@ class TestAgentAPI(E2ETestBase):
             connect = self._connect_agent(client, auth_cookie)
             register = self._register_agent(client, str(connect["register_url"]))
             session_id = str(register["agent_session_id"])
-            headers = self._identity_headers(
+            headers = self._credential_headers(
                 session_id,
-                str(register["identity_hash"]),
+                str(register["credential"]),
             )
             requested = client.post(
                 "/agent/v1/auth/request-access",
@@ -1033,15 +1088,15 @@ class TestAgentAPI(E2ETestBase):
             connect = self._connect_agent(client, auth_cookie)
             register = self._register_agent(client, str(connect["register_url"]))
             session_id = str(register["agent_session_id"])
-            identity_hash = str(register["identity_hash"])
-            headers = self._identity_headers(session_id, identity_hash)
+            credential = str(register["credential"])
+            headers = self._credential_headers(session_id, credential)
             grants: list[AgentTestGrant] = []
             for ttl in ("3600", "86400", "604800", "2592000", "forever"):
                 _request_id, grant = self._approve_grant(
                     client,
                     auth_cookie=auth_cookie,
                     agent_session_id=session_id,
-                    identity_hash=identity_hash,
+                    credential=credential,
                     scope="readonly",
                     ttl=ttl,
                 )
@@ -1054,7 +1109,7 @@ class TestAgentAPI(E2ETestBase):
                 client,
                 auth_cookie=auth_cookie,
                 agent_session_id=session_id,
-                identity_hash=identity_hash,
+                credential=credential,
                 scope="commit",
                 ttl="3600",
             )
@@ -1127,12 +1182,12 @@ class TestAgentAPI(E2ETestBase):
             connect = self._connect_agent(client, auth_cookie)
             register = self._register_agent(client, str(connect["register_url"]))
             session_id = str(register["agent_session_id"])
-            identity_hash = str(register["identity_hash"])
+            credential = str(register["credential"])
             _request_id, grant = self._approve_grant(
                 client,
                 auth_cookie=auth_cookie,
                 agent_session_id=session_id,
-                identity_hash=identity_hash,
+                credential=credential,
                 scope="readonly",
             )
 
@@ -1161,7 +1216,7 @@ class TestAgentAPI(E2ETestBase):
                 client,
                 auth_cookie=auth_cookie,
                 agent_session_id=session_id,
-                identity_hash=identity_hash,
+                credential=credential,
                 scope="readonly",
             )
             before_disconnect = client.get(
@@ -1198,13 +1253,13 @@ class TestAgentAPI(E2ETestBase):
             connect = self._connect_agent(client, auth_cookie)
             register = self._register_agent(client, str(connect["register_url"]))
             session_id = str(register["agent_session_id"])
-            identity_hash = str(register["identity_hash"])
+            credential = str(register["credential"])
 
             _readonly_request, readonly_token = self._approve_grant(
                 client,
                 auth_cookie=auth_cookie,
                 agent_session_id=session_id,
-                identity_hash=identity_hash,
+                credential=credential,
                 scope="readonly",
             )
             readonly_upload = client.post(
@@ -1220,7 +1275,7 @@ class TestAgentAPI(E2ETestBase):
                 client,
                 auth_cookie=auth_cookie,
                 agent_session_id=session_id,
-                identity_hash=identity_hash,
+                credential=credential,
                 scope="workspace",
             )
             upload = client.post(
@@ -1348,12 +1403,12 @@ class TestAgentAPI(E2ETestBase):
             connect = self._connect_agent(client, auth_cookie)
             register = self._register_agent(client, str(connect["register_url"]), desktop_id="D-sync")
             session_id = str(register["agent_session_id"])
-            identity_hash = str(register["identity_hash"])
+            credential = str(register["credential"])
             _readonly_request, readonly_token = self._approve_grant(
                 client,
                 auth_cookie=auth_cookie,
                 agent_session_id=session_id,
-                identity_hash=identity_hash,
+                credential=credential,
                 scope="readonly",
             )
             snapshot = client.get(
@@ -1404,7 +1459,7 @@ class TestAgentAPI(E2ETestBase):
                 client,
                 auth_cookie=auth_cookie,
                 agent_session_id=session_id,
-                identity_hash=identity_hash,
+                credential=credential,
                 scope="workspace",
             )
 
@@ -1493,12 +1548,12 @@ class TestAgentAPI(E2ETestBase):
             connect = self._connect_agent(client, auth_cookie)
             register = self._register_agent(client, str(connect["register_url"]), desktop_id="D-api")
             session_id = str(register["agent_session_id"])
-            identity_hash = str(register["identity_hash"])
+            credential = str(register["credential"])
 
             access_denied = client.post(
                 "/agent/v1/auth/request-access",
                 json={"problem": self.default_problem, "scope": "readonly"},
-                headers=self._identity_headers(session_id, identity_hash),
+                headers=self._credential_headers(session_id, credential),
             )
             self.assertEqual(access_denied.status_code, 404)
 
@@ -1506,7 +1561,7 @@ class TestAgentAPI(E2ETestBase):
                 client,
                 auth_cookie=auth_cookie,
                 agent_session_id=session_id,
-                identity_hash=identity_hash,
+                credential=credential,
                 scope="readonly",
             )
             traversal = client.get(
@@ -1551,7 +1606,7 @@ class TestAgentAPI(E2ETestBase):
                 client,
                 auth_cookie=auth_cookie,
                 agent_session_id=session_id,
-                identity_hash=identity_hash,
+                credential=credential,
                 scope="workspace",
             )
             missing_format = client.post(
@@ -1587,7 +1642,7 @@ class TestAgentAPI(E2ETestBase):
                 client,
                 auth_cookie=auth_cookie,
                 agent_session_id=session_id,
-                identity_hash=identity_hash,
+                credential=credential,
                 scope="commit",
             )
             missing_message = client.post(
@@ -1684,12 +1739,12 @@ class TestAgentAPI(E2ETestBase):
             connect = self._connect_agent(client, auth_cookie)
             register = self._register_agent(client, str(connect["register_url"]), desktop_id="D-detail")
             session_id = str(register["agent_session_id"])
-            identity_hash = str(register["identity_hash"])
+            credential = str(register["credential"])
             _readonly_request, readonly_token = self._approve_grant(
                 client,
                 auth_cookie=auth_cookie,
                 agent_session_id=session_id,
-                identity_hash=identity_hash,
+                credential=credential,
                 scope="readonly",
             )
 

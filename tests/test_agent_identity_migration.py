@@ -1,11 +1,9 @@
 import sqlite3
 import tempfile
 import unittest
-from collections import Counter
-from datetime import datetime, timezone
 from pathlib import Path
 
-from scripts.upgrade_agent_identity_grants import upgrade
+from scripts.upgrade_agent_identity_grants import backup_database, upgrade
 
 
 _LEGACY_SCHEMA = """
@@ -16,6 +14,14 @@ CREATE TABLE users (
 CREATE TABLE problems (
     id INTEGER PRIMARY KEY,
     slug TEXT NOT NULL
+);
+CREATE TABLE agent_registration_codes (
+    code TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used_at TEXT,
+    FOREIGN KEY(user_id) REFERENCES users(id)
 );
 CREATE TABLE agent_sessions (
     id TEXT PRIMARY KEY,
@@ -76,6 +82,13 @@ class TestAgentIdentityMigration(unittest.TestCase):
         self.connection.execute("INSERT INTO problems(id,slug) VALUES(2,'alice/b')")
         self.connection.execute(
             """
+            INSERT INTO agent_registration_codes(
+                code,user_id,created_at,expires_at,used_at
+            ) VALUES('reg-old',1,'2025-01-01','2027-01-01',NULL)
+            """
+        )
+        self.connection.execute(
+            """
             INSERT INTO agent_sessions(
                 id,user_id,identity_hash,agent_name,desktop_id,init_ts,
                 created_at,last_seen_at,revoked_at
@@ -128,7 +141,7 @@ class TestAgentIdentityMigration(unittest.TestCase):
             ],
         )
 
-    def test_active_tokens_become_independent_exact_grants(self) -> None:
+    def test_legacy_agent_state_is_discarded(self) -> None:
         self._token("finite-commit", scope="commit")
         self._token(
             "forever-readonly",
@@ -156,69 +169,21 @@ class TestAgentIdentityMigration(unittest.TestCase):
             """
         )
 
-        summary = upgrade(
-            self.connection,
-            migration_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
-        )
+        summary = upgrade(self.connection)
 
-        self.assertEqual(summary["converted_grants"], 3)
-        self.assertEqual(summary["skipped_tokens"], 3)
+        self.assertEqual(summary["discarded_sessions"], 2)
+        self.assertEqual(summary["discarded_tokens"], 6)
         self.assertEqual(summary["discarded_requests"], 1)
-        objects = {
-            str(row["name"])
-            for row in self.connection.execute(
-                "SELECT name FROM sqlite_master WHERE type IN ('table','index')"
-            )
-        }
-        self.assertNotIn("agent_tokens", objects)
-        self.assertIn("agent_problem_grants", objects)
-        self.assertIn("idx_agent_problem_grants_session_problem_active", objects)
-        general = self.connection.execute(
-            "SELECT general_scope FROM agent_sessions WHERE id='as-live'"
-        ).fetchone()
-        self.assertEqual(general["general_scope"], "none")
-        grants = Counter(
-            (
-                str(row["agent_session_id"]),
-                int(row["problem_id"]),
-                str(row["scope"]),
-                str(row["created_at"]),
-                str(row["expires_at"] or ""),
-            )
-            for row in self.connection.execute(
-                """
-                SELECT agent_session_id,problem_id,scope,created_at,expires_at
-                FROM agent_problem_grants
-                """
-            )
+        self.assertEqual(summary["discarded_registration_codes"], 1)
+        self.assertEqual(
+            self.connection.execute("SELECT COUNT(*) FROM agent_sessions").fetchone()[0],
+            0,
         )
         self.assertEqual(
-            grants,
-            Counter(
-                {
-                    (
-                        "as-live",
-                        1,
-                        "commit",
-                        "2025-01-01T00:00:00+00:00",
-                        "2027-01-01T00:00:00+00:00",
-                    ): 1,
-                    (
-                        "as-live",
-                        1,
-                        "readonly",
-                        "2025-02-01T00:00:00+00:00",
-                        "",
-                    ): 1,
-                    (
-                        "as-live",
-                        1,
-                        "readonly",
-                        "2025-03-01T00:00:00+00:00",
-                        "2028-01-01T00:00:00+00:00",
-                    ): 1,
-                }
-            ),
+            self.connection.execute(
+                "SELECT COUNT(*) FROM agent_problem_grants"
+            ).fetchone()[0],
+            0,
         )
         request_count = self.connection.execute(
             "SELECT COUNT(*) FROM agent_access_requests"
@@ -233,29 +198,44 @@ class TestAgentIdentityMigration(unittest.TestCase):
             "ok",
         )
 
-    def test_invalid_token_rolls_back_schema_and_data(self) -> None:
-        self._token("invalid", scope="invalid")
-
-        with self.assertRaisesRegex(RuntimeError, "invalid agent token scope"):
-            upgrade(
-                self.connection,
-                migration_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
-            )
-
-        session_columns = {
-            str(row["name"])
-            for row in self.connection.execute("PRAGMA table_info(agent_sessions)")
-        }
-        self.assertNotIn("general_scope", session_columns)
-        self.assertIsNone(
-            self.connection.execute(
-                "SELECT 1 FROM sqlite_master WHERE name='agent_problem_grants'"
-            ).fetchone()
+    def test_foreign_key_failure_preserves_legacy_data(self) -> None:
+        self.connection.execute("PRAGMA foreign_keys=OFF")
+        self.connection.execute(
+            """
+            INSERT INTO agent_tokens(
+                id,token_hash,agent_session_id,user_id,problem_id,scope,
+                created_at,expires_at,revoked_at
+            ) VALUES('broken','hash-broken','as-missing',1,1,'readonly',
+                     '2025-01-01',NULL,NULL)
+            """
         )
+
+        with self.assertRaisesRegex(RuntimeError, "foreign key check failed"):
+            upgrade(self.connection)
+
         self.assertEqual(
             self.connection.execute("SELECT COUNT(*) FROM agent_tokens").fetchone()[0],
             1,
         )
+
+    def test_backup_is_verified_before_upgrade(self) -> None:
+        self.connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        backup = Path(self.temp_dir.name) / "backup" / "metadata.db"
+
+        created = backup_database(self.database, backup)
+
+        self.assertEqual(created, backup.absolute())
+        self.assertTrue(backup.is_file())
+        sidecar = Path(str(backup) + ".sha256")
+        self.assertRegex(
+            sidecar.read_text(encoding="ascii"),
+            r"^[0-9a-f]{64}  metadata\.db\n$",
+        )
+        with sqlite3.connect(backup) as copied:
+            self.assertEqual(copied.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+            self.assertEqual(copied.execute("PRAGMA foreign_key_check").fetchall(), [])
+        with self.assertRaisesRegex(RuntimeError, "already exists"):
+            backup_database(self.database, backup)
 
 
 if __name__ == "__main__":

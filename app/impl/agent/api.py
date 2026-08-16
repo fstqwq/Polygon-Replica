@@ -7,7 +7,6 @@ from fastapi import File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 
 from app.impl.agent.shared import (
-    AGENT_IDENTITY_HEADER,
     require_agent_general,
     require_agent_problem,
     require_agent_session,
@@ -66,6 +65,7 @@ async def agent_register(request: Request, code: str):
             agent_name=str(payload.get("agent_name") or ""),
             desktop_id=str(payload.get("desktop_id") or ""),
             init_ts=str(payload.get("init_ts") or ""),
+            existing_session_id=str(payload.get("existing_session_id") or ""),
         )
         return _json_body(result)
     except LookupError:
@@ -74,6 +74,8 @@ async def agent_register(request: Request, code: str):
         return json_error_response("registration code not found", status_code=404)
     except RuntimeError:
         return json_error_response("registration code already used", status_code=410)
+    except PermissionError as exc:
+        return json_error_response(str(exc), status_code=403)
     except ValueError as exc:
         return json_error_response(str(exc), status_code=422)
 
@@ -83,8 +85,7 @@ async def agent_request_access(request: Request):
     session = require_agent_session(request)
     try:
         result = runtime().agent_service.request_problem_access(
-            agent_session_id=session.agent_session_id,
-            identity_hash=str(request.headers.get(AGENT_IDENTITY_HEADER) or ""),
+            session=session,
             problem=str(payload.get("problem") or ""),
             requested_scope=str(payload.get("scope") or "readonly"),
         )
@@ -101,8 +102,7 @@ async def agent_poll_access(request: Request, request_id: str):
     session = require_agent_session(request)
     try:
         result = runtime().agent_service.poll_access_request(
-            agent_session_id=session.agent_session_id,
-            identity_hash=str(request.headers.get(AGENT_IDENTITY_HEADER) or ""),
+            session=session,
             request_id=request_id,
         )
         return _json_body(result)
@@ -116,8 +116,7 @@ async def agent_auth_status(request: Request):
     session = require_agent_session(request)
     try:
         result = runtime().agent_service.session_status(
-            agent_session_id=session.agent_session_id,
-            identity_hash=str(request.headers.get(AGENT_IDENTITY_HEADER) or ""),
+            session=session,
         )
         return _json_body(result)
     except PermissionError as exc:
@@ -129,8 +128,7 @@ async def agent_problem_create(request: Request):
     session = require_agent_session(request)
     try:
         result = runtime().agent_service.create_problem(
-            agent_session_id=session.agent_session_id,
-            identity_hash=str(request.headers.get(AGENT_IDENTITY_HEADER) or ""),
+            session=session,
             problem=str(payload.get("problem") or ""),
         )
         return _json_body(result)

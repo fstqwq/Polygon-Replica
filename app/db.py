@@ -132,6 +132,7 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
     id TEXT PRIMARY KEY,
     user_id INTEGER NOT NULL,
     identity_hash TEXT NOT NULL,
+    credential_sha256 TEXT NOT NULL,
     agent_name TEXT NOT NULL,
     desktop_id TEXT NOT NULL,
     init_ts TEXT NOT NULL,
@@ -585,6 +586,7 @@ CREATE INDEX IF NOT EXISTS idx_pending_registrations_expires ON pending_registra
 CREATE INDEX IF NOT EXISTS idx_auth_rate_limits_expires ON auth_rate_limits(window_expires_at);
 CREATE INDEX IF NOT EXISTS idx_agent_registration_codes_expires ON agent_registration_codes(expires_at);
 CREATE INDEX IF NOT EXISTS idx_agent_sessions_user_revoked_seen ON agent_sessions(user_id, revoked_at, last_seen_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_sessions_credential_sha256 ON agent_sessions(credential_sha256);
 CREATE INDEX IF NOT EXISTS idx_agent_access_requests_session_status_created ON agent_access_requests(agent_session_id, status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_problem_grants_session_problem_active ON agent_problem_grants(
     agent_session_id, problem_id, revoked_at, expires_at
@@ -745,6 +747,7 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
         "id",
         "user_id",
         "identity_hash",
+        "credential_sha256",
         "agent_name",
         "desktop_id",
         "init_ts",

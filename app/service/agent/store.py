@@ -224,12 +224,27 @@ class AgentStore:
         )
         return None if row is None else _session_row(dict(row))
 
+    def active_session_by_credential_sha256(
+        self,
+        credential_sha256: str,
+    ) -> AgentSessionRow | None:
+        row = self.db.fetch_one(
+            self._session_select()
+            + """
+            WHERE s.credential_sha256=? AND s.revoked_at IS NULL
+            LIMIT 1
+            """,
+            [credential_sha256],
+        )
+        return None if row is None else _session_row(dict(row))
+
     def insert_session(
         self,
         *,
         session_id: str,
         user_id: int,
         identity_hash: str,
+        credential_sha256: str,
         agent_name: str,
         desktop_id: str,
         init_ts: str,
@@ -238,14 +253,16 @@ class AgentStore:
         self.db.execute(
             """
             INSERT INTO agent_sessions(
-                id,user_id,identity_hash,agent_name,desktop_id,init_ts,
+                id,user_id,identity_hash,credential_sha256,
+                agent_name,desktop_id,init_ts,
                 created_at,last_seen_at,general_scope,revoked_at
-            ) VALUES(?,?,?,?,?,?,?,?, 'none',NULL)
+            ) VALUES(?,?,?,?,?,?,?,?,?, 'none',NULL)
             """,
             [
                 session_id,
                 int(user_id),
                 identity_hash,
+                credential_sha256,
                 agent_name,
                 desktop_id,
                 init_ts,
@@ -253,6 +270,35 @@ class AgentStore:
                 created_at,
             ],
         )
+
+    def rotate_session_credential(
+        self,
+        *,
+        session_id: str,
+        user_id: int,
+        identity_hash: str,
+        credential_sha256: str,
+        last_seen_at: str,
+    ) -> bool:
+        def transaction(connection: sqlite3.Connection) -> bool:
+            cursor = connection.execute(
+                """
+                UPDATE agent_sessions
+                SET credential_sha256=?,last_seen_at=?
+                WHERE id=? AND user_id=? AND identity_hash=?
+                  AND revoked_at IS NULL
+                """,
+                [
+                    credential_sha256,
+                    last_seen_at,
+                    session_id,
+                    int(user_id),
+                    identity_hash,
+                ],
+            )
+            return cursor.rowcount == 1
+
+        return self.db.write_transaction(transaction)
 
     def touch_session(self, session_id: str, *, last_seen_at: str) -> None:
         self.db.execute(
