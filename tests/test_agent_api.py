@@ -1356,14 +1356,6 @@ class TestAgentAPI(E2ETestBase):
                 identity_hash=identity_hash,
                 scope="readonly",
             )
-            _workspace_request, workspace_token = self._approve_grant(
-                client,
-                auth_cookie=auth_cookie,
-                agent_session_id=session_id,
-                identity_hash=identity_hash,
-                scope="workspace",
-            )
-
             snapshot = client.get(
                 "/agent/v1/workspace/snapshot",
                 params={"problem": self.problem},
@@ -1407,6 +1399,14 @@ class TestAgentAPI(E2ETestBase):
                 files={"archive": ("workspace.zip", local_zip, "application/zip")},
             )
             self.assertEqual(readonly_apply.status_code, 403, readonly_apply.text)
+
+            _workspace_request, workspace_token = self._approve_grant(
+                client,
+                auth_cookie=auth_cookie,
+                agent_session_id=session_id,
+                identity_hash=identity_hash,
+                scope="workspace",
+            )
 
             conflict = client.post(
                 "/agent/v1/workspace/apply",

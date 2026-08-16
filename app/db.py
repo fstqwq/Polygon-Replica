@@ -586,8 +586,9 @@ CREATE INDEX IF NOT EXISTS idx_auth_rate_limits_expires ON auth_rate_limits(wind
 CREATE INDEX IF NOT EXISTS idx_agent_registration_codes_expires ON agent_registration_codes(expires_at);
 CREATE INDEX IF NOT EXISTS idx_agent_sessions_user_revoked_seen ON agent_sessions(user_id, revoked_at, last_seen_at DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_access_requests_session_status_created ON agent_access_requests(agent_session_id, status, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_agent_problem_grants_session_problem_active
-ON agent_problem_grants(agent_session_id, problem_id, revoked_at, expires_at);
+CREATE INDEX IF NOT EXISTS idx_agent_problem_grants_session_problem_active ON agent_problem_grants(
+    agent_session_id, problem_id, revoked_at, expires_at
+);
 CREATE INDEX IF NOT EXISTS idx_system_config_updated ON system_config(updated_at DESC);
 """
 
