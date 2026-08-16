@@ -27,7 +27,6 @@
   ],
   "service": [
     "test_access_service.py",
-    "test_agent_identity_migration.py",
     "test_artifact_cleanup.py",
     "test_database_service.py",
     "test_db_sql_trace.py",

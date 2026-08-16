@@ -173,32 +173,6 @@ step is missed, the process remains available only as a raw `503` diagnostic
 that lists the missing schema objects; no workers or Judgehost runtime start.
 Extra tables, columns, indexes, and rows do not block startup and are preserved.
 
-The Agent identity/grants release has a stopped-service schema replacement.
-For that release, stop the service and pull the exact new revision before the
-migration, then use SQLite's backup operation to capture the stopped database,
-including any committed WAL state, verify that independent copy, and run:
-
-```bash
-sudo systemctl stop polygon-replica.service
-cd /opt/polygon-replica
-sudo -u polygon git pull --ff-only
-agent_grants_backup="/var/backups/polygon-replica/metadata-pre-agent-grants-$(date -u +%Y%m%dT%H%M%SZ).db"
-sudo -u polygon .venv/bin/python scripts/upgrade_agent_identity_grants.py \
-  --db /var/lib/polygon-replica/metadata.db \
-  --backup "$agent_grants_backup"
-```
-
-Use the configured SQLite path if it differs. The procedure discards every old
-Agent registration code, session, token, access request, and authorization;
-none of that identity-header state is migrated. It then installs the empty
-grant schema and hashed credential column. The change is atomic and
-intentionally refuses an already-upgraded or unexpected schema. The migration
-uses Python's SQLite backup API, verifies the independent copy before changing
-the source, and writes a `.sha256` sidecar. Deploy the matching Polygon Agent
-CLI at the same time. Each existing CLI must run `init` with a fresh
-registration URL to create a new session, then request any required permissions
-again.
-
 The bearer credential is replayable by design. Keep the application data root
 and database private to the runtime user. The host installer applies mode
 `0700` to `/var/lib/polygon-replica`, and the systemd unit uses `UMask=0077` so
