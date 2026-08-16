@@ -69,13 +69,40 @@ The array order is testcase order. Each entry contains:
 - optional `sample`: a boolean whose absence means `false`
 - optional `sample_input` and `sample_output` strings
 - optional `sample_output_validate`, a boolean whose absence means `true`
+- optional `sample_json`, a structured `pair` or `interaction` sample object
+
+`sample_json` is mutually exclusive with `sample_input` and `sample_output`.
+Pair samples contain one or more contiguous passes with inline `input` and
+`output` strings. Interaction samples contain contiguous passes whose ordered
+events each provide `source` (`interactor` or `solution`) and inline `content`.
+The Tests page validates the same strict shape before submission; unknown
+fields remain invalid on the server.
+
+```json
+{
+  "sample": true,
+  "sample_json": {
+    "presentation": "pair",
+    "passes": [
+      {"number": 1, "input": "1\n", "output": "2\n"},
+      {"number": 2, "input": "2\n", "output": "3\n"}
+    ]
+  }
+}
+```
+
+For an interactive sample, `presentation` is `interaction` and each pass has
+an `events` array such as
+`{"source":"interactor","content":"1\n"}`. Pass numbers start at one and
+are contiguous. Event array order is the displayed protocol order.
 
 Unknown or duplicate object keys, a top-level array, string booleans, normalized
 aliases, duplicate IDs, and other scalar types are invalid.
 
 The serialized file is bounded by `TEXTAREA_MAX_BYTES` (256 KiB by default).
 For each sample entry, the combined UTF-8 bytes of `sample_input` and
-`sample_output` are independently bounded by `STATEMENT_SAMPLE_MAX_BYTES`
+`sample_output`, or all inline `sample_json` content, are independently bounded
+by `STATEMENT_SAMPLE_MAX_BYTES`
 (32 KiB by default). The same per-sample limit applies when import, preview, or
 package rendering fills missing display data from materialized test input and
 answer files. Oversized samples are rejected rather than truncated. Different
@@ -211,10 +238,11 @@ interaction pass:
   events[].textFile
 ```
 
-The structured extension is a rendering-context contract, not canonical
-problem source. `StatementExamplesProducer` creates it from the canonical
-main-correct `ExecutionResult.passes` projection. Event order and pass numbers
-are explicit; there is no inferred alternation, event `kind`, or EOF entry.
+The rendered structured extension uses controlled resource paths and is not
+written back into authored source. `StatementExamplesProducer` creates it from
+either an authored inline `sample_json` or the canonical main-correct
+`ExecutionResult.passes` projection. Event order and pass numbers are explicit;
+there is no inferred alternation, event `kind`, or EOF entry.
 Presence is authoritative, so an explicitly empty `samples` array does not fall
 back to Polygon samples. The renderer writes the bundle's controlled UTF-8 text
 resources relative to the rendered problem compile directory.

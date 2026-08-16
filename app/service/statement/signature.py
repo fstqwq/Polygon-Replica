@@ -137,6 +137,8 @@ def statement_sources_signature(
         test_id = row["id"]
         kind = row["kind"]
         # Custom sample text already changes tests/spec.json hash.
+        if row["sample_json"] is not None:
+            continue
         if not row["sample_input"]:
             sample_in = _safe_workspace_regular_file(
                 workspace,

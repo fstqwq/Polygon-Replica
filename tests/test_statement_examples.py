@@ -175,6 +175,78 @@ class TestStatementExamplesProducer(unittest.TestCase):
             problem_limits=_PROBLEM_LIMITS,
         )
 
+    def test_authored_structured_pair_needs_no_verification(self) -> None:
+        self._write_spec(
+            [
+                {
+                    "id": "901",
+                    "kind": "manual",
+                    "sample": True,
+                    "sample_json": {
+                        "presentation": "pair",
+                        "passes": [
+                            {"number": 1, "input": "first\n", "output": "one\n"},
+                            {"number": 2, "input": "second\n", "output": "two\n"},
+                        ],
+                    },
+                }
+            ]
+        )
+        evidence = _VerificationEvidence(
+            self.artifacts,
+            mode="pass-fail",
+            tests_meta_rows=[],
+            tasks=[],
+        )
+
+        bundle = self._produce(evidence, verification_id="")
+
+        sample = bundle["context"]["samples"][0]
+        self.assertEqual(sample["presentation"], "pair")
+        self.assertEqual([row["number"] for row in sample["passes"]], [1, 2])
+        self.assertEqual(
+            {row["content"] for row in bundle["resources"]},
+            {"first\n", "one\n", "second\n", "two\n"},
+        )
+
+    def test_authored_structured_interaction_needs_no_verification(self) -> None:
+        self._write_spec(
+            [
+                {
+                    "id": "901",
+                    "kind": "manual",
+                    "sample": True,
+                    "sample_json": {
+                        "presentation": "interaction",
+                        "passes": [
+                            {
+                                "number": 1,
+                                "events": [
+                                    {"source": "interactor", "content": "question\n"},
+                                    {"source": "solution", "content": "answer\n"},
+                                ],
+                            }
+                        ],
+                    },
+                }
+            ]
+        )
+        evidence = _VerificationEvidence(
+            self.artifacts,
+            mode="interactive",
+            tests_meta_rows=[],
+            tasks=[],
+        )
+
+        bundle = self._produce(evidence, verification_id="")
+
+        sample = bundle["context"]["samples"][0]
+        self.assertEqual(sample["presentation"], "interaction")
+        self.assertEqual(
+            [event["source"] for event in sample["passes"][0]["events"]],
+            ["interactor", "solution"],
+        )
+
     def test_multipass_pair_uses_each_pass_and_does_not_modify_sources(self) -> None:
         self._write_spec([{"id": "901", "kind": "manual", "sample": True}])
         source_before = (self.workspace / "tests" / "spec.json").read_bytes()

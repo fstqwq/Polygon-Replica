@@ -19,6 +19,7 @@ from app.impl.tests_spec.shared import (
     tests_spec_gen_script_context,
     tests_spec_row,
     tests_spec_sample_input_value,
+    tests_spec_sample_json_value,
     tests_spec_sample_output_validate_value,
     tests_spec_sample_output_value,
 )
@@ -147,6 +148,7 @@ def add_manual_test(
     sample_input: Annotated[str | None, Form()] = None,
     sample_output: Annotated[str | None, Form()] = None,
     sample_output_validate: Annotated[list[str] | None, Form()] = None,
+    sample_json: Annotated[str | None, Form()] = None,
 ):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
@@ -163,8 +165,10 @@ def add_manual_test(
         safe_sample_input = tests_spec_sample_input_value(sample_input, '')
         safe_sample_output = tests_spec_sample_output_value(sample_output, '')
         safe_sample_output_validate = tests_spec_sample_output_validate_value(sample_output_validate, True)
+        safe_sample_json = tests_spec_sample_json_value(sample_json)
         if not safe_sample:
             safe_sample_output_validate = False
+            safe_sample_json = None
         with runtime().workspace_service.workspace_lock(workspace):
             added_index, safe_test_id = tests_spec_add_single_entry(
                 workspace,
@@ -175,6 +179,7 @@ def add_manual_test(
                 sample_input=safe_sample_input,
                 sample_output=safe_sample_output,
                 sample_output_validate=safe_sample_output_validate,
+                sample_json=safe_sample_json,
             )
             redirect_query = f'focus={added_index}'
     except (ValueError, OSError, HTTPException) as exc:
@@ -193,6 +198,7 @@ async def upload_manual_test(
     sample_input: Annotated[str | None, Form()] = None,
     sample_output: Annotated[str | None, Form()] = None,
     sample_output_validate: Annotated[list[str] | None, Form()] = None,
+    sample_json: Annotated[str | None, Form()] = None,
 ):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
@@ -215,8 +221,10 @@ async def upload_manual_test(
         safe_sample_input = tests_spec_sample_input_value(sample_input, '')
         safe_sample_output = tests_spec_sample_output_value(sample_output, '')
         safe_sample_output_validate = tests_spec_sample_output_validate_value(sample_output_validate, True)
+        safe_sample_json = tests_spec_sample_json_value(sample_json)
         if not safe_sample:
             safe_sample_output_validate = False
+            safe_sample_json = None
         with runtime().workspace_service.workspace_lock(workspace):
             added_index, safe_test_id = tests_spec_add_single_entry(
                 workspace,
@@ -227,6 +235,7 @@ async def upload_manual_test(
                 sample_input=safe_sample_input,
                 sample_output=safe_sample_output,
                 sample_output_validate=safe_sample_output_validate,
+                sample_json=safe_sample_json,
             )
             redirect_query = f'focus={added_index}'
     except (ValueError, OSError, HTTPException) as exc:
@@ -250,6 +259,7 @@ def add_generator_test(
     sample_input: Annotated[str | None, Form()] = None,
     sample_output: Annotated[str | None, Form()] = None,
     sample_output_validate: Annotated[list[str] | None, Form()] = None,
+    sample_json: Annotated[str | None, Form()] = None,
 ):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
@@ -263,8 +273,10 @@ def add_generator_test(
         safe_sample_input = tests_spec_sample_input_value(sample_input, '')
         safe_sample_output = tests_spec_sample_output_value(sample_output, '')
         safe_sample_output_validate = tests_spec_sample_output_validate_value(sample_output_validate, True)
+        safe_sample_json = tests_spec_sample_json_value(sample_json)
         if not safe_sample:
             safe_sample_output_validate = False
+            safe_sample_json = None
         with runtime().workspace_service.workspace_lock(workspace):
             added_index, safe_test_id = tests_spec_add_single_entry(
                 workspace,
@@ -275,6 +287,7 @@ def add_generator_test(
                 sample_input=safe_sample_input,
                 sample_output=safe_sample_output,
                 sample_output_validate=safe_sample_output_validate,
+                sample_json=safe_sample_json,
             )
             redirect_query = f'focus={added_index}'
     except (ValueError, OSError, HTTPException) as exc:
@@ -303,6 +316,10 @@ async def edit_spec_test(
         form = await request.form()
         sample_input = _optional_single_form_text(form, "sample_input")
         sample_output = _optional_single_form_text(form, "sample_output")
+        sample_json = _optional_single_form_text(form, "sample_json")
+        sample_format = _optional_single_form_text(form, "sample_format") or "legacy"
+        if sample_format not in {"legacy", "json"}:
+            raise ValueError("invalid sample content format")
         safe_test_id = normalize_test_id(tests_spec_form_text(test_id))
         safe_kind = normalize_test_kind(tests_spec_form_text(kind))
         safe_sample = tests_spec_bool_flag(tests_spec_form_text(sample))
@@ -319,8 +336,17 @@ async def edit_spec_test(
                 sample_output_validate,
                 current.get('sample_output_validate', True),
             )
+            safe_sample_json = tests_spec_sample_json_value(
+                sample_json, current.get('sample_json')
+            )
+            if sample_format == "json":
+                safe_sample_input = ""
+                safe_sample_output = ""
+            else:
+                safe_sample_json = None
             if not safe_sample:
                 safe_sample_output_validate = False
+                safe_sample_json = None
             submitted_payload = tests_spec_form_text(payload)
             if not str(submitted_payload):
                 submitted_payload = tests_spec_read_payload(workspace, current)
@@ -340,6 +366,7 @@ async def edit_spec_test(
                 sample_input=safe_sample_input,
                 sample_output=safe_sample_output,
                 sample_output_validate=safe_sample_output_validate,
+                sample_json=safe_sample_json,
                 index=idx,
             )
             _write_tests_spec(spec_path, entries)
@@ -450,6 +477,7 @@ def save_gen_script(problem: str, user: Annotated[str, Depends(require_session_u
                     safe_sample_output_validate = existing_gen_rows[idx][
                         'sample_output_validate'
                     ]
+                    safe_sample_json = existing_gen_rows[idx]['sample_json']
                 else:
                     safe_test_id = next_test_id(seed_entries)
                     seed_entries.append(
@@ -463,6 +491,7 @@ def save_gen_script(problem: str, user: Annotated[str, Depends(require_session_u
                     safe_sample_input = ''
                     safe_sample_output = ''
                     safe_sample_output_validate = True
+                    safe_sample_json = None
                 replacement_gen_rows.append(
                     {
                         'id': safe_test_id,
@@ -471,6 +500,7 @@ def save_gen_script(problem: str, user: Annotated[str, Depends(require_session_u
                         'sample_input': safe_sample_input,
                         'sample_output': safe_sample_output,
                         'sample_output_validate': safe_sample_output_validate,
+                        'sample_json': safe_sample_json,
                         'command': command,
                     }
                 )
@@ -492,6 +522,7 @@ def save_gen_script(problem: str, user: Annotated[str, Depends(require_session_u
                             sample_input=replacement['sample_input'],
                             sample_output=replacement['sample_output'],
                             sample_output_validate=replacement['sample_output_validate'],
+                            sample_json=replacement['sample_json'],
                             index=len(rebuilt_entries) + 1,
                         )
                     )
@@ -504,6 +535,7 @@ def save_gen_script(problem: str, user: Annotated[str, Depends(require_session_u
                         sample_input=normalized_row['sample_input'],
                         sample_output=normalized_row['sample_output'],
                         sample_output_validate=normalized_row['sample_output_validate'],
+                        sample_json=normalized_row['sample_json'],
                         index=len(rebuilt_entries) + 1,
                     )
                 )
@@ -516,6 +548,7 @@ def save_gen_script(problem: str, user: Annotated[str, Depends(require_session_u
                         sample_input=replacement['sample_input'],
                         sample_output=replacement['sample_output'],
                         sample_output_validate=replacement['sample_output_validate'],
+                        sample_json=replacement['sample_json'],
                         index=len(rebuilt_entries) + 1,
                     )
                 )

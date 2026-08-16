@@ -20,6 +20,7 @@ from app.service.problem.test_spec import (
     normalize_test_kind,
     normalize_tests_spec_entry,
 )
+from app.service.problem.sample_json import SampleJson, normalize_sample_json
 
 
 def tests_spec_gen_script_context(workspace: Path) -> dict[str, object]:
@@ -85,6 +86,17 @@ def tests_spec_sample_output_validate_value(
     return tests_spec_bool_flag(raw)
 
 
+def tests_spec_sample_json_value(
+    raw: str | None,
+    fallback: SampleJson | None = None,
+) -> SampleJson | None:
+    value: object = fallback if raw is None else tests_spec_form_text(raw).strip()
+    return normalize_sample_json(
+        value,
+        max_bytes=runtime().config_values.integer("STATEMENT_SAMPLE_MAX_BYTES"),
+    )
+
+
 def tests_spec_row(
     *,
     test_id: str,
@@ -93,6 +105,7 @@ def tests_spec_row(
     sample_input: str = "",
     sample_output: str = "",
     sample_output_validate: bool = True,
+    sample_json: SampleJson | None = None,
     index: int = 0,
 ) -> TestSpecEntry:
     payload: dict[str, object] = {
@@ -108,6 +121,8 @@ def tests_spec_row(
         payload["sample_output"] = safe_sample_output
     if bool(sample) and safe_sample_output and (not bool(sample_output_validate)):
         payload["sample_output_validate"] = False
+    if sample_json is not None:
+        payload["sample_json"] = sample_json
     return normalize_tests_spec_entry(
         payload,
         index=index,
@@ -127,6 +142,7 @@ def tests_spec_add_single_entry(
     sample_input: str,
     sample_output: str,
     sample_output_validate: bool,
+    sample_json: SampleJson | None,
 ) -> tuple[int, str]:
     entries, spec_path = read_tests_spec(
         workspace,
@@ -146,6 +162,7 @@ def tests_spec_add_single_entry(
             sample_input=sample_input,
             sample_output=sample_output,
             sample_output_validate=sample_output_validate,
+            sample_json=sample_json,
             index=len(entries) + 1,
         )
     )

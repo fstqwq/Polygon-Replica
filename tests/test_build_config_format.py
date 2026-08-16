@@ -365,6 +365,52 @@ class TestBuildConfigFormat(unittest.TestCase):
                     sample_max_bytes=_SAMPLE_LIMIT,
                 )
 
+    def test_tests_spec_structured_sample_round_trip_and_exclusivity(self) -> None:
+        structured = {
+            "presentation": "interaction",
+            "passes": [
+                {
+                    "number": 1,
+                    "events": [
+                        {"source": "interactor", "content": "question\n"},
+                        {"source": "solution", "content": "answer\n"},
+                    ],
+                }
+            ],
+        }
+        text = dumps_tests_spec(
+            [
+                {
+                    "id": "001",
+                    "kind": "manual",
+                    "sample": True,
+                    "sample_json": structured,
+                }
+            ],
+            document_max_bytes=_DOCUMENT_LIMIT,
+            sample_max_bytes=_SAMPLE_LIMIT,
+        )
+        rows = loads_tests_spec(
+            text,
+            document_max_bytes=_DOCUMENT_LIMIT,
+            sample_max_bytes=_SAMPLE_LIMIT,
+        )
+        self.assertEqual(rows[0]["sample_json"], structured)
+        with self.assertRaisesRegex(ValueError, "cannot be combined"):
+            dumps_tests_spec(
+                [
+                    {
+                        "id": "001",
+                        "kind": "manual",
+                        "sample": True,
+                        "sample_input": "legacy\n",
+                        "sample_json": structured,
+                    }
+                ],
+                document_max_bytes=_DOCUMENT_LIMIT,
+                sample_max_bytes=_SAMPLE_LIMIT,
+            )
+
     def test_solution_descriptor_has_one_canonical_vocabulary(self) -> None:
         text = render_solution_desc(
             "tle_or_correct", "first note\nsecond note"

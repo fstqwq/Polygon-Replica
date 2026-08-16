@@ -48,6 +48,7 @@ from tests.ui_support import (
     export_create,
     revision_commit,
     run_details_page,
+    run_details_sample_json,
     run_details_test_fragment,
     run_execute,
     run_cancel,
@@ -111,6 +112,8 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         sample_input: str | None = None,
         sample_output: str | None = None,
         sample_output_validate: list[str] | None = None,
+        sample_format: str | None = None,
+        sample_json: str | None = None,
     ) -> Response:
         form_data: dict[str, object] = {
             "index": index,
@@ -125,6 +128,10 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             form_data["sample_output"] = sample_output
         if sample_output_validate is not None:
             form_data["sample_output_validate"] = sample_output_validate
+        if sample_format is not None:
+            form_data["sample_format"] = sample_format
+        if sample_json is not None:
+            form_data["sample_json"] = sample_json
         request = _post_form_request(
             f"/problems/{problem}/tests/spec/edit",
             form_data,
@@ -143,6 +150,48 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             )
         )
 
+    def test_tests_spec_edit_accepts_structured_sample_json(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        spec_path = ws / "tests" / "spec.json"
+        spec_path.write_text(dumps_default_tests_spec(), encoding="utf-8")
+        added = tests_spec_add_manual(
+            problem="alice/sample",
+            user="alice",
+            test_id="001",
+            sample="1",
+            manual_input="judge input\n",
+        )
+        self.assertEqual(added.status_code, 303)
+        structured = {
+            "presentation": "pair",
+            "passes": [
+                {"number": 1, "input": "first\n", "output": "one\n"},
+                {"number": 2, "input": "second\n", "output": "two\n"},
+            ],
+        }
+
+        response = self._edit_spec_request(
+            problem="alice/sample",
+            user="alice",
+            index="1",
+            test_id="001",
+            kind="manual",
+            sample="1",
+            payload="judge input\n",
+            sample_format="json",
+            sample_json=json.dumps(structured),
+        )
+
+        self.assertEqual(response.status_code, 303)
+        stored = json.loads(spec_path.read_text(encoding="utf-8"))["tests"][0]
+        self.assertEqual(stored["sample_json"], structured)
+        page = tests_page(
+            _request("/problems/alice/sample/tests"), "alice/sample", "alice"
+        )
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertIn("Structured JSON", html)
+        self.assertIn("structured sample", html)
+        self.assertIn('data-sample-json="1"', html)
     def _problem_readiness(
         self,
         *,
@@ -3971,6 +4020,33 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ):
             self.assertIn(evidence, html)
         self.assertLess(html.index("first pass feedback"), html.index("second pass feedback"))
+        json_response = run_details_sample_json(
+            _request(
+                "/problems/alice/sample/run/details/sample-json",
+                f"verification_id={verification_id}&test=001.in&program_id=solution-0",
+            ),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(json_response.status_code, 200)
+        self.assertEqual(
+            json.loads(json_response.body.decode("utf-8")),
+            {
+                "presentation": "pair",
+                "passes": [
+                    {
+                        "number": 1,
+                        "input": "original input\n",
+                        "output": "first pass output\n",
+                    },
+                    {
+                        "number": 2,
+                        "input": "next pass input\n",
+                        "output": "second pass output\n",
+                    },
+                ],
+            },
+        )
 
     def test_interactive_detail_uses_persisted_mode_and_exposes_every_pass(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")
@@ -4194,6 +4270,31 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertNotIn("third pass input", html)
         self.assertNotIn("must not be read", html)
         self.assertNotIn("trap", html)
+        self.assertIn("download json", html)
+        self.assertIn("/run/details/sample-json?", html)
+        json_response = run_details_sample_json(
+            _request(
+                "/problems/alice/sample/run/details/sample-json",
+                f"verification_id={verification_id}&test=001.in&program_id=solution-1",
+            ),
+            "alice/sample",
+            "alice",
+        )
+        downloaded = json.loads(json_response.body.decode("utf-8"))
+        self.assertEqual(
+            downloaded,
+            {
+                "presentation": "interaction",
+                "passes": [
+                    {
+                        "number": 1,
+                        "events": [
+                            {"source": "interactor", "content": "trap"},
+                        ],
+                    }
+                ],
+            },
+        )
 
         with self.assertRaises(HTTPException) as unknown_run:
             run_details_test_fragment(

@@ -1,10 +1,12 @@
 from collections.abc import Mapping
+import json
 import logging
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import quote_plus
 
 from fastapi import File, Form, HTTPException, Request, UploadFile, Depends
+from fastapi.responses import Response
 
 from app.impl.auth.session import require_session_user
 from app.impl.auth.shared import redirect_response, template_response
@@ -13,6 +15,7 @@ from app.impl.contest.workspace_scope import (
     problem_template_navigation,
 )
 from app.impl.runtime.dependency import runtime
+from app.impl.run_export.artifact import verification_artifact_file
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_job import start_verification_job
 from app.impl.workspace.context_ui import page_ctx
@@ -37,6 +40,9 @@ from app.impl.workspace.run_view_detail import build_run_detail_context
 from app.impl.workspace.run_view_list import run_list_rows
 from app.main_util import normalize_optional_component_source_path, normalize_optional_component_source_path_safe, read_fileobj_bytes_limited
 from app.service.problem.solution_metadata import normalize_expected_behavior
+from app.service.problem.sample_json import SampleJsonEvent, normalize_sample_json
+from app.service.problem.test_spec import read_statement_sample_text
+from app.service.statement.sample_transcript import statement_sample_events_from_transcript
 from app.impl.run_export.query import (
     _rerun_solution_paths_from_verification,
     _run_detail_use_compact_layout,
@@ -196,7 +202,11 @@ def run_details_page(request: Request, problem: str, user: Annotated[str, Depend
     detail_page_ctx['topbar_max_1400'] = detail_table_compact
     return template_response(request, 'run_details.html', {'ctx': detail_page_ctx, **detail_ctx})
 
-def run_details_test_fragment(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
+def _selected_run_test_detail(
+    request: Request,
+    problem: str,
+    user: str,
+) -> tuple[ProblemPageContext, str, list[dict[str, object]], dict[str, object]]:
     ctx = page_ctx(
         problem,
         user,
@@ -235,11 +245,20 @@ def run_details_test_fragment(request: Request, problem: str, user: Annotated[st
     detail_rows = detail_ctx['detail_rows']
     if not detail_rows:
         raise HTTPException(status_code=404, detail='test detail not found')
-    row = detail_rows[0]
+    return ctx, str(detail_ctx['verification_id']), detail_columns, detail_rows[0]
+
+
+def run_details_test_fragment(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
+    ctx, verification_id, detail_columns, row = _selected_run_test_detail(
+        request,
+        problem,
+        user,
+    )
     fragment_context: dict[str, object] = {
         'ctx': ctx,
         'row': row,
         'detail_columns': detail_columns,
+        'verification_id': verification_id,
     }
     fragment_context.update(problem_template_navigation(request, problem))
     response = runtime().templates.TemplateResponse(
@@ -248,6 +267,141 @@ def run_details_test_fragment(request: Request, problem: str, user: Annotated[st
         fragment_context,
     )
     return response
+
+
+def _detail_mapping(value: object, *, label: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise HTTPException(status_code=409, detail=f"{label} is unavailable")
+    return value
+
+
+def _sample_artifact_text(
+    preview_value: object,
+    *,
+    label: str,
+    max_bytes: int,
+) -> str:
+    preview = _detail_mapping(preview_value, label=label)
+    verification_id = preview.get("download_verification_id")
+    rel_path = preview.get("download_rel_path")
+    if not isinstance(verification_id, str) or not isinstance(rel_path, str):
+        raise HTTPException(status_code=409, detail=f"{label} was not captured")
+    artifact = verification_artifact_file(verification_id, rel_path)
+    if artifact is None:
+        raise HTTPException(status_code=409, detail=f"{label} is unavailable")
+    payload, _filename = artifact
+    try:
+        return read_statement_sample_text(payload.path, max_bytes=max_bytes)
+    except ValueError as exc:
+        raise HTTPException(status_code=413, detail=f"{label}: {exc}") from exc
+
+
+def _sample_transcript_events(
+    transcript_value: object,
+    *,
+    label: str,
+    max_bytes: int,
+) -> list[SampleJsonEvent]:
+    transcript_projection = _detail_mapping(transcript_value, label=label)
+    verification_id = transcript_projection.get("download_verification_id")
+    rel_path = transcript_projection.get("download_rel_path")
+    if not isinstance(verification_id, str) or not isinstance(rel_path, str):
+        raise HTTPException(status_code=409, detail=f"{label} was not captured")
+    artifact = verification_artifact_file(verification_id, rel_path)
+    if artifact is None:
+        raise HTTPException(status_code=409, detail=f"{label} is unavailable")
+    payload, _filename = artifact
+    try:
+        return statement_sample_events_from_transcript(
+            payload.path,
+            raw_size_bytes=payload.size,
+            max_bytes=max_bytes,
+            label=label,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+def run_details_sample_json(
+    request: Request,
+    problem: str,
+    user: Annotated[str, Depends(require_session_user)],
+) -> Response:
+    """Download one solution's complete test evidence as authored sample JSON."""
+
+    _ctx, _verification_id, detail_columns, row = _selected_run_test_detail(
+        request,
+        problem,
+        user,
+    )
+    if len(detail_columns) != 1:
+        raise HTTPException(status_code=400, detail="program_id is required")
+    cells = row.get("cells")
+    if not isinstance(cells, list) or len(cells) != 1:
+        raise HTTPException(status_code=404, detail="run detail not found")
+    cell = _detail_mapping(cells[0], label="solution detail")
+    detail = _detail_mapping(cell.get("detail"), label="solution detail")
+    if bool(detail.get("mode_malformed")):
+        raise HTTPException(status_code=409, detail="verification mode is unavailable")
+    pass_values = detail.get("pass_rows")
+    if not isinstance(pass_values, list) or not pass_values:
+        raise HTTPException(status_code=409, detail="pass evidence is unavailable")
+
+    max_bytes = runtime().config_values.integer("STATEMENT_SAMPLE_MAX_BYTES")
+    is_interactive = bool(detail.get("is_interactive"))
+    passes: list[dict[str, object]] = []
+    for index, pass_value in enumerate(pass_values, start=1):
+        pass_row = _detail_mapping(pass_value, label=f"pass {index}")
+        pass_number = pass_row.get("pass_number")
+        if isinstance(pass_number, bool) or not isinstance(pass_number, int):
+            raise HTTPException(status_code=409, detail=f"pass {index} number is invalid")
+        if is_interactive:
+            passes.append(
+                {
+                    "number": pass_number,
+                    "events": _sample_transcript_events(
+                        pass_row.get("interactive_transcript"),
+                        label=f"pass {pass_number} transcript",
+                        max_bytes=max_bytes,
+                    ),
+                }
+            )
+        else:
+            passes.append(
+                {
+                    "number": pass_number,
+                    "input": _sample_artifact_text(
+                        pass_row.get("input_preview"),
+                        label=f"pass {pass_number} input",
+                        max_bytes=max_bytes,
+                    ),
+                    "output": _sample_artifact_text(
+                        pass_row.get("output_preview"),
+                        label=f"pass {pass_number} output",
+                        max_bytes=max_bytes,
+                    ),
+                }
+            )
+    try:
+        value = normalize_sample_json(
+            {
+                "presentation": "interaction" if is_interactive else "pair",
+                "passes": passes,
+            },
+            max_bytes=max_bytes,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if value is None:
+        raise HTTPException(status_code=409, detail="sample evidence is unavailable")
+    return Response(
+        content=json.dumps(value, ensure_ascii=False, indent=2) + "\n",
+        media_type="application/json",
+        headers={
+            "Content-Disposition": "attachment; filename=sample.json",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 def run_cancel(problem: str, user: Annotated[str, Depends(require_session_user)], verification_id: Annotated[str, Form()] = ""):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False, include_workspace_changes=False)

@@ -13,6 +13,7 @@ from app.service.problem.solution_metadata import (
 )
 from app.service.problem.source_file import require_regular_source_file
 from app.service.problem.source_tree import solution_sources
+from app.service.problem.sample_json import dumps_sample_json
 from app.service.problem.test_spec import (
     TESTS_SPEC_REL,
     TestSpecEntry,
@@ -160,6 +161,8 @@ class ProblemSourceQueryService:
                     **entry,
                     "custom_sample_input": bool(entry["sample_input"]),
                     "custom_sample_output": bool(entry["sample_output"]),
+                    "custom_sample_json": entry["sample_json"] is not None,
+                    "sample_json_text": dumps_sample_json(entry["sample_json"]),
                     "payload_path": payload_path,
                     "payload": payload,
                     "preview": preview,

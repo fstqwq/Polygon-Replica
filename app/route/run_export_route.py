@@ -1,10 +1,15 @@
 from fastapi.responses import HTMLResponse
 
-from app.impl.run_export.artifact import artifact_file, export_file, verified_revision_file
+from app.impl.run_export.artifact import (
+    artifact_file,
+    export_file,
+    verified_revision_file,
+)
 from app.impl.run_export.export import export_create, export_page
 from app.impl.run_export.run import (
     run_cancel,
     run_details_page,
+    run_details_sample_json,
     run_details_test_fragment,
     run_execute,
     run_new_page,
@@ -39,6 +44,12 @@ router.add_api_route(
     run_details_test_fragment,
     methods=["GET"],
     response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/problems/{problem:path}/run/details/sample-json",
+    run_details_sample_json,
+    methods=["GET"],
+    name="run_details_sample_json",
 )
 router.add_api_route(
     "/problems/{problem:path}/run/execute",

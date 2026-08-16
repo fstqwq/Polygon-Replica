@@ -31,8 +31,9 @@ The default examples consumer prefers structured `problem.examples.samples`
 data and otherwise projects existing `problem.sampleTests` for source-only
 callers. Browser preview and verified-revision statement builds both use the
 same `StatementExamplesProducer`, verification detail read model, pass artifact
-resolver, override priority, and strict failure rules. Multi-pass pairs and
-interactive events are render resources only and are never persisted in
+resolver, override priority, and strict failure rules. Authored `sample_json`
+may define multi-pass pairs or interaction events inline; the producer converts
+those strings into render resources without writing derived paths back to
 `tests/spec.json`.
 
 The source layout is owned by the

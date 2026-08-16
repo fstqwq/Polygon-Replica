@@ -17,6 +17,7 @@ from app.service.problem.json_codec import (
     require_keys,
 )
 from app.service.problem.source_file import require_regular_source_file
+from app.service.problem.sample_json import SampleJson, normalize_sample_json
 
 TESTS_SPEC_REL = Path("tests/spec.json")
 TESTS_SPEC_MANUAL_DIR_REL = Path("tests/manual")
@@ -30,6 +31,7 @@ _TEST_ENTRY_KEYS = frozenset(
         "sample_input",
         "sample_output",
         "sample_output_validate",
+        "sample_json",
     }
 )
 _TEST_ENTRY_REQUIRED_KEYS = frozenset({"id", "kind"})
@@ -45,6 +47,7 @@ class TestSpecEntry(TypedDict):
     sample_input: str
     sample_output: str
     sample_output_validate: bool
+    sample_json: SampleJson | None
 
 
 def dumps_default_tests_spec() -> str:
@@ -302,6 +305,15 @@ def normalize_tests_spec_entry(
     sample_output_validate = _normalize_sample_output_validate_flag(
         raw.get("sample_output_validate", True)
     )
+    sample_json = normalize_sample_json(
+        raw.get("sample_json"), max_bytes=sample_max_bytes
+    )
+    if sample_json is not None and (sample_input or sample_output):
+        raise ValueError(
+            f"tests[{index}] sample_json cannot be combined with sample_input or sample_output"
+        )
+    if sample_json is not None and not sample:
+        raise ValueError(f"tests[{index}] sample_json requires sample=true")
     if not isinstance(raw_id_obj := raw.get("id"), str):
         raise ValueError(f"tests[{index}] id is required")
     raw_id = raw_id_obj.strip()
@@ -314,6 +326,7 @@ def normalize_tests_spec_entry(
         sample_input=sample_input,
         sample_output=sample_output,
         sample_output_validate=sample_output_validate,
+        sample_json=sample_json,
     )
 
 
@@ -390,6 +403,7 @@ def loads_tests_spec(
             sample_input="",
             sample_output="",
             sample_output_validate=True,
+            sample_json=None,
         )
         if "sample_input" in entry_payload:
             sample_input_value = entry_payload["sample_input"]
@@ -412,8 +426,18 @@ def loads_tests_spec(
                     f"{label}.sample_output_validate: must be a boolean"
                 )
             entry["sample_output_validate"] = validate
+        if "sample_json" in entry_payload:
+            entry["sample_json"] = normalize_sample_json(
+                entry_payload["sample_json"], max_bytes=sample_max_bytes
+            )
         sample_input = entry.get("sample_input", "")
         sample_output = entry.get("sample_output", "")
+        if entry["sample_json"] is not None and (sample_input or sample_output):
+            raise ValueError(
+                f"{label}: sample_json cannot be combined with sample_input or sample_output"
+            )
+        if entry["sample_json"] is not None and not sample:
+            raise ValueError(f"{label}.sample_json: requires sample=true")
         if len(sample_input.encode("utf-8")) + len(sample_output.encode("utf-8")) > max(
             1, int(sample_max_bytes)
         ):
@@ -490,6 +514,8 @@ def dumps_tests_spec(
             row_payload["sample_output"] = sample_output
         if not sample_output_validate:
             row_payload["sample_output_validate"] = False
+        if row.get("sample_json") is not None:
+            row_payload["sample_json"] = row["sample_json"]
         normalized_row = normalize_tests_spec_entry(
             row_payload,
             index=idx,
@@ -512,6 +538,8 @@ def dumps_tests_spec(
             dumped_row["sample_output"] = normalized_sample_output
         if not normalized_sample_validate:
             dumped_row["sample_output_validate"] = False
+        if normalized_row["sample_json"] is not None:
+            dumped_row["sample_json"] = normalized_row["sample_json"]
         dumped_tests.append(dumped_row)
     payload = {"tests": dumped_tests}
     return enforce_textarea_max_bytes(

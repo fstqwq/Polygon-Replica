@@ -4,8 +4,8 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Literal, TypedDict, cast
 
 from app.service.execution.model import CAPTURE_COMPLETE, ExecutionPassResult
-from app.service.judgehost.callback.runpipe_transcript import parse_runpipe_transcript
 from app.service.problem.runtime_config import ProblemConfigLimits, load_problem_config
+from app.service.problem.sample_json import SampleJson
 from app.service.problem.test_spec import (
     TESTS_SPEC_REL,
     TestSpecEntry,
@@ -13,6 +13,7 @@ from app.service.problem.test_spec import (
     payload_rel_path_for_test,
     read_statement_sample_text,
 )
+from app.service.statement.sample_transcript import statement_sample_events_from_transcript
 from app.service.verification.task_store import VerificationTaskRow
 from app.service.verification.types import VerificationStatus, VerificationTaskStatus
 
@@ -90,6 +91,8 @@ def statement_examples_require_verification(
         tests_spec_max_bytes=tests_spec_max_bytes,
         statement_sample_max_bytes=statement_sample_max_bytes,
     ):
+        if row["sample_json"] is not None:
+            continue
         sample_input = row["sample_input"]
         sample_output = row["sample_output"]
         has_override = bool(sample_input or sample_output)
@@ -313,6 +316,53 @@ def _pair_override(
     )
 
 
+def _structured_override(
+    row: TestSpecEntry,
+    sample_json: SampleJson,
+    *,
+    sample_number: int,
+    max_bytes: int,
+) -> tuple[StatementExampleSample, list[StatementExampleResource]]:
+    resources = _SampleResources(sample_id=row["id"], max_bytes=max_bytes)
+    projected: list[StatementExamplePass] = []
+    presentation = sample_json["presentation"]
+    for pass_row in sample_json["passes"]:
+        pass_number = int(pass_row["number"])
+        if presentation == "pair":
+            input_path = resources.add(
+                _resource_path(f"sample-{sample_number}/pass-{pass_number}.in"),
+                str(pass_row["input"]),
+            )
+            output_path = resources.add(
+                _resource_path(f"sample-{sample_number}/pass-{pass_number}.ans"),
+                str(pass_row["output"]),
+            )
+            projected.append(
+                {
+                    "number": pass_number,
+                    "inputFile": input_path,
+                    "outputFile": output_path,
+                }
+            )
+            continue
+        events: list[StatementExampleEvent] = []
+        for event_number, event in enumerate(pass_row["events"], start=1):
+            event_path = resources.add(
+                _resource_path(
+                    f"sample-{sample_number}/pass-{pass_number}/event-{event_number}.txt"
+                ),
+                event["content"],
+            )
+            events.append({"source": event["source"], "textFile": event_path})
+        projected.append({"number": pass_number, "events": events})
+    return (
+        {
+            "number": sample_number,
+            "presentation": presentation,
+            "passes": projected,
+        },
+        resources.rows,
+    )
 def _pass_fail_sample(
     row: TestSpecEntry,
     *,
@@ -376,40 +426,23 @@ def _interactive_sample(
         descriptor = verification_service.artifact_descriptor(artifact_ref)
         if descriptor is None:
             raise RuntimeError(f"sample {row['id']} pass {pass_number} transcript is unavailable")
+        label = f"sample {row['id']} pass {pass_number} transcript"
         try:
-            with descriptor.path.open("rb") as stream:
-                transcript = parse_runpipe_transcript(
-                    stream,
-                    raw_size_bytes=descriptor.size,
-                    event_limit=max(1, max_bytes),
-                    payload_preview_limit=max(1, max_bytes + 1),
-                )
-        except OSError as exc:
-            raise RuntimeError(
-                f"sample {row['id']} pass {pass_number} transcript is unavailable"
-            ) from exc
-        if transcript["state"] != "ok":
-            raise RuntimeError(
-                f"sample {row['id']} pass {pass_number} transcript is malformed at byte "
-                f"{transcript['error_offset']}: {transcript['error_reason']}"
+            sample_events = statement_sample_events_from_transcript(
+                descriptor.path,
+                raw_size_bytes=descriptor.size,
+                max_bytes=max_bytes,
+                label=label,
             )
-        if transcript["events_omitted"]:
-            raise RuntimeError(f"sample {row['id']} pass {pass_number} has too many transcript events")
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
         events: list[StatementExampleEvent] = []
-        data_index = 0
-        for event in transcript["events"]:
-            if event["kind"] == "eof":
-                continue
-            if event["payload_bytes_omitted"]:
-                raise RuntimeError(
-                    f"sample {row['id']} pass {pass_number} transcript event is too large"
-                )
-            data_index += 1
+        for data_index, event in enumerate(sample_events, start=1):
             event_path = resources.add(
                 _resource_path(
                     f"sample-{sample_number}/pass-{pass_number}/event-{data_index}.txt"
                 ),
-                event["payload_display"],
+                event["content"],
             )
             events.append(
                 {
@@ -485,8 +518,16 @@ class StatementExamplesProducer:
                         f"sample {row['id']} main-correct evidence is missing"
                     )
                 passes = _complete_passes(task, sample_id=row["id"])
+            sample_json = row["sample_json"]
             has_override = bool(row["sample_input"] or row["sample_output"])
-            if has_override:
+            if sample_json is not None:
+                sample, resources = _structured_override(
+                    row,
+                    sample_json,
+                    sample_number=sample_number,
+                    max_bytes=statement_sample_max_bytes,
+                )
+            elif has_override:
                 sample, resources = _pair_override(
                     workspace,
                     row,

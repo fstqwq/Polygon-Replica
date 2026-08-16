@@ -36,6 +36,9 @@
   <section class="sol-card" data-program-id="{{ col.id }}">
     <div class="sol-head">
       <strong class="sol-title">{{ col.title }}</strong>
+      {% if cell.detail.pass_rows and not cell.detail.mode_malformed %}
+      <a class="content-heading-action" href="{{ problem_href('run_details_sample_json', query={'verification_id': verification_id, 'test': row.test_name, 'program_id': col.id}) }}">download json</a>
+      {% endif %}
     </div>
     {% if cell.detail.mode_malformed %}
     <p class="test-generation-alert tone-warn">This verification has no valid persisted mode, so its artifacts cannot be interpreted.</p>
