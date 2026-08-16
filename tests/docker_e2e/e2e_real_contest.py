@@ -300,12 +300,15 @@ def assert_contest_pdf(
                 f"contest PDF compiled an incorrect sample payload: {filename}"
             )
     problem_tex = (statement_root / "problem.tex").read_text(encoding="utf-8")
+    examples_tex = (statement_root / "examples.tex").read_text(encoding="utf-8")
+    if r"\input{examples.tex}" not in problem_tex:
+        raise RuntimeError("contest PDF problem.tex omitted the examples companion")
     if (
-        r"\exmpfile" not in problem_tex
-        or "sample.001.in" not in problem_tex
-        or "sample.001.ans" not in problem_tex
+        r"\exmpfile" not in examples_tex
+        or "sample.001.in" not in examples_tex
+        or "sample.001.ans" not in examples_tex
     ):
-        raise RuntimeError("contest PDF problem.tex omitted the verified sample")
+        raise RuntimeError("contest PDF examples.tex omitted the verified sample")
     compile_log = (job_root / "logs" / "contest-pdf.log").read_text(
         encoding="utf-8",
         errors="replace",

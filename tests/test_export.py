@@ -1,5 +1,4 @@
 import json
-import shutil
 import tempfile
 import threading
 import zipfile
@@ -432,7 +431,7 @@ class TestPublishedRevisionExport(E2ETestBase):
                 runtime.export_inflight.discard(key)
                 runtime.export_workers.discard(worker)
 
-    def test_verified_revision_contains_published_source_and_test_data(self) -> None:
+    def test_verified_revision_contains_source_payloads_and_statement_build(self) -> None:
         workspace, problem_id, commit = self._publish_problem()
         revision = runtime.problem_package_service.published_revision(problem_id)
         verified = runtime.problem_package_service.ensure_verified_revision(
@@ -451,12 +450,26 @@ class TestPublishedRevisionExport(E2ETestBase):
         with zipfile.ZipFile(archive, "r") as package:
             names = set(package.namelist())
             self.assertIn("config/problem.json", names)
-            self.assertIn("test_data/manifest.json", names)
-            self.assertIn("test_data/tests/001/input", names)
-            self.assertIn("test_data/tests/001/answer", names)
+            self.assertIn("statement/statements.ftl", names)
+            self.assertIn("statement/problem.tex", names)
+            self.assertIn("statement/olymp.sty", names)
+            self.assertIn("test-data/manifest.json", names)
+            self.assertIn("test-data/tests/001/input", names)
+            self.assertIn("test-data/tests/001/answer", names)
+            self.assertIn("statement-build/english/statements.tex", names)
+            self.assertIn("statement-build/english/problem.tex", names)
+            self.assertIn("statement-build/english/examples.tex", names)
+            self.assertIn("statement-build/english/olymp.sty", names)
+            self.assertIn("statement-build/english/sample.001.in", names)
+            self.assertIn("statement-build/english/sample.001.ans", names)
             self.assertNotIn("source/config/problem.json", names)
             self.assertNotIn("dirty-only.txt", names)
-            manifest = json.loads(package.read("test_data/manifest.json"))
+            self.assertNotIn("statement/examples.tex", names)
+            rendered_main = package.read(
+                "statement-build/english/statements.tex"
+            ).decode("utf-8")
+            self.assertIn("\\input{problem.tex}", rendered_main)
+            manifest = json.loads(package.read("test-data/manifest.json"))
             self.assertEqual(manifest["source_commit"], commit)
             self.assertEqual(manifest["verification"]["id"], verified["verification_id"])
             self.assertEqual(
@@ -761,7 +774,7 @@ class TestPublishedRevisionExport(E2ETestBase):
         self.assertEqual(second["source_digest"], first["source_digest"])
         self.assertEqual(second["revision_number"], first["revision_number"] + 1)
 
-    def test_polygon_replica_package_import_discards_derived_test_data(self) -> None:
+    def test_polygon_replica_package_imports_only_authored_source(self) -> None:
         _problem_id, _commit, verified = self._verified_revision()
         _stored, archive = runtime.problem_package_service.verified_revision_archive(
             verified["id"]
@@ -776,42 +789,16 @@ class TestPublishedRevisionExport(E2ETestBase):
                 archive.read_bytes(),
             )
             self.assertTrue((workspace / "config" / "problem.json").is_file())
-            self.assertFalse((workspace / "test_data").exists())
+            self.assertTrue((workspace / "statement" / "statements.ftl").is_file())
+            self.assertFalse((workspace / "test-data").exists())
+            self.assertFalse((workspace / "statement-build").exists())
             self.assertFalse((workspace / "tests" / "answers").exists())
-
-    def test_workspace_snapshot_is_not_a_polygon_replica_package(self) -> None:
-        workspace, _problem_id, _commit = self._publish_problem()
-        dirty_source = workspace / "solutions" / "snapshot-roundtrip.cpp"
-        dirty_source.write_text("dirty workspace copy\n", encoding="utf-8")
-        context = runtime.workspace_service.workspace_context(
-            self.problem,
-            self.user,
-            include_recent=False,
-        )
-        archive = runtime.export_service.create_workspace_snapshot(
-            self.problem,
-            workspace_id=int(context["workspace"]["id"]),
-        )
-        try:
-            with tempfile.TemporaryDirectory(prefix="snapshot-roundtrip-") as temp:
-                restored = Path(temp) / "workspace"
-                restored.mkdir()
-                with self.assertRaisesRegex(ValueError, "test_data/manifest.json"):
-                    import_problem_package(
-                        PolygonReplicaPackageImportService(),
-                        restored,
-                        archive.name,
-                        archive.read_bytes(),
-                    )
-                self.assertEqual(list(restored.iterdir()), [])
-        finally:
-            shutil.rmtree(archive.parent, ignore_errors=True)
 
     def test_verified_revision_reader_detects_extracted_payload_tampering(self) -> None:
         _problem_id, _commit, verified = self._verified_revision()
         with runtime.problem_package_service.open_reader(verified["id"]) as reader:
-            manifest = load_manifest(reader.root / "test_data" / "manifest.json")
-            payload = reader.root / "test_data" / "tests" / "001" / "input"
+            manifest = load_manifest(reader.root / "test-data" / "manifest.json")
+            payload = reader.root / "test-data" / "tests" / "001" / "input"
             payload.write_bytes(b"tampered\n")
             with self.assertRaisesRegex(ValueError, "integrity"):
                 validate_manifest_files(

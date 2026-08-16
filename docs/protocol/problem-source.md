@@ -13,7 +13,7 @@ Authored entries are limited to `attachments/`, `checkers/`, `config/`,
 `validators/`. They are regular files and directories; symbolic links,
 special files, hidden paths, and materialized answer paths are invalid. The
 workspace's `.git` metadata is outside the authored tree. A Polygon Replica
-package's `test_data/` is validated by its manifest and is never authored source.
+package's `test-data/` and `statement-build/` trees are never authored source.
 
 ## Problem configuration
 
@@ -123,13 +123,14 @@ imported workspace.
 ## Polygon Replica package import and preflight
 
 A Polygon Replica package contains the committed source tree at its root plus a
-complete `test_data/manifest.json` and its declared verified test payloads.
-Import validates the manifest shape, source digest, test order, payload paths,
-sizes, checksums, file types, and the complete `test_data/` inventory. It then
-discards the entire `test_data/` tree and imports only authored source.
-Generated answers never enter the destination workspace or Git history, and
-the imported problem does not inherit the source problem's verified-revision
-identity.
+complete `test-data/manifest.json`, its declared verified test payloads, and a
+derived `statement-build/<language>/` offline TeX tree.
+Import identifies native source by `config/problem.json` and selects only the
+canonical authored roots. It treats both derived trees exactly like any other
+unknown package members: they are not opened, parsed, checksummed, or persisted.
+Generated answers never enter the destination workspace or Git history, and the
+imported problem does not inherit the source problem's verification provenance
+or verified-revision identity.
 
 Operators can inspect all published `main` revisions without mutating Git:
 
@@ -161,13 +162,61 @@ seventh section.
 
 Shared statement assets live under `statement-assets/`. The files
 `statement/statements.ftl`, `statement/problem.tex`, and `statement/olymp.sty`
-are editable rendering source. `statement/main.tex`, everything below
-`statement/rendered/`, and PDFs are regenerated products.
+are editable rendering source. `statement/examples.tex` is optional editable
+source shared by every statement language. It is absent by default; the
+renderer uses the canonical examples template when it is missing. Creating the
+file opts into a repository-owned override, while deleting it restores the
+canonical fallback. An authored empty file is valid and deliberately renders
+an empty examples companion.
+
+`statement/main.tex`, everything below `statement/rendered/`, and PDFs are
+regenerated products. Every language render also writes a derived
+`statement/rendered/<language>/examples.tex`. The default `problem.tex`
+unconditionally inputs that companion. Both the problem and examples FTL
+templates receive the same render context. Existing custom problem templates
+are not rewritten for compatibility; they must input `examples.tex` themselves
+to use either the canonical or authored companion.
+
+Native package construction leaves this authored layout unchanged and writes a
+separate `statement-build/<language>/` directory. Each such directory contains
+rendered `statements.tex`, `problem.tex`, and `examples.tex`, a copied
+`olymp.sty`, referenced assets, and generated sample text files. Neither
+`statement-build/` nor `test-data/` participates in the committed-source digest
+or may be committed as problem source. Building this tree does not infer sample
+presentation data from verified testcase payloads; non-authored presentation
+resources belong to the separate render-resource boundary.
 
 Statement languages are ordered as English, Chinese, then alphabetically. The
 renderer obtains samples from `tests/spec.json`: explicit `sample_input` and
 `sample_output` override judge data for display, while missing sample data may
 be filled in a preview snapshot by a sample-only verification.
+
+The canonical examples template preserves Polygon compatibility by rendering
+`problem.sampleTests[].inputFile` and `.outputFile` through `\exmpfile`. It also
+accepts an optional structured extension at `problem.examples.samples`:
+
+```text
+samples[].number
+samples[].presentation = pair | interaction
+samples[].passes[].number
+
+pair pass:
+  inputFile
+  outputFile
+
+interaction pass:
+  events[].source = interactor | solution
+  events[].textFile
+```
+
+The structured extension is a rendering-context contract, not canonical
+problem source. The current renderer does not write event logs to
+`tests/spec.json` and does not synthesize interaction events. If the structured
+field is absent, the Polygon projection remains unchanged. Event order and pass
+numbers are explicit; there is no inferred alternation, event `kind`, or EOF
+entry. Presence is authoritative, so an explicitly empty `samples` array does
+not fall back to Polygon samples. All referenced text files must already exist
+as UTF-8 payloads relative to the rendered problem compile directory.
 
 ## Publication
 

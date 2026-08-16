@@ -1,6 +1,4 @@
-import hashlib
 import io
-import json
 from pathlib import Path
 import stat
 import struct
@@ -26,9 +24,7 @@ from app.service.problem.runtime_config import (
     dumps_problem_config,
 )
 from app.service.problem.test_spec import dumps_tests_spec
-from app.service.problem_package.manifest import source_digest
 from tests.archive_support import archive_view_from_bytes
-from tests.identity_helpers import canonical_test_verification_id
 
 
 _PROBLEM_LIMITS = ProblemConfigLimits(100, 30000, 1, 2048, 1, 64)
@@ -94,7 +90,7 @@ class TestPolygonPackageRules(unittest.TestCase):
                 "tests/manual",
                 "solutions",
                 "checkers",
-                "test_data/tests/001",
+                "test-data/tests/001",
             ):
                 (root / directory).mkdir(parents=True, exist_ok=True)
             problem = ProblemConfig(
@@ -135,47 +131,14 @@ class TestPolygonPackageRules(unittest.TestCase):
             (root / "checkers/checker.cpp").write_text(
                 "int main(){return 0;}\n", encoding="utf-8"
             )
-            input_payload = b"1\n"
-            answer_payload = b"1\n"
-            (root / "test_data/tests/001/input").write_bytes(input_payload)
-            (root / "test_data/tests/001/answer").write_bytes(answer_payload)
-            manifest = {
-                "source_commit": "a" * 40,
-                "revision_number": 1,
-                "source_digest": source_digest(root),
-                "mode": "pass-fail",
-                "pass_limit": 1,
-                "verification": {
-                    "id": canonical_test_verification_id("package-import"),
-                    "source": "published",
-                },
-                "solutions": [
-                    {
-                        "source_path": "solutions/std.cpp",
-                        "expected_behavior": "accepted",
-                        "verdicts": ["AC"],
-                    }
-                ],
-                "tests": [
-                    {
-                        "id": "001",
-                        "kind": "manual",
-                        "sample": False,
-                        "input": {
-                            "path": "test_data/tests/001/input",
-                            "sha256": hashlib.sha256(input_payload).hexdigest(),
-                            "size": len(input_payload),
-                        },
-                        "answer": {
-                            "path": "test_data/tests/001/answer",
-                            "sha256": hashlib.sha256(answer_payload).hexdigest(),
-                            "size": len(answer_payload),
-                        },
-                    }
-                ],
-            }
-            (root / "test_data/manifest.json").write_text(
-                json.dumps(manifest), encoding="utf-8"
+            (root / "test-data/manifest.json").write_text(
+                "not-json\n",
+                encoding="utf-8",
+            )
+            (root / "test-data/ignored.bin").write_bytes(b"x" * (256 * 1024))
+            (root / "statement-build/english").mkdir(parents=True)
+            (root / "statement-build/english/ignored.bin").write_bytes(
+                b"y" * (256 * 1024)
             )
             payload = io.BytesIO()
             with zipfile.ZipFile(
@@ -235,9 +198,9 @@ class TestPolygonPackageRules(unittest.TestCase):
         return bytes(raw[:eocd_offset] + zip64_record + locator + classic)
 
     def test_archive_entry_limit_counts_directories_and_ignored_members(self) -> None:
-        entries = [("test_data/", b"")]
+        entries = [("test-data/", b"")]
         entries.extend(
-            (f"test_data/ignored-{index:04d}", b"")
+            (f"test-data/ignored-{index:04d}", b"")
             for index in range(4095)
         )
         payload = self._zip(entries)
@@ -384,7 +347,7 @@ class TestPolygonPackageRules(unittest.TestCase):
             ):
                 source.read()
 
-    def test_polygon_replica_import_discards_verified_test_data(self) -> None:
+    def test_polygon_replica_import_ignores_derived_package_trees(self) -> None:
         package = self._polygon_replica_package()
         with tempfile.TemporaryDirectory(prefix="polygon-replica-ignore-") as temp:
             workspace = Path(temp) / "workspace"
@@ -395,7 +358,10 @@ class TestPolygonPackageRules(unittest.TestCase):
             (workspace / ".stale-source").write_text(
                 "remove me\n", encoding="utf-8"
             )
-            with archive_view_from_bytes(package) as archive:
+            with archive_view_from_bytes(
+                package,
+                max_expanded_bytes=16 * 1024,
+            ) as archive:
                 PolygonReplicaPackageImportService().import_package(
                     workspace,
                     "problem-polygon-replica-v1.zip",
@@ -404,33 +370,14 @@ class TestPolygonPackageRules(unittest.TestCase):
                     statement_sample_max_bytes=32 * 1024,
                     problem_config_limits=_PROBLEM_LIMITS,
                 )
-            self.assertFalse((workspace / "test_data").exists())
+            self.assertFalse((workspace / "test-data").exists())
+            self.assertFalse((workspace / "statement-build").exists())
             self.assertEqual(
                 (workspace / "solutions/std.cpp").read_text(encoding="utf-8"),
                 "int main(){return 0;}\n",
             )
             self.assertTrue((git_metadata / "keep").is_file())
             self.assertFalse((workspace / ".stale-source").exists())
-
-        malformed = self._zip(
-            [
-                ("config/problem.json", b"{}\n"),
-                ("test_data/manifest.json", b"not-json"),
-            ]
-        )
-        with tempfile.TemporaryDirectory(prefix="polygon-replica-invalid-") as temp:
-            workspace = Path(temp) / "workspace"
-            workspace.mkdir()
-            with archive_view_from_bytes(malformed) as archive:
-                with self.assertRaisesRegex(ValueError, "manifest"):
-                    PolygonReplicaPackageImportService().import_package(
-                        workspace,
-                        "problem-polygon-replica-v1.zip",
-                        archive,
-                        text_limit_bytes=256 * 1024,
-                        statement_sample_max_bytes=32 * 1024,
-                        problem_config_limits=_PROBLEM_LIMITS,
-                    )
 
         selected = self._zip(
             [

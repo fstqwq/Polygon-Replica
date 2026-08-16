@@ -18,6 +18,10 @@ from app.service.problem.solution_metadata import (
 from app.service.problem.source_tree import solution_sources
 from app.service.problem.runtime_config import ProblemMode
 from app.service.problem.test_spec import load_tests_spec
+from app.service.problem_package.layout import (
+    PACKAGE_DERIVED_ROOT_NAMES,
+    TEST_DATA_DIR,
+)
 from app.service.verification.identity import canonical_verification_id
 
 
@@ -94,15 +98,18 @@ def describe_file(path: Path, *, root: Path) -> VerifiedFileEntry:
 
 
 def source_digest(source_root: Path) -> str:
-    """Hash the exact committed source tree, excluding only ``test_data``."""
+    """Hash authored source while excluding package-local derived trees."""
 
     root = source_root.resolve()
+    derived_roots = PACKAGE_DERIVED_ROOT_NAMES
     entries: list[dict[str, object]] = []
     for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
         parent = Path(dirpath)
         rel_parent = parent.relative_to(root)
         if not rel_parent.parts:
-            dirnames[:] = [name for name in sorted(dirnames) if name != "test_data"]
+            dirnames[:] = [
+                name for name in sorted(dirnames) if name not in derived_roots
+            ]
         else:
             dirnames[:] = sorted(dirnames)
         for dirname in dirnames:
@@ -113,7 +120,7 @@ def source_digest(source_root: Path) -> str:
         for filename in sorted(filenames):
             source = parent / filename
             rel = source.relative_to(root)
-            if rel.parts and rel.parts[0] == "test_data":
+            if rel.parts and rel.parts[0] in derived_roots:
                 continue
             if source.is_symlink() or not source.is_file():
                 raise ValueError(f"published source contains a non-regular file: {rel}")
@@ -135,7 +142,7 @@ def dumps_manifest(manifest: VerifiedRevisionManifest) -> str:
 
 def load_manifest(path: Path) -> VerifiedRevisionManifest:
     if path.is_symlink() or not path.is_file():
-        raise ValueError("Polygon Replica package test_data/manifest.json is missing")
+        raise ValueError("Polygon Replica package test-data/manifest.json is missing")
     try:
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:
@@ -340,7 +347,7 @@ def validate_manifest_files(
                 "sample_input": "sample-input",
                 "sample_output": "sample-output",
             }[key]
-            expected_rel = f"test_data/tests/{test_id}/{file_name}"
+            expected_rel = f"{TEST_DATA_DIR.name}/tests/{test_id}/{file_name}"
             if rel != expected_rel:
                 raise ValueError(f"verified payload path is not canonical: {rel}")
             if rel in declared:
@@ -368,7 +375,7 @@ def validate_manifest_files(
                     "verified revision stores a redundant display override: "
                     f"{test_id}/{display_key}"
                 )
-    data_root = package_root / "test_data"
+    data_root = package_root / TEST_DATA_DIR
     actual_files: set[str] = set()
     actual_directories: set[str] = set()
     for path in data_root.rglob("*"):
@@ -376,20 +383,20 @@ def validate_manifest_files(
             actual_directories.add(path.relative_to(package_root).as_posix())
             continue
         if path.is_symlink() or not path.is_file():
-            raise ValueError("Polygon Replica package test_data contains a non-regular entry")
+            raise ValueError("Polygon Replica package test-data contains a non-regular entry")
         actual_files.add(path.relative_to(package_root).as_posix())
-    expected_files = {*declared, "test_data/manifest.json"}
+    expected_files = {*declared, f"{TEST_DATA_DIR.name}/manifest.json"}
     if actual_files != expected_files:
         raise ValueError(
-            "Polygon Replica package test_data contains undeclared or missing payload files"
+            "Polygon Replica package test-data contains undeclared or missing payload files"
         )
-    expected_directories = {"test_data/tests"}
+    expected_directories = {f"{TEST_DATA_DIR.name}/tests"}
     expected_directories.update(
-        f"test_data/tests/{test['id']}" for test in manifest["tests"]
+        f"{TEST_DATA_DIR.name}/tests/{test['id']}" for test in manifest["tests"]
     )
     if actual_directories != expected_directories:
         raise ValueError(
-            "Polygon Replica package test_data contains undeclared or missing directories"
+            "Polygon Replica package test-data contains undeclared or missing directories"
         )
     if source_digest(package_root) != manifest["source_digest"]:
         raise ValueError("Polygon Replica package source tree does not match its Git revision")

@@ -13,11 +13,13 @@ from app.service.problem.runtime_config import ProblemConfigLimits, load_problem
 from app.service.statement.constant import (
     DEFAULT_OLYMP_STY,
     DEFAULT_PROBLEM_TITLE,
+    DEFAULT_STATEMENT_EXAMPLES_TEMPLATE,
     DEFAULT_STATEMENT_PROBLEM_TEMPLATE,
     DEFAULT_STATEMENT_TEMPLATE,
     STATEMENT_ASSETS_DIR,
     STATEMENT_CANONICAL_SECTION_FILES,
     STATEMENT_DIR,
+    STATEMENT_EXAMPLES_REL,
     STATEMENT_MAIN_REL,
     STATEMENT_PROBLEM_REL,
     STATEMENT_RENDERED_DIR_REL,
@@ -61,6 +63,36 @@ def _safe_read_text(path: Path, fallback: str) -> str:
     except OSError:
         return fallback
     return fallback
+
+
+def _statement_examples_template_text(workspace: Path) -> str:
+    path = workspace / STATEMENT_EXAMPLES_REL
+    try:
+        if path.is_symlink():
+            raise RuntimeError(
+                f"statement examples template must be a regular file: "
+                f"{STATEMENT_EXAMPLES_REL.as_posix()}"
+            )
+        if not path.exists():
+            return DEFAULT_STATEMENT_EXAMPLES_TEMPLATE
+        if not path.is_file():
+            raise RuntimeError(
+                f"statement examples template is not a file: "
+                f"{STATEMENT_EXAMPLES_REL.as_posix()}"
+            )
+    except OSError as exc:
+        raise RuntimeError(
+            f"failed to inspect statement examples template "
+            f"{STATEMENT_EXAMPLES_REL.as_posix()}: {exc}"
+        ) from exc
+    return _read_required_text(
+        path,
+        label=(
+            "statement examples template "
+            f"({STATEMENT_EXAMPLES_REL.as_posix()})"
+        ),
+        allow_empty=True,
+    )
 
 
 def _statement_section_text(workspace: Path, language: str, section_name: str, fallback: str = "") -> str:
@@ -196,6 +228,43 @@ def _problem_context_for_language(
     }
 
 
+def _statement_problem_template_context(
+    problem_ctx: dict[str, object],
+    language: str,
+) -> dict[str, object]:
+    return {
+        "problem": problem_ctx,
+        "language": language,
+        "contest": {
+            "name": "",
+            "location": "",
+            "date": "",
+            "language": language,
+        },
+        "shortProblemTitle": False,
+        "providedStatementsCommands": [],
+        "statements": [],
+    }
+
+
+def _write_rendered_problem_templates(
+    target_dir: Path,
+    *,
+    problem_template_text: str,
+    examples_template_text: str,
+    context: dict[str, object],
+) -> Path:
+    rendered_examples_tex = render_ftl_template(examples_template_text, context)
+    (target_dir / "examples.tex").write_text(
+        rendered_examples_tex,
+        encoding="utf-8",
+    )
+    rendered_problem_tex = render_ftl_template(problem_template_text, context)
+    problem_tex = target_dir / "problem.tex"
+    problem_tex.write_text(rendered_problem_tex, encoding="utf-8")
+    return problem_tex
+
+
 def _copy_tree_without_symlinks(src: Path, dst: Path) -> None:
     if not src.exists() or not src.is_dir() or src.is_symlink():
         return
@@ -296,7 +365,11 @@ def _render_polygon_statement(
         workspace / STATEMENT_TEMPLATE_REL,
         label=f"statement template ({STATEMENT_TEMPLATE_REL.as_posix()})",
     )
-    problem_template_text = _safe_read_text(workspace / STATEMENT_PROBLEM_REL, DEFAULT_STATEMENT_PROBLEM_TEMPLATE)
+    problem_template_text = _safe_read_text(
+        workspace / STATEMENT_PROBLEM_REL,
+        DEFAULT_STATEMENT_PROBLEM_TEMPLATE,
+    )
+    examples_template_text = _statement_examples_template_text(workspace)
     _read_required_text(
         workspace / STATEMENT_STYLE_REL,
         label=f"statement olymp style ({STATEMENT_STYLE_REL.as_posix()})",
@@ -324,18 +397,16 @@ def _render_polygon_statement(
         sample_tests=sample_tests,
         problem_limits=problem_limits,
     )
-    rendered_problem_tex = render_ftl_template(
-        problem_template_text,
-        {
-            "problem": problem_ctx,
-            "language": safe_language,
-            "contest": {"name": "", "location": "", "date": "", "language": safe_language},
-            "shortProblemTitle": False,
-            "providedStatementsCommands": [],
-            "statements": [],
-        },
+    problem_template_context = _statement_problem_template_context(
+        problem_ctx,
+        safe_language,
     )
-    (rendered_lang_root / "problem.tex").write_text(rendered_problem_tex, encoding="utf-8")
+    _write_rendered_problem_templates(
+        rendered_lang_root,
+        problem_template_text=problem_template_text,
+        examples_template_text=examples_template_text,
+        context=problem_template_context,
+    )
 
     rendered_main = render_ftl_template(
         template_text,
@@ -354,7 +425,7 @@ def _render_polygon_statement(
     return main_path
 
 
-def render_statement_problem_assets_for_language(
+def _render_statement_problem_assets_for_language(
     workspace: Path,
     language: str,
     target_dir: Path,
@@ -363,8 +434,12 @@ def render_statement_problem_assets_for_language(
     tests_spec_max_bytes: int,
     statement_sample_max_bytes: int,
     problem_limits: ProblemConfigLimits,
-) -> Path:
-    template_text = _safe_read_text(workspace / STATEMENT_PROBLEM_REL, DEFAULT_STATEMENT_PROBLEM_TEMPLATE)
+) -> tuple[Path, dict[str, object]]:
+    template_text = _safe_read_text(
+        workspace / STATEMENT_PROBLEM_REL,
+        DEFAULT_STATEMENT_PROBLEM_TEMPLATE,
+    )
+    examples_template_text = _statement_examples_template_text(workspace)
     _read_required_text(
         workspace / STATEMENT_STYLE_REL,
         label=f"statement olymp style ({STATEMENT_STYLE_REL.as_posix()})",
@@ -386,20 +461,90 @@ def render_statement_problem_assets_for_language(
         sample_tests=sample_tests,
         problem_limits=problem_limits,
     )
-    rendered_problem_tex = render_ftl_template(
+    problem_tex = _write_rendered_problem_templates(
+        target_dir,
+        problem_template_text=template_text,
+        examples_template_text=examples_template_text,
+        context=_statement_problem_template_context(problem_ctx, safe_language),
+    )
+    return problem_tex, problem_ctx
+
+
+def render_statement_problem_assets_for_language(
+    workspace: Path,
+    language: str,
+    target_dir: Path,
+    *,
+    problem_title: str | None = None,
+    tests_spec_max_bytes: int,
+    statement_sample_max_bytes: int,
+    problem_limits: ProblemConfigLimits,
+) -> Path:
+    problem_tex, _problem_ctx = _render_statement_problem_assets_for_language(
+        workspace,
+        language,
+        target_dir,
+        problem_title=problem_title,
+        tests_spec_max_bytes=tests_spec_max_bytes,
+        statement_sample_max_bytes=statement_sample_max_bytes,
+        problem_limits=problem_limits,
+    )
+    return problem_tex
+
+
+def render_statement_offline_tree(
+    workspace: Path,
+    language: str,
+    target_dir: Path,
+    *,
+    problem_title: str | None = None,
+    tests_spec_max_bytes: int,
+    statement_sample_max_bytes: int,
+    problem_limits: ProblemConfigLimits,
+) -> Path:
+    """Render one self-contained language tree with ``statements.tex`` entrypoint."""
+
+    template_text = _read_required_text(
+        workspace / STATEMENT_TEMPLATE_REL,
+        label=f"statement template ({STATEMENT_TEMPLATE_REL.as_posix()})",
+    )
+    style_path = workspace / STATEMENT_STYLE_REL
+    _read_required_text(
+        style_path,
+        label=f"statement olymp style ({STATEMENT_STYLE_REL.as_posix()})",
+    )
+    safe_language = normalize_statement_language(language)
+    if not safe_language:
+        raise RuntimeError("statement language is required")
+    _problem_tex, problem_ctx = _render_statement_problem_assets_for_language(
+        workspace,
+        safe_language,
+        target_dir,
+        problem_title=problem_title,
+        tests_spec_max_bytes=tests_spec_max_bytes,
+        statement_sample_max_bytes=statement_sample_max_bytes,
+        problem_limits=problem_limits,
+    )
+    shutil.copy2(style_path, target_dir / "olymp.sty")
+    rendered_main = render_ftl_template(
         template_text,
         {
-            "problem": problem_ctx,
+            "contest": {
+                "name": "",
+                "location": "",
+                "date": "",
+                "language": safe_language,
+            },
             "language": safe_language,
-            "contest": {"name": "", "location": "", "date": "", "language": safe_language},
-            "shortProblemTitle": False,
+            "shortProblemTitle": True,
             "providedStatementsCommands": [],
-            "statements": [],
+            "statements": [{"file": "problem.tex"}],
+            "problem": problem_ctx,
         },
     )
-    problem_tex = target_dir / "problem.tex"
-    problem_tex.write_text(rendered_problem_tex, encoding="utf-8")
-    return problem_tex
+    entrypoint = target_dir / "statements.tex"
+    entrypoint.write_text(rendered_main, encoding="utf-8")
+    return entrypoint
 
 
 def seed_statement_sources(workspace: Path) -> None:

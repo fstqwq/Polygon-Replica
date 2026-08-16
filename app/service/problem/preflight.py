@@ -66,11 +66,13 @@ def inspect_published_problem_sources(
                     snapshot,
                     timeout=120,
                 )
-                test_data = snapshot / "test_data"
-                if test_data.is_symlink() or test_data.exists():
-                    raise ValueError(
-                        "test_data: materialized payloads must not be committed"
-                    )
+                for derived_root in ("test-data", "statement-build"):
+                    derived = snapshot / derived_root
+                    if derived.is_symlink() or derived.exists():
+                        raise ValueError(
+                            f"{derived_root}: derived package payloads must not "
+                            "be committed"
+                        )
                 load_problem_source_tree(
                     snapshot,
                     problem_limits=problem_limits,

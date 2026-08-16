@@ -1,0 +1,47 @@
+<#if problem.examples?? && problem.examples.samples??>
+<#if (problem.examples.samples?size > 0)>
+\Example<#if (problem.examples.samples?size > 1)>s</#if>
+\begin{StatementSamples}
+<#list problem.examples.samples as sample>
+<#if sample.passes?? && (sample.passes?size > 0)>
+<#if sample.presentation?? && (sample.presentation = "pair")>
+<#list sample.passes as pass>
+<#if sample.passes?size = 1>
+\StatementSampleFile{${sample.number}}{${pass.inputFile}}{${pass.outputFile}}
+<#else>
+\StatementSamplePassFile{${sample.number}}{${pass.number}}{${pass.inputFile}}{${pass.outputFile}}
+</#if>
+</#list>
+<#elseif sample.presentation?? && (sample.presentation = "interaction")>
+<#list sample.passes as pass>
+<#if sample.passes?size = 1>
+\begin{StatementSampleInteraction}{${sample.number}}
+<#else>
+\begin{StatementSampleInteraction}[${pass.number}]{${sample.number}}
+</#if>
+<#if pass.events??>
+<#list pass.events as event>
+\StatementSampleEventFile{${event.source}}{${event.textFile}}
+</#list>
+<#else>
+\PackageError{olymp}{Interaction sample ${sample.number}, pass ${pass.number} has no events field}{The render-context producer must provide an events array, even when it is empty.}
+</#if>
+\end{StatementSampleInteraction}
+</#list>
+<#else>
+\PackageError{olymp}{Sample ${sample.number} has an unsupported presentation}{Expected presentation to be pair or interaction.}
+</#if>
+<#else>
+\PackageError{olymp}{Sample ${sample.number} has no passes}{Every structured sample must contain at least one complete pass.}
+</#if>
+</#list>
+\end{StatementSamples}
+</#if>
+<#elseif problem.sampleTests?? && (problem.sampleTests?size > 0)>
+\Example<#if (problem.sampleTests?size > 1)>s</#if>
+\begin{example}
+<#list problem.sampleTests as test>
+\exmpfile{${test.inputFile}}{${test.outputFile}}%
+</#list>
+\end{example}
+</#if>

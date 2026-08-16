@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath
 from typing import BinaryIO, Literal, TypedDict
 
 from app.db import DB, now_iso
+from app.main_util import problem_slug_leaf
 from app.service.execution.codec import execution_result_from_json
 from app.service.platform.fs.layout import StorageLayout
 from app.service.platform.fs.op import extract_git_archive
@@ -41,12 +42,19 @@ from app.service.problem_package.manifest import (
     source_digest,
     validate_manifest_files,
 )
+from app.service.problem_package.layout import (
+    PACKAGE_DERIVED_ROOT_NAMES,
+    STATEMENT_BUILD_DIR,
+    TEST_DATA_DIR,
+)
 from app.service.problem_package.store import (
     MaterializationRow,
     ProblemPackageStore,
     PublishedProblem,
     VerifiedSolutionResultRow,
 )
+from app.service.statement.context import statement_languages
+from app.service.statement.render import render_statement_offline_tree
 from app.service.verification.result_match import run_verdict_short
 
 
@@ -433,8 +441,10 @@ class ProblemPackageService:
 
     @staticmethod
     def _copy_source_tree(source: Path, target: Path) -> None:
-        if (source / "test_data").exists():
-            raise ValueError("published source must not contain test_data")
+        if (source / TEST_DATA_DIR).exists():
+            raise ValueError("published source must not contain test-data")
+        if (source / STATEMENT_BUILD_DIR).exists():
+            raise ValueError("published source must not contain statement-build")
         source_root = source.resolve()
         for dirpath, dirnames, filenames in os.walk(source_root, topdown=True, followlinks=False):
             parent = Path(dirpath)
@@ -491,7 +501,7 @@ class ProblemPackageService:
             test_id = str(row["id"])
             if Path(test_id).name != test_id or test_id in {"", ".", ".."}:
                 raise ValueError(f"test ID is not package-safe: {test_id}")
-            test_root = package_root / "test_data" / "tests" / test_id
+            test_root = package_root / TEST_DATA_DIR / "tests" / test_id
             input_path = test_root / "input"
             payload = self._verification_payload(verification_id, test_id, "input_ref")
             if payload is None:
@@ -585,6 +595,34 @@ class ProblemPackageService:
             raise ValueError("verification contains an unknown committed solution")
         return solutions
 
+    def _materialize_statement_build(
+        self,
+        *,
+        snapshot: Path,
+        render_source: Path,
+        package_root: Path,
+        problem_title: str,
+        tests_spec_max_bytes: int,
+        statement_sample_max_bytes: int,
+    ) -> None:
+        self._copy_source_tree(snapshot, render_source)
+        languages = statement_languages(render_source)
+        if not languages:
+            raise ValueError(
+                "published source must contain at least one statement language"
+            )
+        build_root = package_root / STATEMENT_BUILD_DIR
+        for language in languages:
+            render_statement_offline_tree(
+                render_source,
+                language,
+                build_root / language,
+                problem_title=problem_title,
+                tests_spec_max_bytes=tests_spec_max_bytes,
+                statement_sample_max_bytes=statement_sample_max_bytes,
+                problem_limits=problem_config_limits(self.db.config_values),
+            )
+
     @staticmethod
     def _write_archive(source_root: Path, target: Path) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -624,6 +662,7 @@ class ProblemPackageService:
         materialization_id = existing["id"] if existing is not None else f"pm-{uuid.uuid4().hex}"
         staging = self.storage_layout.materialization_staging(materialization_id)
         package_root = staging / "package"
+        render_source = staging / "statement-source"
         archive_partial = staging / "verified-revision.zip.partial"
         previous_archive = staging / "previous-verified-revision.zip"
         final_archive = self.storage_layout.materialization_revision_archive(
@@ -658,9 +697,17 @@ class ProblemPackageService:
                 "solutions": solutions,
                 "tests": tests,
             }
-            manifest_path = package_root / "test_data" / "manifest.json"
+            manifest_path = package_root / TEST_DATA_DIR / "manifest.json"
             manifest_path.parent.mkdir(parents=True, exist_ok=True)
             manifest_path.write_text(dumps_manifest(manifest), encoding="utf-8", newline="\n")
+            self._materialize_statement_build(
+                snapshot=snapshot,
+                render_source=render_source,
+                package_root=package_root,
+                problem_title=problem_slug_leaf(revision.problem["slug"]),
+                tests_spec_max_bytes=tests_spec_max_bytes,
+                statement_sample_max_bytes=statement_sample_max_bytes,
+            )
             validate_manifest_files(
                 package_root,
                 manifest,
@@ -869,7 +916,7 @@ class ProblemPackageService:
         extraction.mkdir(parents=True, exist_ok=False)
         try:
             self._safe_extract(archive_path, extraction)
-            manifest_path = extraction / "test_data" / "manifest.json"
+            manifest_path = extraction / TEST_DATA_DIR / "manifest.json"
             manifest = load_manifest(manifest_path)
             if manifest["source_commit"] != row["source_commit"]:
                 raise ValueError("verified revision manifest commit does not match metadata")
@@ -900,6 +947,7 @@ class ProblemPackageService:
                 statement_sample_max_bytes=self.db.config_values.integer(
                     "STATEMENT_SAMPLE_MAX_BYTES"
                 ),
+                ignored_root_names=PACKAGE_DERIVED_ROOT_NAMES,
             )
             if source_tree.problem["mode"] != manifest["mode"]:
                 raise ValueError(

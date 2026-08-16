@@ -5,6 +5,7 @@ from app.service.problem.test_spec import TESTS_SPEC_REL, load_tests_spec, paylo
 from app.service.statement.constant import (
     STATEMENT_ASSETS_DIR,
     STATEMENT_DIR,
+    STATEMENT_EXAMPLES_REL,
     STATEMENT_MAIN_REL,
     STATEMENT_RENDERED_DIR_REL,
     STATEMENT_RENDERER_SIGNATURE_VERSION,
@@ -46,6 +47,25 @@ def statement_sources_signature(
         return quick_fp_digest(entries, schema="statement-signature")
 
     files: list[tuple[str, Path]] = []
+    examples_template = workspace / STATEMENT_EXAMPLES_REL
+    try:
+        if examples_template.is_symlink():
+            examples_state = "symlink"
+        elif not examples_template.exists():
+            examples_state = "missing"
+        elif examples_template.is_file():
+            examples_state = "file"
+        else:
+            examples_state = "not-file"
+    except OSError:
+        examples_state = "unreadable"
+    entries.append(
+        {
+            "kind": "examples-template",
+            "path": STATEMENT_EXAMPLES_REL.as_posix(),
+            "state": examples_state,
+        }
+    )
     for base in (workspace / STATEMENT_DIR, workspace / STATEMENT_ASSETS_DIR):
         if not base.exists() or not base.is_dir() or base.is_symlink():
             continue

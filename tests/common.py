@@ -418,7 +418,13 @@ class WorkspaceTestBase(RuntimeDBTestBase):
                 "\\documentclass{article}\n"
                 "\\usepackage{olymp}\n"
                 "\\begin{document}\n"
-                "\\input{rendered/english/problem.tex}\n"
+                "<#list statements as statement>\n"
+                "<#if statement.path??>\n"
+                "\\input{${statement.path}${statement.file}}\n"
+                "<#else>\n"
+                "\\input{${statement.file}}\n"
+                "</#if>\n"
+                "</#list>\n"
                 "\\end{document}\n",
                 encoding="utf-8",
             )

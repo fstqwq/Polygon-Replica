@@ -1,12 +1,10 @@
 import json
 import tempfile
 import unittest
-import zipfile
 from pathlib import Path
 
 from app.service.disk.export_store import ExportJobRow
 from app.service.export.service import ExportService
-from app.service.importing.polygon_replica import PolygonReplicaPackageImportService
 from app.service.problem_package.manifest import (
     VerifiedRevisionManifest,
     describe_file,
@@ -16,7 +14,6 @@ from app.service.problem_package.statement_samples import (
     hydrate_verified_statement_samples,
 )
 from app.service.problem_package.store import MaterializationRow
-from tests.archive_support import import_problem_package
 
 
 class TestExportService(unittest.TestCase):
@@ -55,7 +52,7 @@ class TestExportService(unittest.TestCase):
             self.assertLess(len(original_spec.encode("utf-8")), document_limit)
             spec_path.write_text(original_spec, encoding="utf-8")
 
-            test_data = package_root / "test_data" / "tests" / "001"
+            test_data = package_root / "test-data" / "tests" / "001"
             test_data.mkdir(parents=True)
             input_path = test_data / "input"
             answer_path = test_data / "answer"
@@ -140,63 +137,4 @@ class TestExportService(unittest.TestCase):
             self.assertEqual(
                 (hydrated["sample_input"], hydrated["sample_output"]),
                 ("123456", "abcdef"),
-            )
-
-    def test_polygon_replica_import_rejects_source_only_archive(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="polygon-replica-source-only-") as temp:
-            archive = Path(temp) / "source-only.zip"
-            with zipfile.ZipFile(archive, "w") as package:
-                package.writestr(
-                    "sample-snapshot/config/problem.json",
-                    '{"memory_limit_mb": 1}\n',
-                )
-                package.writestr(
-                    "sample-snapshot/solutions/backup.cpp",
-                    "// restored\n",
-                )
-            workspace = Path(temp) / "workspace"
-            workspace.mkdir()
-            (workspace / "old.txt").write_text("old\n", encoding="utf-8")
-
-            with self.assertRaisesRegex(
-                ValueError,
-                "test_data/manifest.json",
-            ):
-                import_problem_package(
-                    PolygonReplicaPackageImportService(),
-                    workspace,
-                    archive.name,
-                    archive.read_bytes(),
-                )
-
-            self.assertEqual(
-                (workspace / "old.txt").read_text(encoding="utf-8"),
-                "old\n",
-            )
-
-    def test_polygon_replica_import_rejects_partial_verified_data(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="polygon-replica-partial-") as temp:
-            archive = Path(temp) / "partial.zip"
-            with zipfile.ZipFile(archive, "w") as package:
-                package.writestr("config/problem.json", "{}\n")
-                package.writestr("solutions/restored.cpp", "// restored\n")
-                package.writestr("test_data/tests/001/input", "1\n")
-            workspace = Path(temp) / "workspace"
-            workspace.mkdir()
-            (workspace / "old.txt").write_text("old\n", encoding="utf-8")
-
-            with self.assertRaisesRegex(
-                ValueError,
-                "test_data/manifest.json",
-            ):
-                import_problem_package(
-                    PolygonReplicaPackageImportService(),
-                    workspace,
-                    archive.name,
-                    archive.read_bytes(),
-                )
-
-            self.assertEqual(
-                (workspace / "old.txt").read_text(encoding="utf-8"),
-                "old\n",
             )

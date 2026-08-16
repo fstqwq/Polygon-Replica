@@ -54,6 +54,26 @@ function initLanguageSwitch() {
   });
 }
 
+function initExamplesTemplateToggle() {
+  document.querySelectorAll("form[data-statement-examples-toggle-form='1']").forEach((form) => {
+    const toggle = form.querySelector("[data-statement-examples-toggle='1']");
+    if (!toggle) return;
+    toggle.addEventListener("change", async () => {
+      if (!toggle.checked) {
+        const confirmed = await showConfirmDialog(
+          "Disable the editable examples template? statement/examples.tex will be deleted and rendering will use the built-in default.",
+          toggle,
+        );
+        if (!confirmed) {
+          toggle.checked = true;
+          return;
+        }
+      }
+      submitForm(form);
+    });
+  });
+}
+
 function initDraftHistory() {
   const form = document.querySelector("form[data-statement-draft-form='1']");
   if (!form) return;
@@ -204,5 +224,6 @@ function initDraftHistory() {
 onReady(() => {
   initCompileState();
   initLanguageSwitch();
+  initExamplesTemplateToggle();
   initDraftHistory();
 });

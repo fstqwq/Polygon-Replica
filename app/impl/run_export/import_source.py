@@ -208,13 +208,13 @@ def _detect_problem_package_format(package: ArchiveView) -> str:
     names = list(package.entries)
     if _is_package_marker(names, "problem.xml"):
         return "polygon"
-    if _is_package_marker(names, "test_data/manifest.json"):
+    if _is_package_marker(names, "config/problem.json"):
         return "polygon-replica"
     if _is_package_marker(names, "problem.yaml"):
         return "icpc"
     raise ValueError(
         "unsupported package format: expected problem.xml (Polygon), "
-        "problem.yaml (ICPC), or test_data/manifest.json (Polygon Replica)"
+        "problem.yaml (ICPC), or config/problem.json (Polygon Replica)"
     )
 
 

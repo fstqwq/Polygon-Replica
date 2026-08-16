@@ -205,6 +205,10 @@ limits:
             )
             zf.writestr("roundtrip/statement/statements.ftl", "ROUNDTRIP_FTL\n")
             zf.writestr(
+                "roundtrip/statement/examples.tex",
+                "ROUNDTRIP_EXAMPLES\n",
+            )
+            zf.writestr(
                 "roundtrip/statement/problem.en.tex",
                 (
                     r"\begin{problem}{Roundtrip ICPC}{stdin}{stdout}{2 seconds}{256 megabytes}" + "\n"
@@ -231,6 +235,10 @@ limits:
         )
         self.assertEqual(str(result.get("title") or ""), "Roundtrip ICPC")
         self.assertEqual((ws / "statement" / "statements.ftl").read_text(encoding="utf-8"), "ROUNDTRIP_FTL\n")
+        self.assertEqual(
+            (ws / "statement" / "examples.tex").read_text(encoding="utf-8"),
+            "ROUNDTRIP_EXAMPLES\n",
+        )
 
         spec = json.loads((ws / "tests" / "spec.json").read_text(encoding="utf-8"))
         tests = spec.get("tests") if isinstance(spec, dict) else []

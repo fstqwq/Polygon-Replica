@@ -45,7 +45,7 @@
     <span class="muted"><strong>Language</strong>: missing</span>
     {% endif %}
     <a class="linkish" href="#statement-language-popup" data-popup-open="statement-language-popup">Add language</a>
-    <form class="inline-action" method="post" action="{{ problem_href('statement_templates_reset') }}" data-confirm-message="Restore statement/statements.ftl, statement/problem.tex, and statement/olymp.sty to Qiulygon defaults? This overwrites imported template/style files but keeps statement sections and attachments.">
+    <form class="inline-action" method="post" action="{{ problem_href('statement_templates_reset') }}" data-confirm-message="Restore statement/statements.ftl, statement/problem.tex, and statement/olymp.sty to Qiulygon defaults? This also removes the optional statement/examples.tex file, but keeps statement sections and attachments.">
       <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
       <input type="hidden" name="language" value="{{ current_language }}" />
       {% if preview_id %}
@@ -174,6 +174,62 @@
       <button class="btn primary-action" type="submit">Save Statement</button>
     </div>
   </form>
+</section>
+<section class="content-section statement-examples-template">
+  <div class="statement-examples-template-head">
+    <div>
+      <h2>Examples template</h2>
+      <p class="muted">Customize the FreeMarker/TeX source at <code>{{ statement_examples_template.path }}</code> for all statement languages. When disabled, rendering uses the built-in Polygon-compatible default. A custom <code>statement/problem.tex</code> must input the rendered companion itself.</p>
+    </div>
+    <form
+      class="statement-examples-template-toggle"
+      method="post"
+      action="{{ problem_href('statement_examples_template_toggle') }}"
+      data-statement-examples-toggle-form="1"
+    >
+      <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
+      <input type="hidden" name="language" value="{{ current_language }}" />
+      {% if preview_id %}
+      <input type="hidden" name="preview_id" value="{{ preview_id }}" />
+      {% endif %}
+      <label>
+        <input
+          type="checkbox"
+          name="enabled"
+          value="true"
+          data-statement-examples-toggle="1"
+          {% if statement_examples_template.enabled %}checked{% endif %}
+          {% if (statement_examples_template.error and not statement_examples_template.enabled) or not ctx.access.can_write %}disabled title="{{ statement_examples_template.error if statement_examples_template.error else ctx.access.write_block_reason }}"{% endif %}
+        />
+        Use editable examples template
+      </label>
+    </form>
+  </div>
+  {% if statement_examples_template.error %}
+  <p class="warn">{{ statement_examples_template.error }}</p>
+  {% elif statement_examples_template.enabled %}
+  <form method="post" action="{{ problem_href('statement_examples_template_save') }}">
+    <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
+    <input type="hidden" name="language" value="{{ current_language }}" />
+    {% if preview_id %}
+    <input type="hidden" name="preview_id" value="{{ preview_id }}" />
+    {% endif %}
+    <textarea
+      name="examples_tex"
+      rows="24"
+      data-code-editor="1"
+      data-code-path="{{ statement_examples_template.path }}"
+      data-code-wrap="1"
+      {% if statement_examples_template.truncated or not ctx.access.can_write %}readonly{% endif %}
+    >{{ statement_examples_template.content }}</textarea>
+    {% if statement_examples_template.truncated %}
+    <p><em>Examples template is truncated in editor (showing first {{ editor_char_limit }} chars).</em></p>
+    {% endif %}
+    <div class="form-submit-row statement-save-actions">
+      <button class="btn primary-action" type="submit" {% if statement_examples_template.truncated or not ctx.access.can_write %}disabled title="{{ 'The source exceeds the editor limit.' if statement_examples_template.truncated else ctx.access.write_block_reason }}"{% endif %}>Save Examples Template</button>
+    </div>
+  </form>
+  {% endif %}
 </section>
 {% if log_refs or log %}
 <section class="content-section statement-preview-diagnostics">

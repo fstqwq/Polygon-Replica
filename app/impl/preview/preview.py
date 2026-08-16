@@ -33,8 +33,11 @@ from app.service.platform.workspace_path import (
     safe_workspace_path,
 )
 from app.service.statement.constant import (
+    DEFAULT_STATEMENT_EXAMPLES_TEMPLATE,
     STATEMENT_ASSETS_DIR,
     STATEMENT_DEFAULT_FILES,
+    STATEMENT_DIR,
+    STATEMENT_EXAMPLES_REL,
     STATEMENT_PROBLEM_REL,
     STATEMENT_SECTIONS_DIR,
     STATEMENT_STYLE_REL,
@@ -74,6 +77,15 @@ class PreviewCompileDetails(TypedDict):
     source_commit: str
     source_ref: str
     error: str
+
+
+class StatementExamplesTemplateEditor(TypedDict):
+    enabled: bool
+    path: str
+    content: str
+    truncated: bool
+    error: str
+
 
 def statement_compile_asset_rows(workspace: Path) -> list[dict[str, str]]:
     try:
@@ -255,6 +267,58 @@ def statement_editor_sections(
             }
         )
     return rows
+
+
+def _statement_template_target(workspace: Path, rel: Path) -> Path:
+    statement_root = workspace / STATEMENT_DIR
+    if statement_root.is_symlink():
+        raise ValueError(f"{STATEMENT_DIR.as_posix()} must be a regular directory")
+    if statement_root.exists() and not statement_root.is_dir():
+        raise ValueError(f"{STATEMENT_DIR.as_posix()} must be a regular directory")
+    return workspace / rel
+
+
+def _statement_examples_template_editor(
+    workspace: Path,
+) -> StatementExamplesTemplateEditor:
+    result: StatementExamplesTemplateEditor = {
+        "enabled": False,
+        "path": STATEMENT_EXAMPLES_REL.as_posix(),
+        "content": "",
+        "truncated": False,
+        "error": "",
+    }
+    try:
+        target = _statement_template_target(workspace, STATEMENT_EXAMPLES_REL)
+        if target.is_symlink():
+            raise ValueError(
+                f"{STATEMENT_EXAMPLES_REL.as_posix()} must be a regular file"
+            )
+        if not target.exists():
+            return result
+        if not target.is_file():
+            raise ValueError(
+                f"{STATEMENT_EXAMPLES_REL.as_posix()} must be a regular file"
+            )
+        result["enabled"] = True
+        editor_limit = runtime().config_values.integer("TEXTAREA_MAX_BYTES")
+        if target.stat().st_size <= editor_limit:
+            content = target.read_text(encoding="utf-8")
+            truncated = False
+        else:
+            content, truncated = read_text_safe_limited(
+                target,
+                editor_limit,
+            )
+        result["content"] = content
+        result["truncated"] = bool(truncated)
+    except UnicodeDecodeError:
+        result["error"] = (
+            f"{STATEMENT_EXAMPLES_REL.as_posix()} must be valid UTF-8"
+        )
+    except (ValueError, OSError) as exc:
+        result["error"] = str(exc)
+    return result
 
 
 def extract_latex_failure_summary(log_text: str, summary_obj: dict[str, object] | None = None) -> str:
@@ -489,6 +553,7 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
     statement_assets_dir = STATEMENT_ASSETS_DIR.as_posix()
     statement_compile_assets = statement_compile_asset_rows(workspace)
     contestant_attachments = contestant_attachment_rows(workspace)
+    statement_examples_template = _statement_examples_template_editor(workspace)
     return template_response(
         request,
         'preview.html',
@@ -501,6 +566,7 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
             'statement_assets_dir': statement_assets_dir,
             'statement_template_path': STATEMENT_TEMPLATE_REL.as_posix(),
             'statement_problem_path': STATEMENT_PROBLEM_REL.as_posix(),
+            'statement_examples_template': statement_examples_template,
             'statement_style_path': STATEMENT_STYLE_REL.as_posix(),
             'statement_compile_assets': statement_compile_assets,
             'contestant_attachments': contestant_attachments,
@@ -788,18 +854,153 @@ def statement_templates_reset(
     message = 'default statement templates restored'
     try:
         with runtime().workspace_service.workspace_lock(workspace):
+            targets: list[tuple[str, Path, str]] = []
             for rel, content in STATEMENT_DEFAULT_FILES.items():
-                target = safe_workspace_path(workspace, rel)
+                target = _statement_template_target(workspace, Path(rel))
+                if (
+                    target.exists()
+                    and (not target.is_file())
+                    and (not target.is_symlink())
+                ):
+                    raise ValueError(f'{rel} must be a regular file')
+                targets.append((rel, target, content))
+            examples_target = _statement_template_target(
+                workspace,
+                STATEMENT_EXAMPLES_REL,
+            )
+            if (
+                examples_target.exists()
+                and (not examples_target.is_file())
+                and (not examples_target.is_symlink())
+            ):
+                raise ValueError(
+                    f'{STATEMENT_EXAMPLES_REL.as_posix()} must be a regular file'
+                )
+            for _, target, content in targets:
                 if target.is_symlink():
-                    raise ValueError(f'{rel} must be a regular file')
-                if target.exists() and (not target.is_file()):
-                    raise ValueError(f'{rel} must be a regular file')
+                    target.unlink()
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(content, encoding='utf-8')
+            if examples_target.is_symlink() or examples_target.is_file():
+                examples_target.unlink()
     except (ValueError, OSError, HTTPException) as exc:
         message = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
     return redirect_response(
         statement_redirect_url(problem, user, target_page, language=current_language, preview_id=preview_id),
+        status_code=303,
+        message=message,
+    )
+
+
+def statement_examples_template_toggle(
+    problem: str,
+    user: Annotated[str, Depends(require_session_user)],
+    enabled: Annotated[bool, Form()] = False,
+    page: Annotated[str, Form()] = 'statement',
+    language: Annotated[str, Form()] = '',
+    preview_id: Annotated[str, Form()] = '',
+):
+    target_page = normalize_statement_target_page(page)
+    ctx = page_ctx(
+        problem,
+        user,
+        include_branches=False,
+        refresh_status=False,
+        include_recent=False,
+    )
+    require_write_access(ctx)
+    workspace = Path(ctx['workspace']['path'])
+    current_language = resolve_statement_page_language(workspace, language)
+    message = (
+        'custom examples template enabled'
+        if enabled
+        else 'custom examples template disabled'
+    )
+    try:
+        with runtime().workspace_service.workspace_lock(workspace):
+            target = _statement_template_target(workspace, STATEMENT_EXAMPLES_REL)
+            if enabled:
+                if target.is_symlink() or (
+                    target.exists() and not target.is_file()
+                ):
+                    raise ValueError(
+                        f'{STATEMENT_EXAMPLES_REL.as_posix()} must be a regular file'
+                    )
+                if not target.exists():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(
+                        DEFAULT_STATEMENT_EXAMPLES_TEMPLATE,
+                        encoding='utf-8',
+                    )
+            else:
+                if (
+                    target.exists()
+                    and (not target.is_file())
+                    and (not target.is_symlink())
+                ):
+                    raise ValueError(
+                        f'{STATEMENT_EXAMPLES_REL.as_posix()} must be a regular file'
+                    )
+                if target.is_symlink() or target.is_file():
+                    target.unlink()
+    except (ValueError, OSError) as exc:
+        message = str(exc)
+    return redirect_response(
+        statement_redirect_url(
+            problem,
+            user,
+            target_page,
+            language=current_language,
+            preview_id=preview_id,
+        ),
+        status_code=303,
+        message=message,
+    )
+
+
+def statement_examples_template_save(
+    problem: str,
+    user: Annotated[str, Depends(require_session_user)],
+    examples_tex: Annotated[str, Form()] = '',
+    page: Annotated[str, Form()] = 'statement',
+    language: Annotated[str, Form()] = '',
+    preview_id: Annotated[str, Form()] = '',
+):
+    target_page = normalize_statement_target_page(page)
+    ctx = page_ctx(
+        problem,
+        user,
+        include_branches=False,
+        refresh_status=False,
+        include_recent=False,
+    )
+    require_write_access(ctx)
+    workspace = Path(ctx['workspace']['path'])
+    current_language = resolve_statement_page_language(workspace, language)
+    message = 'examples template saved'
+    try:
+        safe_examples_tex = enforce_textarea_max_bytes(
+            examples_tex,
+            label='statement examples template',
+            max_bytes=runtime().config_values.integer("TEXTAREA_MAX_BYTES"),
+        )
+        with runtime().workspace_service.workspace_lock(workspace):
+            target = _statement_template_target(workspace, STATEMENT_EXAMPLES_REL)
+            if target.is_symlink() or not target.exists() or not target.is_file():
+                raise ValueError(
+                    f'{STATEMENT_EXAMPLES_REL.as_posix()} is not enabled'
+                )
+            target.write_text(safe_examples_tex, encoding='utf-8')
+    except (ValueError, OSError) as exc:
+        message = str(exc)
+    return redirect_response(
+        statement_redirect_url(
+            problem,
+            user,
+            target_page,
+            language=current_language,
+            preview_id=preview_id,
+        ),
         status_code=303,
         message=message,
     )

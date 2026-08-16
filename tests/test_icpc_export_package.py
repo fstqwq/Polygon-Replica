@@ -475,7 +475,7 @@ class TestICPCExportPackage(unittest.TestCase):
             "attachment\n",
             encoding="utf-8",
         )
-        test_root = package_root / "test_data" / "tests" / "001"
+        test_root = package_root / "test-data" / "tests" / "001"
         test_root.mkdir(parents=True)
         input_path = test_root / "input"
         input_path.write_bytes(b"1\n")

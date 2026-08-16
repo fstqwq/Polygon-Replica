@@ -19,6 +19,8 @@
 
 \makeatletter
 \usepackage{verbatim}
+\RequirePackage{fancyvrb}
+\RequirePackage{xparse}
 \RequirePackage{ifxetex}
 \ifxetex
   % XeLaTeX: use fontspec for OpenType font loading
@@ -33,7 +35,7 @@
 \fi
 \RequirePackage[colorlinks=true,implicit=false]{hyperref}
 
-\providecommand{\wfCurrentProblemName}{}
+\providecommand{\statement@current@problem@name}{}
 
 
 \newif\if@landscape\@landscapefalse
@@ -134,9 +136,9 @@
 \newlength{\exmpthreewidinf}
 \newlength{\exmpthreewidouf}
 \newlength{\exmpthreewidnote}
-\newlength{\wfSampleTableWidth}
-\newlength{\wfSampleLeft}
-\newlength{\wfInteractBlockWidth}
+\newlength{\statement@sample@tablewidth}
+\newlength{\statement@sample@indent}
+\newlength{\statement@sample@interactionwidth}
 
 \newif\ifintentionallyblankpages
 
@@ -146,9 +148,15 @@
 \exmpthreewidinf=0.28\thelinewidth
 \exmpthreewidouf=0.28\thelinewidth
 \exmpthreewidnote=0.30\thelinewidth
-\wfSampleTableWidth=\dimexpr\exmpwidinf+\exmpwidouf+5\tabcolsep+4\arrayrulewidth\relax
-\wfSampleLeft=0pt
-\wfInteractBlockWidth=0.55\wfSampleTableWidth
+% A two-column |p{...}|p{...}| tabular consists of the two declared column
+% widths, four column paddings, and three vertical rules.  Keep the heading
+% and interaction canvas exactly as wide as that table.
+\newcommand{\statement@sample@updategeometry}{%
+    \statement@sample@tablewidth=\dimexpr\exmpwidinf+\exmpwidouf+4\tabcolsep+3\arrayrulewidth\relax
+    \statement@sample@interactionwidth=0.55\statement@sample@tablewidth
+}
+\statement@sample@updategeometry
+\statement@sample@indent=0pt
 
 \newlength{\afterproblemhead}
 \newlength{\afterconstraints}
@@ -345,24 +353,24 @@
 
 % -- End of setup keywords --
 
-\newcommand{\wfProblemLetter}{%
+\newcommand{\statement@problem@letter}{%
   \ifdefined\ProblemIndex
     \ProblemIndex
   \fi
 }
 
-\newcommand{\wfProblemLabel}{%
+\newcommand{\statement@problem@label}{%
     \ifdefined\ProblemIndex
-      \kw@Problem\ \wfProblemLetter
+      \kw@Problem\ \statement@problem@letter
     \else
       \kw@Problem
     \fi
 }
 
-\newcommand{\wfProblemHeader}[3]{%
+\newcommand{\statement@problem@header}[3]{%
   \begin{center}
     \textsf{%
-      {\huge {\wfProblemLabel}}\\[3mm]%
+      {\huge {\statement@problem@label}}\\[3mm]%
       {\LARGE {#1}%
         \ifdefined\DivisionNumber%
           \if\DivisionNumber2%
@@ -499,7 +507,7 @@
 \newenvironment{tutorial}[1]{%
     \bigskip%
     \refstepcounter{problem}
-    \wfProblemHeader{#1}{}{}%
+    \statement@problem@header{#1}{}{}%
     \problemtextfont%
 }
 
@@ -508,13 +516,13 @@
 \global\let\lastproblemdeveloper\thisproblemdeveloper
 \global\let\lastproblemorigin\thisproblemorigin
 \ifx&#4&%
-    \gdef\wfCurrentTimeLimit{\kw@notstated}%
+    \gdef\statement@current@time@limit{\kw@notstated}%
     \gdef\contestshortname{Time limit: \kw@notstated}%
 \else%
-    \gdef\wfCurrentTimeLimit{#4}%
+    \gdef\statement@current@time@limit{#4}%
     \gdef\contestshortname{Time limit: #4}%
 \fi%
-\gdef\wfCurrentProblemName{#1}%
+\gdef\statement@current@problem@name{#1}%
 
 % Hotfix
 %\def\@memorylimit{#5}
@@ -552,7 +560,7 @@
     {
         \ifdefined\NoProblemHead\else%
         \refstepcounter{problem}
-        \wfProblemHeader{#1}{#4}{#5}%
+        \statement@problem@header{#1}{#4}{#5}%
         \problemtextfont%
         \fi%
     }
@@ -583,10 +591,32 @@
 % This is magic, which delete space after verbatiminput
 \addto@hook{\every@verbatim}{\topsep=0pt\relax}
 
+% File-backed sample content uses FancyVerb so that leading empty lines are
+% represented as real lines instead of being discarded by verbatim.sty.
+\newcommand{\statement@sample@textfile}[1]{%
+    \begingroup
+    % import.sty exposes the directory of the current problem as
+    % \import@path.  Prefixing here keeps one problem.tex valid both when it
+    % is compiled locally and when it is imported into a problemset.
+    \edef\statement@sample@resolvedfile{%
+        \ifdefined\import@path\import@path\fi#1%
+    }%
+    \let\statement@sample@original@formatline\FancyVerbFormatLine
+    \def\FancyVerbFormatLine##1{%
+        \strut\statement@sample@original@formatline{##1}\strut
+    }%
+    \VerbatimInput[
+        vspace=0pt,
+        listparameters={\topsep=0pt\partopsep=0pt\parsep=0pt\itemsep=0pt}
+    ]{\statement@sample@resolvedfile}%
+    \endgroup
+}
+
 % :FIXME:
 \newcounter{exmpnum}
 \newenvironment{example}[1][]{
     \s@tm@cr@s#1
+    \statement@sample@updategeometry
     \setcounter{exmpnum}{0}%
     \ttfamily\obeylines\obeyspaces\frenchspacing
     \newcommand{\exmp}[2]{
@@ -595,9 +625,9 @@
             \vspace{0.6\baselineskip}%
         \fi
         \stepcounter{exmpnum}%
-        \noindent\hspace*{\wfSampleLeft}%
-        \begin{minipage}{\wfSampleTableWidth}
-            \hbox to \wfSampleTableWidth{%
+        \noindent\hspace*{\statement@sample@indent}%
+        \begin{minipage}{\statement@sample@tablewidth}
+            \hbox to \statement@sample@tablewidth{%
                 {\sffamily\bfseries Sample Input \arabic{exmpnum}}%
                 \hfil
                 {\sffamily\bfseries Sample Output \arabic{exmpnum}}%
@@ -621,15 +651,15 @@
             \vspace{0.6\baselineskip}%
         \fi
         \stepcounter{exmpnum}%
-        \noindent\hspace*{\wfSampleLeft}%
-        \begin{tabular*}{\wfSampleTableWidth}{@{}l@{\extracolsep{\fill}}c@{\extracolsep{\fill}}r@{}}%
+        \noindent\hspace*{\statement@sample@indent}%
+        \begin{tabular*}{\statement@sample@tablewidth}{@{}l@{\extracolsep{\fill}}c@{\extracolsep{\fill}}r@{}}%
             \sffamily\bfseries Read &
             \sffamily\bfseries Sample Interaction \arabic{exmpnum} &
             \sffamily\bfseries Write
         \end{tabular*}%
         \par
-        \noindent\hspace*{\wfSampleLeft}%
-        \begin{minipage}{\wfSampleTableWidth}
+        \noindent\hspace*{\statement@sample@indent}%
+        \begin{minipage}{\statement@sample@tablewidth}
             \begin{tabular}{|p{\exmpwidinf}|p{\exmpwidouf}|}
                 \hline
                 \begin{minipage}[t]{\exmpwidinf}\rightskip=0pt plus 1fill\relax##1\medskip\end{minipage}&
@@ -641,188 +671,187 @@
     \fi%
     }
     \newcommand{\exmpinteractfile}[2]{%
-        \exmpinteract{\verbatiminput{##1}}{\verbatiminput{##2}}%
+        \exmpinteract{\statement@sample@textfile{##1}}{\statement@sample@textfile{##2}}%
     }
 
     \newcommand{\exmpfile}[2]{
     \ifdefined\NoExamples\else%
        \exmp{
-          \verbatiminput{##1}
+          \statement@sample@textfile{##1}
        }{
-          \verbatiminput{##2}
+          \statement@sample@textfile{##2}
        }%
     \fi%
     }
 }{
 }
 
-\newcounter{exmpnumtwice}
-\newcounter{exmpnumtwicepair}
-\newenvironment{exampletwice}[1][]{
-    \s@tm@cr@s#1
-    \setcounter{exmpnumtwice}{0}%
-    \setcounter{exmpnumtwicepair}{0}%
-    \ttfamily\obeylines\obeyspaces\frenchspacing
-    \newcommand{\exmp}[2]{
-    \ifdefined\NoExamples\else%
-        \ifnum\value{exmpnumtwice}=0\relax
-            \vspace{0.6\baselineskip}%
-        \fi
-        \stepcounter{exmpnumtwice}%
-        \ifodd\value{exmpnumtwice}
-            \stepcounter{exmpnumtwicepair}%
-            \edef\wfPassIndex{1}%
-        \else
-            \edef\wfPassIndex{2}%
-        \fi
-        \edef\wfSampleIndex{\arabic{exmpnumtwicepair}}%
-        \noindent\hspace*{\wfSampleLeft}%
-        \begin{tabular*}{\wfSampleTableWidth}{@{}l@{\extracolsep{\fill}}c@{\extracolsep{\fill}}r@{}}%
-            \sffamily\bfseries Sample Input \wfSampleIndex &
-            \sffamily\bfseries Pass \wfPassIndex &
-            \sffamily\bfseries Sample Output \wfSampleIndex
-        \end{tabular*}%
-        \par
-        \noindent\hspace*{\wfSampleLeft}%
-        \begin{minipage}{\wfSampleTableWidth}
-            \begin{tabular}{|p{\exmpwidinf}|p{\exmpwidouf}|}
-                \hline
-                \begin{minipage}[t]{\exmpwidinf}\rightskip=0pt plus 1fill\relax##1\smallskip\end{minipage}&
-                \begin{minipage}[t]{\exmpwidouf}\rightskip=0pt plus 1fill\relax##2\smallskip\end{minipage}\\
-                \hline
-            \end{tabular}
-        \end{minipage}
-        \par\medskip
-    \fi%
-    }
-    \newcommand{\exmpinteract}[2]{
-    \ifdefined\NoExamples\else%
-        \ifnum\value{exmpnumtwice}=0\relax
-            \vspace{0.6\baselineskip}%
-        \fi
-        \stepcounter{exmpnumtwice}%
-        \ifodd\value{exmpnumtwice}
-            \stepcounter{exmpnumtwicepair}%
-            \edef\wfPassIndex{1}%
-        \else
-            \edef\wfPassIndex{2}%
-        \fi
-        \edef\wfSampleIndex{\arabic{exmpnumtwicepair}}%
-        \noindent\hspace*{\wfSampleLeft}%
-        \begin{tabular*}{\wfSampleTableWidth}{@{}l@{\extracolsep{\fill}}c@{\extracolsep{\fill}}r@{}}%
-            \sffamily\bfseries Read &
-            \sffamily\bfseries Sample \wfSampleIndex, Pass \wfPassIndex &
-            \sffamily\bfseries Write
-        \end{tabular*}%
-        \par
-        \noindent\hspace*{\wfSampleLeft}%
-        \begin{minipage}{\wfSampleTableWidth}
-            \begin{tabular}{|p{\exmpwidinf}|p{\exmpwidouf}|}
-                \hline
-                \begin{minipage}[t]{\exmpwidinf}\rightskip=0pt plus 1fill\relax##1\smallskip\end{minipage}&
-                \begin{minipage}[t]{\exmpwidouf}\rightskip=0pt plus 1fill\relax##2\smallskip\end{minipage}\\
-                \hline
-            \end{tabular}
-        \end{minipage}
-        \par\medskip
-    \fi%
-    }
-    \newcommand{\exmpinteractfile}[2]{%
-        \exmpinteract{\verbatiminput{##1}}{\verbatiminput{##2}}%
-    }
-
-    \newcommand{\exmpfile}[2]{
-    \ifdefined\NoExamples\else%
-       \exmp{
-          \verbatiminput{##1}
-       }{
-          \verbatiminput{##2}
-       }%
-    \fi%
-    }
-}{
-}
-
-% -- Interactive zigzag samples (read/write alternating) --
-\newcommand{\interactread}[1]{%
-    \noindent\hspace*{\wfSampleLeft}%
-    \makebox[\wfSampleTableWidth][l]{%
-        \begin{tabular}{|p{\wfInteractBlockWidth}|}
+\newcommand{\statement@sample@eventblock}[2]{%
+    \noindent\hspace*{\statement@sample@indent}%
+    \makebox[\statement@sample@tablewidth][#1]{%
+        \begin{tabular}{|p{\statement@sample@interactionwidth}|}
             \hline
-            \begin{minipage}[t]{\wfInteractBlockWidth}\rightskip=0pt plus 1fill\relax\strut#1\strut\end{minipage}\\
+            \begin{minipage}[t]{\statement@sample@interactionwidth}\rightskip=0pt plus 1fill\relax#2\end{minipage}\\
             \hline
         \end{tabular}
     }%
     \par\smallskip
 }
-\newcommand{\interactwrite}[1]{%
-    \noindent\hspace*{\wfSampleLeft}%
-    \makebox[\wfSampleTableWidth][r]{%
-        \begin{tabular}{|p{\wfInteractBlockWidth}|}
-            \hline
-            \begin{minipage}[t]{\wfInteractBlockWidth}\rightskip=0pt plus 1fill\relax\strut#1\strut\end{minipage}\\
-            \hline
-        \end{tabular}
-    }%
-    \par\smallskip
-}
+% -- Structured statement sample API --------------------------------------
+% Public names describe statement semantics.  Package implementation details
+% use the private \statement@ namespace.  The caller supplies every sample,
+% pass, and visible event in display order; no identity is inferred.
+\newcounter{statementSampleEntry}
+\newif\ifstatement@sample@presentation
+\newif\ifstatement@sample@interaction
 
-\newenvironment{interactzigzag}{
-    \ttfamily\obeylines\obeyspaces\frenchspacing
-    \ifdefined\NoExamples\else%
-        \ifnum\value{exmpnum}=0\relax
-            \vspace{0.6\baselineskip}%
-        \fi
-        \stepcounter{exmpnum}%
-        \noindent\hspace*{\wfSampleLeft}%
-        \begin{tabular*}{\wfSampleTableWidth}{@{}l@{\extracolsep{\fill}}c@{\extracolsep{\fill}}r@{}}%
-            \sffamily\bfseries Read &
-            \sffamily\bfseries Sample Interaction \arabic{exmpnum} &
-            \sffamily\bfseries Write
-        \end{tabular*}%
-        \par
-        \noindent\hspace*{\wfSampleLeft}%
-        \begin{minipage}{\wfSampleTableWidth}
-    \fi%
-}{
-    \ifdefined\NoExamples\else%
-        \end{minipage}
-        \par\medskip
-    \fi%
-}
-
-\newenvironment{interactzigzagtwice}{
-    \ttfamily\obeylines\obeyspaces\frenchspacing
-    \ifdefined\NoExamples\else%
-        \ifnum\value{exmpnumtwice}=0\relax
-            \vspace{0.6\baselineskip}%
-        \fi
-        \stepcounter{exmpnumtwice}%
-        \ifodd\value{exmpnumtwice}
-            \stepcounter{exmpnumtwicepair}%
-            \edef\wfPassIndex{1}%
-        \else
-            \edef\wfPassIndex{2}%
-        \fi
-        \edef\wfSampleIndex{\arabic{exmpnumtwicepair}}%
-        \noindent\hspace*{\wfSampleLeft}%
-        \hbox to \wfSampleTableWidth{%
-            {\sffamily\bfseries Read}%
-            \hfil
-            {\sffamily\bfseries Sample \wfSampleIndex, Pass \wfPassIndex}%
-            \hfil
-            {\sffamily\bfseries Write}%
+\newcommand{\statement@sample@requirepresentation}[1]{%
+    \ifstatement@sample@presentation\else
+        \PackageError{olymp}{#1 must be used inside StatementSamples}{%
+            Wrap structured sample commands in a StatementSamples environment.%
         }%
-        \par
-        \noindent\hspace*{\wfSampleLeft}%
-        \begin{minipage}{\wfSampleTableWidth}
-    \fi%
-}{
-    \ifdefined\NoExamples\else%
-        \end{minipage}
-        \par\medskip
-    \fi%
+    \fi
 }
+
+\newcommand{\statement@sample@requireinteraction}[1]{%
+    \ifstatement@sample@interaction\else
+        \PackageError{olymp}{#1 must be used inside StatementSampleInteraction}{%
+            Event commands are only valid inside a StatementSampleInteraction environment.%
+        }%
+    \fi
+}
+
+\newcommand{\statement@sample@nextentry}{%
+    \ifnum\value{statementSampleEntry}=0\relax
+        \vspace{0.6\baselineskip}%
+    \fi
+    \stepcounter{statementSampleEntry}%
+}
+
+\newcommand{\statement@sample@filepanel}[5]{%
+    \noindent\hspace*{\statement@sample@indent}%
+    \begin{minipage}{\statement@sample@tablewidth}
+        \def\statement@sample@centertitle{#2}%
+        \ifx\statement@sample@centertitle\@empty
+            \hbox to \statement@sample@tablewidth{%
+                {\sffamily\bfseries #1}%
+                \hfil
+                {\sffamily\bfseries #3}%
+                \hfil
+            }%
+            \par\smallskip
+        \else
+            \begin{tabular*}{\statement@sample@tablewidth}{@{}l@{\extracolsep{\fill}}c@{\extracolsep{\fill}}r@{}}%
+                \sffamily\bfseries #1 &
+                \sffamily\bfseries #2 &
+                \sffamily\bfseries #3
+            \end{tabular*}%
+            \par
+        \fi
+        \setlength{\extrarowheight}{1mm}%
+        \begin{tabular}{|p{\exmpwidinf}|p{\exmpwidouf}|}
+            \hline
+            \begin{minipage}[t]{\exmpwidinf}%
+                \rightskip=0pt plus 1fill\relax
+                \statement@sample@textfile{#4}%
+                \smallskip
+            \end{minipage}&
+            \begin{minipage}[t]{\exmpwidouf}%
+                \rightskip=0pt plus 1fill\relax
+                \statement@sample@textfile{#5}%
+                \smallskip
+            \end{minipage}\\
+            \hline
+        \end{tabular}
+    \end{minipage}
+    \par\medskip
+}
+
+\newcommand{\statement@sample@interactionheading}[1]{%
+    \noindent\hspace*{\statement@sample@indent}%
+    \begin{tabular*}{\statement@sample@tablewidth}{@{}l@{\extracolsep{\fill}}c@{\extracolsep{\fill}}r@{}}%
+        \sffamily\bfseries Read &
+        \sffamily\bfseries #1 &
+        \sffamily\bfseries Write
+    \end{tabular*}%
+    \par\nopagebreak[4]
+}
+
+\NewDocumentEnvironment{StatementSamples}{O{}}{%
+    \s@tm@cr@s#1
+    \statement@sample@updategeometry
+    \setcounter{statementSampleEntry}{0}%
+    \statement@sample@presentationtrue
+    \statement@sample@interactionfalse
+    \ttfamily\obeylines\obeyspaces\frenchspacing
+}{%
+    \statement@sample@interactionfalse
+    \statement@sample@presentationfalse
+}
+
+\NewDocumentCommand{\StatementSampleFile}{m m m}{%
+    \statement@sample@requirepresentation{\string\StatementSampleFile}%
+    \ifdefined\NoExamples\else
+        \statement@sample@nextentry
+        \statement@sample@filepanel
+            {Sample Input #1}{}
+            {Sample Output #1}{#2}{#3}%
+    \fi
+}
+
+\NewDocumentCommand{\StatementSamplePassFile}{m m m m}{%
+    \statement@sample@requirepresentation{\string\StatementSamplePassFile}%
+    \ifdefined\NoExamples\else
+        \statement@sample@nextentry
+        \statement@sample@filepanel
+            {Sample Input #1}{Pass #2}
+            {Sample Output #1}{#3}{#4}%
+    \fi
+}
+
+\NewDocumentEnvironment{StatementSampleInteraction}{O{} m}{%
+    \statement@sample@requirepresentation{StatementSampleInteraction}%
+    \statement@sample@interactiontrue
+    \ifdefined\NoExamples\else
+        \statement@sample@nextentry
+        \def\statement@sample@pass{#1}%
+        \ifx\statement@sample@pass\@empty
+            \statement@sample@interactionheading{Sample Interaction #2}%
+        \else
+            \statement@sample@interactionheading{Sample #2, Pass #1}%
+        \fi
+    \fi
+}{%
+    \ifdefined\NoExamples\else
+        \par\medskip
+    \fi
+    \statement@sample@interactionfalse
+}
+
+\NewDocumentCommand{\StatementSampleEventFile}{m m}{%
+    \statement@sample@requireinteraction{\string\StatementSampleEventFile}%
+    \def\statement@sample@source{#1}%
+    \def\statement@sample@interactor{interactor}%
+    \def\statement@sample@solution{solution}%
+    \let\statement@sample@alignment\@empty
+    \ifx\statement@sample@source\statement@sample@interactor
+        \def\statement@sample@alignment{l}%
+    \else\ifx\statement@sample@source\statement@sample@solution
+        \def\statement@sample@alignment{r}%
+    \else
+        \PackageError{olymp}{Unknown sample event source `#1'}{%
+            Expected `interactor' or `solution'.%
+        }%
+    \fi\fi
+    \ifx\statement@sample@alignment\@empty\else
+        \ifdefined\NoExamples\else
+            \statement@sample@eventblock{\statement@sample@alignment}{%
+                \statement@sample@textfile{#2}%
+            }%
+        \fi
+    \fi
+}
+% -- End structured statement sample API ----------------------------------
 
 \newenvironment{examplewide}[1][]{%
     \s@tm@cr@s#1
@@ -849,9 +878,9 @@
     \newcommand{\exmpfile}[2]{
         \ifdefined\NoExamples\else%
        \exmp{
-          \verbatiminput{##1}
+          \statement@sample@textfile{##1}
        }{
-          \verbatiminput{##2}
+          \statement@sample@textfile{##2}
        }%
         \fi%
     }
@@ -873,9 +902,9 @@
     \newcommand{\exmpfile}[3]{
     \ifdefined\NoExamples\else%
        \exmp{
-          \verbatiminput{##1}
+          \statement@sample@textfile{##1}
        }{
-          \verbatiminput{##2}
+          \statement@sample@textfile{##2}
        }{
           ##3
        }%
@@ -955,47 +984,54 @@
 
 \makeatletter
 
+% Empty by default.  A template may replace this with arbitrary TeX, for
+% example \renewcommand{\StatementBanner}{\includegraphics[...]{...}}.
+\newcommand{\StatementBanner}{}
+\long\def\statement@empty{}
+
 \renewcommand{\@oddhead}{%
-\parbox{\textwidth}{
-\begin{center}
-% \includegraphics[width=\textwidth]{statements-banner.pdf}
-\end{center}
-}
+\ifx\StatementBanner\statement@empty
+    \hfil
+\else
+    \parbox{\textwidth}{%
+        \StatementBanner%
+    }%
+\fi
 }
 
 \renewcommand{\@evenhead}{\@oddhead}
 
 
 
-\renewcommand{\@oddfoot}{
-    \parbox{\textwidth}{
+\renewcommand{\@oddfoot}{%
+    \parbox{\textwidth}{%
         \emph{%
             \ifdefined\thecontestname
                 \thecontestname%
             \fi%
-            \ifx\wfCurrentProblemName\empty\else%
+            \ifx\statement@current@problem@name\empty\else%
                 \ifdefined\thecontestname\space\fi%
-                \kw@Problem\ \wfProblemLetter: \wfCurrentProblemName%
+                \kw@Problem\ \statement@problem@letter: \statement@current@problem@name%
             \fi%
         }%
         \hfill
         \thepage
-    }
+    }%
 }
-\renewcommand{\@evenfoot}{
-    \parbox{\textwidth}{
+\renewcommand{\@evenfoot}{%
+    \parbox{\textwidth}{%
         \emph{%
             \ifdefined\thecontestname
                 \thecontestname%
             \fi%
-            \ifx\wfCurrentProblemName\empty\else%
+            \ifx\statement@current@problem@name\empty\else%
                 \ifdefined\thecontestname\space\fi%
-                \kw@Problem\ \wfProblemLetter: \wfCurrentProblemName%
+                \kw@Problem\ \statement@problem@letter: \statement@current@problem@name%
             \fi%
         }%
         \hfill
         \thepage
-    }
+    }%
 }
 
 \makeatother

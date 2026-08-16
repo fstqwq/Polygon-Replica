@@ -215,6 +215,7 @@ class TestPolygonPackageImport(unittest.TestCase):
     <resources>
       <file path="statements.ftl"/>
       <file path="problem.tex"/>
+      <file path="examples.tex"/>
       <file path="olymp.sty"/>
       <file path="testlib.h"/>
     </resources>
@@ -225,6 +226,7 @@ class TestPolygonPackageImport(unittest.TestCase):
             zf.writestr("problem.xml", xml)
             zf.writestr("statements.ftl", "ROOT_FTL_TEMPLATE\n")
             zf.writestr("problem.tex", "ROOT_PROBLEM_TEMPLATE\n")
+            zf.writestr("examples.tex", "ROOT_EXAMPLES_TEMPLATE\n")
             zf.writestr("olymp.sty", "ROOT_OLYMP_STYLE\n")
             zf.writestr("testlib.h", "// ROOT TESTLIB\n")
             zf.writestr("tests/01", "1\n")
@@ -237,6 +239,7 @@ class TestPolygonPackageImport(unittest.TestCase):
         self.assertEqual(str(result.get("title") or ""), "Root Style Import")
         self.assertEqual((ws / "statement" / "statements.ftl").read_text(encoding="utf-8"), "ROOT_FTL_TEMPLATE\n")
         self.assertEqual((ws / "statement" / "problem.tex").read_text(encoding="utf-8"), "ROOT_PROBLEM_TEMPLATE\n")
+        self.assertEqual((ws / "statement" / "examples.tex").read_text(encoding="utf-8"), "ROOT_EXAMPLES_TEMPLATE\n")
         self.assertEqual((ws / "statement" / "olymp.sty").read_text(encoding="utf-8"), "ROOT_OLYMP_STYLE\n")
         upstream_testlib = Path("third_party/upstream/testlib/testlib.h").read_text(encoding="utf-8")
         workspace_testlib = (ws / "third_party" / "testlib" / "testlib.h").read_text(encoding="utf-8")

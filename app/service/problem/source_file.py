@@ -29,7 +29,11 @@ def _validate_authored_relative(
         raise ValueError(f"{relative}: materialized answers are not authored source")
 
 
-def validate_source_tree_filesystem(root: Path) -> None:
+def validate_source_tree_filesystem(
+    root: Path,
+    *,
+    ignored_root_names: frozenset[str] = frozenset(),
+) -> None:
     """Reject links and special files anywhere in an authored source tree."""
 
     def raise_walk_error(error: OSError) -> None:
@@ -49,10 +53,11 @@ def validate_source_tree_filesystem(root: Path) -> None:
         ):
             parent = Path(dirpath)
             if parent == resolved_root:
+                ignored = {".git", *ignored_root_names}
                 dirnames[:] = [
                     name
                     for name in sorted(dirnames)
-                    if name not in {".git", "test_data"}
+                    if name not in ignored
                 ]
             else:
                 dirnames[:] = sorted(dirnames)
@@ -67,7 +72,7 @@ def validate_source_tree_filesystem(root: Path) -> None:
                     raise ValueError(f"{relative}: special files are not allowed")
                 _validate_authored_relative(relative, entry_kind="directory")
             for name in sorted(filenames):
-                if parent == resolved_root and name in {".git", "test_data"}:
+                if parent == resolved_root and name == ".git":
                     continue
                 path = parent / name
                 relative = path.relative_to(resolved_root).as_posix()

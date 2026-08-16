@@ -35,6 +35,7 @@ from app.service.verification.task_completion import TaskCompletion
 from app.service.verification.types import VerificationTaskStatus
 from app.service.statement.constant import (
     DEFAULT_OLYMP_STY,
+    DEFAULT_STATEMENT_EXAMPLES_TEMPLATE,
     DEFAULT_STATEMENT_PROBLEM_TEMPLATE,
     DEFAULT_STATEMENT_TEMPLATE,
 )
@@ -80,6 +81,8 @@ from tests.ui_support import (
     preview_page,
     revision_commit,
     statement_templates_reset,
+    statement_examples_template_save,
+    statement_examples_template_toggle,
     switch_workspace,
     uuid,
     workspace_access_grant,
@@ -1521,7 +1524,53 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertIn(f"/problems/{owned_problem}/statement", str(resp.headers.get("location", "")))
         self.assertIsNotNone(workspace_service.known_problem_id(owned_problem))
 
-    def test_statement_templates_reset_restores_only_default_template_files(self) -> None:
+    def test_statement_examples_template_is_opt_in_and_editable(self) -> None:
+        problem = f"alice/stmtexamples-{uuid.uuid4().hex[:8]}"
+        workspace_service.ensure_problem(problem)
+        workspace_service.grant_repo_access(problem, "alice", "owner")
+        ws = Path(workspace_service.ensure_workspace(problem, "alice"))
+        ensure_statement_language_sources(ws, "english")
+        examples_path = ws / "statement/examples.tex"
+
+        self.assertFalse(examples_path.exists())
+
+        enabled = statement_examples_template_toggle(
+            problem=problem,
+            user="alice",
+            enabled=True,
+            page="statement",
+            language="english",
+        )
+        self.assertEqual(enabled.status_code, 303)
+        self.assertEqual(
+            examples_path.read_text(encoding="utf-8"),
+            DEFAULT_STATEMENT_EXAMPLES_TEMPLATE,
+        )
+
+        saved = statement_examples_template_save(
+            problem=problem,
+            user="alice",
+            examples_tex="custom ${problem.name}\r\n",
+            page="statement",
+            language="english",
+        )
+        self.assertEqual(saved.status_code, 303)
+        self.assertEqual(
+            examples_path.read_text(encoding="utf-8"),
+            "custom ${problem.name}\n",
+        )
+
+        disabled = statement_examples_template_toggle(
+            problem=problem,
+            user="alice",
+            enabled=False,
+            page="statement",
+            language="english",
+        )
+        self.assertEqual(disabled.status_code, 303)
+        self.assertFalse(examples_path.exists())
+
+    def test_statement_templates_reset_restores_defaults_and_disables_examples_override(self) -> None:
         problem = f"alice/stmtreset-{uuid.uuid4().hex[:8]}"
         workspace_service.ensure_problem(problem)
         workspace_service.grant_repo_access(problem, "alice", "owner")
@@ -1530,6 +1579,8 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         (ws / "statement" / "statements.ftl").write_text("custom statements template\n", encoding="utf-8")
         (ws / "statement" / "problem.tex").write_text("custom problem template\n", encoding="utf-8")
         (ws / "statement" / "olymp.sty").write_text("custom olymp style\n", encoding="utf-8")
+        examples_path = ws / "statement" / "examples.tex"
+        examples_path.write_text("custom examples template\n", encoding="utf-8")
         legend_path = ws / "statement-sections" / "english" / "legend.tex"
         legend_path.write_text("custom legend section\n", encoding="utf-8")
 
@@ -1548,6 +1599,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertEqual((ws / "statement" / "statements.ftl").read_text(encoding="utf-8"), DEFAULT_STATEMENT_TEMPLATE)
         self.assertEqual((ws / "statement" / "problem.tex").read_text(encoding="utf-8"), DEFAULT_STATEMENT_PROBLEM_TEMPLATE)
         self.assertEqual((ws / "statement" / "olymp.sty").read_text(encoding="utf-8"), DEFAULT_OLYMP_STY)
+        self.assertFalse(examples_path.exists())
         self.assertEqual(legend_path.read_text(encoding="utf-8"), "custom legend section\n")
 
     def test_problems_page_shows_only_participating_problems(self) -> None:

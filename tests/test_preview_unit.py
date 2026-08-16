@@ -12,13 +12,19 @@ from app.service.problem.runtime_config import (
 )
 from app.service.problem.test_spec import dumps_tests_spec
 from app.service.statement.constant import (
+    DEFAULT_STATEMENT_EXAMPLES_TEMPLATE,
     DEFAULT_STATEMENT_PROBLEM_TEMPLATE,
     STATEMENT_ASSETS_DIR,
+    STATEMENT_EXAMPLES_REL,
 )
 from app.service.statement.context import pick_statement_language, statement_languages
 from app.service.statement.ftl.renderer import render_ftl_template
 from app.service.statement.preview import PreviewService
-from app.service.statement.render import render_statement_main, seed_statement_sources
+from app.service.statement.render import (
+    render_statement_main,
+    render_statement_offline_tree,
+    seed_statement_sources,
+)
 from app.service.statement.signature import statement_sources_signature
 from app.service.verification.signature import (
     verification_fingerprint,
@@ -104,6 +110,199 @@ class TestPreviewUnit(unittest.TestCase):
         self.assertIn("\\import{rendered/english/}{./problem.tex}", rendered)
         self.assertIn("Rendered Title", rendered_problem)
         self.assertIn("Rendered content.", rendered_problem)
+        self.assertIn("\\par\n\\input{examples.tex}", rendered_problem)
+        self.assertTrue(
+            (statement / "rendered" / "english" / "examples.tex").is_file()
+        )
+        self.assertFalse((self.workspace / STATEMENT_EXAMPLES_REL).exists())
+
+    def test_offline_statement_tree_has_a_local_entrypoint_and_style(self) -> None:
+        target = self.workspace / "package-output" / "english"
+
+        entrypoint = render_statement_offline_tree(
+            self.workspace,
+            "english",
+            target,
+            problem_title="Fallback Title",
+            tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
+            statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
+            problem_limits=_PROBLEM_LIMITS,
+        )
+
+        self.assertEqual(entrypoint, target / "statements.tex")
+        rendered_main = entrypoint.read_text(encoding="utf-8")
+        self.assertIn(r"\input problem.tex", rendered_main)
+        self.assertNotIn("rendered/english", rendered_main)
+        for name in ("problem.tex", "examples.tex", "olymp.sty"):
+            self.assertTrue((target / name).is_file(), name)
+        self.assertEqual(
+            (target / "olymp.sty").read_bytes(),
+            (self.workspace / "statement/olymp.sty").read_bytes(),
+        )
+
+    def test_statement_examples_template_is_optional_and_editable(self) -> None:
+        authored = self.workspace / STATEMENT_EXAMPLES_REL
+        authored.write_text(
+            "Custom examples for ${problem.name}.\n",
+            encoding="utf-8",
+        )
+        (self.workspace / "statement-sections/english/name.tex").write_text(
+            "Custom Title\n",
+            encoding="utf-8",
+        )
+
+        render_statement_main(
+            self.workspace / "statement",
+            problem_title="Custom Title",
+            language="english",
+            tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
+            statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
+            problem_limits=_PROBLEM_LIMITS,
+        )
+
+        rendered_examples = (
+            self.workspace / "statement/rendered/english/examples.tex"
+        ).read_text(encoding="utf-8")
+        self.assertEqual(rendered_examples, "Custom examples for Custom Title.\n")
+
+    def test_invalid_authored_examples_template_does_not_use_fallback(self) -> None:
+        authored = self.workspace / STATEMENT_EXAMPLES_REL
+        authored.write_bytes(b"\xff")
+
+        with self.assertRaisesRegex(RuntimeError, "examples.*valid UTF-8"):
+            render_statement_main(
+                self.workspace / "statement",
+                problem_title="Title",
+                language="english",
+                tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
+                statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
+                problem_limits=_PROBLEM_LIMITS,
+            )
+
+    def test_default_examples_template_consumes_structured_samples(self) -> None:
+        self.assertIn(
+            "<#if (problem.examples.samples?size > 0)>",
+            DEFAULT_STATEMENT_EXAMPLES_TEMPLATE,
+        )
+        rendered = render_ftl_template(
+            DEFAULT_STATEMENT_EXAMPLES_TEMPLATE,
+            {
+                "problem": {
+                    "sampleTests": [],
+                    "examples": {
+                        "samples": [
+                            {
+                                "number": 1,
+                                "presentation": "pair",
+                                "passes": [
+                                    {
+                                        "number": 1,
+                                        "inputFile": "pair.in",
+                                        "outputFile": "pair.ans",
+                                    }
+                                ],
+                            },
+                            {
+                                "number": 2,
+                                "presentation": "pair",
+                                "passes": [
+                                    {
+                                        "number": 1,
+                                        "inputFile": "pass-1.in",
+                                        "outputFile": "pass-1.ans",
+                                    },
+                                    {
+                                        "number": 5,
+                                        "inputFile": "pass-5.in",
+                                        "outputFile": "pass-5.ans",
+                                    },
+                                ],
+                            },
+                            {
+                                "number": 3,
+                                "presentation": "interaction",
+                                "passes": [
+                                    {
+                                        "number": 7,
+                                        "events": [
+                                            {
+                                                "source": "interactor",
+                                                "textFile": "events/001.txt",
+                                            },
+                                            {
+                                                "source": "solution",
+                                                "textFile": "events/002.txt",
+                                            },
+                                            {
+                                                "source": "solution",
+                                                "textFile": "events/003.txt",
+                                            },
+                                        ],
+                                    }
+                                ],
+                            },
+                            {
+                                "number": 4,
+                                "presentation": "interaction",
+                                "passes": [
+                                    {
+                                        "number": 1,
+                                        "events": [
+                                            {
+                                                "source": "interactor",
+                                                "textFile": "events/pass-1.txt",
+                                            }
+                                        ],
+                                    },
+                                    {
+                                        "number": 3,
+                                        "events": [
+                                            {
+                                                "source": "solution",
+                                                "textFile": "events/pass-3.txt",
+                                            }
+                                        ],
+                                    },
+                                ],
+                            },
+                        ]
+                    },
+                }
+            },
+        )
+
+        self.assertIn(r"\StatementSampleFile{1}{pair.in}{pair.ans}", rendered)
+        self.assertIn(
+            r"\StatementSamplePassFile{2}{5}{pass-5.in}{pass-5.ans}",
+            rendered,
+        )
+        self.assertIn(r"\begin{StatementSampleInteraction}{3}", rendered)
+        self.assertIn(
+            r"\StatementSampleEventFile{interactor}{events/001.txt}",
+            rendered,
+        )
+        self.assertIn(
+            r"\StatementSampleEventFile{solution}{events/002.txt}"
+            "\n"
+            r"\StatementSampleEventFile{solution}{events/003.txt}",
+            rendered,
+        )
+        self.assertIn(r"\begin{StatementSampleInteraction}[3]{4}", rendered)
+
+    def test_explicit_empty_structured_samples_do_not_fall_back_to_polygon(self) -> None:
+        rendered = render_ftl_template(
+            DEFAULT_STATEMENT_EXAMPLES_TEMPLATE,
+            {
+                "problem": {
+                    "examples": {"samples": []},
+                    "sampleTests": [
+                        {"inputFile": "legacy.in", "outputFile": "legacy.ans"}
+                    ],
+                }
+            },
+        )
+
+        self.assertEqual(rendered, "")
 
     def test_statement_render_requires_main_template_and_style(self) -> None:
         statement = self.workspace / "statement"
@@ -206,6 +405,13 @@ class TestPreviewUnit(unittest.TestCase):
         self.assertEqual(
             (rendered / "sample.902.in").read_text(encoding="utf-8"),
             "generated input\n",
+        )
+        rendered_examples = (rendered / "examples.tex").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            r"\exmpfile{sample.001.in}{sample.001.ans}%",
+            rendered_examples,
         )
 
     def test_statement_samples_prefer_explicit_display_payloads(self) -> None:

@@ -7,6 +7,7 @@ from typing import Mapping
 STATEMENT_DIR = Path("statement")
 STATEMENT_TEMPLATE_REL = STATEMENT_DIR / "statements.ftl"
 STATEMENT_PROBLEM_REL = STATEMENT_DIR / "problem.tex"
+STATEMENT_EXAMPLES_REL = STATEMENT_DIR / "examples.tex"
 STATEMENT_STYLE_REL = STATEMENT_DIR / "olymp.sty"
 STATEMENT_MAIN_REL = STATEMENT_DIR / "main.tex"
 STATEMENT_RENDERED_DIR_REL = STATEMENT_DIR / "rendered"
@@ -25,6 +26,8 @@ STATEMENT_CANONICAL_SECTION_FILES = frozenset(
 STATEMENT_IGNORED_SECTION_FILES = frozenset({"scoring.tex"})
 WF_STYLE_DIR = Path("third_party") / "Polygon-WF-Styles"
 WF_STYLE_STATEMENTS_REL = WF_STYLE_DIR / "statements.ftl"
+WF_STYLE_PROBLEM_REL = WF_STYLE_DIR / "problem.tex"
+WF_STYLE_EXAMPLES_REL = WF_STYLE_DIR / "examples.tex"
 WF_STYLE_OLYMP_REL = WF_STYLE_DIR / "olymp.sty"
 DEFAULT_PROBLEM_TITLE = "Sample Problem"
 FTL_COMMENT_RE = re.compile(r"<#--.*?-->", re.DOTALL)
@@ -33,44 +36,7 @@ STANDALONE_OPEN_DIRECTIVE_PREFIXES = ("if ", "elseif ", "list ", "assign ")
 STANDALONE_OPEN_DIRECTIVE_EXACT = {"else"}
 STANDALONE_CLOSE_DIRECTIVES = {"if", "list"}
 
-DEFAULT_STATEMENT_PROBLEM_TEMPLATE = r"""\begin{problem}{${problem.name}}{${problem.inputFile}}{${problem.outputFile}}{${(problem.timeLimit/1000)?c} seconds}{${(problem.memoryLimit/1048576)?c} megabytes}
-${problem.legend}
-<#if problem.input?? && (problem.input?length > 0)>
-\InputFile
-${problem.input}
-</#if>
-<#if problem.output?? && (problem.output?length > 0)>
-\OutputFile
-${problem.output}
-</#if>
-<#if problem.interaction?? && (problem.interaction?length > 0)>
-\Interaction
-${problem.interaction}
-</#if>
-<#if (problem.sampleTests?size>0)>
-\Example<#if (problem.sampleTests?size>1)>s</#if>
-\begin{example}
-<#list problem.sampleTests as test>
-\exmpfile{${test.inputFile}}{${test.outputFile}}%
-</#list>
-\end{example}
-</#if>
-<#if (problem.notes??) && (problem.notes?length > 0)>
-\ifdefined\Note
-  \ifx\Note\empty
-    \subsection*{Notes}
-  \else
-    \Note
-  \fi
-\else
-  \subsection*{Notes}
-\fi
-${problem.notes}
-</#if>
-\end{problem}
-"""
-
-STATEMENT_RENDERER_SIGNATURE_VERSION = "2026-04-17-drop-statement-scoring-section"
+STATEMENT_RENDERER_SIGNATURE_VERSION = "2026-08-15-statement-examples-companion"
 
 
 def _read_required_text(path: Path, *, label: str, allow_empty: bool = False) -> str:
@@ -100,6 +66,14 @@ def _load_repo_required_text(rel_path: Path, *, label: str) -> str:
 DEFAULT_STATEMENT_TEMPLATE = _load_repo_required_text(
     WF_STYLE_STATEMENTS_REL,
     label=f"canonical statement template ({WF_STYLE_STATEMENTS_REL.as_posix()})",
+)
+DEFAULT_STATEMENT_PROBLEM_TEMPLATE = _load_repo_required_text(
+    WF_STYLE_PROBLEM_REL,
+    label=f"canonical problem template ({WF_STYLE_PROBLEM_REL.as_posix()})",
+)
+DEFAULT_STATEMENT_EXAMPLES_TEMPLATE = _load_repo_required_text(
+    WF_STYLE_EXAMPLES_REL,
+    label=f"canonical examples template ({WF_STYLE_EXAMPLES_REL.as_posix()})",
 )
 DEFAULT_OLYMP_STY = _load_repo_required_text(
     WF_STYLE_OLYMP_REL,

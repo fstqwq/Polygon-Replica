@@ -12,6 +12,8 @@ from app.impl.preview.preview import (
     statement_language_delete,
     statement_attachment_delete,
     statement_compile_asset_delete,
+    statement_examples_template_save,
+    statement_examples_template_toggle,
     statement_templates_reset,
 )
 from app.route.problem_scoped_router import ProblemScopedRouter
@@ -77,5 +79,15 @@ router.add_api_route(
 router.add_api_route(
     "/problems/{problem:path}/statement/templates/reset",
     statement_templates_reset,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/statement/examples-template/toggle",
+    statement_examples_template_toggle,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/statement/examples-template/save",
+    statement_examples_template_save,
     methods=["POST"],
 )

@@ -41,6 +41,7 @@ from app.service.statement.constant import (
     DEFAULT_STATEMENT_PROBLEM_TEMPLATE,
     DEFAULT_STATEMENT_TEMPLATE,
     STATEMENT_ASSETS_DIR,
+    STATEMENT_EXAMPLES_REL,
     STATEMENT_PROBLEM_REL,
     STATEMENT_RENDERED_DIR_REL,
     STATEMENT_SECTIONS_DIR,
@@ -96,6 +97,7 @@ PolygonMeta = TypedDict(
         "answer_pattern": str,
         "statement_template_path": str,
         "problem_template_path": str,
+        "examples_template_path": str,
         "style_path": str,
         "checker_name": str,
         "checker_source": str,
@@ -311,6 +313,7 @@ class PolygonPackageImportService:
 
         statement_template_path = "files/statements.ftl"
         problem_template_path = "files/problem.tex"
+        examples_template_path = "files/examples.tex"
         style_path = "files/olymp.sty"
         for node in root.findall("./files/resources/file"):
             path = _xml_attr(node, "path")
@@ -320,6 +323,8 @@ class PolygonPackageImportService:
                 statement_template_path = path
             elif source_name == "problem.tex":
                 problem_template_path = path
+            elif source_name == "examples.tex":
+                examples_template_path = path
             elif source_name == "olymp.sty":
                 style_path = path
 
@@ -375,6 +380,7 @@ class PolygonPackageImportService:
             "answer_pattern": answer_pattern,
             "statement_template_path": statement_template_path,
             "problem_template_path": problem_template_path,
+            "examples_template_path": examples_template_path,
             "style_path": style_path,
             "checker_name": checker_name,
             "checker_source": checker_source,
@@ -434,6 +440,20 @@ class PolygonPackageImportService:
         )
         if not problem_ok:
             self._write_text(workspace, STATEMENT_PROBLEM_REL, DEFAULT_STATEMENT_PROBLEM_TEMPLATE)
+        examples_target = workspace / STATEMENT_EXAMPLES_REL
+        if examples_target.is_symlink() or examples_target.is_file():
+            examples_target.unlink()
+        elif examples_target.exists():
+            raise ValueError(
+                f"{STATEMENT_EXAMPLES_REL.as_posix()} must be a regular file"
+            )
+        self._copy_zip_entry(
+            zf,
+            entries,
+            meta["examples_template_path"],
+            workspace,
+            STATEMENT_EXAMPLES_REL,
+        )
         style_ok = self._copy_zip_entry(
             zf,
             entries,

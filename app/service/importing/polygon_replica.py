@@ -12,7 +12,6 @@ from app.service.platform.workspace_path import (
 )
 from app.service.problem.runtime_config import ProblemConfigLimits
 from app.service.problem.source_tree import load_problem_source_tree
-from app.service.problem_package.manifest import load_manifest, validate_manifest_files
 
 
 POLYGON_REPLICA_PACKAGE_ANCHOR = "config/problem.json"
@@ -89,10 +88,12 @@ class PolygonReplicaPackageImportService:
             for rel, info in rooted_entries.items()
             if not info.is_dir()
         }
+        # Native import selects only canonical authored roots. Derived and other
+        # unknown package members remain unopened and consume no expansion budget.
         entry_map = {
             rel: info
             for rel, info in complete_entry_map.items()
-            if not rel.startswith("test_data/")
+            if is_allowed_workspace_root_path(Path(rel).parts)
         }
         problem_info = entry_map.get(POLYGON_REPLICA_PACKAGE_ANCHOR)
         if problem_info is None:
@@ -104,11 +105,9 @@ class PolygonReplicaPackageImportService:
             for rel, info in sorted(rooted_entries.items()):
                 if not info.is_dir():
                     continue
-                target_rel = (
-                    Path(rel)
-                    if rel == "test_data" or rel.startswith("test_data/")
-                    else _validated_source_directory(rel)
-                )
+                if not is_allowed_workspace_root_path(Path(rel).parts):
+                    continue
+                target_rel = _validated_source_directory(rel)
                 mode = info.external_attr >> 16
                 file_type = stat.S_IFMT(mode)
                 if file_type not in {0, stat.S_IFDIR}:
@@ -116,19 +115,7 @@ class PolygonReplicaPackageImportService:
                         f"Polygon Replica package contains a special file: {rel}"
                     )
                 (staging_root / target_rel).mkdir(parents=True, exist_ok=True)
-            source_by_rel = {
-                rel: target_rel for target_rel, _info, rel in source_entries
-            }
-            for rel, info in sorted(complete_entry_map.items()):
-                if rel.startswith("test_data/"):
-                    target_rel = Path(rel)
-                else:
-                    source_target_rel = source_by_rel.get(rel)
-                    if source_target_rel is None:
-                        raise ValueError(
-                            f"Polygon Replica package contains invalid source path: {rel}"
-                        )
-                    target_rel = source_target_rel
+            for target_rel, info, rel in source_entries:
                 mode = info.external_attr >> 16
                 file_type = stat.S_IFMT(mode)
                 if file_type not in {0, stat.S_IFREG}:
@@ -137,29 +124,12 @@ class PolygonReplicaPackageImportService:
                 if mode:
                     (staging_root / target_rel).chmod(stat.S_IMODE(mode))
 
-            manifest = load_manifest(staging_root / "test_data/manifest.json")
-            validate_manifest_files(
-                staging_root,
-                manifest,
-                tests_spec_max_bytes=text_limit_bytes,
-                statement_sample_max_bytes=statement_sample_max_bytes,
-            )
             source_tree = load_problem_source_tree(
                 staging_root,
                 problem_limits=problem_config_limits,
                 tests_spec_max_bytes=text_limit_bytes,
                 statement_sample_max_bytes=statement_sample_max_bytes,
             )
-            if source_tree.problem["mode"] != manifest["mode"]:
-                raise ValueError(
-                    "Polygon Replica package mode does not match config/problem.json"
-                )
-            if source_tree.problem["pass_limit"] != manifest["pass_limit"]:
-                raise ValueError(
-                    "Polygon Replica package pass limit does not match config/problem.json"
-                )
-            shutil.rmtree(staging_root / "test_data")
-
             _clear_workspace_tree(workspace)
             for child in staging_root.iterdir():
                 shutil.move(str(child), str(workspace / child.name))

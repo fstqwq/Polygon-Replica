@@ -39,22 +39,30 @@ source and discards the uploaded archive after conversion.
 
 The application detects Polygon packages by `problem.xml`, ICPC/DOMjudge
 packages by `problem.yaml`, and Polygon Replica packages by
-`test_data/manifest.json`. Their importers convert accepted files
+`config/problem.json`. Their importers convert accepted files
 into the current workspace source model and report validation errors at the
 archive boundary.
+
+Polygon resource discovery recognizes an optional `examples.tex` by basename
+alongside `statements.ftl`, `problem.tex`, and `olymp.sty`. It is copied to
+`statement/examples.tex` when present at `files/examples.tex` or at a declared
+resource path. Packages without that resource retain the canonical renderer
+fallback and do not gain a new authored file.
 
 Importing as a new problem converts into an unborn workspace, commits the
 result, and pushes `main`. Importing into an existing problem converts in a
 staging directory, overwrites paths present in the converted tree, and keeps
 existing paths absent from that tree; it leaves the merged changes uncommitted.
 
-A Polygon Replica package contains a complete verified-revision payload. Its
-importer validates `test_data/manifest.json`, the committed-source digest, test
-order, declared paths, sizes, checksums, file types, and the complete
-`test_data/` inventory. It then deletes `test_data/` and imports only authored
-source. Generated inputs and answers never enter the destination workspace or
-Git, and import never registers the package as a verified revision of the new
-problem.
+A Polygon Replica package contains a complete verified-revision payload, but
+source import does not transfer verified-revision identity. Native source is
+identified by `config/problem.json`. The importer selects only canonical
+authored roots; `test-data/`, `statement-build/`, and every other unknown
+top-level member all remain unopened under the same rule. It validates and
+imports only authored source. Generated inputs, answers, verification
+provenance, and offline statement products never enter the destination
+workspace, Git, or materialization tables. The imported problem must run its
+own Verification before it has a verified revision.
 
 The ICPC importer accepts standard 2025-09 packages and the supported
 DOMjudge-compatible layout. It parses scalar or sequence problem types,
@@ -72,10 +80,17 @@ pair. It keeps the published revision number, source digest, verification
 provenance, archive locator, archive size and SHA-256, timestamps, and current
 availability. Rebuilding the same Git revision reuses that identity.
 
-The Polygon Replica package keeps the committed source at its root and adds:
+The Polygon Replica package keeps the committed source at its root without
+renaming `statement/`. It adds two package-owned derived trees:
 
 ```text
-test_data/
+statement/
+  statements.ftl
+  problem.tex
+  examples.tex       # present only when authored
+  olymp.sty
+
+test-data/
   manifest.json
   tests/
     <test-id>/
@@ -83,10 +98,41 @@ test_data/
       answer
       sample-input
       sample-output
+
+statement-build/
+  <language>/
+    statements.tex
+    problem.tex
+    examples.tex
+    olymp.sty
+    ... copied statement assets and sample text files
 ```
 
 Only applicable members are present. Interactive tests may omit `answer`.
 Sample display files occur only when they differ from judge input or answer.
+Every newly materialized native package renders every authored statement
+language into `statement-build/`. The language directory is a complete TeX
+working directory; offline compilation starts there with `statements.tex`, for
+example:
+
+```text
+cd statement-build/english
+xelatex -interaction=nonstopmode -halt-on-error statements.tex
+```
+
+This render consumes authored statement and sample source only. Native package
+construction does not backfill statement samples from `test-data/`; a separate
+render-resource producer may populate the ephemeral render input when that
+function is introduced.
+
+`test-data/` is not Git source, but it is the verified payload consumed when the
+platform opens a verified revision or builds a package projection. Those read
+paths validate its manifest, checksums, paths, and complete inventory. Source
+import deliberately does none of that because it neither consumes nor stores
+the verified payload. `statement-build/` is a reproducible convenience product:
+it is excluded from the source digest, is not interpreted during source import,
+and does not add fields to the manifest. The exact package directory name is
+`test-data`; the former underscore spelling is not part of this protocol.
 
 The manifest contains `source_commit`, `revision_number`, `source_digest`,
 `mode`, `pass_limit`, verification provenance, and the ordered tests. Each
@@ -98,6 +144,7 @@ project-owned format or materializer version.
 Opening a verified revision checks the stored archive size and SHA, safe ZIP
 member paths and types, manifest identity, every declared payload, absence of
 undeclared testcase payloads, canonical source shape, and committed-source
+digest. Both `test-data/` and `statement-build/` are excluded from that source
 digest. A frozen consumer can additionally require the checksum recorded at
 admission. The reader exposes only the extracted, validated revision; it does
 not expose Git, a workspace, verification rows, or runtime cache references.

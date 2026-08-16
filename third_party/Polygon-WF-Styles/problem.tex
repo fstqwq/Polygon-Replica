@@ -1,0 +1,29 @@
+\begin{problem}{${problem.name}}{${problem.inputFile}}{${problem.outputFile}}{${(problem.timeLimit / 1000)?c} seconds}{${(problem.memoryLimit / 1048576)?c} megabytes}
+${problem.legend}
+<#if problem.input?? && (problem.input?length > 0)>
+\InputFile
+${problem.input}
+</#if>
+<#if problem.output?? && (problem.output?length > 0)>
+\OutputFile
+${problem.output}
+</#if>
+<#if problem.interaction?? && (problem.interaction?length > 0)>
+\Interaction
+${problem.interaction}
+</#if>
+\par
+\input{examples.tex}
+<#if problem.notes?? && (problem.notes?length > 0)>
+\ifdefined\Note
+  \ifx\Note\empty
+    \subsection*{Notes}
+  \else
+    \Note
+  \fi
+\else
+  \subsection*{Notes}
+\fi
+${problem.notes}
+</#if>
+\end{problem}

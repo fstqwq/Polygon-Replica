@@ -66,8 +66,12 @@ def load_problem_source_tree(
     problem_limits: ProblemConfigLimits,
     tests_spec_max_bytes: int,
     statement_sample_max_bytes: int,
+    ignored_root_names: frozenset[str] = frozenset(),
 ) -> ProblemSourceTree:
-    validate_source_tree_filesystem(root)
+    validate_source_tree_filesystem(
+        root,
+        ignored_root_names=ignored_root_names,
+    )
     problem = load_problem_config(root, limits=problem_limits)
     build = load_build_config(root, problem_mode=problem["mode"])
     tests = tuple(
