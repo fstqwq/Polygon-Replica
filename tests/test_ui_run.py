@@ -192,6 +192,23 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertIn("Structured JSON", html)
         self.assertIn("structured sample", html)
         self.assertIn('data-sample-json="1"', html)
+
+        reset = self._edit_spec_request(
+            problem="alice/sample",
+            user="alice",
+            index="1",
+            test_id="001",
+            kind="manual",
+            sample="1",
+            payload="judge input\n",
+            sample_format="default",
+        )
+
+        self.assertEqual(reset.status_code, 303)
+        reset_row = json.loads(spec_path.read_text(encoding="utf-8"))["tests"][0]
+        self.assertNotIn("sample_json", reset_row)
+        self.assertNotIn("sample_input", reset_row)
+        self.assertNotIn("sample_output", reset_row)
     def _problem_readiness(
         self,
         *,

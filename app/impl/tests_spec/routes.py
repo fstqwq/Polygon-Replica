@@ -318,7 +318,7 @@ async def edit_spec_test(
         sample_output = _optional_single_form_text(form, "sample_output")
         sample_json = _optional_single_form_text(form, "sample_json")
         sample_format = _optional_single_form_text(form, "sample_format") or "legacy"
-        if sample_format not in {"legacy", "json"}:
+        if sample_format not in {"default", "legacy", "json"}:
             raise ValueError("invalid sample content format")
         safe_test_id = normalize_test_id(tests_spec_form_text(test_id))
         safe_kind = normalize_test_kind(tests_spec_form_text(kind))
@@ -339,12 +339,18 @@ async def edit_spec_test(
             safe_sample_json = tests_spec_sample_json_value(
                 sample_json, current.get('sample_json')
             )
-            if sample_format == "json":
+            if sample_format == "default":
+                safe_sample_input = ""
+                safe_sample_output = ""
+                safe_sample_json = None
+            elif sample_format == "json":
                 safe_sample_input = ""
                 safe_sample_output = ""
             else:
                 safe_sample_json = None
             if not safe_sample:
+                safe_sample_input = ""
+                safe_sample_output = ""
                 safe_sample_output_validate = False
                 safe_sample_json = None
             submitted_payload = tests_spec_form_text(payload)
