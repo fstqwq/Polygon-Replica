@@ -120,10 +120,12 @@ cd statement-build/english
 xelatex -interaction=nonstopmode -halt-on-error statements.tex
 ```
 
-This render consumes authored statement and sample source only. Native package
-construction does not backfill statement samples from `test-data/`; a separate
-render-resource producer may populate the ephemeral render input when that
-function is introduced.
+This render consumes authored statement source plus an ephemeral
+`StatementExamplesBundle` projected from the full Verification that created the
+verified revision. Browser Preview uses the same producer with its sample-only
+Verification, so pass order and resource bytes follow one contract. The bundle
+does not backfill source from `test-data/`, modify `tests/spec.json`, or become a
+manifest field.
 
 `test-data/` is not Git source, but it is the verified payload consumed when the
 platform opens a verified revision or builds a package projection. Those read

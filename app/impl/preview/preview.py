@@ -530,8 +530,8 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
             preview_failed_stage = (
                 failed_stage_value if isinstance(failed_stage_value, str) else ""
             )
-            if preview_failed_stage == 'sample_sync':
-                preview_failure_title = 'Sample verification failed.'
+            if preview_failed_stage == 'statement_examples':
+                preview_failure_title = 'Statement examples failed.'
                 failure_value = preview_summary.get("error")
                 preview_failure_detail = sanitize_log_text_for_ui(
                     failure_value if isinstance(failure_value, str) else ""
@@ -671,7 +671,11 @@ def preview_run(
                 failed_stage_value if isinstance(failed_stage_value, str) else ""
             )
             details['failed_stage'] = failed_stage
-            msg = 'sample verification failed' if failed_stage == 'sample_sync' else 'preview compile failed'
+            msg = (
+                'statement examples failed'
+                if failed_stage == 'statement_examples'
+                else 'preview compile failed'
+            )
     except Exception as exc:
         details['status'] = 'failed'
         details['error'] = str(exc)

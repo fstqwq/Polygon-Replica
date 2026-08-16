@@ -12,9 +12,10 @@ Language selection is source context, rendering interprets statement source
 Titles do not have an independent service or lifecycle.
 
 Authored inputs remain Git source. SQLite stores preview metadata, while preview
-PDFs and logs are cache payloads. Preview compilation runs
-synchronously and may run sample-only verification to hydrate missing sample
-data in its snapshot.
+PDFs and logs are cache payloads. Preview compilation runs synchronously and
+may run sample-only verification. `StatementExamplesProducer` projects the
+canonical per-pass execution evidence into an in-memory render bundle; it does
+not hydrate or rewrite the snapshot's test files or `tests/spec.json`.
 
 The renderer evaluates `statement/problem.tex` and the optional
 `statement/examples.tex` with one context. Missing examples source selects the
@@ -26,12 +27,13 @@ The Statement authoring page creates the canonical source only when the author
 opts in, deletes it when the override is disabled, and deletes it when the core
 templates are reset to defaults.
 
-The default examples consumer prefers optional structured
-`problem.examples.samples` data and otherwise projects existing
-`problem.sampleTests`. This service currently produces only the Polygon
-projection. Structured multipass and interaction data must be supplied by a
-future producer or by another rendering caller; it is not persisted in
-`tests/spec.json` by this layer.
+The default examples consumer prefers structured `problem.examples.samples`
+data and otherwise projects existing `problem.sampleTests` for source-only
+callers. Browser preview and verified-revision statement builds both use the
+same `StatementExamplesProducer`, verification detail read model, pass artifact
+resolver, override priority, and strict failure rules. Multi-pass pairs and
+interactive events are render resources only and are never persisted in
+`tests/spec.json`.
 
 The source layout is owned by the
 [problem-source protocol](../../../../protocol/problem-source.md).

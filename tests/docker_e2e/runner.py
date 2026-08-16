@@ -304,7 +304,10 @@ def _assert_preview_sample_materialization(
     log_text = latex_log.read_text(encoding="utf-8", errors="replace")
     missing_samples = {
         filename
-        for filename in ("sample.001.in", "sample.001.ans")
+        for filename in (
+            "examples/sample-1/pass-1.in",
+            "examples/sample-1/pass-1.ans",
+        )
         if filename not in log_text
     }
     if missing_samples:
@@ -316,14 +319,17 @@ def _assert_preview_sample_materialization(
         summary = json.loads(str(preview["summary_json"]))
     except json.JSONDecodeError as exc:
         raise RuntimeError("preview persisted invalid summary JSON") from exc
-    sample_sync = summary.get("sample_sync") if isinstance(summary, dict) else None
+    statement_examples = (
+        summary.get("statement_examples") if isinstance(summary, dict) else None
+    )
     if (
-        not isinstance(sample_sync, dict)
-        or sample_sync.get("verification_id") != verification_id
-        or int(sample_sync.get("copied") or 0) != 1
+        not isinstance(statement_examples, dict)
+        or statement_examples.get("verification_id") != verification_id
+        or int(statement_examples.get("sample_count") or 0) != 1
     ):
         raise RuntimeError(
-            f"preview did not persist sample materialization evidence: {sample_sync!r}"
+            "preview did not persist statement example evidence: "
+            f"{statement_examples!r}"
         )
 
 

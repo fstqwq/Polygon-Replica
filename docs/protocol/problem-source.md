@@ -182,14 +182,16 @@ separate `statement-build/<language>/` directory. Each such directory contains
 rendered `statements.tex`, `problem.tex`, and `examples.tex`, a copied
 `olymp.sty`, referenced assets, and generated sample text files. Neither
 `statement-build/` nor `test-data/` participates in the committed-source digest
-or may be committed as problem source. Building this tree does not infer sample
-presentation data from verified testcase payloads; non-authored presentation
-resources belong to the separate render-resource boundary.
+or may be committed as problem source. Building this tree projects sample
+presentation from the same canonical Verification pass evidence used by Test
+Details. The resulting context and text files stay within the derived
+render-resource boundary.
 
 Statement languages are ordered as English, Chinese, then alphabetically. The
-renderer obtains samples from `tests/spec.json`: explicit `sample_input` and
-`sample_output` override judge data for display, while missing sample data may
-be filled in a preview snapshot by a sample-only verification.
+producer obtains sample order and explicit display overrides from
+`tests/spec.json`. Browser Preview may run a sample-only Verification and a
+Verified Revision uses its full Verification; both consume the same
+main-correct per-pass artifacts without modifying the source snapshot.
 
 The canonical examples template preserves Polygon compatibility by rendering
 `problem.sampleTests[].inputFile` and `.outputFile` through `\exmpfile`. It also
@@ -210,13 +212,12 @@ interaction pass:
 ```
 
 The structured extension is a rendering-context contract, not canonical
-problem source. The current renderer does not write event logs to
-`tests/spec.json` and does not synthesize interaction events. If the structured
-field is absent, the Polygon projection remains unchanged. Event order and pass
-numbers are explicit; there is no inferred alternation, event `kind`, or EOF
-entry. Presence is authoritative, so an explicitly empty `samples` array does
-not fall back to Polygon samples. All referenced text files must already exist
-as UTF-8 payloads relative to the rendered problem compile directory.
+problem source. `StatementExamplesProducer` creates it from the canonical
+main-correct `ExecutionResult.passes` projection. Event order and pass numbers
+are explicit; there is no inferred alternation, event `kind`, or EOF entry.
+Presence is authoritative, so an explicitly empty `samples` array does not fall
+back to Polygon samples. The renderer writes the bundle's controlled UTF-8 text
+resources relative to the rendered problem compile directory.
 
 ## Publication
 

@@ -3,29 +3,24 @@ import shutil
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Iterator, cast
+from typing import Callable, Iterator, cast
 
 from app.db import now_iso
-from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.problem.runtime_config import (
     default_problem_config,
     dumps_problem_config,
     problem_config_limits,
 )
-from app.service.problem.test_spec import dumps_tests_spec, load_tests_spec
+from app.service.repository.workspace import WorkspaceService
 from app.service.sandbox.base import ExecResult, ExecSpec, SandboxBackend
+from app.service.statement.examples import StatementExamplesProducer
 from app.service.statement.preview import PreviewService
 from app.service.statement.render import seed_statement_sources
 from app.service.statement.tex_compile import TexCompileService
-from app.service.repository.workspace import WorkspaceService
+from app.service.verification.service import VerificationService
 from app.setting import Settings
 from tests.db_fixture import DBTestBase
 from tests.isolated_db_helpers import isolated_db_execute, isolated_db_fetch_one
-
-if TYPE_CHECKING:
-    from app.service.verification.service import VerificationService
-    from app.service.verification.workflow import VerificationWorkflow
-
 
 _HEAD = "a" * 40
 _TESTS_SPEC_MAX_BYTES = 256 * 1024
@@ -120,49 +115,6 @@ class _FakeTexSandbox(SandboxBackend):
         return self.handler(spec)
 
 
-class _VerificationArtifacts:
-    def __init__(
-        self,
-        verification_id: str,
-        refs: dict[tuple[str, str], str],
-        descriptors: dict[str, PayloadFile],
-    ) -> None:
-        self.verification_id = verification_id
-        self.refs = refs
-        self.descriptors = descriptors
-        self.calls: list[tuple[str, str, bool]] = []
-
-    def run_workspace(
-        self,
-        problem: str,
-        username: str,
-        commit: str | None = None,
-        ref: str | None = None,
-        *,
-        sample_only: bool = False,
-    ) -> str:
-        self.calls.append((problem, username, sample_only))
-        return self.verification_id
-
-    def verification_artifact_ref(
-        self,
-        verification_id: str,
-        test_name: str,
-        ref_key: str,
-    ) -> str:
-        if verification_id != self.verification_id:
-            raise AssertionError("unexpected verification")
-        return self.refs.get((test_name, ref_key), "")
-
-    def artifact_descriptor(self, token: str) -> PayloadFile | None:
-        return self.descriptors.get(token)
-
-    def verification_detail(self, verification_id: str) -> dict[str, object]:
-        if verification_id != self.verification_id:
-            raise AssertionError("unexpected verification")
-        return {}
-
-
 class TestPreviewService(DBTestBase):
     def setUp(self) -> None:
         super().setUp()
@@ -234,6 +186,7 @@ class TestPreviewService(DBTestBase):
             cast(WorkspaceService, self.local_workspace),
             compiler,
             self.storage_layout,
+            StatementExamplesProducer(cast(VerificationService, object())),
         )
 
     def _insert_preview(
@@ -432,126 +385,6 @@ class TestPreviewService(DBTestBase):
 
         self.assertNotEqual(preview_id, legacy_id)
         self.assertEqual(str(self._preview_row(preview_id)["status"]), "ok")
-
-    def test_sample_sync_materializes_generated_payload_and_preserves_custom_input(self) -> None:
-        (self.workspace / "tests" / "manual" / "903.in").write_text(
-            "base-manual-input\n",
-            encoding="utf-8",
-        )
-        (self.workspace / "tests" / "spec.json").write_text(
-            dumps_tests_spec(
-                [
-                    {"id": "901", "kind": "manual", "sample": True},
-                    {"id": "902", "kind": "gen", "sample": True},
-                    {
-                        "id": "903",
-                        "kind": "manual",
-                        "sample": True,
-                        "sample_input": "custom-sample-input\n",
-                    },
-                ],
-                document_max_bytes=_TESTS_SPEC_MAX_BYTES,
-                sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
-            ),
-            encoding="utf-8",
-        )
-        verification_id = f"v-{uuid.uuid4().hex}"
-        isolated_db_execute(
-            self.db,
-            """
-            INSERT INTO verifications(
-                id,problem_id,workspace_id,signature,kind,status,created_at,finished_at
-            ) VALUES(?,?,?,?,?,?,?,?)
-            """,
-            [
-                verification_id,
-                self.problem_id,
-                self.workspace_id,
-                "",
-                "all",
-                "ok",
-                now_iso(),
-                now_iso(),
-            ],
-        )
-        raw_payloads = {
-            ("001.in", "input_ref"): b"build-manual-input\n",
-            ("001.in", "answer_ref"): b"build-manual-answer\n",
-            ("002.in", "input_ref"): b"build-gen-input\n",
-            ("002.in", "answer_ref"): b"build-gen-answer\n",
-            ("003.in", "input_ref"): b"custom-sample-input\n",
-            ("003.in", "answer_ref"): b"custom-sample-answer\n",
-        }
-        refs: dict[tuple[str, str], str] = {}
-        descriptors: dict[str, PayloadFile] = {}
-        for identity, content in raw_payloads.items():
-            descriptor = self.runtime_blob_store.put_bytes(content)
-            refs[identity] = descriptor.blob_ref
-            descriptors[descriptor.blob_ref] = descriptor
-        verification = _VerificationArtifacts(verification_id, refs, descriptors)
-        self.service.verification_service = cast("VerificationService", verification)
-        self.service.verification_workflow = cast("VerificationWorkflow", verification)
-
-        summary = self.service.sync_sample_payloads_for_snapshot(
-            self.problem,
-            self.user,
-            self.workspace,
-        )
-
-        spec = load_tests_spec(
-            self.workspace / "tests" / "spec.json",
-            document_max_bytes=_TESTS_SPEC_MAX_BYTES,
-            sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
-        )
-        self.assertEqual(verification.calls, [(self.problem, self.user, True)])
-        self.assertEqual(summary["copied"], 3)
-        self.assertEqual(
-            (self.workspace / "tests" / "manual" / "901.in").read_text(encoding="utf-8"),
-            "build-manual-input\n",
-        )
-        self.assertEqual(
-            (self.workspace / "tests" / "generator" / "902.in").read_text(encoding="utf-8"),
-            "build-gen-input\n",
-        )
-        self.assertEqual(
-            (self.workspace / "tests" / "manual" / "903.in").read_text(encoding="utf-8"),
-            "base-manual-input\n",
-        )
-        self.assertEqual(spec[0]["sample_output"], "build-manual-answer\n")
-        self.assertEqual(spec[1]["sample_output"], "build-gen-answer\n")
-        self.assertEqual(spec[2]["sample_output"], "custom-sample-answer\n")
-
-    def test_interactive_sample_sync_does_not_start_verification(self) -> None:
-        limits = problem_config_limits(self.config_values)
-        problem = default_problem_config(limits=limits)
-        problem["mode"] = "interactive"
-        (self.workspace / "config" / "problem.json").write_text(
-            dumps_problem_config(problem, limits=limits), encoding="utf-8"
-        )
-        (self.workspace / "tests" / "spec.json").write_text(
-            dumps_tests_spec(
-                [
-                    {
-                        "id": "901",
-                        "kind": "manual",
-                        "sample": True,
-                        "sample_input": "play\n",
-                        "sample_output": "take\n",
-                    }
-                ],
-                document_max_bytes=_TESTS_SPEC_MAX_BYTES,
-                sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
-            ),
-            encoding="utf-8",
-        )
-
-        summary = self.service.sync_sample_payloads_for_snapshot(
-            self.problem,
-            self.user,
-            self.workspace,
-        )
-
-        self.assertEqual(summary, {"sample_count": 0, "copied": 0, "verification_id": "", "skipped": "interactive"})
 
     def test_prune_removes_terminal_history_but_preserves_running_and_kept_rows(self) -> None:
         keep_id = f"p-{uuid.uuid4().hex[:12]}"

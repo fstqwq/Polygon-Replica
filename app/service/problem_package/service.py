@@ -54,6 +54,7 @@ from app.service.problem_package.store import (
     VerifiedSolutionResultRow,
 )
 from app.service.statement.context import statement_languages
+from app.service.statement.examples import StatementExamplesProducer
 from app.service.statement.render import render_statement_offline_tree
 from app.service.verification.result_match import run_verdict_short
 
@@ -141,12 +142,14 @@ class ProblemPackageService:
         storage_layout: StorageLayout,
         artifact_file_resolver: Callable[[str], PayloadFile | None],
         verification_id_allocator: Callable[[], str],
+        statement_examples_producer: StatementExamplesProducer,
     ) -> None:
         self.db = db
         self.storage_layout = storage_layout
         self.store = ProblemPackageStore(db)
         self._artifact_file_resolver = artifact_file_resolver
         self._verification_id_allocator = verification_id_allocator
+        self._statement_examples_producer = statement_examples_producer
         self._locks_guard = threading.Lock()
         self._build_locks: dict[tuple[int, str], threading.Lock] = {}
 
@@ -602,10 +605,18 @@ class ProblemPackageService:
         render_source: Path,
         package_root: Path,
         problem_title: str,
+        verification_id: str,
         tests_spec_max_bytes: int,
         statement_sample_max_bytes: int,
     ) -> None:
         self._copy_source_tree(snapshot, render_source)
+        examples_bundle = self._statement_examples_producer.produce(
+            render_source,
+            verification_id=verification_id,
+            tests_spec_max_bytes=tests_spec_max_bytes,
+            statement_sample_max_bytes=statement_sample_max_bytes,
+            problem_limits=problem_config_limits(self.db.config_values),
+        )
         languages = statement_languages(render_source)
         build_root = package_root / STATEMENT_BUILD_DIR
         for language in languages:
@@ -614,6 +625,7 @@ class ProblemPackageService:
                 language,
                 build_root / language,
                 problem_title=problem_title,
+                examples_bundle=examples_bundle,
                 tests_spec_max_bytes=tests_spec_max_bytes,
                 statement_sample_max_bytes=statement_sample_max_bytes,
                 problem_limits=problem_config_limits(self.db.config_values),
@@ -701,6 +713,7 @@ class ProblemPackageService:
                 render_source=render_source,
                 package_root=package_root,
                 problem_title=problem_slug_leaf(revision.problem["slug"]),
+                verification_id=verification_id,
                 tests_spec_max_bytes=tests_spec_max_bytes,
                 statement_sample_max_bytes=statement_sample_max_bytes,
             )

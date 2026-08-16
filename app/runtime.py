@@ -41,6 +41,7 @@ from app.service.sandbox.base import SandboxBackend
 from app.service.sandbox.tex_backend import TexSandboxBackend
 from app.service.statement.tex_compile import TexCompileService
 from app.service.statement.preview import PreviewService
+from app.service.statement.examples import StatementExamplesProducer
 from app.service.platform.system_config import SystemConfigService
 from app.service.mail.smtp_config import SmtpConfigService
 from app.service.workspace.archive import WorkspaceArchiveService
@@ -304,6 +305,9 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
             task_store=self.verification_task_store,
             config_values=self.config_values,
         )
+        self.statement_examples_producer = StatementExamplesProducer(
+            self.verification_service
+        )
         self.preview_service = PreviewService(
             self.db,
             self.workspace_service,
@@ -311,12 +315,14 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
             self.storage_layout,
             verification_service=self.verification_service,
             verification_workflow=self.verification_workflow,
+            statement_examples_producer=self.statement_examples_producer,
         )
         self.problem_package_service = ProblemPackageService(
             self.db,
             self.storage_layout,
             artifact_file_resolver=self.runtime_blob_store.descriptor,
             verification_id_allocator=self.verification_service.allocate_verification_id,
+            statement_examples_producer=self.statement_examples_producer,
         )
         self.verified_revision_workflow = VerifiedRevisionWorkflow(
             self.problem_package_service,

@@ -1,6 +1,6 @@
 import os
 import shutil
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from app.main_util import problem_slug_leaf
 from app.service.problem.test_spec import (
@@ -28,6 +28,7 @@ from app.service.statement.constant import (
     STATEMENT_TEMPLATE_REL,
     _read_required_text,
 )
+from app.service.statement.examples import StatementExamplesBundle
 from app.service.statement.context import (
     normalize_statement_language,
     pick_statement_language,
@@ -205,6 +206,7 @@ def _problem_context_for_language(
     problem_title: str | None,
     *,
     sample_tests: list[dict[str, str]] | None = None,
+    examples_bundle: StatementExamplesBundle | None = None,
     problem_limits: ProblemConfigLimits,
 ) -> dict[str, object]:
     cfg = load_problem_config(workspace, limits=problem_limits)
@@ -213,7 +215,7 @@ def _problem_context_for_language(
     time_limit_ms = cfg["time_limit_ms"]
     memory_limit_mb = cfg["memory_limit_mb"]
     resolved_title = statement_title_for_language(workspace, language, problem_title)
-    return {
+    context: dict[str, object] = {
         "name": resolved_title,
         "inputFile": input_file,
         "outputFile": output_file,
@@ -226,6 +228,34 @@ def _problem_context_for_language(
         "notes": _statement_section_text(workspace, language, "notes.tex", fallback=""),
         "sampleTests": list(sample_tests or []),
     }
+    if examples_bundle is not None:
+        context["examples"] = examples_bundle["context"]
+    return context
+
+
+def _write_statement_example_resources(
+    target_dir: Path,
+    bundle: StatementExamplesBundle | None,
+) -> None:
+    if bundle is None:
+        return
+    target_root = target_dir.resolve()
+    observed: set[str] = set()
+    for resource in bundle["resources"]:
+        rel = PurePosixPath(resource["path"])
+        if (
+            rel.is_absolute()
+            or not rel.parts
+            or any(part in {"", ".", ".."} for part in rel.parts)
+            or rel.as_posix() in observed
+        ):
+            raise RuntimeError("statement example resource path is invalid")
+        observed.add(rel.as_posix())
+        target = (target_dir / Path(*rel.parts)).resolve()
+        if target_root not in target.parents:
+            raise RuntimeError("statement example resource escapes compile tree")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(resource["content"], encoding="utf-8", newline="\n")
 
 
 def _statement_problem_template_context(
@@ -357,6 +387,7 @@ def _render_polygon_statement(
     *,
     language: str,
     include_sample_tests: bool = True,
+    examples_bundle: StatementExamplesBundle | None = None,
     tests_spec_max_bytes: int,
     statement_sample_max_bytes: int,
     problem_limits: ProblemConfigLimits,
@@ -387,14 +418,16 @@ def _render_polygon_statement(
             tests_spec_max_bytes=tests_spec_max_bytes,
             statement_sample_max_bytes=statement_sample_max_bytes,
         )
-        if include_sample_tests
+        if include_sample_tests and examples_bundle is None
         else []
     )
+    _write_statement_example_resources(rendered_lang_root, examples_bundle)
     problem_ctx = _problem_context_for_language(
         workspace,
         safe_language,
         problem_title,
         sample_tests=sample_tests,
+        examples_bundle=examples_bundle,
         problem_limits=problem_limits,
     )
     problem_template_context = _statement_problem_template_context(
@@ -431,6 +464,7 @@ def _render_statement_problem_assets_for_language(
     target_dir: Path,
     *,
     problem_title: str | None = None,
+    examples_bundle: StatementExamplesBundle | None = None,
     tests_spec_max_bytes: int,
     statement_sample_max_bytes: int,
     problem_limits: ProblemConfigLimits,
@@ -448,17 +482,23 @@ def _render_statement_problem_assets_for_language(
     if not safe_language:
         raise RuntimeError("statement language is required")
     _prepare_statement_language_compile_tree(workspace, safe_language, target_dir)
-    sample_tests = _collect_sample_tests(
-        workspace,
-        target_dir,
-        tests_spec_max_bytes=tests_spec_max_bytes,
-        statement_sample_max_bytes=statement_sample_max_bytes,
+    sample_tests = (
+        _collect_sample_tests(
+            workspace,
+            target_dir,
+            tests_spec_max_bytes=tests_spec_max_bytes,
+            statement_sample_max_bytes=statement_sample_max_bytes,
+        )
+        if examples_bundle is None
+        else []
     )
+    _write_statement_example_resources(target_dir, examples_bundle)
     problem_ctx = _problem_context_for_language(
         workspace,
         safe_language,
         problem_title,
         sample_tests=sample_tests,
+        examples_bundle=examples_bundle,
         problem_limits=problem_limits,
     )
     problem_tex = _write_rendered_problem_templates(
@@ -476,6 +516,7 @@ def render_statement_problem_assets_for_language(
     target_dir: Path,
     *,
     problem_title: str | None = None,
+    examples_bundle: StatementExamplesBundle | None = None,
     tests_spec_max_bytes: int,
     statement_sample_max_bytes: int,
     problem_limits: ProblemConfigLimits,
@@ -485,6 +526,7 @@ def render_statement_problem_assets_for_language(
         language,
         target_dir,
         problem_title=problem_title,
+        examples_bundle=examples_bundle,
         tests_spec_max_bytes=tests_spec_max_bytes,
         statement_sample_max_bytes=statement_sample_max_bytes,
         problem_limits=problem_limits,
@@ -498,6 +540,7 @@ def render_statement_offline_tree(
     target_dir: Path,
     *,
     problem_title: str | None = None,
+    examples_bundle: StatementExamplesBundle | None = None,
     tests_spec_max_bytes: int,
     statement_sample_max_bytes: int,
     problem_limits: ProblemConfigLimits,
@@ -521,6 +564,7 @@ def render_statement_offline_tree(
         safe_language,
         target_dir,
         problem_title=problem_title,
+        examples_bundle=examples_bundle,
         tests_spec_max_bytes=tests_spec_max_bytes,
         statement_sample_max_bytes=statement_sample_max_bytes,
         problem_limits=problem_limits,
@@ -557,6 +601,7 @@ def render_statement_main(
     *,
     language: str,
     include_sample_tests: bool = True,
+    examples_bundle: StatementExamplesBundle | None = None,
     tests_spec_max_bytes: int,
     statement_sample_max_bytes: int,
     problem_limits: ProblemConfigLimits,
@@ -568,6 +613,7 @@ def render_statement_main(
         problem_title=problem_title,
         language=language,
         include_sample_tests=include_sample_tests,
+        examples_bundle=examples_bundle,
         tests_spec_max_bytes=tests_spec_max_bytes,
         statement_sample_max_bytes=statement_sample_max_bytes,
         problem_limits=problem_limits,

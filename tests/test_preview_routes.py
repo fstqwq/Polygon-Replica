@@ -19,7 +19,7 @@ from tests.ui_support import _flash_messages_from_response
 
 
 class TestPreviewRoutes(BackendE2ETestBase):
-    def test_preview_run_uses_sample_build_failed_flash_for_sample_sync_failure(self) -> None:
+    def test_preview_run_reports_statement_examples_failure(self) -> None:
         ctx = runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         preview_id = self.random_id("p-preview-sample-sync-failed")
         db_execute(
@@ -42,7 +42,7 @@ class TestPreviewRoutes(BackendE2ETestBase):
             preview_id,
             {
                 "error": "sample verification failed (ver-sample-123): validator failed",
-                "failed_stage": "sample_sync",
+                "failed_stage": "statement_examples",
             },
         )
         with patch.object(runtime.preview_service, "compile_preview", return_value=preview_id):
@@ -52,7 +52,7 @@ class TestPreviewRoutes(BackendE2ETestBase):
             f"/problems/{self.problem}/statement?language=english",
             resp.headers.get("location", ""),
         )
-        self.assertIn("sample verification failed.", _flash_messages_from_response(resp))
+        self.assertIn("statement examples failed.", _flash_messages_from_response(resp))
 
     def test_preview_run_rejects_missing_language_directories(self) -> None:
         ws = Path(runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])

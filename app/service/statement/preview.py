@@ -1,13 +1,11 @@
 import re
 import shutil
 import uuid
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, TypedDict
 
 from app.db import DB
 from app.main_util import problem_slug_leaf
-from app.service.disk.verification_store import VerificationStore
 from app.service.disk.preview_store import (
     PreviewArtifactRow,
     PreviewLatestRow,
@@ -22,14 +20,11 @@ from app.service.statement.render import (
     statement_title_for_language,
 )
 from app.service.statement.signature import statement_sources_signature
-from app.service.problem.test_spec import (
-    TESTS_SPEC_REL,
-    dumps_tests_spec,
-    load_tests_spec,
-    payload_rel_path_for_test,
-    read_statement_sample_text,
+from app.service.statement.examples import (
+    StatementExamplesProducer,
+    statement_examples_require_verification,
 )
-from app.service.problem.runtime_config import load_problem_config, problem_config_limits
+from app.service.problem.runtime_config import problem_config_limits
 from app.service.platform.git_process import run_git
 from app.service.platform.process import is_canonical_artifact_id
 from app.service.repository.workspace import WorkspaceService
@@ -54,30 +49,22 @@ class PreviewStateRow(TypedDict):
 
 
 class PreviewService:
-    @dataclass(frozen=True)
-    class _SampleVerificationRow:
-        index: int
-        test_id: str
-        kind: str
-        needs_input_copy: bool
-        needs_output_copy: bool
-        validate_custom_output: bool
-
     def __init__(
         self,
         db: DB,
         workspace_service: WorkspaceService,
         pdf_compiler: TexCompileService,
         storage_layout: StorageLayout,
+        statement_examples_producer: StatementExamplesProducer,
         verification_service: VerificationService | None = None,
         verification_workflow: VerificationWorkflow | None = None,
     ):
         self.db = db
         self._store = PreviewStore(db)
-        self._verification_store = VerificationStore(db)
         self.workspace_service = workspace_service
         self.verification_service = verification_service
         self.verification_workflow = verification_workflow
+        self.statement_examples_producer = statement_examples_producer
         self.storage_layout = storage_layout
         self.pdf_compiler = pdf_compiler
 
@@ -104,167 +91,6 @@ class PreviewService:
         if row is None:
             return None
         return row
-
-    def _problem_mode(self, workspace: Path) -> str:
-        return load_problem_config(
-            workspace,
-            limits=problem_config_limits(self.db.config_values),
-        )["mode"]
-
-    def _sample_verification_rows_from_spec(
-        self,
-        workspace: Path,
-        *,
-        document_max_bytes: int,
-        sample_max_bytes: int,
-    ) -> list[_SampleVerificationRow]:
-        if self._problem_mode(workspace) == "interactive":
-            return []
-        spec_path = workspace / TESTS_SPEC_REL
-        try:
-            entries = load_tests_spec(
-                spec_path,
-                document_max_bytes=document_max_bytes,
-                sample_max_bytes=sample_max_bytes,
-            )
-        except Exception as exc:
-            raise RuntimeError(f"invalid tests/spec.json: {exc}") from exc
-        rows: list[PreviewService._SampleVerificationRow] = []
-        for index, entry in enumerate(entries, start=1):
-            if not entry["sample"]:
-                continue
-            test_id = entry["id"]
-            kind = entry["kind"]
-            sample_input = entry.get("sample_input", "")
-            sample_output = entry.get("sample_output", "")
-            sample_output_validate = entry.get("sample_output_validate", True)
-            needs_input_copy = False
-            needs_output_copy = False
-            if not sample_input:
-                if kind == "gen":
-                    needs_input_copy = True
-                else:
-                    try:
-                        input_rel = Path(payload_rel_path_for_test(test_id, kind))
-                        input_path = workspace / input_rel
-                        if input_path.is_symlink() or (not input_path.exists()) or (not input_path.is_file()):
-                            needs_input_copy = True
-                    except Exception:
-                        needs_input_copy = True
-            if not sample_output:
-                needs_output_copy = True
-            validate_custom_output = bool(sample_output) and sample_output_validate
-            if needs_input_copy or needs_output_copy or validate_custom_output:
-                rows.append(
-                    PreviewService._SampleVerificationRow(
-                        index=index,
-                        test_id=test_id,
-                        kind=kind,
-                        needs_input_copy=needs_input_copy,
-                        needs_output_copy=needs_output_copy,
-                        validate_custom_output=validate_custom_output,
-                    )
-                )
-        return rows
-
-    def _copy_sample_payloads_from_verification(self, problem: str, username: str, snapshot: Path) -> dict[str, object]:
-        tests_spec_max_bytes = self.db.config_values.integer("TEXTAREA_MAX_BYTES")
-        statement_sample_max_bytes = self.db.config_values.integer(
-            "STATEMENT_SAMPLE_MAX_BYTES"
-        )
-        if self._problem_mode(snapshot) == "interactive":
-            return {"sample_count": 0, "copied": 0, "verification_id": "", "skipped": "interactive"}
-        rows = self._sample_verification_rows_from_spec(
-            snapshot,
-            document_max_bytes=tests_spec_max_bytes,
-            sample_max_bytes=statement_sample_max_bytes,
-        )
-        if not rows:
-            return {"sample_count": 0, "copied": 0, "verification_id": ""}
-        if self.verification_service is None or self.verification_workflow is None:
-            raise RuntimeError("preview sample sync requires verification service")
-        verification_id = self.verification_workflow.run_workspace(
-            problem,
-            username,
-            sample_only=True,
-        )
-        verification_row = self._verification_store.record_row(verification_id)
-        if verification_row is None:
-            raise RuntimeError(f"sample verification missing: {verification_id}")
-        verification_status = str(verification_row["status"]).strip().lower()
-        if verification_status != "ok":
-            detail_payload = self.verification_service.verification_detail(verification_id)
-            error_text = str(verification_row["fail_reason"] or detail_payload.get("error") or "").strip()
-            if error_text:
-                raise RuntimeError(f"sample verification failed ({verification_id}): {error_text}")
-            raise RuntimeError(f"sample verification failed ({verification_id})")
-        copied = 0
-        snapshot_root = snapshot.resolve()
-        spec_entries = load_tests_spec(
-            snapshot / TESTS_SPEC_REL,
-            document_max_bytes=tests_spec_max_bytes,
-            sample_max_bytes=statement_sample_max_bytes,
-        )
-        spec_changed = False
-        for row in rows:
-            index = int(row.index)
-            test_id = str(row.test_id)
-            kind = str(row.kind)
-            test_name = f"{int(index):03d}.in"
-            input_ref = self.verification_service.verification_artifact_ref(verification_id, test_name, "input_ref")
-            answer_ref = self.verification_service.verification_artifact_ref(verification_id, test_name, "answer_ref")
-            input_rel = Path(payload_rel_path_for_test(test_id, kind))
-            input_target = (snapshot / input_rel).resolve()
-            if snapshot_root not in input_target.parents:
-                raise RuntimeError(f"invalid sample target path for test id {test_id}")
-            copied_row = False
-            if row.needs_input_copy:
-                input_file = self.verification_service.artifact_descriptor(input_ref) if input_ref else None
-                if input_file is None:
-                    raise RuntimeError(f"sample input missing from verification for test id {test_id} (row {index})")
-                input_target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(input_file.path, input_target)
-                copied_row = True
-            if row.needs_output_copy:
-                answer_file = self.verification_service.artifact_descriptor(answer_ref) if answer_ref else None
-                if answer_file is None:
-                    raise RuntimeError(f"sample answer missing from verification for test id {test_id} (row {index})")
-                if index < 1 or index > len(spec_entries):
-                    raise RuntimeError(f"invalid tests/spec.json row for sample id {test_id}")
-                sample_input_text = str(
-                    spec_entries[index - 1].get("sample_input") or ""
-                )
-                if not sample_input_text:
-                    sample_input_text = read_statement_sample_text(
-                        input_target,
-                        max_bytes=statement_sample_max_bytes,
-                    )
-                spec_entries[index - 1]["sample_output"] = (
-                    read_statement_sample_text(
-                        answer_file.path,
-                        max_bytes=(
-                            statement_sample_max_bytes
-                            - len(sample_input_text.encode("utf-8"))
-                        ),
-                    )
-                )
-                spec_changed = True
-                copied_row = True
-            if copied_row:
-                copied += 1
-        if spec_changed:
-            (snapshot / TESTS_SPEC_REL).write_text(
-                dumps_tests_spec(
-                    spec_entries,
-                    document_max_bytes=tests_spec_max_bytes,
-                    sample_max_bytes=statement_sample_max_bytes,
-                ),
-                encoding="utf-8",
-            )
-        return {"sample_count": len(rows), "copied": copied, "verification_id": verification_id}
-
-    def sync_sample_payloads_for_snapshot(self, problem: str, username: str, snapshot: Path) -> dict[str, object]:
-        return self._copy_sample_payloads_from_verification(problem, username, snapshot)
 
     def _latex_compile_error_detail(self, output_text: str, returncode: int | None) -> str:
         text = str(output_text or "")
@@ -554,12 +380,11 @@ class PreviewService:
                 tests_spec_max_bytes=tests_spec_max_bytes,
                 statement_sample_max_bytes=statement_sample_max_bytes,
             )
-            dynamic_samples = bool(
-                self._sample_verification_rows_from_spec(
-                    workspace,
-                    document_max_bytes=tests_spec_max_bytes,
-                    sample_max_bytes=statement_sample_max_bytes,
-                )
+            dynamic_samples = statement_examples_require_verification(
+                workspace,
+                tests_spec_max_bytes=tests_spec_max_bytes,
+                statement_sample_max_bytes=statement_sample_max_bytes,
+                problem_limits=problem_config_limits(self.db.config_values),
             )
             if not head:
                 head = run_git(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
@@ -621,7 +446,8 @@ class PreviewService:
         log = preview_layout.logs / "latex.log"
         status = "ok"
         summary: dict[str, object] = {"statement_signature": statement_signature, "preview_ref": preview_ref, "language": safe_language}
-        sample_sync: dict[str, object] | None = None
+        statement_examples_summary: dict[str, object] | None = None
+        statement_examples_attempted = False
 
         def _summary_with_sample(payload: dict[str, object]) -> dict[str, object]:
             out = dict(payload or {})
@@ -629,22 +455,44 @@ class PreviewService:
                 out["preview_ref"] = preview_ref
             if "language" not in out:
                 out["language"] = safe_language
-            if sample_sync is not None and "sample_sync" not in out:
-                out["sample_sync"] = sample_sync
+            if (
+                statement_examples_summary is not None
+                and "statement_examples" not in out
+            ):
+                out["statement_examples"] = statement_examples_summary
             return out
 
         try:
+            verification_id = ""
             if dynamic_samples:
-                sample_sync = self._copy_sample_payloads_from_verification(problem, username, snapshot)
-                sample_verification_id_obj = sample_sync.get("verification_id")
-                if sample_verification_id_obj is not None:
-                    sample_verification_id_text = str(sample_verification_id_obj).strip()
-                    sample_verification_id = sample_verification_id_text if sample_verification_id_text else None
-                summary["sample_sync"] = sample_sync
+                if self.verification_workflow is None:
+                    raise RuntimeError(
+                        "statement examples require the verification workflow"
+                    )
+                verification_id = self.verification_workflow.run_workspace(
+                    problem,
+                    username,
+                    sample_only=True,
+                )
+                sample_verification_id = verification_id
+            statement_examples_attempted = True
+            examples_bundle = self.statement_examples_producer.produce(
+                snapshot,
+                verification_id=verification_id,
+                tests_spec_max_bytes=tests_spec_max_bytes,
+                statement_sample_max_bytes=statement_sample_max_bytes,
+                problem_limits=problem_config_limits(self.db.config_values),
+            )
+            statement_examples_summary = {
+                "verification_id": verification_id,
+                "sample_count": len(examples_bundle["context"]["samples"]),
+            }
+            summary["statement_examples"] = statement_examples_summary
             tex = render_statement_main(
                 snapshot / "statement",
                 problem_title=problem_title,
                 language=safe_language,
+                examples_bundle=examples_bundle,
                 tests_spec_max_bytes=tests_spec_max_bytes,
                 statement_sample_max_bytes=statement_sample_max_bytes,
                 problem_limits=problem_config_limits(self.db.config_values),
@@ -704,7 +552,11 @@ class PreviewService:
                 log.write_text(str(exc) + "\n", encoding="utf-8")
         except Exception as exc:
             status = "failed"
-            failed_stage = "sample_sync" if str(exc).startswith("sample verification failed") else "latex_compile"
+            failed_stage = (
+                "statement_examples"
+                if dynamic_samples or statement_examples_attempted
+                else "latex_compile"
+            )
             summary = _summary_with_sample(
                 {
                     "error": str(exc),

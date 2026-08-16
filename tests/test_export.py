@@ -1,4 +1,5 @@
 import json
+import shutil
 import tempfile
 import threading
 import zipfile
@@ -11,6 +12,13 @@ import yaml
 from app.main import runtime
 import app.impl.workspace.context_job as workspace_context_job
 from app.service.importing.polygon_replica import PolygonReplicaPackageImportService
+from app.service.execution.model import (
+    CAPTURE_COMPLETE,
+    ExecutionPassResult,
+    ExecutionUsage,
+    PassArtifacts,
+)
+from app.service.execution.policy import normalize_execution_result
 from app.service.platform.git_process import run_git
 from app.service.problem.build_config import (
     BuildConfig,
@@ -211,7 +219,32 @@ class TestPublishedRevisionExport(E2ETestBase):
                     status=VerificationTaskStatus.DONE,
                     run_id="",
                     judgehost_task_id="",
-                    result=execution_result("OK"),
+                    result=normalize_execution_result(
+                        passes=(
+                            ExecutionPassResult(
+                                number=1,
+                                capture_status=CAPTURE_COMPLETE,
+                                runresult="correct",
+                                verdict="OK",
+                                score_text="",
+                                answer_correct=True,
+                                usage=ExecutionUsage(),
+                                feedback="",
+                                artifacts=PassArtifacts(
+                                    input_ref=input_ref,
+                                    output_ref=answer_ref,
+                                    stderr_ref=answer_ref,
+                                    system_ref=answer_ref,
+                                    judge_message_ref=answer_ref,
+                                    team_message_ref=answer_ref,
+                                    metadata_ref=answer_ref,
+                                    compare_metadata_ref=answer_ref,
+                                ),
+                            ),
+                        ),
+                        verdict="OK",
+                        answer_correct=True,
+                    ),
                     input_ref=input_ref,
                     answer_ref=answer_ref,
                 )
@@ -250,6 +283,21 @@ class TestPublishedRevisionExport(E2ETestBase):
                 verification_id,
                 programs=verification_programs_for_tasks(tasks),
                 tasks=tasks,
+                detail={
+                    "verification_id": verification_id,
+                    "task_graph": True,
+                    "mode": "pass-fail",
+                    "pass_limit": 1,
+                    "tests_meta_rows": [
+                        {
+                            "index": 1,
+                            "test_name": "001.in",
+                            "kind": "manual",
+                            "id": "001",
+                            "sample": True,
+                        }
+                    ],
+                },
             )
             if activation.outcome != "activated":
                 raise AssertionError(f"unexpected activation outcome: {activation.outcome}")
@@ -460,8 +508,8 @@ class TestPublishedRevisionExport(E2ETestBase):
             self.assertIn("statement-build/english/problem.tex", names)
             self.assertIn("statement-build/english/examples.tex", names)
             self.assertIn("statement-build/english/olymp.sty", names)
-            self.assertIn("statement-build/english/sample.001.in", names)
-            self.assertIn("statement-build/english/sample.001.ans", names)
+            self.assertIn("statement-build/english/examples/sample-1/display.in", names)
+            self.assertIn("statement-build/english/examples/sample-1/display.ans", names)
             self.assertNotIn("source/config/problem.json", names)
             self.assertNotIn("dirty-only.txt", names)
             self.assertNotIn("statement/examples.tex", names)
@@ -482,6 +530,37 @@ class TestPublishedRevisionExport(E2ETestBase):
                     }
                 ],
             )
+
+    def test_multilanguage_statement_build_projects_examples_once(self) -> None:
+        workspace = Path(self._workspace_path())
+        shutil.copytree(
+            workspace / "statement-sections" / "english",
+            workspace / "statement-sections" / "chinese",
+        )
+        _workspace, problem_id, _commit = self._publish_problem()
+        revision = runtime.problem_package_service.published_revision(problem_id)
+        producer = runtime.statement_examples_producer
+
+        with patch.object(
+            producer,
+            "produce",
+            wraps=producer.produce,
+        ) as produce:
+            verified = runtime.problem_package_service.ensure_verified_revision(
+                revision,
+                self._verification_builder(problem_id),
+            )
+
+        self.assertEqual(produce.call_count, 1)
+        archive = runtime.storage_layout.artifacts_root / verified["archive_rel_path"]
+        with zipfile.ZipFile(archive) as package:
+            english_input = package.read(
+                "statement-build/english/examples/sample-1/display.in"
+            )
+            chinese_input = package.read(
+                "statement-build/chinese/examples/sample-1/display.in"
+            )
+        self.assertEqual(english_input, chinese_input)
 
     def test_valid_verified_revision_is_reused_without_verification(self) -> None:
         problem_id, _commit, first = self._verified_revision()

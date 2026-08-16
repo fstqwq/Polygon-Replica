@@ -20,6 +20,10 @@ from app.service.statement.constant import (
 from app.service.statement.context import pick_statement_language, statement_languages
 from app.service.statement.ftl.renderer import render_ftl_template
 from app.service.statement.preview import PreviewService
+from app.service.statement.examples import (
+    StatementExamplesBundle,
+    statement_examples_require_verification,
+)
 from app.service.statement.render import (
     render_statement_main,
     render_statement_offline_tree,
@@ -139,6 +143,61 @@ class TestPreviewUnit(unittest.TestCase):
             (target / "olymp.sty").read_bytes(),
             (self.workspace / "statement/olymp.sty").read_bytes(),
         )
+
+    def test_preview_and_offline_renderers_write_the_same_example_bundle(self) -> None:
+        bundle: StatementExamplesBundle = {
+            "verification_id": "ver-shared",
+            "context": {
+                "samples": [
+                    {
+                        "number": 1,
+                        "presentation": "pair",
+                        "passes": [
+                            {
+                                "number": 1,
+                                "inputFile": "examples/sample-1/pass-1.in",
+                                "outputFile": "examples/sample-1/pass-1.ans",
+                            }
+                        ],
+                    }
+                ]
+            },
+            "resources": [
+                {"path": "examples/sample-1/pass-1.in", "content": "1 2\n"},
+                {"path": "examples/sample-1/pass-1.ans", "content": "3\n"},
+            ],
+        }
+        render_statement_main(
+            self.workspace / "statement",
+            problem_title="Shared Bundle",
+            language="english",
+            examples_bundle=bundle,
+            tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
+            statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
+            problem_limits=_PROBLEM_LIMITS,
+        )
+        preview_root = self.workspace / "statement" / "rendered" / "english"
+        offline_root = self.workspace / "offline" / "english"
+        render_statement_offline_tree(
+            self.workspace,
+            "english",
+            offline_root,
+            problem_title="Shared Bundle",
+            examples_bundle=bundle,
+            tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
+            statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
+            problem_limits=_PROBLEM_LIMITS,
+        )
+
+        for relative in (
+            "examples.tex",
+            "examples/sample-1/pass-1.in",
+            "examples/sample-1/pass-1.ans",
+        ):
+            self.assertEqual(
+                (preview_root / relative).read_bytes(),
+                (offline_root / relative).read_bytes(),
+            )
 
     def test_statement_examples_template_is_optional_and_editable(self) -> None:
         authored = self.workspace / STATEMENT_EXAMPLES_REL
@@ -507,7 +566,7 @@ class TestPreviewUnit(unittest.TestCase):
                 sample_max_bytes=sample_limit,
             )
 
-    def test_sample_selection_identifies_only_missing_or_validated_payloads(self) -> None:
+    def test_statement_examples_require_verification_for_missing_or_validated_payloads(self) -> None:
         (self.workspace / "tests/manual/001.in").write_text(
             "base input\n",
             encoding="utf-8",
@@ -545,17 +604,16 @@ class TestPreviewUnit(unittest.TestCase):
             encoding="utf-8",
         )
 
-        rows = self.preview._sample_verification_rows_from_spec(
+        required = statement_examples_require_verification(
             self.workspace,
-            document_max_bytes=_TESTS_SPEC_MAX_BYTES,
-            sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
+            tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
+            statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
+            problem_limits=_PROBLEM_LIMITS,
         )
 
-        self.assertEqual([row.test_id for row in rows], ["001", "002"])
-        self.assertTrue(rows[0].validate_custom_output)
-        self.assertTrue(rows[1].needs_output_copy)
+        self.assertTrue(required)
 
-    def test_sample_selection_skips_interactive_and_rejects_invalid_kind(self) -> None:
+    def test_complete_interactive_pair_does_not_require_verification(self) -> None:
         config_path = self.workspace / "config/problem.json"
         interactive_config = default_problem_config(limits=_PROBLEM_LIMITS)
         interactive_config["mode"] = "interactive"
@@ -565,23 +623,34 @@ class TestPreviewUnit(unittest.TestCase):
         )
         (self.workspace / "tests/spec.json").write_text(
             dumps_tests_spec(
-                [{"id": "001", "kind": "gen", "sample": True}],
+                [
+                    {
+                        "id": "001",
+                        "kind": "gen",
+                        "sample": True,
+                        "sample_input": "question\n",
+                        "sample_output": "answer\n",
+                        "sample_output_validate": False,
+                    }
+                ],
                 document_max_bytes=_TESTS_SPEC_MAX_BYTES,
                 sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
             ),
             encoding="utf-8",
         )
         self.assertEqual(
-            self.preview._sample_verification_rows_from_spec(
+            statement_examples_require_verification(
                 self.workspace,
-                document_max_bytes=_TESTS_SPEC_MAX_BYTES,
-                sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
+                tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
+                statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
+                problem_limits=_PROBLEM_LIMITS,
             ),
-            [],
+            False,
         )
 
+    def test_statement_examples_reject_invalid_test_kind(self) -> None:
         pass_fail_config = default_problem_config(limits=_PROBLEM_LIMITS)
-        config_path.write_text(
+        (self.workspace / "config/problem.json").write_text(
             dumps_problem_config(pass_fail_config, limits=_PROBLEM_LIMITS),
             encoding="utf-8",
         )
@@ -590,10 +659,11 @@ class TestPreviewUnit(unittest.TestCase):
             encoding="utf-8",
         )
         with self.assertRaisesRegex(RuntimeError, "invalid tests/spec.json"):
-            self.preview._sample_verification_rows_from_spec(
+            statement_examples_require_verification(
                 self.workspace,
-                document_max_bytes=_TESTS_SPEC_MAX_BYTES,
-                sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
+                tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
+                statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
+                problem_limits=_PROBLEM_LIMITS,
             )
 
     def test_verification_signature_tracks_content_but_not_mtime(self) -> None:
