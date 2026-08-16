@@ -19,8 +19,14 @@
       <input id="contest-date" name="date_text" value="{{ date_text or '' }}" placeholder="YYYY-MM-DD" />
     </div>
     <div class="form-field-stack">
-      <label>Statement Language</label>
-      <output class="contest-property-value">{{ statement_language if statement_language else "Not set" }}</output>
+      <label for="contest-statement-language">Default statement language</label>
+      <input
+        id="contest-statement-language"
+        name="statement_language"
+        value="{{ statement_language }}"
+        placeholder="english"
+        required
+      />
     </div>
     <div class="contest-properties-actions">
       <button class="btn primary-action" type="submit">Save properties</button>

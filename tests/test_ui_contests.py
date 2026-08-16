@@ -689,15 +689,21 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             title="Props Contest Updated",
             location="San Francisco",
             date_text="2026-03-01",
+            statement_language="chinese",
         )
         self.assertEqual(save_props.status_code, 303)
         alice_row = db_fetch_one("SELECT id FROM users WHERE username='alice'")
         self.assertIsNotNone(alice_row)
-        runtime.contest_service.set_statement_default_language(contest_id, int(alice_row["id"]), "english")
-
-        contest_row = db_fetch_one("SELECT title FROM contests WHERE id=?", [contest_id])
+        contest_row = db_fetch_one(
+            "SELECT title,statement_default_language FROM contests WHERE id=?",
+            [contest_id],
+        )
         self.assertIsNotNone(contest_row)
         self.assertEqual(str(contest_row["title"]), "Props Contest Updated")
+        self.assertEqual(
+            str(contest_row["statement_default_language"]),
+            "chinese",
+        )
 
         grant = contest_access_grant(contest=contest_slug, user="alice", target_user="bob", role="write")
         self.assertEqual(grant.status_code, 303)

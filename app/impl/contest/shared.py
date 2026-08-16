@@ -23,6 +23,12 @@ def _contest_nav(contest_slug: str, active: str) -> list[dict[str, str | bool]]:
     return [
         {"key": "problems", "label": "Problems", "href": f"{base}/overview", "active": active == "overview"},
         {
+            "key": "properties",
+            "label": "Properties",
+            "href": f"{base}/properties",
+            "active": active == "properties",
+        },
+        {
             "key": "packages",
             "label": "Statements & Builds",
             "href": f"{base}/packages",
@@ -39,12 +45,6 @@ def _contest_manage_nav(contest_slug: str, active: str) -> list[dict[str, str | 
             "label": "Manage problems",
             "href": f"{base}/problems",
             "active": active == "problems",
-        },
-        {
-            "key": "properties",
-            "label": "Properties",
-            "href": f"{base}/properties",
-            "active": active == "properties",
         },
         {
             "key": "access",
