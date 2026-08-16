@@ -115,7 +115,6 @@ _FORM_RAW_BINARY_KEYS = {
     "compare_metadata",
     "team_message",
 }
-_JUDGEHOST_FORM_PART_LIMIT_BYTES = 16 * 1024 * 1024
 _JUDGEHOST_FORM_PART_LIMIT_HEADROOM_BYTES = 1024 * 1024
 _logger = logging.getLogger(__name__)
 
@@ -124,8 +123,6 @@ def _judgehost_form_part_limit_bytes() -> int:
     values = runtime().config_values.snapshot()
     return judgehost_form_part_limit_bytes(
         values,
-        upload_max_bytes=runtime().config_values.integer("UPLOAD_MAX_BYTES"),
-        default_part_limit_bytes=_JUDGEHOST_FORM_PART_LIMIT_BYTES,
         headroom_bytes=_JUDGEHOST_FORM_PART_LIMIT_HEADROOM_BYTES,
     )
 

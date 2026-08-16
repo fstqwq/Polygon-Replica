@@ -7,7 +7,7 @@ from pathlib import Path
 from app.service.judgehost.domjudge.limits import (
     compile_output_kb,
     config_int,
-    run_output_kb,
+    upload_max_bytes,
 )
 
 _CONTEST_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -83,7 +83,7 @@ def config_payload(values: Mapping[str, object]) -> dict[str, object]:
         # DOMjudge applies output_storage_limit to program stdout artifacts.
         # Generator stdout becomes verification input for downstream tasks, so
         # this must follow the run input/output cap, not the saved-log cap.
-        "output_storage_limit": int(run_output_kb(values) * 1024),
+        "output_storage_limit": upload_max_bytes(values),
         "script_timelimit": compile_timeout,
         "script_memory_limit": int(compile_mem_mb * 1024),
         "script_filesize_limit": int(compile_output_kb(values)),

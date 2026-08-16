@@ -4121,7 +4121,7 @@ class TestJudgehostService(E2ETestBase):
         self.assertEqual(int(run_config.get("process_limit") or 0), 1024)
         self.assertEqual(
             int(run_config.get("output_limit") or 0),
-            int(runtime.config_values.RUN_EXEC_OUTPUT_KB),
+            int(runtime.config_values.UPLOAD_MAX_BYTES) // 1024,
         )
         self.assertEqual(int(run_config.get("pass_limit") or 0), 1)
         compile_output_kb = int(runtime.config_values.TOOLCHAIN_COMPILE_OUTPUT_KB)

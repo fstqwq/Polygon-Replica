@@ -27,8 +27,8 @@ from app.service.judgehost.cache.case_result import CaseCacheLookup, CaseResultC
 from app.service.judgehost.callback.diagnostic_payload import parse_diagnostic_payload
 from app.service.judgehost.callback.model import CallbackOutcome, HostEvent
 from app.service.judgehost.domjudge.limits import (
-    run_output_kb,
     truncate_stored_log_bytes,
+    upload_max_bytes,
 )
 from app.service.judgehost.callback.result_normalizer import (
     CapturedJudgehostCase,
@@ -557,7 +557,7 @@ class JudgehostCallbackIngestion:
             8 * 1024 * 1024,
             max(
                 1024,
-                int(run_output_kb(settings.values) * 1024 * 3 // 4),
+                int(upload_max_bytes(settings.values) * 3 // 4),
             ),
         )
         callback_pass = max(0, parse_int(payload.get("pass"), 0))

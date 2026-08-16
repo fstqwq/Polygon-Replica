@@ -12,8 +12,12 @@ def config_int(values: Mapping[str, object], key: str) -> int:
     return value
 
 
+def upload_max_bytes(values: Mapping[str, object]) -> int:
+    return config_int(values, "UPLOAD_MAX_BYTES")
+
+
 def run_output_kb(values: Mapping[str, object]) -> int:
-    return config_int(values, "RUN_EXEC_OUTPUT_KB")
+    return max(1, upload_max_bytes(values) // 1024)
 
 
 def compile_output_kb(values: Mapping[str, object]) -> int:
@@ -41,22 +45,11 @@ def aux_display_limit_bytes(values: Mapping[str, object]) -> int:
 def judgehost_form_part_limit_bytes(
     values: Mapping[str, object],
     *,
-    upload_max_bytes: int,
-    default_part_limit_bytes: int,
     headroom_bytes: int,
 ) -> int:
-    payload_limit_bytes = max(
-        run_output_kb(values) * 1024,
-        compile_output_kb(values) * 1024,
-        stored_log_limit_bytes(values),
-        aux_display_limit_bytes(values),
-    )
-    raw_part_limit_bytes = max(int(upload_max_bytes), int(payload_limit_bytes))
+    raw_part_limit_bytes = upload_max_bytes(values)
     base64_part_limit_bytes = ((raw_part_limit_bytes + 2) // 3) * 4
-    return max(
-        int(default_part_limit_bytes),
-        base64_part_limit_bytes + int(headroom_bytes),
-    )
+    return base64_part_limit_bytes + int(headroom_bytes)
 
 
 def truncate_stored_log_bytes(

@@ -62,11 +62,15 @@ class SystemLimitInfo(TypedDict):
 
 
 def _system_limit_info() -> SystemLimitInfo:
+    upload_limit_bytes = runtime().config_values.integer("UPLOAD_MAX_BYTES")
     return {
         'title': 'System limits',
         'description': 'Contact an administrator to change these limits if needed.',
         'rows': [
-            {'label': 'Program input/output limit', 'value': f'{runtime().config_values.integer("RUN_EXEC_OUTPUT_KB")} KiB'},
+            {
+                'label': 'Program input/output and upload limit',
+                'value': f'{upload_limit_bytes} bytes',
+            },
             {'label': 'Compilation size limit', 'value': f'{runtime().config_values.integer("TOOLCHAIN_COMPILE_OUTPUT_KB")} KiB'},
             {'label': 'Saved judging log limit', 'value': f'{runtime().config_values.integer("JUDGEHOST_STORED_LOG_LIMIT_BYTES")} bytes'},
         ],

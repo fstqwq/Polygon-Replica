@@ -127,7 +127,7 @@ UI_AND_LIMIT_DEFINITIONS = (
         "UPLOAD_MAX_BYTES",
         256 * 1024 * 1024,
         "Misc",
-        "Shared raw-byte limit for uploaded files.",
+        "Shared raw-byte limit for uploads and Judgehost program input/output.",
         _bounds(1024, 1024 * 1024 * 1024),
     ),
     _int(
@@ -592,16 +592,6 @@ TOOLCHAIN_DEFINITIONS = (
         "Judging",
         "Run-time sandbox process limit.",
         _bounds(1, 4096),
-    ),
-    _int(
-        "RUN_EXEC_OUTPUT_KB",
-        65536,
-        "Judging",
-        (
-            "Judgehost run-stage stdout cap in KiB; compile/compare sandbox "
-            "output uses TOOLCHAIN_COMPILE_OUTPUT_KB."
-        ),
-        _bounds(64, 1048576),
     ),
     _int(
         "JUDGEHOST_STORED_LOG_LIMIT_BYTES",

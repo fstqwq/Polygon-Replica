@@ -7,7 +7,11 @@ from pathlib import Path
 from app.config import build_config_values
 from app.service.judgehost.callback.artifact_capture import decode_callback_blob
 from app.service.judgehost.callback.diagnostic_payload import parse_diagnostic_payload
-from app.service.judgehost.domjudge.limits import run_memory_limit_kb
+from app.service.judgehost.domjudge.limits import (
+    judgehost_form_part_limit_bytes,
+    run_memory_limit_kb,
+    run_output_kb,
+)
 from app.service.judgehost.callback.pass_bundle import BundledPass, PassBundle
 from app.service.judgehost.callback.result_normalizer import (
     CapturedCaseArtifact,
@@ -438,12 +442,12 @@ class TestJudgehostPayload(unittest.TestCase):
     def test_config_uses_kib_for_scripts_and_bytes_for_output_storage(self) -> None:
         snapshot = build_config_values().snapshot()
         config = config_payload(snapshot)
-        run_output_bytes = int(snapshot["RUN_EXEC_OUTPUT_KB"]) * 1024
+        upload_max_bytes = int(snapshot["UPLOAD_MAX_BYTES"])
         compile_output_kb = int(snapshot["TOOLCHAIN_COMPILE_OUTPUT_KB"])
         stored_log_limit_bytes = int(snapshot["JUDGEHOST_STORED_LOG_LIMIT_BYTES"])
         aux_limit_bytes = int(snapshot["AUX_DISPLAY_TEXT_LIMIT_BYTES"])
         self.assertEqual(config["timelimit_overshoot"], "1s|100%")
-        self.assertEqual(config["output_storage_limit"], run_output_bytes)
+        self.assertEqual(config["output_storage_limit"], upload_max_bytes)
         self.assertEqual(config["script_filesize_limit"], compile_output_kb)
         self.assertGreaterEqual(config["script_filesize_limit"], 1024)
         self.assertLess(stored_log_limit_bytes, config["output_storage_limit"])
@@ -454,6 +458,23 @@ class TestJudgehostPayload(unittest.TestCase):
         self.assertNotEqual(
             config["script_filesize_limit"],
             (aux_limit_bytes + 1023) // 1024,
+        )
+
+    def test_upload_limit_drives_run_storage_and_multipart_limits(self) -> None:
+        values = dict(build_config_values().snapshot())
+        raw_limit_bytes = 10 * 1024 * 1024
+        headroom_bytes = 1024 * 1024
+        values["UPLOAD_MAX_BYTES"] = raw_limit_bytes
+        values["TOOLCHAIN_COMPILE_OUTPUT_KB"] = 256 * 1024
+
+        self.assertEqual(run_output_kb(values), raw_limit_bytes // 1024)
+        self.assertEqual(config_payload(values)["output_storage_limit"], raw_limit_bytes)
+        self.assertEqual(
+            judgehost_form_part_limit_bytes(
+                values,
+                headroom_bytes=headroom_bytes,
+            ),
+            ((raw_limit_bytes + 2) // 3) * 4 + headroom_bytes,
         )
 
 
