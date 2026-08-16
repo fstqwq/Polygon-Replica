@@ -281,11 +281,11 @@ class ProblemSourceQueryService:
     def run_test_options(
         self,
         workspace: Path,
-    ) -> tuple[list[RunTestOption], bool, str]:
+    ) -> tuple[list[RunTestOption], bool]:
         try:
             entries, _path = self._tests(workspace)
         except ValueError:
-            return [], False, ""
+            return [], False
         limit = self._config_values.integer("RUN_TEST_SELECTOR_LIMIT")
         options: list[RunTestOption] = []
         for index, row in enumerate(entries[:limit], start=1):
@@ -294,4 +294,4 @@ class ProblemSourceQueryService:
                 parts.append("sample")
             name = f"{index:03d}.in"
             options.append({"name": name, "label": f'{name} ({"; ".join(parts)})'})
-        return options, len(entries) > limit, "tests/spec.json" if options else ""
+        return options, len(entries) > limit

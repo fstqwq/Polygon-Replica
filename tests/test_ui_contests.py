@@ -207,6 +207,11 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertEqual(html.count('id="contest-workspace-title"'), 1)
         self.assertIn(f'href="/contests/{contest_slug}/overview"', html)
         self.assertIn(f">{contest_title}</a>", html)
+        slug_markup = f'<code class="contest-context-slug">{contest_slug}</code>'
+        copy_markup = f'data-copy-text="{contest_slug}"'
+        self.assertIn(slug_markup, html)
+        self.assertIn(copy_markup, html)
+        self.assertLess(html.index(slug_markup), html.index(copy_markup))
         self.assertIn("1 problem</p>", html)
         self.assertIn(
             f'href="/problems/alice/sample/statement?contest={contest_slug}"',

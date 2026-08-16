@@ -5,9 +5,35 @@
   gap: var(--space-4);
 }
 
+.run-pick-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: var(--font-size-ui-sm);
+}
+
+.run-pick-list {
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  padding: var(--space-1);
+}
+
+.run-pick-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-2);
+}
+
+.run-pick-main {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: var(--font-size-ui-sm);
+}
+
 @container problem-content (max-width: 820px) {
   .run-execute-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 }
-

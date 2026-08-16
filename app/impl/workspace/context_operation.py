@@ -434,5 +434,5 @@ def run_solution_options_context(
 
 def run_test_options_context(
     workspace: Path,
-) -> tuple[list[RunTestOption], bool, str]:
+) -> tuple[list[RunTestOption], bool]:
     return runtime().problem_source_query_service.run_test_options(workspace)

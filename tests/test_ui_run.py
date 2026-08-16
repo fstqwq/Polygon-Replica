@@ -2155,6 +2155,9 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn('name="test_names" value="001.in" checked', html)
         self.assertIn('name="test_names" value="002.in" checked', html)
+        self.assertEqual(html.count('class="run-pick-list"'), 2)
+        self.assertNotIn("Tests source:", html)
+        self.assertNotIn("Select solutions. Leave tests empty to run all tests.", html)
 
     def test_run_list_orders_by_verification_run_time_not_latest_run_time(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")

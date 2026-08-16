@@ -12,16 +12,16 @@
     <div class="run-execute-grid">
       <div class="form-row form-row-column">
         <label for="solution-paths">Solutions</label>
-        <div class="solution-pick-actions">
+        <div class="run-pick-actions">
           <a href="#" id="solution-select-all" class="linkish">Select all</a>
           <a href="#" id="solution-select-clear" class="linkish">Clear</a>
         </div>
-        <div id="solution-paths" class="solution-pick-list">
+        <div id="solution-paths" class="run-pick-list">
           {% if solution_options %}
             {% for row in solution_options %}
-            <label class="solution-pick-item">
+            <label class="run-pick-item">
               <input type="checkbox" name="solution_paths" value="{{ row.path }}" {% if row.path in selected_solution_paths %}checked{% endif %} />
-              <span class="solution-pick-main">{{ row.label }}</span>
+              <span class="run-pick-main">{{ row.label }}</span>
             </label>
             {% endfor %}
           {% else %}
@@ -31,25 +31,22 @@
       </div>
       <div class="form-row form-row-column">
         <label for="test-names">Tests</label>
-        <div class="solution-pick-actions">
+        <div class="run-pick-actions">
           <a href="#" id="test-select-all" class="linkish">Select all</a>
           <a href="#" id="test-select-clear" class="linkish">Clear</a>
         </div>
-        <div id="test-names" class="solution-pick-list">
+        <div id="test-names" class="run-pick-list">
           {% if test_options %}
             {% for row in test_options %}
-            <label class="solution-pick-item">
+            <label class="run-pick-item">
               <input type="checkbox" name="test_names" value="{{ row.name }}" {% if row.name in selected_test_names %}checked{% endif %} />
-              <span class="solution-pick-main">{{ row.label }}</span>
+              <span class="run-pick-main">{{ row.label }}</span>
             </label>
             {% endfor %}
           {% else %}
           <p class="muted">No tests.</p>
           {% endif %}
         </div>
-        {% if test_options_source %}
-        <p class="muted">Tests source: <code>{{ test_options_source }}</code></p>
-        {% endif %}
       </div>
     </div>
     <div class="form-row">
@@ -66,6 +63,5 @@
   {% if test_options_truncated %}
   <p class="muted">Showing first available tests only.</p>
   {% endif %}
-  <p class="muted solution-pick-help">Select solutions. Leave tests empty to run all tests.</p>
 </section>
 {% endblock %}

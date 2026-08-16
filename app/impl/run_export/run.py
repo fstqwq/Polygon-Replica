@@ -139,9 +139,7 @@ def run_new_page(request: Request, problem: str, user: Annotated[str, Depends(re
         solution_options = []
         default_submission_path = ''
         solution_options_truncated = False
-    test_options, test_options_truncated, test_options_source = run_test_options_context(
-        workspace
-    )
+    test_options, test_options_truncated = run_test_options_context(workspace)
     selected_solution_paths: list[str] = []
     for raw in request.query_params.getlist('solution_paths'):
         normalized = normalize_optional_component_source_path_safe(raw, 'solutions', 'solution path')
@@ -166,7 +164,6 @@ def run_new_page(request: Request, problem: str, user: Annotated[str, Depends(re
             'selected_solution_paths': selected_solution_paths,
             'test_options': test_options,
             'test_options_truncated': test_options_truncated,
-            'test_options_source': test_options_source,
             'selected_test_names': selected_test_names,
         },
     )

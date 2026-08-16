@@ -19,37 +19,6 @@
 }
 
 
-.solution-pick-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-4);
-  font-size: var(--font-size-ui-sm);
-}
-
-.solution-pick-list {
-  max-height: 360px;
-  overflow: auto;
-  border: 1px solid var(--line);
-  background: var(--surface);
-  padding: var(--space-1);
-}
-
-.solution-pick-item {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-  padding: var(--space-2);
-}
-
-.solution-pick-main {
-  font-family: Consolas, "Courier New", monospace;
-  font-size: var(--font-size-ui-sm);
-}
-
-.solution-pick-help {
-  margin-top: var(--space-2);
-}
-
 .solutions-table {
   table-layout: fixed;
   width: 100%;
@@ -229,4 +198,3 @@ select.tag-select.tag-select-neutral {
   color: var(--tag-neutral-fg);
   background-color: var(--tag-neutral-bg);
 }
-

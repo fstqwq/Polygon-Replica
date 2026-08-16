@@ -211,6 +211,12 @@ body.problem-layout:not(.verification-compact) {
   font-size: var(--font-size-ui-sm);
 }
 
+.contest-context-slug-group {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 .section-tabs {
   display: flex;
   align-items: flex-end;
