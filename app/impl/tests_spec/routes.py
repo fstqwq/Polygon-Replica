@@ -8,6 +8,7 @@ from typing import Annotated
 from fastapi import File, Form, HTTPException, Request, UploadFile, Depends
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
+from starlette.datastructures import FormData
 
 from app.impl.auth.shared import redirect_response, template_response
 from app.impl.contest.workspace_scope import contest_workspace_context_from_request
@@ -51,6 +52,18 @@ from app.service.problem.test_spec import (
 
 class GeneratorReplacement(TestSpecEntry):
     command: str
+
+
+def _optional_single_form_text(form: FormData, field: str) -> str | None:
+    values = form.getlist(field)
+    if not values:
+        return None
+    if len(values) != 1:
+        raise ValueError(f"form field must occur once: {field}")
+    value = values[0]
+    if not isinstance(value, str):
+        raise ValueError(f"form field must be text: {field}")
+    return value
 
 
 def _read_tests_spec(workspace: Path) -> tuple[list[TestSpecEntry], Path]:
@@ -271,7 +284,8 @@ def add_generator_test(
         redirect_url = f'{redirect_url}?{redirect_query}'
     return redirect_response(redirect_url, status_code=303, message=msg)
 
-def edit_spec_test(
+async def edit_spec_test(
+    request: Request,
     problem: str,
     user: Annotated[str, Depends(require_session_user)],
     index: Annotated[str, Form(...)],
@@ -279,8 +293,6 @@ def edit_spec_test(
     kind: Annotated[str, Form()] = '',
     sample: Annotated[str, Form()] = '0',
     payload: Annotated[str, Form()] = '',
-    sample_input: Annotated[str | None, Form()] = None,
-    sample_output: Annotated[str | None, Form()] = None,
     sample_output_validate: Annotated[list[str] | None, Form()] = None,
 ):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
@@ -288,6 +300,9 @@ def edit_spec_test(
     workspace = Path(ctx['workspace']['path'])
     msg = 'test updated'
     try:
+        form = await request.form()
+        sample_input = _optional_single_form_text(form, "sample_input")
+        sample_output = _optional_single_form_text(form, "sample_output")
         safe_test_id = normalize_test_id(tests_spec_form_text(test_id))
         safe_kind = normalize_test_kind(tests_spec_form_text(kind))
         safe_sample = tests_spec_bool_flag(tests_spec_form_text(sample))

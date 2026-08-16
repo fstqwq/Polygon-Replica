@@ -17,6 +17,7 @@ from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 from fastapi import HTTPException
+from starlette.responses import Response
 
 from app.config import CONFIG_REGISTRY
 from app.service.problem.test_spec import dumps_default_tests_spec
@@ -27,6 +28,7 @@ from tests.ui_support import (
     Path,
     UIHelpersMixin,
     _flash_messages_from_response,
+    _post_form_request,
     _request,
     _wait_for_row,
     tests_page,
@@ -95,6 +97,51 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
 
         async def close(self) -> None:
             return None
+
+    @staticmethod
+    def _edit_spec_request(
+        *,
+        problem: str,
+        user: str,
+        index: str,
+        test_id: str,
+        kind: str,
+        sample: str,
+        payload: str,
+        sample_input: str | None = None,
+        sample_output: str | None = None,
+        sample_output_validate: list[str] | None = None,
+    ) -> Response:
+        form_data: dict[str, object] = {
+            "index": index,
+            "test_id": test_id,
+            "kind": kind,
+            "sample": sample,
+            "payload": payload,
+        }
+        if sample_input is not None:
+            form_data["sample_input"] = sample_input
+        if sample_output is not None:
+            form_data["sample_output"] = sample_output
+        if sample_output_validate is not None:
+            form_data["sample_output_validate"] = sample_output_validate
+        request = _post_form_request(
+            f"/problems/{problem}/tests/spec/edit",
+            form_data,
+        )
+        return asyncio.run(
+            tests_spec_edit(
+                request=request,
+                problem=problem,
+                user=user,
+                index=index,
+                test_id=test_id,
+                kind=kind,
+                sample=sample,
+                payload=payload,
+                sample_output_validate=sample_output_validate,
+            )
+        )
 
     def _problem_readiness(
         self,
@@ -665,7 +712,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertNotIn("\r", manual_payload)
         self.assertEqual((generator_dir / "002.in").read_text(encoding="utf-8"), "gen 10 20")
 
-        edit_gen = tests_spec_edit(
+        edit_gen = self._edit_spec_request(
             problem="alice/sample",
             user="alice",
             index="2",
@@ -726,7 +773,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(add_manual.status_code, 303)
 
-        edit_spec = tests_spec_edit(
+        edit_spec = self._edit_spec_request(
             problem="alice/sample",
             user="alice",
             index="1",
@@ -744,7 +791,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertEqual(len(tests), 1)
         self.assertFalse(bool(tests[0].get("sample_output_validate", True)))
 
-        edit_spec_checked = tests_spec_edit(
+        edit_spec_checked = self._edit_spec_request(
             problem="alice/sample",
             user="alice",
             index="1",
@@ -765,6 +812,61 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         page = tests_page(_request("/problems/alice/sample/tests"), "alice/sample", "alice")
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn('type="hidden" name="sample_output_validate" value="0"', html)
+
+    def test_tests_spec_edit_can_clear_custom_sample_text(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        spec_path = ws / "tests" / "spec.json"
+        spec_path.write_text(dumps_default_tests_spec(), encoding="utf-8")
+
+        added = tests_spec_add_manual(
+            problem="alice/sample",
+            user="alice",
+            test_id="001",
+            sample="1",
+            manual_input="judge input\n",
+            sample_input="custom input\n",
+            sample_output="custom output\n",
+            sample_output_validate=["0", "1"],
+        )
+        self.assertEqual(added.status_code, 303)
+
+        preserved = self._edit_spec_request(
+            problem="alice/sample",
+            user="alice",
+            index="1",
+            test_id="001",
+            kind="manual",
+            sample="1",
+            payload="updated judge input\n",
+            sample_output_validate=["0", "1"],
+        )
+        self.assertEqual(preserved.status_code, 303)
+
+        preserved_payload = json.loads(spec_path.read_text(encoding="utf-8"))
+        preserved_tests = preserved_payload.get("tests") or []
+        self.assertEqual(preserved_tests[0].get("sample_input"), "custom input\n")
+        self.assertEqual(preserved_tests[0].get("sample_output"), "custom output\n")
+
+        updated = self._edit_spec_request(
+            problem="alice/sample",
+            user="alice",
+            index="1",
+            test_id="001",
+            kind="manual",
+            sample="1",
+            payload="updated judge input\n",
+            sample_input="",
+            sample_output="",
+            sample_output_validate=["0", "1"],
+        )
+        self.assertEqual(updated.status_code, 303)
+
+        payload = json.loads(spec_path.read_text(encoding="utf-8"))
+        tests = payload.get("tests") or []
+        self.assertEqual(len(tests), 1)
+        self.assertNotIn("sample_input", tests[0])
+        self.assertNotIn("sample_output", tests[0])
+        self.assertNotIn("sample_output_validate", tests[0])
 
     def test_tests_spec_gen_script_save_adds_and_removes_gen_entries(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
