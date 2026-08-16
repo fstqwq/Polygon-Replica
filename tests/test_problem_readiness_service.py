@@ -115,12 +115,17 @@ class TestProblemReadinessService(unittest.TestCase):
     def _service(
         self,
         rows: list[WorkspaceVerificationRow],
+        *,
+        package: VerifiedRevisionReadiness | None = None,
     ) -> tuple[ProblemReadinessService, _VerificationRows]:
         verification = _VerificationRows(
             {(self.subject["problem_id"], self.subject["workspace_id"]): rows}
         )
         packages = _PackageRows(
-            {self.subject["problem_id"]: _missing_package(self.subject["problem_id"])}
+            {
+                self.subject["problem_id"]: package
+                or _missing_package(self.subject["problem_id"])
+            }
         )
         return (
             ProblemReadinessService(
@@ -129,6 +134,25 @@ class TestProblemReadinessService(unittest.TestCase):
             ),
             verification,
         )
+
+    def test_active_verified_revision_build_projects_as_queued(self) -> None:
+        service, _verification = self._service(
+            [],
+            package={
+                "problem_id": self.subject["problem_id"],
+                "published_commit": self.subject["head_commit"],
+                "published_revision_number": 2,
+                "verified_revision_number": None,
+                "verified_revision_id": "",
+                "status": "queued",
+                "missing_reason": "",
+            },
+        )
+
+        readiness = service.readiness(self.subject)
+
+        self.assertEqual(readiness["package"]["state"], "queued")
+        self.assertEqual(readiness["package"]["tone"], "normal")
 
     def test_batch_projection_uses_bulk_rows_without_failure_details(self) -> None:
         service, verification = self._service(

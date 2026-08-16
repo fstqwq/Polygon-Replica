@@ -111,7 +111,7 @@ class VerifiedRevisionOperationBusy(RuntimeError):
     """The revision is already being validated, read, or rebuilt."""
 
 
-VerifiedRevisionStatus = Literal["ready", "stale", "none"]
+VerifiedRevisionStatus = Literal["ready", "queued", "stale", "none"]
 
 
 class VerifiedRevisionReadiness(TypedDict):
@@ -282,6 +282,7 @@ class ProblemPackageService:
         published: PublishedRevision | None,
         materialization: MaterializationRow | None,
         previous_materialization: MaterializationRow | None,
+        build_active: bool,
         error: str = "",
     ) -> VerifiedRevisionReadiness:
         if published is None:
@@ -302,6 +303,16 @@ class ProblemPackageService:
                 "verified_revision_number": materialization["revision_number"],
                 "verified_revision_id": materialization["id"],
                 "status": "ready",
+                "missing_reason": "",
+            }
+        if build_active:
+            return {
+                "problem_id": problem_id,
+                "published_commit": published.source_commit,
+                "published_revision_number": published.revision_number,
+                "verified_revision_number": None,
+                "verified_revision_id": "",
+                "status": "queued",
                 "missing_reason": "",
             }
         if previous_materialization is not None:
@@ -352,6 +363,12 @@ class ProblemPackageService:
                 for problem_id, revision in revisions.items()
             ]
         )
+        active_builds = self.store.active_builds_for_revisions(
+            [
+                (problem_id, revision.source_commit)
+                for problem_id, revision in revisions.items()
+            ]
+        )
         return {
             problem_id: self._published_readiness(
                 problem_id,
@@ -364,6 +381,12 @@ class ProblemPackageService:
                     else None
                 ),
                 previous_materializations.get(problem_id),
+                (
+                    (problem_id, revisions[problem_id].source_commit)
+                    in active_builds
+                    if problem_id in revisions
+                    else False
+                ),
                 errors.get(problem_id, ""),
             )
             for problem_id in ids

@@ -28,9 +28,9 @@ from tests.ui_support import (
     contest_overview_page,
     contest_packages_page,
     contest_problems_add,
-    contest_problems_change_general,
     contest_problems_page,
     contest_problems_remove_selected,
+    contest_problems_save,
     contest_properties_save,
     contests_root_create,
     contests_root_page,
@@ -515,14 +515,22 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         problem_row = db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem_slug])
         self.assertIsNotNone(problem_row)
         pid = int(problem_row["id"])
+        contest_problem_row = db_fetch_one(
+            "SELECT id,label FROM contest_problems WHERE contest_id=? AND problem_id=?",
+            [contest_id, pid],
+        )
+        self.assertIsNotNone(contest_problem_row)
 
-        update_resp = contest_problems_change_general(
+        update_resp = contest_problems_save(
             contest=contest_slug,
             user="alice",
-            selected_problem_ids=[str(pid)],
+            contest_problem_ids=[str(contest_problem_row["id"])],
+            contest_problem_indices=[str(contest_problem_row["label"])],
             problem_ids=[str(pid)],
             time_limit_ms_values=["3500"],
             memory_limit_mb_values=["512"],
+            original_time_limit_ms_values=["2000"],
+            original_memory_limit_mb_values=["1024"],
         )
         self.assertEqual(update_resp.status_code, 303)
         self.assertIn(f"/contests/{contest_slug}/problems", update_resp.headers.get("location", ""))
@@ -566,14 +574,22 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         problem_row = db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem_slug])
         self.assertIsNotNone(problem_row)
         pid = int(problem_row["id"])
+        contest_problem_row = db_fetch_one(
+            "SELECT id,label FROM contest_problems WHERE contest_id=? AND problem_id=?",
+            [contest_id, pid],
+        )
+        self.assertIsNotNone(contest_problem_row)
 
-        update_resp = contest_problems_change_general(
+        update_resp = contest_problems_save(
             contest=contest_slug,
             user="alice",
-            selected_problem_ids=[str(pid)],
+            contest_problem_ids=[str(contest_problem_row["id"])],
+            contest_problem_indices=[str(contest_problem_row["label"])],
             problem_ids=[str(pid)],
             time_limit_ms_values=["3500"],
             memory_limit_mb_values=["512"],
+            original_time_limit_ms_values=["2000"],
+            original_memory_limit_mb_values=["1024"],
         )
         self.assertEqual(update_resp.status_code, 303)
 

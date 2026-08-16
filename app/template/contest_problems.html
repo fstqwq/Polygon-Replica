@@ -10,7 +10,7 @@
     <h2 id="contest-current-problems-heading">Contest problems</h2>
   </div>
   {% if problem_rows %}
-  <form method="post" action="/contests/{{ ctx.contest.slug }}/problems/reorder">
+  <form method="post" action="/contests/{{ ctx.contest.slug }}/problems/save">
     <table class="table-base table-compact problem-list-table contest-management-table">
       <tr>
         <th class="contest-select-column" aria-label="Select"></th>
@@ -32,19 +32,39 @@
           <input type="hidden" name="problem_ids" value="{{ row.problem_id }}" />
           {% if not row.can_problem_write %}<span class="contest-row-note">read-only</span>{% endif %}
         </td>
-        <td><input class="contest-limit-input" name="time_limit_ms_values" value="{{ row.time_limit_ms }}" inputmode="numeric"{% if not row.can_problem_write %} readonly{% endif %} aria-label="Time limit for {{ row.problem_slug }}" /></td>
-        <td><input class="contest-limit-input" name="memory_limit_mb_values" value="{{ row.memory_limit_mb }}" inputmode="numeric"{% if not row.can_problem_write %} readonly{% endif %} aria-label="Memory limit for {{ row.problem_slug }}" /></td>
-        <td><span class="{{ 'revision-alert' if row.workspace_revision_warn else '' }}">{{ row.workspace_revision_display }}</span></td>
+        <td>
+          <input type="hidden" name="original_time_limit_ms_values" value="{{ row.time_limit_ms }}" />
+          <input class="contest-limit-input" name="time_limit_ms_values" value="{{ row.time_limit_ms }}" inputmode="numeric"{% if not row.can_problem_write %} readonly{% endif %} aria-label="Time limit for {{ row.problem_slug }}" />
+        </td>
+        <td>
+          <input type="hidden" name="original_memory_limit_mb_values" value="{{ row.memory_limit_mb }}" />
+          <input class="contest-limit-input" name="memory_limit_mb_values" value="{{ row.memory_limit_mb }}" inputmode="numeric"{% if not row.can_problem_write %} readonly{% endif %} aria-label="Memory limit for {{ row.problem_slug }}" />
+        </td>
+        <td class="contest-problem-review-cell">
+          <span class="problem-review-list">
+            {% if row.workspace_revision_available %}
+            <span class="problem-review-line">
+              <span class="problem-review-label">Upstream</span>
+              <strong class="problem-review-value">{{ ('v' ~ row.workspace_revision_upstream) if row.workspace_revision_upstream is not none else 'none' }}</strong>
+            </span>
+            <span class="problem-review-line">
+              <span class="problem-review-label">Workspace</span>
+              <strong class="problem-review-value {{ 'danger' if row.workspace_revision_warn else '' }}">{{ ('v' ~ row.workspace_revision_local) if row.workspace_revision_local is not none else 'none' }}</strong>
+            </span>
+            {% else %}
+            <span class="problem-review-line">
+              <span class="problem-review-label">Status</span>
+              <strong class="problem-review-value danger">unavailable</strong>
+            </span>
+            {% endif %}
+          </span>
+        </td>
       </tr>
       {% endfor %}
     </table>
     <div class="contest-management-actions">
-      {% if ctx.access.can_manage_roster %}
-      <button class="btn" type="submit" formaction="/contests/{{ ctx.contest.slug }}/problems/reorder">Save order</button>
-      <button class="btn" type="submit" formaction="/contests/{{ ctx.contest.slug }}/problems/renumber">Renumber A, B, C...</button>
-      {% endif %}
-      {% if ctx.access.can_write %}
-      <button class="btn" type="submit" formaction="/contests/{{ ctx.contest.slug }}/problems/change-general">Update limits</button>
+      {% if ctx.access.can_manage_roster or ctx.access.can_write %}
+      <button class="btn" type="submit">Save</button>
       {% endif %}
       {% if ctx.access.can_manage_roster %}
       <button

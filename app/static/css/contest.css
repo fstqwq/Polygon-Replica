@@ -264,7 +264,24 @@
   line-height: 1.4;
 }
 
+.contest-package-tools {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
+
+.contest-package-tools > form,
+.contest-package-tools .contest-package-summary {
+  margin: 0;
+}
+
 @media (max-width: 640px) {
+  .contest-package-tools {
+    align-items: flex-end;
+    flex-direction: column;
+  }
+
   .contest-package-summary {
     white-space: normal;
   }

@@ -8,19 +8,26 @@
   {% set verification_tone = 'warn' if verification.tone == 'warning' else 'danger' if verification.tone == 'danger' else '' %}
   {% set package_tone = 'warn' if package.tone == 'warning' else 'danger' if package.tone == 'danger' else '' %}
   <span class="problem-review-line problem-review-upstream">
-    Upstream: <strong>{{ ('v' ~ workspace.upstream_revision) if workspace.upstream_revision is not none else 'none' }}</strong>
+    <span class="problem-review-label">Upstream</span>
+    <strong class="problem-review-value">{{ ('v' ~ workspace.upstream_revision) if workspace.upstream_revision is not none else 'none' }}</strong>
   </span>
   <span class="problem-review-line problem-review-workspace">
-    Workspace: <strong class="{{ workspace_tone }}">{{ ('v' ~ workspace.local_revision) if workspace.local_revision is not none else 'none' }}</strong>
+    <span class="problem-review-label">Workspace</span>
+    <strong class="problem-review-value {{ workspace_tone }}">{{ ('v' ~ workspace.local_revision) if workspace.local_revision is not none else 'none' }}</strong>
   </span>
   <span class="problem-review-line">
-    Verification: <span class="{{ verification_tone }}">{{ verification.display }}</span>{% if show_verification_reason and verification.reason_short %}<span class="problem-review-reason"> &mdash; {{ verification.reason_short }}</span>{% endif %}
+    <span class="problem-review-label">Verification</span>
+    <strong class="problem-review-value {{ verification_tone }}">{{ verification.display }}</strong>{% if show_verification_reason and verification.reason_short %}<span class="problem-review-reason"> &mdash; {{ verification.reason_short }}</span>{% endif %}
   </span>
   <span class="problem-review-line">
-    Verified revision: <span class="{{ package_tone }}">{% if package.state == 'ready' and package.revision_number is not none %}v{{ package.revision_number }} (current){% elif package.state == 'stale' and package.revision_number is not none %}v{{ package.revision_number }} (stale){% else %}none{% endif %}</span>
+    <span class="problem-review-label">Verified revision</span>
+    <strong class="problem-review-value {{ package_tone }}">{% if package.state == 'ready' and package.revision_number is not none %}v{{ package.revision_number }} (current){% elif package.state == 'queued' %}queued{% elif package.state == 'stale' and package.revision_number is not none %}v{{ package.revision_number }} (stale){% else %}none{% endif %}</strong>
   </span>
   {% else %}
-  <span class="problem-review-line"><span class="danger">unavailable</span></span>
+  <span class="problem-review-line">
+    <span class="problem-review-label">Status</span>
+    <strong class="problem-review-value danger">unavailable</strong>
+  </span>
   {% endif %}
 </div>
 {%- endmacro %}

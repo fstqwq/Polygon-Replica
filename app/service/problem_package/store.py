@@ -211,6 +211,42 @@ class ProblemPackageStore:
                 result[materialization["problem_id"]] = materialization
         return result
 
+    def active_builds_for_revisions(
+        self,
+        revisions: list[tuple[int, str]],
+    ) -> set[tuple[int, str]]:
+        keys = list(
+            dict.fromkeys(
+                (int(problem_id), source_commit)
+                for problem_id, source_commit in revisions
+                if source_commit
+            )
+        )
+        result: set[tuple[int, str]] = set()
+        for offset in range(0, len(keys), 300):
+            chunk = keys[offset : offset + 300]
+            if not chunk:
+                continue
+            values = ",".join("(?,?)" for _key in chunk)
+            params = [value for key in chunk for value in key]
+            rows = self.db.fetch_all(
+                f"""
+                WITH requested(problem_id,source_commit) AS (VALUES {values})
+                SELECT b.problem_id,b.source_commit
+                FROM problem_package_builds b
+                JOIN requested r
+                  ON r.problem_id=b.problem_id
+                 AND r.source_commit=b.source_commit
+                WHERE b.status IN ('queued','running')
+                """,
+                params,
+            )
+            result.update(
+                (int(row["problem_id"]), str(row["source_commit"]))
+                for row in rows
+            )
+        return result
+
     def create_or_retry_build(
         self,
         *,

@@ -4,12 +4,20 @@
 {% block content %}
 <div class="page-title-inline contest-problems-title">
   <h1 class="page-title">Problems</h1>
-  <p class="contest-package-summary">
-    Verified revisions:
-    <span>{{ verified_ready_count }} current</span>{% if verified_stale_count %},
-    <span class="warn">{{ verified_stale_count }} stale</span>{% endif %}{% if verified_none_count %},
-    <span class="danger">{{ verified_none_count }} none</span>{% endif %}
-  </p>
+  <div class="contest-package-tools">
+    <p class="contest-package-summary">
+      Verified revisions:
+      <span>{{ verified_ready_count }} current</span>{% if verified_queued_count %},
+      <span>{{ verified_queued_count }} queued</span>{% endif %}{% if verified_stale_count %},
+      <span class="warn">{{ verified_stale_count }} stale</span>{% endif %}{% if verified_none_count %},
+      <span class="danger">{{ verified_none_count }} none</span>{% endif %}
+    </p>
+    {% if ctx.access.can_build %}
+    <form method="post" action="/contests/{{ ctx.contest.slug }}/packages/build-all">
+      <button class="btn" type="submit">Build All Packages</button>
+    </form>
+    {% endif %}
+  </div>
 </div>
 
 {% include "_flash_message.html" %}

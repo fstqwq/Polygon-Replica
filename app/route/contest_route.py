@@ -6,7 +6,10 @@ from app.impl.contest.access import (
     contest_access_page,
     contest_access_revoke,
 )
-from app.impl.contest.overview import contest_overview_page
+from app.impl.contest.overview import (
+    contest_build_all_packages,
+    contest_overview_page,
+)
 from app.impl.contest.package import (
     contest_packages_artifact_download,
     contest_packages_build_start,
@@ -19,13 +22,11 @@ from app.impl.contest.package import (
 )
 from app.impl.contest.problem import (
     contest_problems_add,
-    contest_problems_change_general,
     contest_problems_change_general_retry,
     contest_problems_page,
     contest_problems_remove,
     contest_problems_remove_selected,
-    contest_problems_renumber,
-    contest_problems_reorder,
+    contest_problems_save,
 )
 from app.impl.contest.property import contest_properties_page, contest_properties_save
 
@@ -37,6 +38,13 @@ router.add_api_route(
     methods=["GET"],
     response_class=HTMLResponse,
     name="contest_overview",
+)
+
+router.add_api_route(
+    "/contests/{contest}/packages/build-all",
+    contest_build_all_packages,
+    methods=["POST"],
+    name="contest_build_all_packages",
 )
 
 router.add_api_route(
@@ -65,21 +73,10 @@ router.add_api_route(
 )
 
 router.add_api_route(
-    "/contests/{contest}/problems/reorder",
-    contest_problems_reorder,
+    "/contests/{contest}/problems/save",
+    contest_problems_save,
     methods=["POST"],
-)
-
-router.add_api_route(
-    "/contests/{contest}/problems/renumber",
-    contest_problems_renumber,
-    methods=["POST"],
-)
-
-router.add_api_route(
-    "/contests/{contest}/problems/change-general",
-    contest_problems_change_general,
-    methods=["POST"],
+    name="contest_problems_save",
 )
 
 router.add_api_route(

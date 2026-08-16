@@ -185,70 +185,6 @@ def _contest_problem_index_pairs(
     return pairs
 
 
-def contest_problems_reorder(
-    contest: str,
-    user: Annotated[str, Depends(require_session_user)],
-    contest_problem_ids: list[str] = Form([]),
-    contest_problem_indices: list[str] = Form([]),
-):
-    ctx = _contest_ctx(contest, user, "problems")
-    if not ctx["access"]["can_manage_roster"]:
-        raise HTTPException(status_code=403, detail=ctx["access"]["roster_block_reason"])
-    try:
-        pairs = _contest_problem_index_pairs(contest_problem_ids, contest_problem_indices)
-    except ValueError as exc:
-        return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message=str(exc))
-    if not runtime().contest_service.reorder_problem_indices(int(ctx["contest"]["id"]), pairs):
-        return _contest_redirect(
-            str(ctx["contest"]["slug"]),
-            "problems",
-            message="problem order must include every contest problem",
-        )
-    return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message="problem order saved")
-
-
-def contest_problems_renumber(
-    contest: str,
-    user: Annotated[str, Depends(require_session_user)],
-    contest_problem_ids: list[str] = Form([]),
-    contest_problem_indices: list[str] = Form([]),
-):
-    ctx = _contest_ctx(contest, user, "problems")
-    if not ctx["access"]["can_manage_roster"]:
-        raise HTTPException(status_code=403, detail=ctx["access"]["roster_block_reason"])
-    try:
-        pairs = _contest_problem_index_pairs(contest_problem_ids, contest_problem_indices)
-    except ValueError as exc:
-        return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message=str(exc))
-    ordered_ids = [
-        contest_problem_id
-        for contest_problem_id, _ in sorted(pairs, key=lambda pair: pair[1])
-    ]
-    if not runtime().contest_service.renumber_problem_indices(int(ctx["contest"]["id"]), ordered_ids):
-        return _contest_redirect(
-            str(ctx["contest"]["slug"]),
-            "problems",
-            message="problem order must include every contest problem",
-        )
-    return _contest_redirect(
-        str(ctx["contest"]["slug"]),
-        "problems",
-        message="problem indices renumbered",
-    )
-
-
-def _selected_problem_ids(raw_ids: list[str]) -> list[int]:
-    selected_ids: list[int] = []
-    for raw_id in raw_ids:
-        try:
-            problem_id = int(raw_id)
-        except ValueError:
-            continue
-        if problem_id > 0 and problem_id not in selected_ids:
-            selected_ids.append(problem_id)
-    return selected_ids
-
-
 def _failed_general_job_payload(
     contest_id: int,
     retry_job_id: str,
@@ -291,6 +227,8 @@ def _apply_general_changes(
     ctx: dict[str, object],
     selected_ids: list[int],
     requested_map: dict[int, dict[str, object]],
+    *,
+    message_prefix: str = "",
 ):
     contest_ctx = ctx["contest"]
     user_ctx = ctx["user"]
@@ -357,28 +295,107 @@ def _apply_general_changes(
         str(contest_ctx["slug"]),
         "problems",
         query=f"job_id={quote_plus(job_id)}",
-        message=f"change TL/ML finished: {success_count} success, {failed_count} failed, {skipped_count} skipped",
+        message=(
+            f"{message_prefix}; " if message_prefix else ""
+        ) + (
+            f"limits: {success_count} saved, {failed_count} failed, "
+            f"{skipped_count} unchanged"
+        ),
     )
 
 
-def contest_problems_change_general(
+def contest_problems_save(
     contest: str,
     user: Annotated[str, Depends(require_session_user)],
-    selected_problem_ids: list[str] = Form([]),
+    contest_problem_ids: list[str] = Form([]),
+    contest_problem_indices: list[str] = Form([]),
     problem_ids: list[str] = Form([]),
     time_limit_ms_values: list[str] = Form([]),
     memory_limit_mb_values: list[str] = Form([]),
+    original_time_limit_ms_values: list[str] = Form([]),
+    original_memory_limit_mb_values: list[str] = Form([]),
 ):
     ctx = _contest_ctx(contest, user, "problems")
-    if not bool(ctx["access"].get("can_write")):
-        raise HTTPException(status_code=403, detail=ctx["access"]["write_block_reason"])
-    selected_ids = _selected_problem_ids(selected_problem_ids)
+    contest_access = ctx["access"]
+    can_manage_roster = bool(contest_access.get("can_manage_roster"))
+    can_write = bool(contest_access.get("can_write"))
+    if not can_manage_roster and not can_write:
+        raise HTTPException(
+            status_code=403,
+            detail=contest_access["write_block_reason"],
+        )
+
+    if can_manage_roster:
+        try:
+            pairs = _contest_problem_index_pairs(
+                contest_problem_ids,
+                contest_problem_indices,
+            )
+        except ValueError as exc:
+            return _contest_redirect(
+                str(ctx["contest"]["slug"]),
+                "problems",
+                message=str(exc),
+            )
+        if not runtime().contest_service.reorder_problem_indices(
+            int(ctx["contest"]["id"]),
+            pairs,
+        ):
+            return _contest_redirect(
+                str(ctx["contest"]["slug"]),
+                "problems",
+                message="problem order must include every contest problem",
+            )
+
+    if not can_write:
+        return _contest_redirect(
+            str(ctx["contest"]["slug"]),
+            "problems",
+            message="contest problems saved",
+        )
+
     requested_map = _problem_general_payload_map(
         problem_ids,
         time_limit_ms_values,
         memory_limit_mb_values,
     )
-    return _apply_general_changes(ctx, selected_ids, requested_map)
+    original_map = _problem_general_payload_map(
+        problem_ids,
+        original_time_limit_ms_values,
+        original_memory_limit_mb_values,
+    )
+    requested_ids = [
+        problem_id
+        for problem_id, requested in requested_map.items()
+        if requested != original_map.get(problem_id)
+    ]
+    if not requested_ids:
+        return _contest_redirect(
+            str(ctx["contest"]["slug"]),
+            "problems",
+            message="contest problems saved",
+        )
+    problem_access = runtime().access_query.problem_contexts(
+        requested_ids,
+        int(ctx["user"]["id"]),
+    )
+    writable_ids = [
+        problem_id
+        for problem_id in requested_ids
+        if problem_access[problem_id]["can_write"]
+    ]
+    if not writable_ids:
+        return _contest_redirect(
+            str(ctx["contest"]["slug"]),
+            "problems",
+            message="contest problems saved",
+        )
+    return _apply_general_changes(
+        ctx,
+        writable_ids,
+        requested_map,
+        message_prefix="contest problems saved",
+    )
 
 
 def contest_problems_change_general_retry(

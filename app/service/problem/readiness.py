@@ -21,7 +21,7 @@ from app.service.verification.workspace_fingerprint import (
 ReadinessTone = Literal["normal", "warning", "danger"]
 WorkspaceReadinessState = Literal["current", "behind"]
 VerificationResult = Literal["none", "running", "ok", "failed"]
-PackageReadinessState = Literal["ready", "stale", "none"]
+PackageReadinessState = Literal["ready", "queued", "stale", "none"]
 
 _SANITY_STATUS_TOKENS = {
     "ok",
@@ -191,6 +191,16 @@ class ProblemReadinessService:
                 "tone": "warning",
                 "reason": readiness["missing_reason"],
                 "verified_revision_id": readiness["verified_revision_id"],
+                "published_commit": readiness["published_commit"],
+                "published_revision_number": readiness["published_revision_number"],
+            }
+        if status == "queued":
+            return {
+                "state": "queued",
+                "revision_number": None,
+                "tone": "normal",
+                "reason": "",
+                "verified_revision_id": None,
                 "published_commit": readiness["published_commit"],
                 "published_revision_number": readiness["published_revision_number"],
             }

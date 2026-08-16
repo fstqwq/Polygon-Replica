@@ -27,7 +27,6 @@ from app.service.problem.runtime_config import (
 from app.service.problem.source_file import require_regular_source_file
 from app.service.problem.source_tree import solution_sources
 from app.service.repository.workspace import WorkspaceService
-from app.service.repository.revision import workspace_upstream_revision_display
 from app.service.statement.context import statement_languages
 from app.service.verification.standard_checker import detect_standard_checker
 from app.service.workspace.state import WorkspaceState
@@ -46,22 +45,15 @@ class ContestProblemDisplayRow(TypedDict):
     metadata: ProblemMetadataContext
     details_available: bool
     content_review: ProblemContentReview | None
-    workspace_revision_display: str
+    workspace_revision_local: int | None
+    workspace_revision_upstream: int | None
+    workspace_revision_available: bool
     workspace_revision_warn: bool
     dirty: bool
     readiness: ProblemReadiness | None
     can_problem_read: bool
     can_problem_write: bool
     created_at: str
-
-
-def _workspace_revision_display(state: WorkspaceState) -> tuple[str, bool]:
-    local = state["revision_local"]
-    upstream = state["revision_upstream"]
-    return (
-        workspace_upstream_revision_display(local, upstream),
-        local is None or upstream is None or upstream > local,
-    )
 
 
 def _component_display(
@@ -285,7 +277,9 @@ class ContestProblemQueryService:
         )
         time_limit_ms = metadata["time_limit_ms"]
         memory_limit_mb = metadata["memory_limit_mb"]
-        revision_display = "no problem access" if not can_read else "unavailable"
+        revision_local: int | None = None
+        revision_upstream: int | None = None
+        revision_available = False
         revision_warn = not can_read
         dirty = False
         test_count = 0
@@ -306,8 +300,13 @@ class ContestProblemQueryService:
             )
             if workspace is None:
                 raise RuntimeError("workspace unavailable")
-            revision_display, revision_warn = _workspace_revision_display(
-                state
+            revision_local = state["revision_local"]
+            revision_upstream = state["revision_upstream"]
+            revision_available = True
+            revision_warn = bool(
+                revision_local is None
+                or revision_upstream is None
+                or revision_upstream > revision_local
             )
             dirty = bool(state["dirty"])
             source_state = inspect_authoring_source(
@@ -374,7 +373,6 @@ class ContestProblemQueryService:
             details_available = True
         except (OSError, RuntimeError, ValueError):
             if can_read:
-                revision_display = "unavailable"
                 revision_warn = True
 
         return {
@@ -390,7 +388,9 @@ class ContestProblemQueryService:
             "metadata": metadata,
             "details_available": details_available,
             "content_review": review,
-            "workspace_revision_display": revision_display,
+            "workspace_revision_local": revision_local,
+            "workspace_revision_upstream": revision_upstream,
+            "workspace_revision_available": revision_available,
             "workspace_revision_warn": revision_warn,
             "dirty": dirty,
             "readiness": readiness,
