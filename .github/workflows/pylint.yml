@@ -12,10 +12,13 @@ jobs:
       with:
         python-version: "3.14"
         cache: pip
+        cache-dependency-path: |
+          requirements.txt
+          requirements-static.txt
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt pylint mypy
+        pip install -r requirements.txt -r requirements-static.txt
     - name: Run static checks
       run: PYTHONPATH="$GITHUB_WORKSPACE" bash tests/scripts/check.sh
 

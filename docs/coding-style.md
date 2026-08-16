@@ -130,6 +130,7 @@ sorter, so passing the static gate alone does not prove that layout is correct.
 On the configured Linux test environment, run:
 
 ```bash
+python -m pip install -r requirements.txt -r requirements-static.txt
 bash tests/scripts/check-import-policy.sh
 ```
 
@@ -139,6 +140,7 @@ update the checker and this document together. Do not add a UI or unit test
 that merely restates the static import checker.
 
 That shared static check also runs mypy against the complete `app/` tree with
-Linux as the target platform. Narrow declarations for third-party packages
-that do not publish usable typing metadata live under `typings/`; they describe
-only the interfaces the application actually consumes.
+Linux as the target platform. Third-party packages that do not publish usable
+typing metadata have explicit stub-package dependencies in
+`requirements-static.txt`; application code does not maintain shadow copies of
+their interfaces.
