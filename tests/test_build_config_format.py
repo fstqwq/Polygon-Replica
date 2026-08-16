@@ -411,6 +411,52 @@ class TestBuildConfigFormat(unittest.TestCase):
                 sample_max_bytes=_SAMPLE_LIMIT,
             )
 
+    def test_sparse_legacy_and_structured_samples_use_compatible_defaults(self) -> None:
+        rows = loads_tests_spec(
+            json.dumps(
+                {
+                    "tests": [
+                        {"id": "001", "kind": "manual", "sample": True},
+                        {
+                            "id": "002",
+                            "kind": "manual",
+                            "sample": True,
+                            "sample_input": "legacy input\n",
+                        },
+                        {
+                            "id": "003",
+                            "kind": "manual",
+                            "sample": True,
+                            "sample_json": {
+                                "presentation": "pair",
+                                "passes": [{"input": "", "output": ""}],
+                            },
+                        },
+                        {
+                            "id": "004",
+                            "kind": "manual",
+                            "sample": True,
+                            "sample_json": {
+                                "presentation": "interaction",
+                                "passes": [{"events": []}],
+                            },
+                        },
+                    ],
+                }
+            ),
+            document_max_bytes=_DOCUMENT_LIMIT,
+            sample_max_bytes=_SAMPLE_LIMIT,
+        )
+
+        self.assertEqual(rows[0]["sample_input"], "")
+        self.assertEqual(rows[0]["sample_output"], "")
+        self.assertIsNone(rows[0]["sample_json"])
+        self.assertEqual(rows[1]["sample_input"], "legacy input\n")
+        self.assertEqual(rows[2]["sample_json"]["passes"][0]["number"], 1)
+        self.assertEqual(rows[2]["sample_json"]["passes"][0]["input"], "")
+        self.assertEqual(rows[3]["sample_json"]["passes"][0]["number"], 1)
+        self.assertEqual(rows[3]["sample_json"]["passes"][0]["events"], [])
+
     def test_solution_descriptor_has_one_canonical_vocabulary(self) -> None:
         text = render_solution_desc(
             "tle_or_correct", "first note\nsecond note"

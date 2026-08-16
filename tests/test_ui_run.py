@@ -209,6 +209,126 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertNotIn("sample_json", reset_row)
         self.assertNotIn("sample_input", reset_row)
         self.assertNotIn("sample_output", reset_row)
+
+    def test_tests_page_preserves_sparse_legacy_sample_entries(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        spec_path = ws / "tests" / "spec.json"
+        manual_dir = ws / "tests" / "manual"
+        manual_dir.mkdir(parents=True, exist_ok=True)
+        spec_path.write_text(
+            json.dumps(
+                {
+                    "tests": [
+                        {"id": "001", "kind": "manual", "sample": True},
+                        {
+                            "id": "002",
+                            "kind": "manual",
+                            "sample": True,
+                            "sample_input": "legacy input only\n",
+                        },
+                        {
+                            "id": "003",
+                            "kind": "manual",
+                            "sample": True,
+                            "sample_output": "legacy output only\n",
+                            "sample_output_validate": False,
+                        },
+                    ],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        for test_id in ("001", "002", "003"):
+            (manual_dir / f"{test_id}.in").write_text(
+                f"judge input {test_id}\n", encoding="utf-8"
+            )
+
+        page = tests_page(
+            _request("/problems/alice/sample/tests"), "alice/sample", "alice"
+        )
+
+        self.assertEqual(page.status_code, 200)
+        editor = page.context["tests_editor"]
+        rows = editor["rows"]
+        self.assertEqual(
+            [
+                (
+                    row["custom_sample_input"],
+                    row["custom_sample_output"],
+                    row["custom_sample_json"],
+                )
+                for row in rows
+            ],
+            [(False, False, False), (True, False, False), (False, True, False)],
+        )
+
+        for index, test_id in enumerate(("001", "002", "003"), start=1):
+            response = self._edit_spec_request(
+                problem="alice/sample",
+                user="alice",
+                index=str(index),
+                test_id=test_id,
+                kind="manual",
+                sample="1",
+                payload=f"updated judge input {test_id}\n",
+            )
+            self.assertEqual(response.status_code, 303)
+
+        stored = json.loads(spec_path.read_text(encoding="utf-8"))["tests"]
+        self.assertNotIn("sample_input", stored[0])
+        self.assertNotIn("sample_output", stored[0])
+        self.assertNotIn("sample_json", stored[0])
+        self.assertEqual(stored[1]["sample_input"], "legacy input only\n")
+        self.assertNotIn("sample_output", stored[1])
+        self.assertEqual(stored[2]["sample_output"], "legacy output only\n")
+        self.assertFalse(stored[2]["sample_output_validate"])
+        self.assertTrue(all("sample_json" not in row for row in stored))
+
+    def test_incomplete_structured_sample_is_atomic_for_legacy_repository(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        spec_path = ws / "tests" / "spec.json"
+        spec_path.write_text(dumps_default_tests_spec(), encoding="utf-8")
+        added = tests_spec_add_manual(
+            problem="alice/sample",
+            user="alice",
+            test_id="001",
+            sample="1",
+            manual_input="judge input\n",
+            sample_input="legacy input\n",
+            sample_output="legacy output\n",
+        )
+        self.assertEqual(added.status_code, 303)
+        before = spec_path.read_bytes()
+
+        response = self._edit_spec_request(
+            problem="alice/sample",
+            user="alice",
+            index="1",
+            test_id="001",
+            kind="manual",
+            sample="1",
+            payload="changed judge input\n",
+            sample_format="json",
+            sample_json=json.dumps(
+                {
+                    "presentation": "pair",
+                    "passes": [{"number": 1, "input": "missing output\n"}],
+                }
+            ),
+        )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertIn(
+            "input and output are required",
+            " ".join(_flash_messages_from_response(response)),
+        )
+        self.assertEqual(spec_path.read_bytes(), before)
+        stored = json.loads(before)["tests"][0]
+        self.assertEqual(stored["sample_input"], "legacy input\n")
+        self.assertEqual(stored["sample_output"], "legacy output\n")
+        self.assertNotIn("sample_json", stored)
+
     def _problem_readiness(
         self,
         *,

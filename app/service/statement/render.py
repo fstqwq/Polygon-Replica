@@ -226,7 +226,11 @@ def _problem_context_for_language(
         "output": _statement_section_text(workspace, language, "output.tex", fallback=""),
         "interaction": _statement_section_text(workspace, language, "interaction.tex", fallback=""),
         "notes": _statement_section_text(workspace, language, "notes.tex", fallback=""),
-        "sampleTests": list(sample_tests or []),
+        "sampleTests": list(
+            examples_bundle.get("sample_tests", [])
+            if examples_bundle is not None
+            else (sample_tests or [])
+        ),
     }
     if examples_bundle is not None:
         context["examples"] = examples_bundle["context"]

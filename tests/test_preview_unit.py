@@ -199,6 +199,73 @@ class TestPreviewUnit(unittest.TestCase):
                 (offline_root / relative).read_bytes(),
             )
 
+    def test_structured_bundle_populates_legacy_sample_tests_from_first_pass(self) -> None:
+        authored = self.workspace / STATEMENT_EXAMPLES_REL
+        authored.write_text(
+            "<#list problem.sampleTests as test>"
+            "legacy:${test.inputFile}:${test.outputFile}\\n"
+            "</#list>\n",
+            encoding="utf-8",
+        )
+        bundle: StatementExamplesBundle = {
+            "verification_id": "ver-legacy-projection",
+            "context": {
+                "samples": [
+                    {
+                        "number": 1,
+                        "presentation": "pair",
+                        "passes": [
+                            {
+                                "number": 1,
+                                "inputFile": "examples/sample-1/pass-1.in",
+                                "outputFile": "examples/sample-1/pass-1.ans",
+                            },
+                            {
+                                "number": 2,
+                                "inputFile": "examples/sample-1/pass-2.in",
+                                "outputFile": "examples/sample-1/pass-2.ans",
+                            },
+                        ],
+                    }
+                ]
+            },
+            "resources": [
+                {"path": "examples/sample-1/pass-1.in", "content": "first in\n"},
+                {"path": "examples/sample-1/pass-1.ans", "content": "first out\n"},
+                {"path": "examples/sample-1/pass-2.in", "content": "second in\n"},
+                {"path": "examples/sample-1/pass-2.ans", "content": "second out\n"},
+            ],
+            "sample_tests": [
+                {
+                    "inputFile": "examples/sample-1/pass-1.in",
+                    "outputFile": "examples/sample-1/pass-1.ans",
+                }
+            ],
+        }
+
+        render_statement_main(
+            self.workspace / "statement",
+            problem_title="Structured Compatibility",
+            language="english",
+            examples_bundle=bundle,
+            tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
+            statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
+            problem_limits=_PROBLEM_LIMITS,
+        )
+
+        rendered_root = self.workspace / "statement/rendered/english"
+        self.assertEqual(
+            (rendered_root / "examples.tex").read_text(encoding="utf-8"),
+            "legacy:examples/sample-1/pass-1.in:"
+            "examples/sample-1/pass-1.ans\\n",
+        )
+        self.assertEqual(
+            (rendered_root / "examples/sample-1/pass-1.in").read_text(
+                encoding="utf-8"
+            ),
+            "first in\n",
+        )
+
     def test_statement_examples_template_is_optional_and_editable(self) -> None:
         authored = self.workspace / STATEMENT_EXAMPLES_REL
         authored.write_text(
@@ -223,6 +290,50 @@ class TestPreviewUnit(unittest.TestCase):
             self.workspace / "statement/rendered/english/examples.tex"
         ).read_text(encoding="utf-8")
         self.assertEqual(rendered_examples, "Custom examples for Custom Title.\n")
+
+    def test_legacy_examples_template_works_without_structured_context(self) -> None:
+        authored = self.workspace / STATEMENT_EXAMPLES_REL
+        authored.write_text(
+            "<#if problem.sampleTests??>"
+            "<#list problem.sampleTests as test>"
+            "legacy:${test.inputFile}:${test.outputFile}\\n"
+            "</#list>"
+            "</#if>\n",
+            encoding="utf-8",
+        )
+        (self.workspace / "tests/manual/001.in").write_text(
+            "legacy input\n", encoding="utf-8"
+        )
+        (self.workspace / "tests/spec.json").write_text(
+            dumps_tests_spec(
+                [
+                    {
+                        "id": "001",
+                        "kind": "manual",
+                        "sample": True,
+                        "sample_output": "legacy output\n",
+                        "sample_output_validate": False,
+                    }
+                ],
+                document_max_bytes=_TESTS_SPEC_MAX_BYTES,
+                sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
+            ),
+            encoding="utf-8",
+        )
+
+        render_statement_main(
+            self.workspace / "statement",
+            problem_title="Legacy Examples",
+            language="english",
+            tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
+            statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
+            problem_limits=_PROBLEM_LIMITS,
+        )
+
+        rendered_examples = (
+            self.workspace / "statement/rendered/english/examples.tex"
+        ).read_text(encoding="utf-8")
+        self.assertEqual(rendered_examples, "legacy:sample.001.in:sample.001.ans\\n")
 
     def test_invalid_authored_examples_template_does_not_use_fallback(self) -> None:
         authored = self.workspace / STATEMENT_EXAMPLES_REL
@@ -362,6 +473,44 @@ class TestPreviewUnit(unittest.TestCase):
         )
 
         self.assertEqual(rendered, "")
+
+    def test_default_examples_template_handles_missing_optional_structures(self) -> None:
+        legacy = render_ftl_template(
+            DEFAULT_STATEMENT_EXAMPLES_TEMPLATE,
+            {
+                "problem": {
+                    "examples": {},
+                    "sampleTests": [
+                        {"inputFile": "old.in", "outputFile": "old.ans"}
+                    ],
+                }
+            },
+        )
+        self.assertIn(r"\exmpfile{old.in}{old.ans}", legacy)
+
+        sparse = render_ftl_template(
+            DEFAULT_STATEMENT_EXAMPLES_TEMPLATE,
+            {
+                "problem": {
+                    "sampleTests": [],
+                    "examples": {
+                        "samples": [
+                            {"number": 1},
+                            {"number": 2, "passes": [{"number": 1}]},
+                            {
+                                "number": 3,
+                                "presentation": "interaction",
+                                "passes": [{"number": 1}],
+                            },
+                        ]
+                    },
+                }
+            },
+        )
+
+        self.assertIn("Sample 1 has no passes", sparse)
+        self.assertIn("Sample 2 has an unsupported presentation", sparse)
+        self.assertIn("Interaction sample 3, pass 1 has no events field", sparse)
 
     def test_statement_render_requires_main_template_and_style(self) -> None:
         statement = self.workspace / "statement"

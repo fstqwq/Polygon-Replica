@@ -36,7 +36,7 @@ STANDALONE_OPEN_DIRECTIVE_PREFIXES = ("if ", "elseif ", "list ", "assign ")
 STANDALONE_OPEN_DIRECTIVE_EXACT = {"else"}
 STANDALONE_CLOSE_DIRECTIVES = {"if", "list"}
 
-STATEMENT_RENDERER_SIGNATURE_VERSION = "2026-08-15-statement-examples-companion"
+STATEMENT_RENDERER_SIGNATURE_VERSION = "2026-08-17-statement-examples-legacy-projection"
 
 
 def _read_required_text(path: Path, *, label: str, allow_empty: bool = False) -> str:

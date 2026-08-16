@@ -208,6 +208,15 @@ class TestStatementExamplesProducer(unittest.TestCase):
             {row["content"] for row in bundle["resources"]},
             {"first\n", "one\n", "second\n", "two\n"},
         )
+        self.assertEqual(
+            bundle["sample_tests"],
+            [
+                {
+                    "inputFile": "examples/sample-1/pass-1.in",
+                    "outputFile": "examples/sample-1/pass-1.ans",
+                }
+            ],
+        )
 
     def test_authored_structured_interaction_needs_no_verification(self) -> None:
         self._write_spec(
@@ -283,6 +292,15 @@ class TestStatementExamplesProducer(unittest.TestCase):
         resources = {row["path"]: row["content"] for row in bundle["resources"]}
         self.assertEqual(resources["examples/sample-1/pass-1.in"], "first input\n")
         self.assertEqual(resources["examples/sample-1/pass-2.ans"], "second output\n")
+        self.assertEqual(
+            bundle["sample_tests"],
+            [
+                {
+                    "inputFile": "examples/sample-1/pass-1.in",
+                    "outputFile": "examples/sample-1/pass-1.ans",
+                }
+            ],
+        )
         self.assertEqual(
             (self.workspace / "tests" / "spec.json").read_bytes(), source_before
         )
@@ -386,19 +404,51 @@ class TestStatementExamplesProducer(unittest.TestCase):
             tasks=[],
         )
         transcript_ref = evidence.put("pass-1.transcript", transcript)
+        second_transcript_ref = evidence.put(
+            "pass-2.transcript",
+            _frame(40, b">", b"second question\n")
+            + _frame(44, b"<", b"second answer\n")
+            + _eof(50, b"]"),
+        )
         evidence.read_model["tasks"] = [
-            _task("001.in", (_pass(1, transcript_ref=transcript_ref),))
+            _task(
+                "001.in",
+                (
+                    _pass(1, transcript_ref=transcript_ref),
+                    _pass(2, transcript_ref=second_transcript_ref),
+                ),
+            )
         ]
 
         bundle = self._produce(evidence)
 
         sample = bundle["context"]["samples"][0]
         self.assertEqual(sample["presentation"], "interaction")
+        self.assertEqual([row["number"] for row in sample["passes"]], [1, 2])
         events = sample["passes"][0]["events"]
         self.assertEqual([event["source"] for event in events], ["interactor", "solution"])
         resources = {row["path"]: row["content"] for row in bundle["resources"]}
-        self.assertEqual(len(resources), 2)
+        self.assertEqual(len(resources), 6)
         self.assertIn("jury:\n> fake header", next(iter(resources.values())))
+        self.assertEqual(
+            bundle["sample_tests"],
+            [
+                {
+                    "inputFile": "examples/sample-1/compat.in",
+                    "outputFile": "examples/sample-1/compat.ans",
+                }
+            ],
+        )
+        self.assertEqual(
+            resources["examples/sample-1/compat.in"],
+            "jury:\n> fake header\n\n",
+        )
+        self.assertEqual(
+            resources["examples/sample-1/compat.ans"],
+            "\n\nanswer ✓\n",
+        )
+        self.assertNotIn("second question", resources["examples/sample-1/compat.in"])
+        self.assertNotIn("second answer", resources["examples/sample-1/compat.ans"])
 
     def test_mixed_override_and_structured_samples_share_one_bundle(self) -> None:
         self._write_spec(

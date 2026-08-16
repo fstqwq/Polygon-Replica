@@ -1,7 +1,7 @@
 """Project canonical verification evidence into statement example resources."""
 
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict, cast
 
 from app.service.execution.model import CAPTURE_COMPLETE, ExecutionPassResult
 from app.service.problem.runtime_config import ProblemConfigLimits, load_problem_config
@@ -53,6 +53,7 @@ class StatementExamplesBundle(TypedDict):
     context: StatementExamplesContext
     resources: list[StatementExampleResource]
     verification_id: str
+    sample_tests: NotRequired[list[dict[str, str]]]
 
 
 def _sample_rows(
@@ -363,6 +364,70 @@ def _structured_override(
         },
         resources.rows,
     )
+
+
+def _interaction_compatibility_text(
+    sample: StatementExampleSample,
+    resources_by_path: dict[str, str],
+) -> tuple[str, str]:
+    passes = sample["passes"]
+    if not passes:
+        return "", ""
+    input_parts: list[str] = []
+    output_parts: list[str] = []
+    for event in passes[0].get("events", []):
+        path = event["textFile"]
+        if path not in resources_by_path:
+            raise RuntimeError(f"statement example resource is missing: {path}")
+        content = resources_by_path[path]
+        line_count = max(1, len(content.splitlines()) or 1)
+        aligned = content if content.endswith("\n") else f"{content}\n"
+        blank = "\n" * line_count
+        if event["source"] == "interactor":
+            input_parts.append(aligned)
+            output_parts.append(blank)
+        else:
+            input_parts.append(blank)
+            output_parts.append(aligned)
+    return "".join(input_parts), "".join(output_parts)
+
+
+def _legacy_sample_projection(
+    samples: list[StatementExampleSample],
+    resources: list[StatementExampleResource],
+) -> tuple[list[dict[str, str]], list[StatementExampleResource]]:
+    resources_by_path = {row["path"]: row["content"] for row in resources}
+    legacy: list[dict[str, str]] = []
+    generated: list[StatementExampleResource] = []
+    for sample in samples:
+        passes = sample["passes"]
+        if not passes:
+            continue
+        first_pass = passes[0]
+        if sample["presentation"] == "pair":
+            input_path = first_pass.get("inputFile", "")
+            output_path = first_pass.get("outputFile", "")
+            if not input_path or not output_path:
+                raise RuntimeError(
+                    f"sample {sample['number']} has incomplete pair resources"
+                )
+            legacy.append({"inputFile": input_path, "outputFile": output_path})
+            continue
+        input_text, output_text = _interaction_compatibility_text(
+            sample, resources_by_path
+        )
+        input_path = _resource_path(f"sample-{sample['number']}/compat.in")
+        output_path = _resource_path(f"sample-{sample['number']}/compat.ans")
+        generated.extend(
+            [
+                {"path": input_path, "content": input_text},
+                {"path": output_path, "content": output_text},
+            ]
+        )
+        legacy.append({"inputFile": input_path, "outputFile": output_path})
+    return legacy, generated
+
+
 def _pass_fail_sample(
     row: TestSpecEntry,
     *,
@@ -568,8 +633,19 @@ class StatementExamplesProducer:
                     )
                 resource_paths.add(resource["path"])
                 all_resources.append(resource)
+        legacy_samples, compatibility_resources = _legacy_sample_projection(
+            samples, all_resources
+        )
+        for resource in compatibility_resources:
+            if resource["path"] in resource_paths:
+                raise RuntimeError(
+                    f"duplicate statement example resource: {resource['path']}"
+                )
+            resource_paths.add(resource["path"])
+            all_resources.append(resource)
         return {
             "context": {"samples": samples},
             "resources": all_resources,
             "verification_id": verification_id,
+            "sample_tests": legacy_samples,
         }
