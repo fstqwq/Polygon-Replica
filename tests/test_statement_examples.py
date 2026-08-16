@@ -1,3 +1,5 @@
+# ascii-lint: allow; reason=chinese-test
+
 import hashlib
 import tempfile
 import unittest
