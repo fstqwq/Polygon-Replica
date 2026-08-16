@@ -40,10 +40,14 @@ from runner import (
 
 USERNAME = "e2e"
 PROBLEM = "e2e/sample"
+CONTEST_PULL_PROBLEM = "e2e/contest-pull-second"
+CONTEST_PULL_SLUG = "e2e-agent-pull"
+CONTEST_PULL_TITLE = "E2E Agent Pull"
 COMMIT_MESSAGE = "e2e-real verified journey"
 AGENT_ROOT = Path(os.environ["POLYGON_REPLICA_E2E_STATE_DIR"]) / "agent-cli"
 AGENT_STATE = AGENT_ROOT / "state.json"
 AGENT_REPO = AGENT_ROOT / PROBLEM
+AGENT_CONTEST_REPO = AGENT_ROOT / "contest-pull"
 AGENT_TEMP = AGENT_ROOT / "temp"
 AGENT_SOLUTION_VERDICTS = {
     "solutions/wa.cpp": {"001.in": "WA", "002.in": "WA"},
@@ -643,6 +647,171 @@ def _exercise_legacy_build_normalization(client: httpx.Client) -> None:
         raise RuntimeError("legacy build normalization changed current selections")
 
 
+def _assert_contest_repo(
+    path: Path,
+    *,
+    problem: str,
+    label: str,
+) -> None:
+    if not (path / ".git").is_dir() or not (path / "config/problem.json").is_file():
+        raise RuntimeError(f"Contest pull did not create a problem Git repo: {path}")
+    expected_config = {
+        "polygon-agent.problem": problem,
+        "polygon-agent.contest": CONTEST_PULL_SLUG,
+        "polygon-agent.contest-label": label,
+    }
+    for key, expected in expected_config.items():
+        actual = _git("-C", str(path), "config", "--get", key)
+        if actual != expected:
+            raise RuntimeError(
+                f"Contest pull wrote wrong {key} for {label}: {actual!r}"
+            )
+    contest_problem_id = _git(
+        "-C",
+        str(path),
+        "config",
+        "--get",
+        "polygon-agent.contest-problem-id",
+    )
+    if not contest_problem_id.isdigit() or int(contest_problem_id) <= 0:
+        raise RuntimeError(
+            f"Contest pull omitted the Contest problem identity for {label}"
+        )
+
+
+def _exercise_agent_contest_pull(
+    client: httpx.Client,
+    *,
+    agent_session_id: str,
+) -> None:
+    created = _agent_cli("create", "--problem", CONTEST_PULL_PROBLEM)
+    if created.get("problem") != CONTEST_PULL_PROBLEM:
+        raise RuntimeError(
+            f"Agent created the wrong secondary problem: {created!r}"
+        )
+    _post(
+        client,
+        "/contests/create",
+        {
+            "contest_slug": CONTEST_PULL_SLUG,
+            "contest_title": CONTEST_PULL_TITLE,
+        },
+    )
+    for problem in (PROBLEM, CONTEST_PULL_PROBLEM):
+        _post(
+            client,
+            f"/contests/{CONTEST_PULL_SLUG}/problems/add",
+            {"problem_slugs": problem, "q": ""},
+        )
+
+    _agent_set_general_scope(client, agent_session_id, "none")
+    denied = _agent_cli(
+        "pull-contest",
+        "--contest",
+        CONTEST_PULL_SLUG,
+        "--target-dir",
+        str(AGENT_CONTEST_REPO),
+        expect_ok=False,
+    )
+    if int(denied.get("http_status") or 0) != 403:
+        raise RuntimeError(
+            f"Contest pull without general read was not rejected: {denied!r}"
+        )
+    if AGENT_CONTEST_REPO.exists():
+        raise RuntimeError("rejected Contest pull modified the local filesystem")
+
+    _agent_set_general_scope(client, agent_session_id, "readonly")
+    pulled = _agent_cli(
+        "pull-contest",
+        "--contest",
+        CONTEST_PULL_SLUG,
+        "--target-dir",
+        str(AGENT_CONTEST_REPO),
+    )
+    pulled_problems = cast(
+        list[dict[str, object]],
+        pulled.get("problems") or [],
+    )
+    if (
+        pulled.get("contest") != CONTEST_PULL_SLUG
+        or pulled.get("contest_title") != CONTEST_PULL_TITLE
+        or pulled.get("problem_count") != 2
+        or [row.get("idx") for row in pulled_problems] != ["A", "B"]
+        or [row.get("problem") for row in pulled_problems]
+        != [PROBLEM, CONTEST_PULL_PROBLEM]
+    ):
+        raise RuntimeError(f"Contest pull returned the wrong roster: {pulled!r}")
+    if {path.name for path in AGENT_CONTEST_REPO.iterdir()} != {"A", "B"}:
+        raise RuntimeError("Contest pull created unexpected root entries")
+    _assert_contest_repo(AGENT_CONTEST_REPO / "A", problem=PROBLEM, label="A")
+    _assert_contest_repo(
+        AGENT_CONTEST_REPO / "B",
+        problem=CONTEST_PULL_PROBLEM,
+        label="B",
+    )
+    if (AGENT_CONTEST_REPO / ".polygon").exists():
+        raise RuntimeError("Contest pull created an unsupported root manifest")
+
+    repeated = _agent_cli(
+        "pull-contest",
+        "--contest",
+        CONTEST_PULL_SLUG,
+        "--target-dir",
+        str(AGENT_CONTEST_REPO),
+    )
+    repeated_problems = cast(
+        list[dict[str, object]],
+        repeated.get("problems") or [],
+    )
+    if any(
+        bool(row.get("created_repo")) or bool(row.get("changed"))
+        for row in repeated_problems
+    ):
+        raise RuntimeError(
+            f"unchanged Contest pull was not idempotent: {repeated!r}"
+        )
+
+    _agent_set_general_scope(client, agent_session_id, "commit")
+    refresh_source = AGENT_TEMP / "contest-refresh.txt"
+    refresh_source.write_text("updated through Contest pull\n", encoding="utf-8")
+    _agent_cli(
+        "upload",
+        "--problem",
+        CONTEST_PULL_PROBLEM,
+        "--workspace-path",
+        "attachments/contest-refresh.txt",
+        "--local-file",
+        str(refresh_source),
+    )
+    _agent_set_general_scope(client, agent_session_id, "readonly")
+    refreshed = _agent_cli(
+        "pull-contest",
+        "--contest",
+        CONTEST_PULL_SLUG,
+        "--target-dir",
+        str(AGENT_CONTEST_REPO),
+    )
+    refreshed_rows = cast(
+        list[dict[str, object]],
+        refreshed.get("problems") or [],
+    )
+    changed_by_label = {
+        str(row.get("idx") or ""): bool(row.get("changed"))
+        for row in refreshed_rows
+    }
+    if changed_by_label != {"A": False, "B": True}:
+        raise RuntimeError(
+            f"Contest refresh changed the wrong problem repos: {refreshed!r}"
+        )
+    refreshed_file = AGENT_CONTEST_REPO / "B/attachments/contest-refresh.txt"
+    if (
+        refreshed_file.read_text(encoding="utf-8")
+        != "updated through Contest pull\n"
+    ):
+        raise RuntimeError("Contest pull did not synchronize the updated problem")
+    _agent_set_general_scope(client, agent_session_id, "none")
+
+
 def prepare() -> None:
     _assert_fixture_shape()
     AGENT_ROOT.mkdir(parents=True, exist_ok=True)
@@ -708,7 +877,10 @@ def prepare() -> None:
         if int(duplicate.get("http_status") or 0) != 409:
             raise RuntimeError(f"duplicate Agent create was not rejected: {duplicate!r}")
 
-        _agent_set_general_scope(client, agent_session_id, "none")
+        _exercise_agent_contest_pull(
+            client,
+            agent_session_id=agent_session_id,
+        )
 
         access = _agent_cli("connect", "--problem", PROBLEM)
         request_id = str(access.get("request_id") or "")
