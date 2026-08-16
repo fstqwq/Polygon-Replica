@@ -3,7 +3,6 @@
 from pathlib import Path
 from typing import Literal, TypedDict
 
-import app.main_constant as constants
 from app.config import ConfigValues
 from app.service.access.query import AccessQuery
 from app.service.contest.service import ContestProblem, ContestService
@@ -13,6 +12,7 @@ from app.service.problem.content_review import (
     ProblemContentReview,
     problem_content_review,
 )
+from app.service.problem.context import ProblemMetadataContext, metadata_context
 from app.service.problem.authoring_source import inspect_authoring_source
 from app.service.problem.build_config import BuildConfig
 from app.service.problem.readiness import (
@@ -20,8 +20,10 @@ from app.service.problem.readiness import (
     ProblemReadinessService,
     WorkspaceReadinessSubject,
 )
-from app.service.problem.resource_limits import resource_limit_display
-from app.service.problem.runtime_config import problem_config_limits
+from app.service.problem.runtime_config import (
+    default_problem_config,
+    problem_config_limits,
+)
 from app.service.problem.source_file import require_regular_source_file
 from app.service.problem.source_tree import solution_sources
 from app.service.repository.workspace import WorkspaceService
@@ -41,20 +43,7 @@ class ContestProblemDisplayRow(TypedDict):
     slug_leaf: str
     time_limit_ms: int
     memory_limit_mb: int
-    time_limit_display: str
-    time_limit_warn: bool
-    memory_limit_display: str
-    memory_limit_warn: bool
-    mode: str
-    pass_limit: int
-    test_count: int
-    solution_count: int
-    solutions_truncated: bool
-    statement_language_names: list[str]
-    statement_language_count: int
-    output_component_label: str
-    output_component_display: str
-    validator_display: str
+    metadata: ProblemMetadataContext
     details_available: bool
     content_review: ProblemContentReview | None
     workspace_revision_display: str
@@ -289,10 +278,13 @@ class ContestProblemQueryService:
         slug_owner, _separator, slug_leaf = problem_slug.partition("/")
         can_read = bool(access["can_read"])
         can_write = bool(access["can_write"])
-        time_limit_ms = int(constants.GENERAL_CONFIG_DEFAULTS["time_limit_ms"])
-        memory_limit_mb = int(constants.GENERAL_CONFIG_DEFAULTS["memory_limit_mb"])
-        mode = str(constants.GENERAL_CONFIG_DEFAULTS["mode"])
-        pass_limit = int(constants.GENERAL_CONFIG_DEFAULTS["pass_limit"])
+        metadata = metadata_context(
+            default_problem_config(
+                limits=problem_config_limits(self._config_values),
+            )
+        )
+        time_limit_ms = metadata["time_limit_ms"]
+        memory_limit_mb = metadata["memory_limit_mb"]
         revision_display = "no problem access" if not can_read else "unavailable"
         revision_warn = not can_read
         dirty = False
@@ -331,10 +323,10 @@ class ContestProblemQueryService:
             )
             problem = source_state["problem"]
             build = source_state["build"]
-            time_limit_ms = problem["time_limit_ms"]
-            memory_limit_mb = problem["memory_limit_mb"]
-            mode = problem["mode"]
-            pass_limit = problem["pass_limit"]
+            metadata = metadata_context(problem)
+            time_limit_ms = metadata["time_limit_ms"]
+            memory_limit_mb = metadata["memory_limit_mb"]
+            mode = metadata["mode"]
             test_count = len(source_state["tests"])
             try:
                 all_solutions = solution_sources(workspace)
@@ -395,17 +387,7 @@ class ContestProblemQueryService:
             "slug_leaf": slug_leaf,
             "time_limit_ms": time_limit_ms,
             "memory_limit_mb": memory_limit_mb,
-            **resource_limit_display(time_limit_ms, memory_limit_mb),
-            "mode": mode,
-            "pass_limit": pass_limit,
-            "test_count": test_count,
-            "solution_count": solution_count,
-            "solutions_truncated": solutions_truncated,
-            "statement_language_names": languages,
-            "statement_language_count": len(languages),
-            "output_component_label": output_label,
-            "output_component_display": output_display,
-            "validator_display": validator_display,
+            "metadata": metadata,
             "details_available": details_available,
             "content_review": review,
             "workspace_revision_display": revision_display,

@@ -25,3 +25,12 @@ workspace: records owned by that workspace and problem-level records whose
 `workspace_id` is `NULL`. A record is current only when its persisted commit or
 source signature matches the current workspace content; record ownership is not
 itself source equivalence.
+
+Problem pages consume one request-scoped shell projection. Authored metadata,
+component state, content review, Workspace/Verification/Package readiness,
+navigation labels, and workspace changes are derived once and then reused by
+the page header, section navigation, sidebar, and page-specific handlers. The
+Contest problem overview uses the same typed metadata, content-review, and
+readiness models in its batched row projection. Templates do not rebuild those
+states from raw Git, SQLite, or package records, and handlers do not retain a
+parallel set of legacy convenience fields.

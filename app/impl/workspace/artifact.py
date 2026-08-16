@@ -4,6 +4,7 @@ from fastapi import HTTPException
 from fastapi.responses import FileResponse
 
 from app.impl.runtime.dependency import runtime
+from app.impl.workspace.context_model import ProblemPageContext
 from app.service.platform.process import is_canonical_artifact_id
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.platform.workspace_path import contains_symlink_component
@@ -98,7 +99,10 @@ def browser_file_response(file_path: Path) -> FileResponse:
     return FileResponse(file_path, filename=file_path.name, headers=headers)
 
 
-def workspace_verification_id_for_run(ctx: dict, run_id: str) -> str:
+def workspace_verification_id_for_run(
+    ctx: ProblemPageContext,
+    run_id: str,
+) -> str:
     return runtime().verification_service.workspace_verification_id_for_run(
         int(ctx["problem"]["id"]),
         int(ctx["workspace"]["id"]),
@@ -106,7 +110,10 @@ def workspace_verification_id_for_run(ctx: dict, run_id: str) -> str:
     )
 
 
-def assert_workspace_artifact_access(ctx: dict, artifact_id: str) -> None:
+def assert_workspace_artifact_access(
+    ctx: ProblemPageContext,
+    artifact_id: str,
+) -> None:
     problem_id = int(ctx["problem"]["id"])
     workspace_id = int(ctx["workspace"]["id"])
     if str(artifact_id or "").startswith("p-"):

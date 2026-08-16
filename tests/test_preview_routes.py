@@ -223,8 +223,7 @@ class TestPreviewRoutes(BackendE2ETestBase):
         )
 
         with patch.object(runtime.preview_service, "get_workspace_preview_state", side_effect=AssertionError("preview state lookup should stay local to statement page")):
-            page = page_ctx(self.problem, self.user)
-        self.assertNotIn("preview", page["nav_status"])
+            page_ctx(self.problem, self.user)
 
     def test_preview_artifact_file_reports_expired_for_missing_preview_pdf(self) -> None:
         ctx = runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)

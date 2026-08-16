@@ -12,7 +12,6 @@ from app.impl.contest.workspace_scope import contest_workspace_context_from_requ
 from app.impl.runtime.dependency import runtime
 from app.impl.problem.shared import MAIN_CORRECT_EXPECTED_LABEL, MAIN_CORRECT_EXPECTED_VALUE
 from app.impl.workspace.context_operation import (
-    list_solution_entries,
     read_build_config,
     read_text_safe_limited,
     solution_metadata_entry,
@@ -59,15 +58,15 @@ def solutions_page(request: Request, problem: str, user: Annotated[str, Depends(
         user,
         contest_workspace=contest_workspace_context_from_request(request),
     )
-    workspace = Path(ctx['workspace']['path'])
-    build_config = ctx['authoring_source']['build']
-    entries, entries_truncated = list_solution_entries(workspace, build_config)
+    solutions = ctx['shell']['components']['solutions']
+    entries = solutions['entries']
+    entries_truncated = solutions['truncated']
     selected = normalize_workspace_rel_path(request.query_params.get('path'))
     if not selected or not any(row.get('source_path') == selected for row in entries):
         selected = entries[0]['source_path'] if entries else ''
     selected_entry = next((row for row in entries if row.get('source_path') == selected), None)
-    accepted_source = build_config.get('accepted_solution_source', '')
-    accepted_source_exists = bool(accepted_source) and workspace_rel_file_exists(workspace, accepted_source)
+    accepted_source = solutions['accepted_source']
+    accepted_source_exists = solutions['accepted_exists']
     expected_behavior_options = [{'value': MAIN_CORRECT_EXPECTED_VALUE, 'label': MAIN_CORRECT_EXPECTED_LABEL}, *solution_behavior_options()]
     entries_view: list[dict] = []
     for row in entries:
@@ -98,10 +97,9 @@ def solutions_editor_page(request: Request, problem: str, user: Annotated[str, D
         contest_workspace=contest_workspace_context_from_request(request),
     )
     workspace = Path(ctx['workspace']['path'])
-    entries, entries_truncated = list_solution_entries(
-        workspace,
-        ctx['authoring_source']['build'],
-    )
+    solutions = ctx['shell']['components']['solutions']
+    entries = solutions['entries']
+    entries_truncated = solutions['truncated']
     requested = normalize_workspace_rel_path(request.query_params.get('path'))
     selected = ''
     if requested:
@@ -158,10 +156,9 @@ def solutions_save_source(request: Request, problem: str, user: Annotated[str, D
         )
         selected_for_redirect = selected
         with runtime().workspace_service.workspace_lock(workspace):
-            accepted_source = ctx['authoring_source']['build'].get(
-                'accepted_solution_source',
-                '',
-            )
+            accepted_source = ctx['shell']['components']['solutions'][
+                'accepted_source'
+            ]
             desc_path = desc_rel_path_for_source(selected)
             desc_abs = safe_workspace_path(workspace, desc_path)
             desc_existed_before = desc_abs.exists() and desc_abs.is_file() and (not desc_abs.is_symlink())

@@ -11,7 +11,7 @@
   <div>
     <h2>Workspace Updated</h2>
     {% if change_rows %}
-    <p>Review {{ ctx.workspace_changes.total }} changed file{% if ctx.workspace_changes.total != 1 %}s{% endif %} before publishing.</p>
+    <p>Review {{ ctx.shell.workspace_changes.total }} changed file{% if ctx.shell.workspace_changes.total != 1 %}s{% endif %} before publishing.</p>
     {% else %}
     <p>Workspace now matches the published revision.</p>
     {% endif %}
@@ -28,26 +28,26 @@
 <div class="workspace-page-layout">
   <section class="content-section workspace-controls-panel">
     <h2>Review</h2>
-    {{ workspace_review(ctx.readiness, ctx.content_review) }}
+    {{ workspace_review(ctx.shell.readiness, ctx.shell.content_review) }}
 
-    {% if ctx.workspace_needs_update %}
+    {% if ctx.shell.readiness.workspace.needs_update %}
     <form method="post" action="{{ problem_href('merge_start') }}">
       <button class="btn primary-action" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Resolve Conflicts</button>
     </form>
     {% endif %}
 
     <h2>Publish</h2>
-    {% if ctx.workspace_needs_update %}
+    {% if ctx.shell.readiness.workspace.needs_update %}
     <p class="warn">A newer published revision exists. Review it before publishing.</p>
     {% endif %}
     <form class="form-row" method="post" action="{{ problem_href('revision_commit') }}">
       <label for="revision-message">Message</label>
-      <input id="revision-message" name="message" required {% if not ctx.access.can_write or ctx.workspace_needs_update or not change_rows %}disabled{% endif %} />
-      <button class="btn{% if change_rows and not ctx.workspace_needs_update %} primary-action{% endif %}" type="submit" {% if not ctx.access.can_write or ctx.workspace_needs_update or not change_rows %}disabled title="{{ ctx.access.write_block_reason if not ctx.access.can_write else 'Review the published changes first' if ctx.workspace_needs_update else 'No file changes to publish' }}"{% endif %}>Publish new revision</button>
+      <input id="revision-message" name="message" required {% if not ctx.access.can_write or ctx.shell.readiness.workspace.needs_update or not change_rows %}disabled{% endif %} />
+      <button class="btn{% if change_rows and not ctx.shell.readiness.workspace.needs_update %} primary-action{% endif %}" type="submit" {% if not ctx.access.can_write or ctx.shell.readiness.workspace.needs_update or not change_rows %}disabled title="{{ ctx.access.write_block_reason if not ctx.access.can_write else 'Review the published changes first' if ctx.shell.readiness.workspace.needs_update else 'No file changes to publish' }}"{% endif %}>Publish new revision</button>
     </form>
 
     {% if change_rows %}
-    {{ change_badges(ctx.workspace_changes.counts) }}
+    {{ change_badges(ctx.shell.workspace_changes.counts) }}
     {% endif %}
 
     {% if ctx.access.can_write or ctx.access.can_manage %}

@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 import logging
 from pathlib import Path
 from typing import Annotated
@@ -15,6 +16,7 @@ from app.impl.runtime.dependency import runtime
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_job import start_verification_job
 from app.impl.workspace.context_ui import page_ctx
+from app.impl.workspace.context_model import ProblemPageContext
 from app.impl.workspace.context_job_helper import allocate_verification_id
 from app.impl.workspace.context_operation import (
     RunSolutionOption,
@@ -45,7 +47,8 @@ logger = logging.getLogger(__name__)
 
 
 def _context_section(
-    context: dict[str, object], key: str
+    context: Mapping[str, object],
+    key: str,
 ) -> dict[str, object]:
     value = context.get(key)
     if not isinstance(value, dict):
@@ -86,8 +89,7 @@ def run_page(request: Request, problem: str, user: Annotated[str, Depends(requir
         contest_workspace=contest_workspace_context_from_request(request),
     )
     workspace = Path(ctx['workspace']['path'])
-    general_cfg = ctx['authoring_source']['problem']
-    execute_mode = general_cfg['mode']
+    execute_mode = ctx['shell']['metadata']['mode']
     workspace_id = int(ctx['workspace']['id'])
     requested_verification_id = parse_verification_detail_id(request)
     if requested_verification_id:
@@ -173,8 +175,7 @@ def run_details_page(request: Request, problem: str, user: Annotated[str, Depend
         include_workspace_changes=True,
         contest_workspace=contest_workspace_context_from_request(request),
     )
-    general_cfg = ctx['authoring_source']['problem']
-    execute_mode = general_cfg['mode']
+    execute_mode = ctx['shell']['metadata']['mode']
     requested_verification_id = parse_verification_detail_id(request)
     detail_ctx = build_run_detail_context(
         ctx,
@@ -205,8 +206,7 @@ def run_details_test_fragment(request: Request, problem: str, user: Annotated[st
         include_workspace_changes=True,
         contest_workspace=contest_workspace_context_from_request(request),
     )
-    general_cfg = ctx['authoring_source']['problem']
-    execute_mode = general_cfg['mode']
+    execute_mode = ctx['shell']['metadata']['mode']
 
     requested_verification_id = parse_verification_detail_id(request)
 
@@ -375,7 +375,7 @@ def _start_run_verification(
     *,
     problem: str,
     user: str,
-    ctx: dict[str, object],
+    ctx: ProblemPageContext,
     workspace: Path,
     selected_solution_paths: list[str],
     selected_test_names: list[str],

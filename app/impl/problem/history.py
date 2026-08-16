@@ -14,6 +14,7 @@ from app.impl.runtime.dependency import runtime
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context import count_label
 from app.impl.workspace.context_ui import page_ctx
+from app.impl.workspace.context_model import ProblemPageContext
 from app.service.importing.upload import spool_fileobj
 from app.service.importing.archive import ArchiveView, problem_archive_policy
 
@@ -29,14 +30,15 @@ class RevisionHistoryRow(TypedDict):
     version: int | None
 
 
-def _revision_history_rows(ctx: dict[str, object]) -> tuple[Path, list[RevisionHistoryRow]]:
-    workspace_context = cast(dict[str, object], ctx["workspace"])
-    workspace = Path(cast(str, workspace_context["path"]))
+def _revision_history_rows(
+    ctx: ProblemPageContext,
+) -> tuple[Path, list[RevisionHistoryRow]]:
+    workspace = Path(ctx["workspace"]["path"])
     raw_rows = runtime().git_service.history(
         workspace,
         limit=runtime().config_values.integer("WORKSPACE_HISTORY_LIMIT"),
     )
-    revision_top = cast(int | None, ctx.get("workspace_version"))
+    revision_top = ctx["shell"]["readiness"]["workspace"]["local_revision"]
     rows: list[RevisionHistoryRow] = []
     for index, raw in enumerate(raw_rows):
         version = None if revision_top is None else revision_top - index

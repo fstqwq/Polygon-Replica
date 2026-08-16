@@ -1,9 +1,47 @@
 import os
 import shutil
 from pathlib import Path, PurePosixPath
+from typing import Literal, TypedDict
 
 from app.service.platform.git_process import run_git
 from app.service.platform.workspace_path import contains_symlink_component, is_hidden_workspace_path
+
+
+class StatusChangeCounts(TypedDict):
+    added: int
+    modified: int
+    deleted: int
+    renamed: int
+    untracked: int
+    conflicted: int
+    typechange: int
+    other: int
+
+
+StatusChangeKind = Literal[
+    "added",
+    "modified",
+    "deleted",
+    "renamed",
+    "conflicted",
+    "typechange",
+    "other",
+]
+
+
+class StatusChangeRow(TypedDict):
+    code: str
+    path: str
+    link_path: str
+    kind: StatusChangeKind
+
+
+class StatusChangeSummary(TypedDict):
+    counts: StatusChangeCounts
+    rows: list[StatusChangeRow]
+    total: int
+    truncated: bool
+    limit: int | None
 
 
 class GitService:
@@ -144,12 +182,12 @@ class GitService:
             path = path[1:-1]
         return path
 
-    def _status_kind(self, code: str, path: str) -> str:
+    def _status_kind(self, code: str, path: str) -> StatusChangeKind:
         status = str(code or "").strip()
         if status == "??":
             return "added"
         if status == "!!":
-            return "ignored"
+            return "other"
         if "U" in status or status in {"DD", "AU", "UD", "UA", "DU", "AA", "UU"}:
             return "conflicted"
         if "R" in status or "C" in status or " -> " in str(path or ""):
@@ -164,7 +202,11 @@ class GitService:
             return "modified"
         return "other"
 
-    def status_change_summary(self, workspace: Path, limit: int | None = None) -> dict:
+    def status_change_summary(
+        self,
+        workspace: Path,
+        limit: int | None = None,
+    ) -> StatusChangeSummary:
         cap: int | None = None
         if limit is not None:
             parsed = int(limit)
@@ -174,7 +216,7 @@ class GitService:
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr or proc.stdout)
 
-        counts = {
+        counts: StatusChangeCounts = {
             "added": 0,
             "modified": 0,
             "deleted": 0,
@@ -184,7 +226,7 @@ class GitService:
             "typechange": 0,
             "other": 0,
         }
-        rows: list[dict] = []
+        rows: list[StatusChangeRow] = []
         total = 0
         for raw in proc.stdout.splitlines():
             line = raw.rstrip("\n")
@@ -216,7 +258,7 @@ class GitService:
                     "code": display_code,
                     "path": display_path,
                     "link_path": self._normalize_status_path(link_path),
-                    "kind": kind if kind in counts else "other",
+                    "kind": kind,
                 }
             )
         return {

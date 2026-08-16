@@ -17,6 +17,7 @@ from app.impl.contest.workspace_scope import contest_workspace_context_from_requ
 from app.impl.runtime.dependency import runtime
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
+from app.impl.workspace.context_model import ProblemPageContext
 from app.impl.workspace.context_operation import (
     read_text_safe_limited,
     read_workspace_source_with_default,
@@ -156,8 +157,8 @@ def normalize_statement_compile_asset_target(path: str, *, upload_filename: str 
     return target_rel
 
 
-def statement_mode_from_ctx(ctx: dict) -> str:
-    return ctx["general_cfg"]["mode"]
+def statement_mode_from_ctx(ctx: ProblemPageContext) -> str:
+    return ctx["shell"]["metadata"]["mode"]
 
 
 def statement_editor_section_paths(language: str) -> dict[str, Path]:

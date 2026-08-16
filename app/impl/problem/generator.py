@@ -17,7 +17,6 @@ from app.impl.workspace.context_operation import (
     workspace_rel_file_exists,
     write_build_config,
 )
-from app.impl.workspace.context_component_status import generator_status_context
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
 from app.main_util import enforce_textarea_max_bytes
@@ -45,25 +44,16 @@ def generators_page(request: Request, problem: str, user: Annotated[str, Depends
         contest_workspace=contest_workspace_context_from_request(request),
     )
     workspace = Path(ctx['workspace']['path'])
-    generator_status = generator_status_context(
-        workspace,
-        ctx['authoring_source']['build'],
-    )
-    source_rows: list[dict[str, object]] = []
-    if isinstance(generator_status.get('source_rows'), list):
-        for row in generator_status['source_rows']:
-            if not isinstance(row, dict):
-                continue
-            path = normalize_optional_component_source_path_safe(row.get('path'), 'generators', 'generator source')
-            if not path:
-                continue
-            if not bool(row.get('exists')):
-                continue
-            source_rows.append({
-                'path': path,
-                'configured': bool(row.get('configured')),
-                'reference_count': int(row.get('reference_count') or 0),
-            })
+    generator_status = ctx['shell']['components']['generators']
+    source_rows: list[dict[str, object]] = [
+        {
+            'path': row['path'],
+            'configured': row['configured'],
+            'reference_count': row['reference_count'],
+        }
+        for row in generator_status['source_rows']
+        if row['exists']
+    ]
     requested_source = normalize_optional_component_source_path_safe(request.query_params.get('path'), 'generators', 'generator source')
     requested_new = request.query_params.get('new')
     new_source = ''
@@ -76,7 +66,7 @@ def generators_page(request: Request, problem: str, user: Annotated[str, Depends
             )
         except ValueError:
             new_source = 'generators/generator.cpp'
-    repo_source = generator_status['repo_source'] if isinstance(generator_status.get('repo_source'), str) and generator_status['repo_source'] else 'generators/generator.cpp'
+    repo_source = generator_status['repo_source'] or 'generators/generator.cpp'
     selected_source = new_source or requested_source or repo_source or 'generators/generator.cpp'
     selected_exists = workspace_rel_file_exists(workspace, selected_source)
     if selected_source and selected_exists and all((row.get('path') != selected_source for row in source_rows)):
@@ -96,7 +86,7 @@ def generators_page(request: Request, problem: str, user: Annotated[str, Depends
         repo_content_truncated = False
     starter_content = _generator_template_for_target(selected_source) if not selected_exists else ''
     show_editor = bool(selected_exists or new_source)
-    return template_response(request, 'generators.html', {'ctx': ctx, 'generator_status': generator_status, 'repo_source': selected_source, 'selected_source': selected_source, 'selected_exists': selected_exists, 'new_source': bool(new_source), 'show_editor': show_editor, 'source_rows': source_rows, 'source_rows_truncated': bool(generator_status.get('source_rows_truncated')), 'repo_content': repo_content, 'starter_content': starter_content, 'repo_content_truncated': repo_content_truncated, 'content_char_limit': runtime().config_values.WORKSPACE_FILE_VIEW_CHAR_LIMIT})
+    return template_response(request, 'generators.html', {'ctx': ctx, 'repo_source': selected_source, 'selected_source': selected_source, 'selected_exists': selected_exists, 'new_source': bool(new_source), 'show_editor': show_editor, 'source_rows': source_rows, 'source_rows_truncated': generator_status['source_rows_truncated'], 'repo_content': repo_content, 'starter_content': starter_content, 'repo_content_truncated': repo_content_truncated, 'content_char_limit': runtime().config_values.WORKSPACE_FILE_VIEW_CHAR_LIMIT})
 
 def generator_rename_source(
     problem: str,

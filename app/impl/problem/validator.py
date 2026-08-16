@@ -12,7 +12,6 @@ from app.impl.problem.shared import rename_component_source, single_source_edito
 from app.impl.runtime.dependency import runtime
 from app.impl.workspace.context_operation import read_build_config, template_for_kind, write_build_config
 from app.impl.workspace.access import require_write_access
-from app.impl.workspace.context_component_status import validator_status_context
 from app.impl.workspace.context_ui import page_ctx
 from app.main_util import enforce_textarea_max_bytes
 from app.service.platform.workspace_path import normalize_component_source_path, safe_workspace_path
@@ -26,12 +25,9 @@ def validator_page(request: Request, problem: str, user: Annotated[str, Depends(
         contest_workspace=contest_workspace_context_from_request(request),
     )
     workspace = Path(ctx['workspace']['path'])
-    validator_status = validator_status_context(
-        workspace,
-        ctx['authoring_source']['build'],
-    )
-    repo_source = validator_status['repo_source'] if isinstance(validator_status.get('repo_source'), str) and validator_status['repo_source'] else 'validators/validator.cpp'
-    repo_exists = bool(validator_status.get('repo_source_exists'))
+    validator_status = ctx['shell']['components']['validator']
+    repo_source = validator_status['repo_source'] or 'validators/validator.cpp'
+    repo_exists = validator_status['repo_source_exists']
     editor = single_source_editor_context(
         request=request,
         workspace=workspace,
@@ -41,7 +37,7 @@ def validator_page(request: Request, problem: str, user: Annotated[str, Depends(
         default_filename='validator.cpp',
         starter_content=template_for_kind('validator'),
     )
-    return template_response(request, 'validator.html', {'ctx': ctx, 'validator_status': validator_status, 'editor': editor, 'content_char_limit': runtime().config_values.integer("WORKSPACE_FILE_VIEW_CHAR_LIMIT")})
+    return template_response(request, 'validator.html', {'ctx': ctx, 'editor': editor, 'content_char_limit': runtime().config_values.integer("WORKSPACE_FILE_VIEW_CHAR_LIMIT")})
 
 def validator_rename_source(
     problem: str,

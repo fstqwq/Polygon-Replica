@@ -32,10 +32,11 @@
       <td class="contest-problem-details-cell">
         {% if row.details_available %}
         {% set content = row.content_review %}
+        {% set metadata = row.metadata %}
         <span class="contest-problem-detail">
-          {{ row.mode }}{% if row.pass_limit > 1 %} &middot; {{ row.pass_limit }} passes{% endif %}
-          &middot; <span class="{{ 'warn' if content.time_limit.tone == 'warning' else '' }}">{{ content.time_limit.display }}</span>
-          / <span class="{{ 'warn' if content.memory_limit.tone == 'warning' else '' }}">{{ content.memory_limit.display }}</span>
+          {{ metadata.mode }}{% if metadata.pass_limit > 1 %} &middot; {{ metadata.pass_limit }} passes{% endif %}
+          &middot; <span class="{{ 'warn' if metadata.time_limit_warn else '' }}">{{ metadata.time_limit_display }}</span>
+          / <span class="{{ 'warn' if metadata.memory_limit_warn else '' }}">{{ metadata.memory_limit_display }}</span>
         </span>
         <span class="contest-problem-detail contest-problem-detail-summary">
           <span class="{{ 'danger' if content.tests.tone == 'danger' else '' }}">{{ content.tests.display }}</span>

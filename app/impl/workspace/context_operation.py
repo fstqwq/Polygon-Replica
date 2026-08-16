@@ -2,9 +2,10 @@ import app.main_constant as _K
 import os
 import time
 from pathlib import Path
-from typing import TypedDict
+from typing import Literal, TypedDict
 from fastapi import HTTPException
 from app.impl.runtime.dependency import runtime
+from app.impl.workspace.context_model import SolutionsComponentContext
 from app.service.platform.workspace_path import (
     normalize_workspace_rel_path,
     safe_workspace_path,
@@ -368,9 +369,6 @@ def tests_spec_editor_context(workspace: Path, limit: int) -> dict:
         limit,
     )
 
-def _tests_spec_status_context(workspace: Path) -> dict:
-    return runtime().problem_source_query_service.tests_spec_status(workspace)
-
 def solution_metadata_entry(workspace: Path, source_rel: str) -> SolutionSourceRow:
     return runtime().problem_source_query_service.solution_entry(
         workspace,
@@ -392,7 +390,7 @@ def resolve_build_accepted_solution_source(workspace: Path) -> str:
 def _solutions_status_context(
     workspace: Path,
     build_config: BuildConfig | None = None,
-) -> dict:
+) -> SolutionsComponentContext:
     entries, truncated = list_solution_entries(workspace, build_config)
     total = len(entries)
     accepted_source = (
@@ -407,6 +405,7 @@ def _solutions_status_context(
         count_display = '1 file'
     else:
         count_display = f'{total} files'
+    mode: Literal['ready', 'missing-main', 'missing']
     if accepted_exists:
         mode = 'ready'
         display = f'{accepted_source} ({count_display})'
@@ -416,7 +415,16 @@ def _solutions_status_context(
     else:
         mode = 'missing'
         display = 'missing'
-    return {'mode': mode, 'display': display, 'accepted_source': accepted_source, 'accepted_exists': accepted_exists, 'count': total, 'count_display': count_display, 'truncated': bool(truncated)}
+    return {
+        'mode': mode,
+        'display': display,
+        'accepted_source': accepted_source,
+        'accepted_exists': accepted_exists,
+        'count': total,
+        'count_display': count_display,
+        'truncated': bool(truncated),
+        'entries': entries,
+    }
 
 def run_solution_options_context(
     workspace: Path,

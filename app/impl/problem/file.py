@@ -20,6 +20,7 @@ from app.impl.workspace.context_operation import (
     template_for_kind,
 )
 from app.impl.workspace.context_ui import page_ctx
+from app.impl.workspace.context_model import ProblemPageContext
 from app.main_util import problem_slug_leaf
 from app.service.platform.workspace_path import (
     normalize_workspace_rel_path,
@@ -47,7 +48,11 @@ def _files_redirect_href(
     )
 
 
-def _files_write_context(request: Request, problem: str, user: str) -> dict:
+def _files_write_context(
+    request: Request,
+    problem: str,
+    user: str,
+) -> ProblemPageContext:
     ctx = page_ctx(
         problem,
         user,

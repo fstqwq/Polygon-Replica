@@ -181,30 +181,6 @@ class ProblemSourceQueryService:
             "truncated": len(entries) > cap,
         }
 
-    def tests_spec_status(self, workspace: Path) -> dict:
-        try:
-            entries, _path = self._tests(workspace)
-        except ValueError:
-            return {
-                "mode": "invalid",
-                "display": "invalid",
-                "total": 0,
-                "manual": 0,
-                "gen": 0,
-                "sample": 0,
-            }
-        summary = summarize_tests_spec(entries)
-        total = summary["total"]
-        if total == 0:
-            return {"mode": "empty", "display": "empty", **summary}
-        sample = summary["sample"]
-        sample_label = "sample" if sample == 1 else "samples"
-        return {
-            "mode": "ready",
-            "display": f"{total} ({sample} {sample_label})",
-            **summary,
-        }
-
     @staticmethod
     def _solution_entry(
         workspace: Path,

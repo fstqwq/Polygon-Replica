@@ -526,7 +526,7 @@ def _agent_verification_detail_yaml(
     workspace = Path(str(ctx["workspace"]["path"])).resolve()
     _problem_cfg, general_cfg, _statement_cfg = read_problem_config(workspace)
     detail_ctx = build_run_detail_context(
-        dict(ctx),
+        ctx,
         str(general_cfg["mode"]),
         requested_verification_id=verification_id,
         include_row_details=bool(test_name),

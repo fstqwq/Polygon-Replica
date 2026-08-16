@@ -52,20 +52,22 @@
   </header>
 
   <div class="workbench-frame{% if ctx.page_wide_content %} page-frame-wide{% endif %}">
-    {% set nav_status = ctx.nav_status if ctx.nav_status is defined else {} %}
-    {% set problem_mode = ctx.problem_mode if ctx.problem_mode is defined else "pass-fail" %}
-    {% set statement_meta_nav = nav_status.get('statement_languages', {}) %}
-    {% set verification_review = ctx.readiness.verification if ctx.readiness is defined else {} %}
-    {% set verification_status = verification_review.get('display', 'none') %}
-    {% set verification_mode = verification_review.get('result', 'none') %}
-    {% set verification_tone = verification_review.get('tone', 'danger') %}
-    {% set verification_tooltip = verification_review.get('reason_short', '') %}
+    {% set shell = ctx.shell %}
+    {% set metadata = shell.metadata %}
+    {% set nav_status = shell.navigation %}
+    {% set problem_mode = metadata.mode %}
+    {% set statement_meta_nav = nav_status.statements %}
+    {% set verification_review = shell.readiness.verification %}
+    {% set verification_status = verification_review.display %}
+    {% set verification_mode = verification_review.result %}
+    {% set verification_tone = verification_review.tone %}
+    {% set verification_tooltip = verification_review.reason_short %}
     {% if verification_mode == 'failed' and (not verification_tooltip) %}
     {% set verification_tooltip = 'verification failed; open Verification for details' %}
-    {% elif verification_review.get('stale') and (not verification_tooltip) %}
+    {% elif verification_review.stale and (not verification_tooltip) %}
     {% set verification_tooltip = 'changed: verification inputs' %}
     {% endif %}
-    {% set tests_nav = nav_status.get('tests', {}) %}
+    {% set tests_nav = nav_status.tests %}
     <div class="workbench-context-bar problem-context-bar">
       <div class="problem-context-main">
         <div class="problem-context-identity">
@@ -83,7 +85,6 @@
             </svg>
           </button>
         </div>
-        {% if ctx.general_cfg is defined %}
         <div class="problem-context-meta">
           <a
             class="problem-context-meta-pill problem-context-meta-pill-action"
@@ -94,58 +95,51 @@
             <svg class="problem-context-meta-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
               <path fill="currentColor" d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.07-.94l2.03-1.58-1.92-3.32-2.39.96a7.18 7.18 0 0 0-1.62-.94L14.87 3h-3.84l-.36 3.18c-.58.24-1.12.55-1.62.94l-2.39-.96-1.92 3.32 2.03 1.58c-.05.31-.08.64-.08.94s.03.63.08.94l-2.03 1.58 1.92 3.32 2.39-.96c.5.39 1.04.7 1.62.94l.36 3.18h3.84l.36-3.18c.58-.24 1.12-.55 1.62-.94l2.39.96 1.92-3.32-2.02-1.58ZM12.95 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z"></path>
             </svg>
-            <span class="problem-context-meta-pill-item{{ ' warn' if ctx.general_cfg.time_limit_warn else '' }}">{{ ctx.general_cfg.time_limit_display }}</span>
-            <span class="problem-context-meta-pill-item{{ ' warn' if ctx.general_cfg.memory_limit_warn else '' }}">{{ ctx.general_cfg.memory_limit_display }}</span>
-            {% if ctx.general_cfg.pass_limit > 1 %}
-            <span class="problem-context-meta-pill-item accent-gradient-text">{{ ctx.general_cfg.pass_limit }} passes</span>
+            <span class="problem-context-meta-pill-item{{ ' warn' if metadata.time_limit_warn else '' }}">{{ metadata.time_limit_display }}</span>
+            <span class="problem-context-meta-pill-item{{ ' warn' if metadata.memory_limit_warn else '' }}">{{ metadata.memory_limit_display }}</span>
+            {% if metadata.pass_limit > 1 %}
+            <span class="problem-context-meta-pill-item accent-gradient-text">{{ metadata.pass_limit }} passes</span>
             {% endif %}
-            {% if ctx.general_cfg.mode != 'pass-fail' %}
-            <span class="problem-context-meta-pill-item accent-gradient-text">{{ ctx.general_cfg.mode }}</span>
+            {% if metadata.mode != 'pass-fail' %}
+            <span class="problem-context-meta-pill-item accent-gradient-text">{{ metadata.mode }}</span>
             {% endif %}
           </a>
         </div>
-        {% endif %}
       </div>
     </div>
     <nav class="section-tabs problem-section-tabs" aria-label="Problem sections" data-problem-nav="1">
       <a class="section-tab problem-section-tab{{ ' active' if problem_section == 'statement' else '' }}" data-page="statement" href="{{ problem_href('problem_statement') }}"{% if problem_section == 'statement' %} aria-current="page"{% endif %}>
         <span class="problem-section-tab-title">Statements</span>
-        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if statement_meta_nav.get('danger') else 'section-tab-status-warn' if statement_meta_nav.get('warn') else '' }}">{{ statement_meta_nav.get("text", "-") }}</span>
+        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if statement_meta_nav.tone == 'danger' else 'section-tab-status-warn' if statement_meta_nav.tone == 'warning' else '' }}">{{ statement_meta_nav.text }}</span>
       </a>
-      {% set checker_nav = nav_status.get('checker', {}) %}
+      {% set checker_nav = nav_status.checker %}
       {% if problem_mode != "interactive" %}
       <a class="section-tab problem-section-tab{{ ' active' if problem_section == 'checker' else '' }}" data-page="checker" href="{{ problem_href('problem_checker') }}"{% if problem_section == 'checker' %} aria-current="page"{% endif %}>
         <span class="problem-section-tab-title">Checker</span>
-        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if checker_nav.get('danger') else '' }}" {% if checker_nav.get('hint') %}data-tooltip="{{ checker_nav.get('hint') }}" aria-label="checker details"{% endif %}>{{ checker_nav.get("text", "-") }}</span>
+        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if checker_nav.tone == 'danger' else 'section-tab-status-warn' if checker_nav.tone == 'warning' else '' }}" {% if checker_nav.hint %}data-tooltip="{{ checker_nav.hint }}" aria-label="checker details"{% endif %}>{{ checker_nav.text }}</span>
       </a>
       {% endif %}
       {% if problem_mode == "interactive" %}
       <a class="section-tab problem-section-tab{{ ' active' if problem_section == 'interactor' else '' }}" data-page="interactor" href="{{ problem_href('problem_interactor') }}"{% if problem_section == 'interactor' %} aria-current="page"{% endif %}>
         <span class="problem-section-tab-title">Interactor</span>
-        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if nav_status.get('interactor', {}).get('danger') else '' }}">{{ nav_status.get("interactor", {}).get("text", "-") }}</span>
+        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if nav_status.interactor.tone == 'danger' else 'section-tab-status-warn' if nav_status.interactor.tone == 'warning' else '' }}">{{ nav_status.interactor.text }}</span>
       </a>
       {% endif %}
       <a class="section-tab problem-section-tab{{ ' active' if problem_section == 'validator' else '' }}" data-page="validator" href="{{ problem_href('problem_validator') }}"{% if problem_section == 'validator' %} aria-current="page"{% endif %}>
         <span class="problem-section-tab-title">Validator</span>
-        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if nav_status.get('validator', {}).get('danger') else '' }}">{{ nav_status.get("validator", {}).get("text", "-") }}</span>
+        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if nav_status.validator.tone == 'danger' else 'section-tab-status-warn' if nav_status.validator.tone == 'warning' else '' }}">{{ nav_status.validator.text }}</span>
       </a>
       <a class="section-tab problem-section-tab{{ ' active' if problem_section == 'generators' else '' }}" data-page="generators" href="{{ problem_href('problem_generators') }}"{% if problem_section == 'generators' %} aria-current="page"{% endif %}>
         <span class="problem-section-tab-title">Generators</span>
-        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if nav_status.get('generators', {}).get('danger') else '' }}">{{ nav_status.get("generators", {}).get("text", "-") }}</span>
+        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if nav_status.generators.tone == 'danger' else 'section-tab-status-warn' if nav_status.generators.tone == 'warning' else '' }}">{{ nav_status.generators.text }}</span>
       </a>
       <a class="section-tab problem-section-tab{{ ' active' if problem_section == 'solutions' else '' }}" data-page="solutions" href="{{ problem_href('problem_solutions') }}"{% if problem_section == 'solutions' %} aria-current="page"{% endif %}>
         <span class="problem-section-tab-title">Solutions</span>
-        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if nav_status.get('solutions', {}).get('danger') else '' }}">{{ nav_status.get("solutions", {}).get("text", "-") }}</span>
+        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if nav_status.solutions.tone == 'danger' else 'section-tab-status-warn' if nav_status.solutions.tone == 'warning' else '' }}">{{ nav_status.solutions.text }}</span>
       </a>
       <a class="section-tab problem-section-tab{{ ' active' if problem_section == 'tests' else '' }}" data-page="tests" href="{{ problem_href('problem_tests') }}"{% if problem_section == 'tests' %} aria-current="page"{% endif %}>
         <span class="problem-section-tab-title">Tests</span>
-        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if tests_nav.get('danger') else '' }}">
-            {% if tests_nav.get('has_counts') %}
-            {{ tests_nav.get('total', 0) }} ({% set sample_count = tests_nav.get('sample', 0) | int %}{% if tests_nav.get('sample_zero') %}<span class="section-tab-status-danger">no sample</span>{% elif sample_count == 1 %}1 sample{% else %}{{ sample_count }} samples{% endif %})
-            {% else %}
-            {{ tests_nav.get("text", "-") }}
-            {% endif %}
-        </span>
+        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if tests_nav.tone == 'danger' else 'section-tab-status-warn' if tests_nav.tone == 'warning' else '' }}">{{ tests_nav.text }}</span>
       </a>
       <div class="section-tab problem-section-tab problem-section-action-tab problem-section-action-tab-verification{{ ' active' if problem_section == 'run' else '' }}">
         <a class="problem-section-tab-title problem-section-tab-title-link" data-page="run" href="{{ problem_href('problem_run') }}"{% if problem_section == 'run' %} aria-current="page"{% endif %}{% if verification_tooltip %} data-tooltip="{{ verification_tooltip }}" aria-label="verification {{ verification_mode }} details"{% endif %}>Verification</a>
@@ -155,10 +149,10 @@
         </form>
         <span class="problem-section-tab-status {{ 'section-tab-status-danger' if verification_tone == 'danger' else 'section-tab-status-warn' if verification_tone == 'warning' else '' }}">{{ verification_status }}</span>
       </div>
-      {% set export_nav = nav_status.get('export', {}) %}
+      {% set export_nav = nav_status.packages %}
       <div class="section-tab problem-section-tab problem-section-action-tab{{ ' active' if problem_section == 'export' else '' }}">
         <a class="problem-section-tab-title problem-section-tab-title-link" data-page="export" href="{{ problem_href('problem_export') }}"{% if problem_section == 'export' %} aria-current="page"{% endif %}>Packages</a>
-        {% set export_download = export_nav.get('download') %}
+        {% set export_download = export_nav.download %}
         {% if export_download %}
         <a class="problem-section-tab-action-control" href="{{ problem_href('export_file', export_id=export_download.export_id, filename=export_download.filename) }}">Download</a>
         {% else %}
@@ -167,7 +161,7 @@
           <button class="problem-section-tab-action-control" type="submit" {% if not ctx.access.can_create_packages or not ctx.workspace.head_commit %}disabled title="{{ ctx.access.package_create_block_reason if not ctx.access.can_create_packages else 'Commit changes before building a package' }}"{% endif %}>Build</button>
         </form>
         {% endif %}
-        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if export_nav.get('danger') else 'section-tab-status-warn' if export_nav.get('warn') else '' }}">{{ export_nav.get("text", "-") }}</span>
+        <span class="problem-section-tab-status {{ 'section-tab-status-danger' if export_nav.tone == 'danger' else 'section-tab-status-warn' if export_nav.tone == 'warning' else '' }}">{{ export_nav.text }}</span>
       </div>
     </nav>
     <div class="page-grid{% if ctx.page_wide_content %} page-grid-wide{% endif %}">
@@ -183,16 +177,16 @@
             <h3>Workspace</h3>
             <a class="workspace-side-link" href="{{ problem_href('problem_access') }}"{% if problem_section == 'access' %} aria-current="page"{% endif %}>Manage access</a>
           </div>
-          {% set ws_revision = ctx.workspace_revision if ctx.workspace_revision is defined else {} %}
-          {% set local_rev_raw = ws_revision.get('local') if ws_revision else none %}
-          {% set published_rev_raw = ws_revision.get('upstream') if ws_revision else none %}
+          {% set workspace_review = shell.readiness.workspace %}
+          {% set local_rev_raw = workspace_review.local_revision %}
+          {% set published_rev_raw = workspace_review.upstream_revision %}
           {% set local_rev = ('v' ~ local_rev_raw) if local_rev_raw is not none else 'none' %}
           {% set published_rev = ('v' ~ published_rev_raw) if published_rev_raw is not none else 'none' %}
           <div class="workspace-revision">
-            <p class="workspace-revision-inline{{ ' revision-alert' if ctx.workspace_revision_alert else '' }}">Workspace on <strong>{{ local_rev }}</strong> / Upstream <strong>{{ published_rev }}</strong></p>
+            <p class="workspace-revision-inline{{ ' revision-alert' if workspace_review.tone != 'normal' else '' }}">Workspace on <strong>{{ local_rev }}</strong> / Upstream <strong>{{ published_rev }}</strong></p>
           </div>
           <div class="workspace-actions">
-            {% if ctx.workspace_needs_update %}
+            {% if workspace_review.needs_update %}
             <form class="action-link-form" method="post" action="{{ problem_href('merge_start') }}">
               <button class="button-link primary-action workspace-side-button" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Resolve Conflicts</button>
             </form>
@@ -200,10 +194,10 @@
             <a class="button-link primary-action workspace-side-button" href="{{ problem_href('problem_workspace') }}">Review workspace</a>
             {% endif %}
           </div>
-          {% if ctx.workspace_changes.total > 0 %}
-          {{ change_badges(ctx.workspace_changes.counts) }}
+          {% if shell.workspace_changes.total > 0 %}
+          {{ change_badges(shell.workspace_changes.counts) }}
           <ul class="change-list">
-            {% for row in ctx.workspace_changes.rows %}
+            {% for row in shell.workspace_changes.rows %}
             <li class="change-item change-{{ row.kind }}">
               <code class="change-code">{{ row.code }}</code>
               <a href="{{ problem_href('problem_workspace', query={'path': row.link_path, 'src': 'workspace'}) }}" title="{{ row.path }}">{{ row.path }}</a>
@@ -231,22 +225,22 @@
         <div class="form-row form-row-inline-distribute">
           <div class="form-field-stack">
             <label for="time-limit">Time Limit</label>
-            <input id="time-limit" type="text" inputmode="numeric" name="time_limit_ms" value="{{ ctx.general_cfg.time_limit_ms }}" />
+            <input id="time-limit" type="text" inputmode="numeric" name="time_limit_ms" value="{{ metadata.time_limit_ms }}" />
           </div>
           <div class="form-field-stack">
             <label for="memory-limit">Memory Limit</label>
-            <input id="memory-limit" type="text" inputmode="numeric" name="memory_limit_mb" value="{{ ctx.general_cfg.memory_limit_mb }}" />
+            <input id="memory-limit" type="text" inputmode="numeric" name="memory_limit_mb" value="{{ metadata.memory_limit_mb }}" />
           </div>
           <div class="form-field-stack">
             <label for="problem-mode">Mode</label>
             <select id="problem-mode" name="mode">
-              <option value="pass-fail" {% if ctx.general_cfg.mode == 'pass-fail' %}selected{% endif %}>pass-fail</option>
-              <option value="interactive" {% if ctx.general_cfg.mode == 'interactive' %}selected{% endif %}>interactive</option>
+              <option value="pass-fail" {% if metadata.mode == 'pass-fail' %}selected{% endif %}>pass-fail</option>
+              <option value="interactive" {% if metadata.mode == 'interactive' %}selected{% endif %}>interactive</option>
             </select>
           </div>
           <div class="form-field-stack">
             <label for="pass-limit">Pass Limit</label>
-            <input id="pass-limit" type="text" inputmode="numeric" name="pass_limit" value="{{ ctx.general_cfg.pass_limit }}" />
+            <input id="pass-limit" type="text" inputmode="numeric" name="pass_limit" value="{{ metadata.pass_limit }}" />
           </div>
           <button class="btn" type="submit">Save</button>
         </div>

@@ -11,7 +11,6 @@ from app.impl.problem.compile_check import judgehost_compile_check_error
 from app.impl.runtime.dependency import runtime
 from app.impl.problem.shared import rename_component_source, single_source_editor_context
 from app.impl.workspace.context_operation import read_build_config, resolve_standard_checker_path, standard_checker_catalog, template_for_kind, write_build_config
-from app.impl.workspace.context_component_status import checker_status_context
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
 from app.main_util import enforce_textarea_max_bytes
@@ -26,32 +25,29 @@ def checker_page(request: Request, problem: str, user: Annotated[str, Depends(re
         user,
         contest_workspace=contest_workspace_context_from_request(request),
     )
-    if ctx.get('problem_mode') == 'interactive':
+    if ctx['shell']['metadata']['mode'] == 'interactive':
         return redirect_response(f'/problems/{problem}/interactor', status_code=303, message='interactive problem uses an interactor; checker section hidden')
     workspace = Path(ctx['workspace']['path'])
-    checker_status = checker_status_context(
-        workspace,
-        ctx['authoring_source']['build'],
-    )
+    checker_status = ctx['shell']['components']['checker']
     standard_checker_options = standard_checker_catalog()
-    selected_standard = standard_checker if isinstance(standard_checker := checker_status.get('standard_checker'), str) else ''
-    repo_source = repo_source if isinstance(repo_source := checker_status.get('repo_source'), str) and repo_source else 'checkers/checker.cpp'
+    selected_standard = checker_status['standard_checker']
+    repo_source = checker_status['repo_source'] or 'checkers/checker.cpp'
     editor = single_source_editor_context(
         request=request,
         workspace=workspace,
         configured_source=repo_source,
-        configured_source_exists=bool(checker_status.get('repo_source_exists')),
+        configured_source_exists=checker_status['repo_source_exists'],
         folder='checkers',
         default_filename='checker.cpp',
         starter_content=template_for_kind('checker'),
     )
     show_custom_editor = editor['state'] == 'create' or bool(
         editor['state'] == 'existing' and (
-            not checker_status.get('standard_checker')
+            not checker_status['standard_checker']
             or request.query_params.get('edit') == 'source'
         )
     )
-    return template_response(request, 'checker.html', {'ctx': ctx, 'checker_status': checker_status, 'standard_checker_options': standard_checker_options, 'selected_standard_checker': selected_standard, 'show_custom_editor': show_custom_editor, 'editor': editor, 'content_char_limit': runtime().config_values.WORKSPACE_FILE_VIEW_CHAR_LIMIT})
+    return template_response(request, 'checker.html', {'ctx': ctx, 'standard_checker_options': standard_checker_options, 'selected_standard_checker': selected_standard, 'show_custom_editor': show_custom_editor, 'editor': editor, 'content_char_limit': runtime().config_values.WORKSPACE_FILE_VIEW_CHAR_LIMIT})
 
 def checker_view_standard(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)], checker_name: str=''):
     ctx = page_ctx(
@@ -59,16 +55,12 @@ def checker_view_standard(request: Request, problem: str, user: Annotated[str, D
         user,
         contest_workspace=contest_workspace_context_from_request(request),
     )
-    if ctx.get('problem_mode') == 'interactive':
+    if ctx['shell']['metadata']['mode'] == 'interactive':
         return redirect_response(f'/problems/{problem}/interactor', status_code=303, message='interactive problem uses an interactor; checker section hidden')
-    workspace = Path(ctx['workspace']['path'])
-    checker_status = checker_status_context(
-        workspace,
-        ctx['authoring_source']['build'],
-    )
+    checker_status = ctx['shell']['components']['checker']
     selected = checker_name.strip()
     if not selected:
-        selected = standard_checker if isinstance(standard_checker := checker_status.get('standard_checker'), str) else ''
+        selected = checker_status['standard_checker']
     if not selected:
         catalog = standard_checker_catalog()
         if catalog:
@@ -87,7 +79,7 @@ def checker_view_standard(request: Request, problem: str, user: Annotated[str, D
 
 def checker_set_standard(problem: str, user: Annotated[str, Depends(require_session_user)], checker_name: str=Form(...)):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
-    if ctx.get('problem_mode') == 'interactive':
+    if ctx['shell']['metadata']['mode'] == 'interactive':
         return redirect_response(f'/problems/{problem}/interactor', status_code=303, message='interactive problem uses an interactor; checker section hidden')
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
@@ -116,7 +108,7 @@ def checker_rename_source(
     new_path: str = Form(...),
 ):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
-    if ctx.get('problem_mode') == 'interactive':
+    if ctx['shell']['metadata']['mode'] == 'interactive':
         return redirect_response(f'/problems/{problem}/interactor', status_code=303, message='interactive problem uses an interactor; checker section hidden')
     return rename_component_source(
         problem=problem,
@@ -139,7 +131,7 @@ def checker_save_source(
     response_mode: str = Form(''),
 ):
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
-    if ctx.get('problem_mode') == 'interactive':
+    if ctx['shell']['metadata']['mode'] == 'interactive':
         return redirect_response(f'/problems/{problem}/interactor', status_code=303, message='interactive problem uses an interactor; checker section hidden')
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])

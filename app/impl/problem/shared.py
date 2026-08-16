@@ -17,6 +17,7 @@ from app.impl.workspace.context_operation import (
     write_build_config,
 )
 from app.impl.workspace.context_ui import page_ctx
+from app.impl.workspace.context_model import ProblemPageContext
 from app.main_util import normalize_component_source_path
 from app.service.platform.workspace_path import (
     normalize_workspace_rel_path,
@@ -128,7 +129,7 @@ def rename_component_source(
     component_label: str,
     redirect_url_for_path: Callable[[str], str],
     config_key: str = "",
-    ctx: dict | None = None,
+    ctx: ProblemPageContext | None = None,
 ) -> RedirectResponse:
     source_for_redirect = f"{folder}/{default_filename}"
     active_ctx = ctx
@@ -230,14 +231,9 @@ def _sudo_redirect_for_destructive(
     return redirect_response(f"/sudo?next={quote_plus(safe_next)}", status_code=303, message=message)
 
 
-def _has_destructive_sudo_for_ctx(request: Request, ctx: dict) -> bool:
-    user_row = ctx.get("user") if isinstance(ctx, dict) else None
-    user_id = 0
-    if isinstance(user_row, dict):
-        try:
-            user_id = int(user_row["id"])
-        except Exception:
-            user_id = 0
-    if user_id <= 0:
-        return False
+def _has_destructive_sudo_for_ctx(
+    request: Request,
+    ctx: ProblemPageContext,
+) -> bool:
+    user_id = ctx["user"]["id"]
     return has_sudo_session(request, user_id=user_id, scope=str(_K.SUDO_SCOPE_DESTRUCTIVE))

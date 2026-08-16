@@ -76,6 +76,9 @@ class PackageReadiness(TypedDict):
     revision_number: int | None
     tone: ReadinessTone
     reason: str
+    verified_revision_id: str | None
+    published_commit: str
+    published_revision_number: int | None
 
 
 class ProblemReadiness(TypedDict):
@@ -150,6 +153,9 @@ class ProblemReadinessService:
                 "revision_number": None,
                 "tone": "danger",
                 "reason": "readiness unavailable",
+                "verified_revision_id": None,
+                "published_commit": "",
+                "published_revision_number": None,
             },
         }
 
@@ -174,6 +180,9 @@ class ProblemReadinessService:
                 "revision_number": readiness["verified_revision_number"],
                 "tone": "normal",
                 "reason": "",
+                "verified_revision_id": readiness["verified_revision_id"],
+                "published_commit": readiness["published_commit"],
+                "published_revision_number": readiness["published_revision_number"],
             }
         if status == "stale":
             return {
@@ -181,12 +190,18 @@ class ProblemReadinessService:
                 "revision_number": readiness["verified_revision_number"],
                 "tone": "warning",
                 "reason": readiness["missing_reason"],
+                "verified_revision_id": readiness["verified_revision_id"],
+                "published_commit": readiness["published_commit"],
+                "published_revision_number": readiness["published_revision_number"],
             }
         return {
             "state": "none",
             "revision_number": None,
             "tone": "danger",
             "reason": readiness["missing_reason"],
+            "verified_revision_id": None,
+            "published_commit": readiness["published_commit"],
+            "published_revision_number": readiness["published_revision_number"],
         }
 
     @staticmethod

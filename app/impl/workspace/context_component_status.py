@@ -1,9 +1,15 @@
 from pathlib import Path
 from typing import Literal
 
-from app.impl.runtime.dependency import runtime
+from app.impl.workspace.context_model import (
+    CheckerComponentContext,
+    GeneratorComponentContext,
+    GeneratorSourceContext,
+    SourceComponentContext,
+)
 from app.service.problem.build_config import BuildConfig
 from app.service.problem.test_spec import (
+    TestSpecEntry,
     generator_source_paths,
     parse_gen_command_tokens,
     resolve_generator_source,
@@ -12,7 +18,7 @@ from app.impl.workspace.context_operation import (
     read_build_config,
     workspace_rel_file_exists,
 )
-from app.impl.workspace.test_spec import read_tests_spec, tests_spec_read_payload
+from app.impl.workspace.test_spec import tests_spec_read_payload
 
 
 
@@ -42,21 +48,12 @@ def _source_basename_label(path: str) -> str:
 def _generator_reference_counts(
     workspace: Path,
     source_catalog: tuple[str, ...],
+    tests: list[TestSpecEntry],
 ) -> dict[str, int]:
     counts = {path: 0 for path in source_catalog}
     if not source_catalog:
         return counts
-    try:
-        entries, _ = read_tests_spec(
-            workspace,
-            document_max_bytes=runtime().config_values.integer("TEXTAREA_MAX_BYTES"),
-            sample_max_bytes=runtime().config_values.integer(
-                "STATEMENT_SAMPLE_MAX_BYTES"
-            ),
-        )
-    except Exception:
-        return counts
-    for row in entries:
+    for row in tests:
         if row.get('kind') != 'gen':
             continue
         try:
@@ -78,8 +75,9 @@ def _generator_reference_counts(
 
 def generator_status_context(
     workspace: Path,
+    tests: list[TestSpecEntry],
     build_cfg: BuildConfig | None = None,
-) -> dict:
+) -> GeneratorComponentContext:
     if build_cfg is None:
         build_cfg, _ = read_build_config(workspace)
     configured_sources = tuple(build_cfg["generator_sources"])
@@ -103,9 +101,13 @@ def generator_status_context(
         ),
     )
     repo_exists = workspace_rel_file_exists(workspace, repo_source)
-    reference_counts = _generator_reference_counts(workspace, configured_sources)
+    reference_counts = _generator_reference_counts(
+        workspace,
+        configured_sources,
+        tests,
+    )
     has_declared_or_discovered = bool(all_sources)
-    source_rows: list[dict[str, object]] = []
+    source_rows: list[GeneratorSourceContext] = []
     configured_set = frozenset(configured_sources)
     for rel in visible_sources:
         exists = workspace_rel_file_exists(workspace, rel)
@@ -117,6 +119,7 @@ def generator_status_context(
             'configured': rel in configured_set,
             'reference_count': reference_counts.get(rel, 0),
         })
+    mode: Literal['repository', 'missing', 'empty']
     if repo_exists:
         mode = 'repository'
         display = _source_basename_label(repo_source)
@@ -139,7 +142,7 @@ def generator_status_context(
 def validator_status_context(
     workspace: Path,
     build_cfg: BuildConfig | None = None,
-) -> dict:
+) -> SourceComponentContext:
     if build_cfg is None:
         build_cfg, _ = read_build_config(workspace)
     repo_source, repo_exists = _configured_component_source(
@@ -153,7 +156,7 @@ def validator_status_context(
 def interactor_status_context(
     workspace: Path,
     build_cfg: BuildConfig | None = None,
-) -> dict:
+) -> SourceComponentContext:
     if build_cfg is None:
         build_cfg, _ = read_build_config(workspace)
     repo_source, repo_exists = _configured_component_source(
@@ -167,7 +170,7 @@ def interactor_status_context(
 def checker_status_context(
     workspace: Path,
     build_cfg: BuildConfig | None = None,
-) -> dict:
+) -> CheckerComponentContext:
     if build_cfg is None:
         build_cfg, _ = read_build_config(workspace)
     repo_source, repo_exists = _configured_component_source(

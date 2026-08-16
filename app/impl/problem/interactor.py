@@ -11,7 +11,6 @@ from app.impl.problem.compile_check import judgehost_compile_check_error
 from app.impl.problem.shared import rename_component_source, single_source_editor_context
 from app.impl.runtime.dependency import runtime
 from app.impl.workspace.context_operation import read_build_config, template_for_kind, write_build_config
-from app.impl.workspace.context_component_status import interactor_status_context
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
 from app.main_util import enforce_textarea_max_bytes
@@ -26,21 +25,18 @@ def interactor_page(request: Request, problem: str, user: Annotated[str, Depends
         contest_workspace=contest_workspace_context_from_request(request),
     )
     workspace = Path(ctx['workspace']['path'])
-    interactor_status = interactor_status_context(
-        workspace,
-        ctx['authoring_source']['build'],
-    )
-    repo_source = repo_source if isinstance(repo_source := interactor_status.get('repo_source'), str) and repo_source else 'interactors/interactor.cpp'
+    interactor_status = ctx['shell']['components']['interactor']
+    repo_source = interactor_status['repo_source'] or 'interactors/interactor.cpp'
     editor = single_source_editor_context(
         request=request,
         workspace=workspace,
         configured_source=repo_source,
-        configured_source_exists=bool(interactor_status.get('repo_source_exists')),
+        configured_source_exists=interactor_status['repo_source_exists'],
         folder='interactors',
         default_filename='interactor.cpp',
         starter_content=template_for_kind('interactor'),
     )
-    return template_response(request, 'interactor.html', {'ctx': ctx, 'interactor_status': interactor_status, 'editor': editor, 'content_char_limit': runtime().config_values.integer("WORKSPACE_FILE_VIEW_CHAR_LIMIT")})
+    return template_response(request, 'interactor.html', {'ctx': ctx, 'editor': editor, 'content_char_limit': runtime().config_values.integer("WORKSPACE_FILE_VIEW_CHAR_LIMIT")})
 
 def interactor_rename_source(
     problem: str,

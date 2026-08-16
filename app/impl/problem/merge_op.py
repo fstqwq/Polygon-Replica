@@ -16,10 +16,14 @@ from app.impl.contest.workspace_scope import (
 from app.impl.runtime.dependency import runtime
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
+from app.impl.workspace.context_model import ProblemPageContext
 from app.service.repository.merge import MergeEntry, MergeFile, MergePreview
 
 
-def _workspace_context(problem: str, user: str) -> tuple[dict, Path]:
+def _workspace_context(
+    problem: str,
+    user: str,
+) -> tuple[ProblemPageContext, Path]:
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
     require_write_access(ctx)
     return ctx, Path(ctx["workspace"]["path"])

@@ -18,7 +18,6 @@ from app.service.access import ProblemAccessContext
 from app.service.export.service import NATIVE_PACKAGE_FORMAT
 from app.service.problem_package.service import (
     VerifiedRevision,
-    VerifiedRevisionReadiness,
 )
 
 
@@ -82,11 +81,8 @@ def _available_packages_by_revision(
 
 
 def _current_verified_revision(
-    readiness: VerifiedRevisionReadiness,
+    verified_revision_id: str | None,
 ) -> VerifiedRevision | None:
-    if readiness["status"] != "ready":
-        return None
-    verified_revision_id = readiness["verified_revision_id"]
     if not verified_revision_id:
         return None
     verified_revision = runtime().problem_package_service.verified_revision(
@@ -193,8 +189,10 @@ def export_page(
         contest_workspace=contest_workspace_context_from_request(request),
     )
     problem_id = int(ctx["problem"]["id"])
-    readiness = runtime().problem_package_service.published_readiness(problem_id)
-    current_verified_revision = _current_verified_revision(readiness)
+    package_readiness = ctx["shell"]["readiness"]["package"]
+    current_verified_revision = _current_verified_revision(
+        package_readiness["verified_revision_id"]
+    )
     verified_revisions = (
         runtime().problem_package_service.available_verified_revision_history(
             problem_id,
@@ -218,13 +216,13 @@ def export_page(
     current_package = _current_package_context(
         request,
         problem,
-        readiness["published_revision_number"],
+        package_readiness["published_revision_number"],
         current_verified_revision,
     )
     revision_rows = _revision_rows(
         request,
         problem,
-        readiness["published_commit"],
+        package_readiness["published_commit"],
         verified_revisions,
         packages_by_revision,
     )
@@ -253,7 +251,13 @@ def _existing_current_package_href(
     package_format: str,
 ) -> str:
     readiness = runtime().problem_package_service.published_readiness(problem_id)
-    verified_revision = _current_verified_revision(readiness)
+    verified_revision = _current_verified_revision(
+        (
+            readiness["verified_revision_id"]
+            if readiness["status"] == "ready"
+            else None
+        )
+    )
     if verified_revision is None:
         return ""
     href = problem_href_builder(request, problem)

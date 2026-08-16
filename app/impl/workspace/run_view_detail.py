@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import cast
 from app.impl.runtime.dependency import runtime
+from app.service.repository.workspace import WorkspaceContext
 from app.impl.workspace.artifact import verification_artifact_file, verification_blob_virtual_rel
 from app.impl.workspace.context import count_label
 from app.impl.workspace.context_operation import workspace_rel_file_exists
@@ -450,7 +451,7 @@ def _detail_sanity_context(
 
 
 def build_run_detail_context(
-    ctx: dict,
+    ctx: WorkspaceContext,
     execute_mode: str,
     *,
     requested_verification_id: str = "",
