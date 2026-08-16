@@ -9,6 +9,7 @@ from fastapi import Form, HTTPException, Request, Depends
 from app.impl.auth.shared import template_response
 from app.impl.contest.workspace_scope import add_contest_problem_hrefs
 from app.impl.runtime.dependency import runtime
+from app.impl.workspace.context_model import workspace_published_revision_pair
 from app.main_util import form_text
 
 from app.impl.contest.common import (
@@ -28,7 +29,7 @@ def contest_problems_page(request: Request, contest: str, user: Annotated[str, D
     ctx = _contest_ctx(contest, user, "problems", request=request)
     contest_id = int(ctx["contest"]["id"])
     user_id = int(ctx["user"]["id"])
-    rows = add_contest_problem_hrefs(
+    source_rows = add_contest_problem_hrefs(
         request,
         contest_slug=str(ctx["contest"]["slug"]),
         rows=runtime().contest_problem_query_service.problem_rows(
@@ -38,6 +39,20 @@ def contest_problems_page(request: Request, contest: str, user: Annotated[str, D
             include_review=False,
         ),
     )
+    rows: list[dict[str, object]] = []
+    for source_row in source_rows:
+        row = dict(source_row)
+        row["workspace_revision_pair"] = (
+            workspace_published_revision_pair(
+                source_row["workspace_revision_local"],
+                source_row["workspace_revision_upstream"],
+                dirty=source_row["dirty"],
+                needs_update=source_row["workspace_revision_warn"],
+            )
+            if source_row["workspace_revision_available"]
+            else None
+        )
+        rows.append(row)
     query = q.strip()
     available_rows = runtime().contest_service.available_problems(
         contest_id,
@@ -46,14 +61,19 @@ def contest_problems_page(request: Request, contest: str, user: Annotated[str, D
         query=query,
     )
     available_display_rows: list[dict[str, object]] = []
-    for row in available_rows:
-        slug_owner, _separator, slug_leaf = row["problem_slug"].partition("/")
+    for available_row in available_rows:
+        slug_owner, _separator, slug_leaf = available_row["problem_slug"].partition("/")
         available_display_rows.append(
             {
-                **row,
+                **available_row,
                 "slug_owner": slug_owner,
                 "slug_leaf": slug_leaf,
-                "href": str(request.url_for("problem_statement", problem=row["problem_slug"])),
+                "href": str(
+                    request.url_for(
+                        "problem_statement",
+                        problem=available_row["problem_slug"],
+                    )
+                ),
             }
         )
     owner_prefix_chars = max(

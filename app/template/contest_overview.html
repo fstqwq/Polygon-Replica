@@ -1,16 +1,17 @@
 {% extends "contest_base.html" %}
 {% from "_problem_slug_link.html" import problem_slug_link %}
 {% from "_problem_review.html" import problem_review %}
+{% from "_revision_pair.html" import fact_row %}
 {% block content %}
 <div class="page-title-inline contest-problems-title">
   <h1 class="page-title">Problems</h1>
   <div class="contest-package-tools">
     <p class="contest-package-summary">
-      Verified revisions:
-      <span>{{ verified_ready_count }} current</span>{% if verified_queued_count %},
-      <span>{{ verified_queued_count }} queued</span>{% endif %}{% if verified_stale_count %},
-      <span class="warn">{{ verified_stale_count }} stale</span>{% endif %}{% if verified_none_count %},
-      <span class="danger">{{ verified_none_count }} none</span>{% endif %}
+      Packages:
+      <span>{{ package_ready_count }} ready</span>{% if package_queued_count %},
+      <span>{{ package_queued_count }} queued</span>{% endif %}{% if package_stale_count %},
+      <span class="warn">{{ package_stale_count }} stale</span>{% endif %}{% if package_none_count %},
+      <span class="danger">{{ package_none_count }} none</span>{% endif %}
     </p>
     {% if ctx.access.can_build %}
     <form method="post" action="/contests/{{ ctx.contest.slug }}/packages/build-all">
@@ -50,14 +51,11 @@
           <span class="{{ 'danger' if content.tests.tone == 'danger' else '' }}">{{ content.tests.display }}</span>
           &middot; <span class="{{ 'danger' if content.solutions.tone == 'danger' else '' }}">{{ content.solutions.display }}</span>
         </span>
-        <span class="contest-problem-detail contest-problem-detail-components">
-          {{ content.output_component.label }}: <span class="{{ 'danger' if content.output_component.tone == 'danger' else '' }}">{{ content.output_component.display }}</span>
-        </span>
-        <span class="contest-problem-detail contest-problem-detail-components">
-          {{ content.validator.label }}: <span class="{{ 'danger' if content.validator.tone == 'danger' else '' }}">{{ content.validator.display }}</span>
-        </span>
-        <span class="contest-problem-detail contest-problem-detail-languages">
-          {{ content.languages.label }}: <span class="{{ 'danger' if content.languages.tone == 'danger' else '' }}">{{ content.languages.display }}</span>
+        <span class="compact-fact-list contest-problem-facts">
+          {{ fact_row(content.output_component.label, content.output_component.display, 'danger' if content.output_component.tone == 'danger' else '') }}
+          {{ fact_row(content.validator.label, content.validator.display, 'danger' if content.validator.tone == 'danger' else '') }}
+          {{ fact_row(content.languages.label, content.languages.display, 'danger' if content.languages.tone == 'danger' else '') }}
+          {{ fact_row('Verification', row.verification_display, row.verification_tone) }}
         </span>
         {% for warning in content.warnings if warning.code == 'source' %}
         <span class="contest-problem-detail contest-problem-detail-summary {{ 'danger' if warning.tone == 'danger' else 'warn' }}">{{ warning.display }}</span>
@@ -66,7 +64,7 @@
         <span class="contest-problem-detail contest-problem-detail-summary danger">unavailable</span>
         {% endif %}
       </td>
-      <td class="contest-problem-review-cell">{{ problem_review(row.readiness) }}</td>
+      <td class="contest-problem-review-cell">{{ problem_review(row.revision_pair, row.workspace_revision_notice) }}</td>
     </tr>
     {% endfor %}
   </table>

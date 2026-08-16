@@ -8,6 +8,10 @@ from app.impl.auth.shared import template_response
 from app.impl.contest.workspace_scope import add_contest_problem_hrefs
 from app.impl.runtime.dependency import runtime
 from app.impl.workspace.context_job import start_export_job
+from app.impl.workspace.context_model import (
+    package_published_revision_pair,
+    workspace_revision_notice,
+)
 from app.service.export.service import NATIVE_PACKAGE_FORMAT
 
 from app.impl.contest.shared import _contest_ctx, _contest_redirect
@@ -17,7 +21,7 @@ def contest_overview_page(request: Request, contest: str, user: Annotated[str, D
     ctx = _contest_ctx(contest, user, "overview", request=request)
     contest_id = int(ctx["contest"]["id"])
     user_id = int(ctx["user"]["id"])
-    rows = add_contest_problem_hrefs(
+    source_rows = add_contest_problem_hrefs(
         request,
         contest_slug=str(ctx["contest"]["slug"]),
         rows=runtime().contest_problem_query_service.problem_rows(
@@ -27,33 +31,49 @@ def contest_overview_page(request: Request, contest: str, user: Annotated[str, D
             include_review=True,
         ),
     )
+    rows: list[dict[str, object]] = []
+    for source_row in source_rows:
+        row = dict(source_row)
+        readiness = source_row["readiness"]
+        row["revision_pair"] = (
+            package_published_revision_pair(readiness)
+            if readiness is not None
+            else None
+        )
+        row["workspace_revision_notice"] = (
+            workspace_revision_notice(readiness)
+            if readiness is not None
+            else None
+        )
+        if readiness is not None:
+            verification = readiness["verification"]
+            row["verification_display"] = verification["display"]
+            row["verification_tone"] = (
+                "warn"
+                if verification["tone"] == "warning"
+                else "danger" if verification["tone"] == "danger" else ""
+            )
+        else:
+            row["verification_display"] = "unavailable"
+            row["verification_tone"] = "danger"
+        rows.append(row)
     owner_prefix_chars = max(
         (len(str(row["slug_owner"])) + 1 for row in rows),
         default=0,
     )
-    verified_ready_count = sum(
-        1
-        for row in rows
+    package_states = [
+        row["readiness"]["package"]["state"]
+        for row in source_rows
         if row["readiness"] is not None
-        and row["readiness"]["package"]["state"] == "ready"
-    )
-    verified_stale_count = sum(
-        1
-        for row in rows
-        if row["readiness"] is not None
-        and row["readiness"]["package"]["state"] == "stale"
-    )
-    verified_queued_count = sum(
-        1
-        for row in rows
-        if row["readiness"] is not None
-        and row["readiness"]["package"]["state"] == "queued"
-    )
-    verified_none_count = (
+    ]
+    package_ready_count = package_states.count("ready")
+    package_stale_count = package_states.count("stale")
+    package_queued_count = package_states.count("queued")
+    package_none_count = (
         len(rows)
-        - verified_ready_count
-        - verified_queued_count
-        - verified_stale_count
+        - package_ready_count
+        - package_queued_count
+        - package_stale_count
     )
     return template_response(
         request,
@@ -62,10 +82,10 @@ def contest_overview_page(request: Request, contest: str, user: Annotated[str, D
             "ctx": ctx,
             "problem_rows": rows,
             "owner_prefix_chars": owner_prefix_chars,
-            "verified_ready_count": verified_ready_count,
-            "verified_queued_count": verified_queued_count,
-            "verified_stale_count": verified_stale_count,
-            "verified_none_count": verified_none_count,
+            "package_ready_count": package_ready_count,
+            "package_queued_count": package_queued_count,
+            "package_stale_count": package_stale_count,
+            "package_none_count": package_none_count,
         },
     )
 

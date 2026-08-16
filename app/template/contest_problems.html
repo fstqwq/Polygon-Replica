@@ -1,5 +1,6 @@
 {% extends "contest_base.html" %}
 {% from "_problem_slug_link.html" import problem_slug_link %}
+{% from "_revision_pair.html" import fact_row, revision_pair %}
 {% block content %}
 <h1 class="page-title">Manage Problems</h1>
 
@@ -41,21 +42,11 @@
           <input class="contest-limit-input" name="memory_limit_mb_values" value="{{ row.memory_limit_mb }}" inputmode="numeric"{% if not row.can_problem_write %} readonly{% endif %} aria-label="Memory limit for {{ row.problem_slug }}" />
         </td>
         <td class="contest-problem-review-cell">
-          <span class="problem-review-list">
-            {% if row.workspace_revision_available %}
-            <span class="problem-review-line">
-              <span class="problem-review-label">Upstream</span>
-              <strong class="problem-review-value">{{ ('v' ~ row.workspace_revision_upstream) if row.workspace_revision_upstream is not none else 'none' }}</strong>
-            </span>
-            <span class="problem-review-line">
-              <span class="problem-review-label">Workspace</span>
-              <strong class="problem-review-value {{ 'danger' if row.workspace_revision_warn else '' }}">{{ ('v' ~ row.workspace_revision_local) if row.workspace_revision_local is not none else 'none' }}</strong>
-            </span>
+          <span class="compact-fact-list">
+            {% if row.workspace_revision_pair %}
+            {{ revision_pair(row.workspace_revision_pair) }}
             {% else %}
-            <span class="problem-review-line">
-              <span class="problem-review-label">Status</span>
-              <strong class="problem-review-value danger">unavailable</strong>
-            </span>
+            {{ fact_row('Status', 'unavailable', 'danger') }}
             {% endif %}
           </span>
         </td>

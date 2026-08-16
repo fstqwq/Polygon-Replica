@@ -109,6 +109,23 @@ def _is_db_handle(node: ast.AST) -> bool:
 
 
 class TestPublicContracts(unittest.TestCase):
+    def test_user_templates_use_package_published_revision_terms(self) -> None:
+        template_source = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted((ROOT / "app" / "template").glob("*.html"))
+        )
+        self.assertNotIn("Verified revision", template_source)
+        self.assertNotIn("Verified revisions", template_source)
+        self.assertNotIn("Upstream", template_source)
+        self.assertIn("Package", template_source)
+        self.assertIn("Published", template_source)
+
+        core_css = (ROOT / "app" / "static" / "css" / "core.css").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(".compact-fact-label::after", core_css)
+        self.assertIn('content: ":"', core_css)
+
     def test_agent_runtime_has_no_problem_bearer_compatibility(self) -> None:
         paths = [
             ROOT / "app" / "db.py",

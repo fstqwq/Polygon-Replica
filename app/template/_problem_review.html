@@ -1,33 +1,12 @@
-{% macro problem_review(readiness, show_verification_reason=false) -%}
-<div class="problem-review-list">
-  {% if readiness %}
-  {% set workspace = readiness.workspace %}
-  {% set verification = readiness.verification %}
-  {% set package = readiness.package %}
-  {% set workspace_tone = 'warn' if workspace.tone == 'warning' else 'danger' if workspace.tone == 'danger' else '' %}
-  {% set verification_tone = 'warn' if verification.tone == 'warning' else 'danger' if verification.tone == 'danger' else '' %}
-  {% set package_tone = 'warn' if package.tone == 'warning' else 'danger' if package.tone == 'danger' else '' %}
-  <span class="problem-review-line problem-review-upstream">
-    <span class="problem-review-label">Upstream</span>
-    <strong class="problem-review-value">{{ ('v' ~ workspace.upstream_revision) if workspace.upstream_revision is not none else 'none' }}</strong>
-  </span>
-  <span class="problem-review-line problem-review-workspace">
-    <span class="problem-review-label">Workspace</span>
-    <strong class="problem-review-value {{ workspace_tone }}">{{ ('v' ~ workspace.local_revision) if workspace.local_revision is not none else 'none' }}</strong>
-  </span>
-  <span class="problem-review-line">
-    <span class="problem-review-label">Verification</span>
-    <strong class="problem-review-value {{ verification_tone }}">{{ verification.display }}</strong>{% if show_verification_reason and verification.reason_short %}<span class="problem-review-reason"> &mdash; {{ verification.reason_short }}</span>{% endif %}
-  </span>
-  <span class="problem-review-line">
-    <span class="problem-review-label">Verified revision</span>
-    <strong class="problem-review-value {{ package_tone }}">{% if package.state == 'ready' and package.revision_number is not none %}v{{ package.revision_number }} (current){% elif package.state == 'queued' %}queued{% elif package.state == 'stale' and package.revision_number is not none %}v{{ package.revision_number }} (stale){% else %}none{% endif %}</strong>
-  </span>
+{% from "_revision_pair.html" import fact_row, revision_pair, workspace_notice %}
+
+{% macro problem_review(revision, workspace) -%}
+<div class="compact-fact-list">
+  {% if revision %}
+  {{ revision_pair(revision) }}
+  {{ workspace_notice(workspace) }}
   {% else %}
-  <span class="problem-review-line">
-    <span class="problem-review-label">Status</span>
-    <strong class="problem-review-value danger">unavailable</strong>
-  </span>
+  {{ fact_row('Status', 'unavailable', 'danger') }}
   {% endif %}
 </div>
 {%- endmacro %}
@@ -40,7 +19,7 @@
   {% set workspace_tone = 'warn' if workspace.tone == 'warning' else 'danger' if workspace.tone == 'danger' else '' %}
   {% set verification_tone = 'warn' if verification.tone == 'warning' else 'danger' if verification.tone == 'danger' else '' %}
   <div class="workspace-review-row">
-    <span class="workspace-review-label">Upstream</span>
+    <span class="workspace-review-label">Published</span>
     <strong class="workspace-review-value">{{ ('v' ~ workspace.upstream_revision) if workspace.upstream_revision is not none else 'none' }}</strong>
   </div>
   <div class="workspace-review-row">

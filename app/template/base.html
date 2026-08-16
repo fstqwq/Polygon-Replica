@@ -1,4 +1,5 @@
 {% from "_component_dialogs.html" import change_badges, ui_popup %}
+{% from "_revision_pair.html" import revision_pair %}
 <!doctype html>
 <html lang="en">
 <head>
@@ -178,12 +179,8 @@
             <a class="workspace-side-link" href="{{ problem_href('problem_access') }}"{% if problem_section == 'access' %} aria-current="page"{% endif %}>Manage access</a>
           </div>
           {% set workspace_review = shell.readiness.workspace %}
-          {% set local_rev_raw = workspace_review.local_revision %}
-          {% set published_rev_raw = workspace_review.upstream_revision %}
-          {% set local_rev = ('v' ~ local_rev_raw) if local_rev_raw is not none else 'none' %}
-          {% set published_rev = ('v' ~ published_rev_raw) if published_rev_raw is not none else 'none' %}
           <div class="workspace-revision">
-            <p class="workspace-revision-inline{{ ' revision-alert' if workspace_review.tone != 'normal' else '' }}">Workspace on <strong>{{ local_rev }}</strong> / Upstream <strong>{{ published_rev }}</strong></p>
+            <div class="compact-fact-list">{{ revision_pair(shell.workspace_revision_pair) }}</div>
           </div>
           <div class="workspace-actions">
             {% if workspace_review.needs_update %}

@@ -1,5 +1,5 @@
 import uuid
-from typing import Annotated, TypedDict
+from typing import Annotated, Literal, TypedDict
 
 from fastapi import Depends, Form, HTTPException, Request
 
@@ -19,6 +19,7 @@ from app.service.export.service import NATIVE_PACKAGE_FORMAT
 from app.service.problem_package.service import (
     VerifiedRevision,
 )
+from app.service.problem.readiness import PackageReadiness
 
 
 class AvailablePackage(TypedDict):
@@ -32,8 +33,8 @@ class PackageFormatContext(TypedDict):
 
 
 class CurrentPackageContext(TypedDict):
-    revision_number: int | None
-    native_available: bool
+    published_display: str
+    package_state: Literal["ready", "queued", "none"]
     create_href: str
     external_formats: list[PackageFormatContext]
 
@@ -41,8 +42,8 @@ class CurrentPackageContext(TypedDict):
 class PackageRevisionRow(TypedDict):
     revision_number: int
     current: bool
-    native_download_href: str
-    additional_packages: list[AvailablePackage]
+    package_download_href: str
+    external_packages: list[AvailablePackage]
 
 
 class PackageAttemptRow(TypedDict):
@@ -103,21 +104,21 @@ def _revision_rows(
     href = problem_href_builder(request, problem)
     rows: list[PackageRevisionRow] = []
     for verified_revision in verified_revisions:
-        additional_packages: list[AvailablePackage] = []
+        external_packages: list[AvailablePackage] = []
         stored_packages = packages_by_revision[verified_revision["id"]]
         for adapter in runtime().export_service.package_adapters.adapters:
             package = stored_packages.get(adapter.format)
             if package is not None:
-                additional_packages.append(package)
+                external_packages.append(package)
         rows.append(
             {
                 "revision_number": verified_revision["revision_number"],
                 "current": verified_revision["source_commit"] == published_commit,
-                "native_download_href": href(
+                "package_download_href": href(
                     "verified_revision_file",
                     verified_revision_id=verified_revision["id"],
                 ),
-                "additional_packages": additional_packages,
+                "external_packages": external_packages,
             }
         )
     return rows
@@ -126,8 +127,7 @@ def _revision_rows(
 def _current_package_context(
     request: Request,
     problem: str,
-    revision_number: int | None,
-    verified_revision: VerifiedRevision | None,
+    readiness: PackageReadiness,
 ) -> CurrentPackageContext:
     href = problem_href_builder(request, problem)
     external_formats: list[PackageFormatContext] = []
@@ -138,9 +138,17 @@ def _current_package_context(
                 "name": adapter.display_name,
             }
         )
+    package_state: Literal["ready", "queued", "none"] = "none"
+    if readiness["state"] == "ready":
+        package_state = "ready"
+    elif readiness["state"] == "queued":
+        package_state = "queued"
+    revision_number = readiness["published_revision_number"]
     return {
-        "revision_number": revision_number,
-        "native_available": verified_revision is not None,
+        "published_display": (
+            f"v{revision_number}" if revision_number is not None else "none"
+        ),
+        "package_state": package_state,
         "create_href": href("export_create"),
         "external_formats": external_formats,
     }
@@ -170,8 +178,12 @@ def _package_attempt_rows(
             {
                 "created_at": job["created_at"],
                 "status": job["status"],
-                "format_display": runtime()
-                .export_service.package_format_display_name(job["export_type"]),
+                "format_display": (
+                    "Package"
+                    if job["export_type"] == NATIVE_PACKAGE_FORMAT
+                    else runtime()
+                    .export_service.package_format_display_name(job["export_type"])
+                ),
                 "detail": detail,
             }
         )
@@ -216,8 +228,7 @@ def export_page(
     current_package = _current_package_context(
         request,
         problem,
-        package_readiness["published_revision_number"],
-        current_verified_revision,
+        package_readiness,
     )
     revision_rows = _revision_rows(
         request,

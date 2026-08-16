@@ -2,6 +2,7 @@
 {% block page_scripts %}<script type="module" src="{{ static_asset_url('js/root_import.js') }}"></script>{% endblock %}
 {% from "_component_dialogs.html" import ui_popup %}
 {% from "_problem_slug_link.html" import problem_slug_link %}
+{% from "_revision_pair.html" import revision_pair %}
 {% block content %}
 <div class="page-title-inline root-page-title-inline">
   <h1 class="page-title">My Problems</h1>
@@ -28,7 +29,7 @@
         {{ problem_slug_link('/problems/' ~ row.slug ~ '/statement', row.slug_owner, row.slug_leaf, owner_prefix_chars) }}
       </td>
       <td>{{ row.role }}</td>
-      <td><span class="{{ 'revision-alert' if row.revision_highlight else '' }}">{{ row.revision_display }}</span></td>
+      <td><span class="compact-fact-list">{{ revision_pair(row.revision_pair) }}</span></td>
       <td>{{ row.updated_at | local_time if row.updated_at else "-" }}</td>
     </tr>
     {% endfor %}

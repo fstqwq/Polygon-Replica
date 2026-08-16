@@ -81,21 +81,6 @@
   padding: var(--space-3);
 }
 
-.workspace-revision-inline {
-  margin: 0;
-  padding: 2px 0 0;
-  font-size: var(--font-size-ui-sm);
-  line-height: 1.35;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow-wrap: normal;
-  word-break: keep-all;
-}
-
-.workspace-revision-inline.revision-alert {
-  color: var(--danger);
-}
-
 .workspace-actions {
   display: grid;
   gap: var(--space-2);

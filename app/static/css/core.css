@@ -293,33 +293,46 @@ body.problem-layout:not(.verification-compact) {
   color: var(--warn);
 }
 
-.problem-review-list {
-  display: grid;
-  gap: 0.15rem;
-}
-
-.problem-review-line {
+.compact-fact-list {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
-  column-gap: var(--space-2);
+  gap: 0.15rem;
   line-height: 1.3;
 }
 
-.problem-review-label {
-  color: var(--muted);
-  text-align: right;
+.compact-fact-row {
+  display: contents;
 }
 
-.problem-review-label::after {
+.compact-fact-label {
+  color: var(--muted);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.compact-fact-label::after {
   content: ":";
 }
 
-.problem-review-value {
+.compact-fact-value {
   min-width: 0;
+  margin-left: var(--space-2);
 }
 
-.problem-review-reason {
-  overflow-wrap: anywhere;
+.compact-fact-meta {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.revision-pair-value {
+  display: inline-flex;
+  gap: var(--space-2);
+  align-items: baseline;
+}
+
+.revision-pair-separator {
+  color: var(--muted);
+  font-weight: 400;
 }
 
 .problem-section-tab.active .problem-section-tab-status:not(.section-tab-status-danger):not(.section-tab-status-warn) {

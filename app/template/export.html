@@ -4,21 +4,21 @@
 {% include "_flash_message.html" %}
 
 <div class="content-section package-create-section">
-  {% if current_package.revision_number %}
+  {% if current_package.published_display != 'none' %}
   <div class="package-create-revision">
-    <span>Current revision: <strong>v{{ current_package.revision_number }}</strong></span>
-    {% if current_package.native_available %}
-    <span class="muted">(Verified)</span>
-    {% else %}
+    <span class="muted">Published:</span> <strong>{{ current_package.published_display }}</strong>
+    <span aria-hidden="true">&middot;</span>
+    <span class="muted">Package:</span> <strong class="{{ 'danger' if current_package.package_state == 'none' else '' }}">{{ current_package.package_state }}</strong>
+    {% if current_package.package_state == 'none' %}
     <form class="package-verify-form" method="post" action="{{ current_package.create_href }}">
       <input type="hidden" name="format" value="native" />
-      <span aria-hidden="true">(</span><button class="linkish-button" type="submit" {% if not ctx.access.can_create_packages %}disabled title="{{ ctx.access.package_create_block_reason }}"{% endif %}>Verify this version</button><span aria-hidden="true">)</span>
+      <span aria-hidden="true">(</span><button class="linkish-button" type="submit" {% if not ctx.access.can_create_packages %}disabled title="{{ ctx.access.package_create_block_reason }}"{% endif %}>Create package</button><span aria-hidden="true">)</span>
     </form>
     {% endif %}
   </div>
   <form class="form-row package-create-form" method="post" action="{{ current_package.create_href }}">
     <label>
-      Format
+      External format
       <select name="format">
         {% for format in current_package.external_formats %}
         <option value="{{ format.id }}">{{ format.name }}</option>
@@ -36,14 +36,14 @@
   <h2>Revisions</h2>
   {% if revision_rows %}
   <div class="table-scroll"><table class="table-base">
-    <tr><th>Revision</th><th>Verified</th><th>External Packages</th></tr>
+    <tr><th>Published</th><th>Package</th><th>External packages</th></tr>
     {% for row in revision_rows %}
     <tr>
       <td>v{{ row.revision_number }}{% if row.current %} <span class="muted">Current</span>{% endif %}</td>
-      <td><a href="{{ row.native_download_href }}">Download</a></td>
+      <td><a href="{{ row.package_download_href }}">Download</a></td>
       <td>
-        {% if row.additional_packages %}
-          {% for package in row.additional_packages %}
+        {% if row.external_packages %}
+          {% for package in row.external_packages %}
             {{ package.name }} &middot; <a href="{{ package.download_href }}">Download</a>{% if not loop.last %}<br />{% endif %}
           {% endfor %}
         {% else %}
@@ -53,7 +53,7 @@
     </tr>
     {% endfor %}
   </table></div>
-  {% else %}<p class="muted">No verified revisions are available.</p>{% endif %}
+  {% else %}<p class="muted">No packages are available.</p>{% endif %}
 </section>
 
 <section class="content-section">

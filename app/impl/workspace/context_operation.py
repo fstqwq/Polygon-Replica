@@ -5,7 +5,10 @@ from pathlib import Path
 from typing import Literal, TypedDict
 from fastapi import HTTPException
 from app.impl.runtime.dependency import runtime
-from app.impl.workspace.context_model import SolutionsComponentContext
+from app.impl.workspace.context_model import (
+    SolutionsComponentContext,
+    workspace_published_revision_pair,
+)
 from app.service.platform.workspace_path import (
     normalize_workspace_rel_path,
     safe_workspace_path,
@@ -20,7 +23,6 @@ from app.service.problem.query import (
     RunTestOption,
     SolutionSourceRow,
 )
-from app.service.repository.revision import workspace_upstream_revision_display
 from app.service.access.policy import access_role
 
 
@@ -30,9 +32,6 @@ _STANDARD_CHECKER_CACHE_AVAILABLE = False
 _STANDARD_CHECKER_CACHE_NAMES: tuple[str, ...] = ()
 _STANDARD_CHECKER_CACHE_SET: frozenset[str] = frozenset()
 
-
-def _db_revision_display(local: int | None, upstream: int | None) -> str:
-    return workspace_upstream_revision_display(local, upstream)
 
 def user_participating_problems(user_id: int, limit: int) -> list[dict]:
     uid = int(user_id)
@@ -51,8 +50,13 @@ def user_participating_problems(user_id: int, limit: int) -> list[dict]:
         workspace_path = row['path'] or ''
         revision_local = row['revision_local']
         revision_upstream = row['revision_upstream']
-        revision_display = _db_revision_display(revision_local, revision_upstream)
-        items.append({'slug': row['slug'], 'role': role, 'workspace_id': row['workspace_id'], 'has_workspace': row['workspace_id'] is not None, 'workspace_path': workspace_path, 'branch': branch, 'head_commit': head, 'head_short': head[:8], 'dirty': dirty, 'revision_local': revision_local, 'revision_upstream': revision_upstream, 'revision_display': revision_display, 'revision_highlight': bool(row['revision_highlight']), 'revision_upstream_higher': bool(row['revision_upstream_higher']), 'revision_missing': bool(row['revision_missing']), 'updated_at': row['updated_at'], 'last_updated_at': row['last_updated_at']})
+        revision_pair = workspace_published_revision_pair(
+            revision_local,
+            revision_upstream,
+            dirty=dirty,
+            needs_update=bool(row['revision_upstream_higher']),
+        )
+        items.append({'slug': row['slug'], 'role': role, 'workspace_id': row['workspace_id'], 'has_workspace': row['workspace_id'] is not None, 'workspace_path': workspace_path, 'branch': branch, 'head_commit': head, 'head_short': head[:8], 'dirty': dirty, 'revision_local': revision_local, 'revision_upstream': revision_upstream, 'revision_pair': revision_pair, 'revision_highlight': bool(row['revision_highlight']), 'revision_upstream_higher': bool(row['revision_upstream_higher']), 'revision_missing': bool(row['revision_missing']), 'updated_at': row['updated_at'], 'last_updated_at': row['last_updated_at']})
     return items
 
 def normalize_contest_slug_required(value: str) -> str:

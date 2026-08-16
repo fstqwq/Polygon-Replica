@@ -38,6 +38,7 @@ from app.impl.workspace.context_model import (
     SourceComponentContext,
     SystemLimitInfo,
     navigation_context,
+    workspace_published_revision_pair,
 )
 from app.impl.workspace.context_operation import (
     _solutions_status_context,
@@ -492,6 +493,12 @@ def page_ctx(
             package_download=package_download,
         ),
         'workspace_changes': workspace_changes,
+        'workspace_revision_pair': workspace_published_revision_pair(
+            readiness['workspace']['local_revision'],
+            readiness['workspace']['upstream_revision'],
+            dirty=readiness['workspace']['dirty'],
+            needs_update=readiness['workspace']['needs_update'],
+        ),
     }
     ctx['shell'] = shell
     ctx['contest_workspace'] = contest_workspace

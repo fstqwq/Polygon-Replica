@@ -246,22 +246,18 @@
   color: var(--danger);
 }
 
-.contest-problem-detail-components,
-.contest-problem-detail-languages {
-  white-space: normal;
-}
-
 .table-base .contest-problem-review-cell {
   min-width: 190px;
   font-size: var(--font-size-ui-xs);
 }
 
-.contest-problem-review-cell .problem-review-list {
+.contest-problem-review-cell .compact-fact-list {
   gap: 0;
+  line-height: 1.4;
 }
 
-.contest-problem-review-cell .problem-review-line {
-  line-height: 1.4;
+.contest-problem-facts {
+  margin-top: 1px;
 }
 
 .contest-package-tools {

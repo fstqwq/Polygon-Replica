@@ -5858,6 +5858,13 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertIn('<option value="domjudge">DOMjudge</option>', html)
         self.assertIn('<option value="icpc-2025-09">ICPC 2025-09</option>', html)
         self.assertIn("<strong>v5</strong>", html)
+        self.assertIn("Published:", html)
+        self.assertIn("Package:</", html)
+        self.assertIn("Create package</button>", html)
+        self.assertIn("External format", html)
+        self.assertIn("<th>Published</th><th>Package</th><th>External packages</th>", html)
+        self.assertNotIn("Current revision:", html)
+        self.assertNotIn("Verify this version", html)
         for revision in (2, 3, 4):
             self.assertIn(
                 f"/problems/alice/sample/verified-revisions/"
@@ -5901,6 +5908,89 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             "sample-polygon-replica-v4.zip",
             str(response.headers.get("content-disposition") or ""),
         )
+
+    def test_packages_page_projects_current_package_ready_and_queued_states(
+        self,
+    ) -> None:
+        context = workspace_service.workspace_context(
+            "alice/sample",
+            "alice",
+            include_recent=False,
+        )
+        problem_id = int(context["problem"]["id"])
+        source_commit = str(context["workspace"]["head_commit"] or "")
+        published_revision = 1
+        verified_revision_id = f"vr-package-page-{uuid.uuid4().hex[:8]}"
+        verified_revision = {
+            "id": verified_revision_id,
+            "problem_id": problem_id,
+            "source_commit": source_commit,
+            "revision_number": published_revision,
+            "source_digest": "b" * 64,
+            "archive_rel_path": "materializations/current.zip",
+            "archive_sha256": "c" * 64,
+            "archive_size_bytes": 100,
+            "verification_id": "ver-package-page",
+            "status": "available",
+            "created_at": "2026-08-17T00:00:00Z",
+            "checked_at": "2026-08-17T00:00:00Z",
+            "unavailable_reason": "",
+        }
+        for status, expected in (("ready", "ready"), ("queued", "queued")):
+            readiness = {
+                "problem_id": problem_id,
+                "published_commit": source_commit,
+                "published_revision_number": published_revision,
+                "verified_revision_number": (
+                    published_revision if status == "ready" else None
+                ),
+                "verified_revision_id": (
+                    verified_revision_id if status == "ready" else ""
+                ),
+                "status": status,
+                "missing_reason": "",
+            }
+            with self.subTest(status=status):
+                with (
+                    patch.object(
+                        runtime.problem_package_service,
+                        "published_readiness",
+                        return_value=readiness,
+                    ),
+                    patch.object(
+                        runtime.problem_package_service,
+                        "verified_revision",
+                        return_value=(
+                            verified_revision if status == "ready" else None
+                        ),
+                    ),
+                    patch.object(
+                        runtime.problem_package_service,
+                        "available_verified_revision_history",
+                        return_value=(
+                            [verified_revision] if status == "ready" else []
+                        ),
+                    ),
+                    patch.object(
+                        runtime.export_service,
+                        "materialization_packages",
+                        return_value=[],
+                    ),
+                    patch.object(
+                        runtime.export_service,
+                        "problem_export_jobs",
+                        return_value=[],
+                    ),
+                ):
+                    page = export_page(
+                        _request("/problems/alice/sample/export"),
+                        "alice/sample",
+                        "alice",
+                    )
+                html = page.body.decode("utf-8", errors="replace")
+                self.assertIn("Published:", html)
+                self.assertIn(f">{expected}</strong>", html)
+                self.assertNotIn("Create package</button>", html)
 
     def test_package_create_reuses_existing_current_package(self) -> None:
         context = workspace_service.workspace_context(

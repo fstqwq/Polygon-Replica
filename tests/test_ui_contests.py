@@ -403,6 +403,17 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertEqual(overview.status_code, 200)
         html = overview.body.decode("utf-8", errors="replace")
         self.assertNotIn("private checker detail", html)
+        details_start = html.index('<td class="contest-problem-details-cell">')
+        revision_start = html.index(
+            '<td class="contest-problem-review-cell">',
+            details_start,
+        )
+        row_end = html.index("</tr>", revision_start)
+        self.assertIn("Verification", html[details_start:revision_start])
+        self.assertIn("failed", html[details_start:revision_start])
+        self.assertNotIn("Verification", html[revision_start:row_end])
+        self.assertIn("Package / Published", html[revision_start:row_end])
+        self.assertIn("Packages:", html)
 
     def test_contest_details_remain_available_for_repairable_source_warning(self) -> None:
         contest_slug = f"review-source-{uuid.uuid4().hex[:8]}"
@@ -482,9 +493,9 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
 
         self.assertEqual(overview.status_code, 200)
         html = overview.body.decode("utf-8", errors="replace")
-        self.assertIn("Checker:", html)
+        self.assertIn('class="compact-fact-label">Checker</span>', html)
         self.assertIn("checker.cpp", html)
-        self.assertIn("Validator:", html)
+        self.assertIn('class="compact-fact-label">Validator</span>', html)
         self.assertIn("validator.cpp", html)
         self.assertIn(
             "extra field &#39;interactor_source&#39; in a pass-fail problem",

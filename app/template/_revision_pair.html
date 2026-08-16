@@ -1,0 +1,30 @@
+{% macro fact_row(label, value, tone='') -%}
+<span class="compact-fact-row">
+  <span class="compact-fact-label">{{ label }}</span>
+  <strong class="compact-fact-value {{ tone }}">{{ value }}</strong>
+</span>
+{%- endmacro %}
+
+{% macro revision_pair(view) -%}
+{% set left_tone = 'warn' if view.left_tone == 'warning' else 'danger' if view.left_tone == 'danger' else '' %}
+<span class="compact-fact-row revision-pair-row" aria-label="{{ view.aria_label }}">
+  <span class="compact-fact-label">{{ view.left_label }} / {{ view.right_label }}</span>
+  <span class="compact-fact-value revision-pair-value" aria-hidden="true">
+    <strong class="{{ left_tone }}">{{ view.left_display }}</strong>
+    <span class="revision-pair-separator">/</span>
+    <strong>{{ view.right_display }}</strong>
+  </span>
+</span>
+{%- endmacro %}
+
+{% macro workspace_notice(notice) -%}
+{% if notice %}
+{% set notice_tone = 'warn' if notice.tone == 'warning' else 'danger' if notice.tone == 'danger' else '' %}
+<span class="compact-fact-row">
+  <span class="compact-fact-label">Workspace</span>
+  <span class="compact-fact-value">
+    <strong class="{{ notice_tone }}">{{ notice.display }}</strong>{% if notice.meta %}<span class="compact-fact-meta"> &middot; {{ notice.meta }}</span>{% endif %}
+  </span>
+</span>
+{% endif %}
+{%- endmacro %}
