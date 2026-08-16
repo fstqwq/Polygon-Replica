@@ -426,6 +426,22 @@ def _agent_register_url(client: httpx.Client) -> str:
     return str(payload.get("register_url") or "")
 
 
+def _agent_set_general_scope(
+    client: httpx.Client,
+    session_id: str,
+    scope: str,
+) -> None:
+    response = _post(
+        client,
+        f"/agent/sessions/{session_id}/general-scope",
+        {"general_scope": scope},
+    )
+    if response.headers.get("location") != "/agent/sessions":
+        raise RuntimeError(
+            f"Agent general permission redirected unexpectedly: {response.headers!r}"
+        )
+
+
 def _setup(client: httpx.Client) -> None:
     fields = _hidden_inputs(client.get("/setup"))
     csrf_token = _required_field(fields, "csrf_token")
@@ -668,10 +684,18 @@ def prepare() -> None:
         )
         if initialized.get("user") != USERNAME:
             raise RuntimeError(f"Agent initialized for wrong user: {initialized!r}")
+        agent_session_id = str(initialized.get("agent_session_id") or "")
+        if not agent_session_id:
+            raise RuntimeError(f"Agent init omitted session identity: {initialized!r}")
         status = _agent_cli("status")
-        if status.get("user") != USERNAME or status.get("authorized_problems") != []:
+        if (
+            status.get("user") != USERNAME
+            or status.get("general_scope") != "none"
+            or status.get("problem_grants") != []
+        ):
             raise RuntimeError(f"fresh Agent status is wrong: {status!r}")
 
+        _agent_set_general_scope(client, agent_session_id, "commit")
         created = _agent_cli("create", "--problem", PROBLEM)
         if created.get("problem") != PROBLEM:
             raise RuntimeError(f"Agent created the wrong problem: {created!r}")
@@ -683,6 +707,8 @@ def prepare() -> None:
         )
         if int(duplicate.get("http_status") or 0) != 409:
             raise RuntimeError(f"duplicate Agent create was not rejected: {duplicate!r}")
+
+        _agent_set_general_scope(client, agent_session_id, "none")
 
         access = _agent_cli("connect", "--problem", PROBLEM)
         request_id = str(access.get("request_id") or "")
@@ -703,20 +729,24 @@ def prepare() -> None:
             "--timeout-sec",
             "10",
         )
-        if approved.get("status") != "approved" or approved.get("token_saved") is not True:
-            raise RuntimeError(f"Agent token was not saved: {approved!r}")
+        if (
+            approved.get("status") != "approved"
+            or not approved.get("grant_id")
+            or approved.get("granted_scope") != "commit"
+        ):
+            raise RuntimeError(f"Agent grant was not created: {approved!r}")
         authorized = _agent_cli("status")
-        authorized_problems = cast(
+        problem_grants = cast(
             list[dict[str, object]],
-            authorized.get("authorized_problems") or [],
+            authorized.get("problem_grants") or [],
         )
-        if authorized_problems != [
-            {
-                "problem": PROBLEM,
-                "scope": "commit",
-                "expires_at": approved.get("expires_at"),
-            }
-        ]:
+        if (
+            authorized.get("general_scope") != "none"
+            or len(problem_grants) != 1
+            or problem_grants[0].get("problem") != PROBLEM
+            or problem_grants[0].get("scope") != "commit"
+            or problem_grants[0].get("grant_id") != approved.get("grant_id")
+        ):
             raise RuntimeError(
                 f"Agent status omitted approved problem access: {authorized!r}"
             )

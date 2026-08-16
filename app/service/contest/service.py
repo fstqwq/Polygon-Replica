@@ -10,7 +10,7 @@ from app.db import DB, now_iso
 from app.config import ConfigValues
 from app.service.access.policy import access_role, contest_role
 from app.service.access.query import AccessQuery
-from app.service.contest.model import ContestBuildItemRecord
+from app.service.contest.model import AgentContestRoster, ContestBuildItemRecord
 from app.service.contest.statement_meta import infer_contest_header_fields
 from app.service.disk.contest_store import (
     ContestDiskStore,
@@ -470,6 +470,9 @@ class ContestService:
             "statement_default_language": str(row["statement_default_language"]),
             "created_at": str(row["created_at"]),
         }
+
+    def agent_roster(self, contest_slug: str) -> AgentContestRoster | None:
+        return self._store.agent_roster(str(contest_slug or ""))
 
     def owner_count(self, contest_id: int) -> int:
         return self._store.owner_count(int(contest_id))

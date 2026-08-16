@@ -679,6 +679,14 @@ class WorkspaceDiskStore:
             )
             conn.execute("DELETE FROM verifications WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM workspaces WHERE problem_id=?", [int(problem_id)])
+            conn.execute(
+                "DELETE FROM agent_access_requests WHERE problem_id=?",
+                [int(problem_id)],
+            )
+            conn.execute(
+                "DELETE FROM agent_problem_grants WHERE problem_id=?",
+                [int(problem_id)],
+            )
             conn.execute("DELETE FROM repo_acl WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM problems WHERE id=?", [int(problem_id)])
 

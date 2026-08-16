@@ -131,6 +131,25 @@ verified-revision identities, and frozen archive checksums in one
 revision aborts admission without a partial job. Filesystem reads occur after
 that transaction and must match the frozen identities and checksums.
 
+## Agent authorization rows
+
+`agent_sessions` owns the connected desktop identity and its non-expiring
+`none`, `readonly`, `workspace`, or `commit` general scope. Ordinary Agent API
+authentication requires the session ID and identity hash headers. A
+disconnected session is not an actor.
+
+`agent_problem_grants` stores independent user approvals. Multiple rows may
+target the same session and problem; each retains its own scope, creation time,
+expiry, and revocation time. Authorization filters active rows at read time and
+takes their strongest scope without merging their lifetimes. The result is
+combined with general scope and capped by the user's current direct,
+Contest-derived, or administrator problem role.
+
+`agent_access_requests` is an expiring approval request, not credential
+delivery. Approval creates one grant and records its ID, scope, and expiry in
+the same `BEGIN IMMEDIATE` transaction. Repeating approval of the same request
+returns that grant and cannot create another row.
+
 ## Configuration
 
 `system_config` is a key/value JSON store with update identity and timestamp. It

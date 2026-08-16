@@ -31,9 +31,9 @@ layout is defined by the
 
 ## Trust boundaries
 
-Browser sessions, agent tokens, and Judgehost credentials are distinct.
+Browser sessions, Agent identities, and Judgehost credentials are distinct.
 Cross-resource capability decisions are owned by the access service and are
-described in the [access model](access.md). Agent tokens cannot acquire,
+described in the [access model](access.md). Agent identities cannot acquire,
 inherit, or present sudo authority. Sudo belongs only to the browser session
 that completed elevation and is not transferable.
 

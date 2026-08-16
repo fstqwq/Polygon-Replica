@@ -3,7 +3,12 @@ from typing import TypedDict
 
 from app.db import DB, is_sqlite_locked_error
 from app.main_util import problem_slug_leaf
-from app.service.contest.model import ContestBuildFreezeResult, ContestBuildItemRecord
+from app.service.contest.model import (
+    AgentContestRoster,
+    AgentContestRosterProblem,
+    ContestBuildFreezeResult,
+    ContestBuildItemRecord,
+)
 
 
 class ContestContextRecord(TypedDict):
@@ -366,6 +371,62 @@ class ContestDiskStore:
             [contest_slug],
         )
         return None if row is None else _contest_context_record(dict(row))
+
+    def agent_roster(self, contest_slug: str) -> AgentContestRoster | None:
+        with self.db.conn() as connection:
+            connection.execute("BEGIN")
+            contest = connection.execute(
+                """
+                SELECT id,slug,title,source_generation
+                FROM contests
+                WHERE slug=?
+                """,
+                [contest_slug],
+            ).fetchone()
+            if contest is None:
+                connection.rollback()
+                return None
+            rows = connection.execute(
+                """
+                SELECT cp.id AS contest_problem_id,cp.position,
+                       cp.label AS idx,cp.problem_id,p.slug AS problem_slug
+                FROM contest_problems cp
+                JOIN problems p ON p.id=cp.problem_id
+                WHERE cp.contest_id=?
+                ORDER BY cp.position,cp.id
+                """,
+                [int(contest["id"])],
+            ).fetchall()
+            connection.commit()
+        problems: list[AgentContestRosterProblem] = [
+            {
+                "contest_problem_id": _required_int(
+                    row["contest_problem_id"],
+                    "agent roster contest_problem_id",
+                ),
+                "position": _required_int(
+                    row["position"],
+                    "agent roster position",
+                ),
+                "idx": str(row["idx"] or ""),
+                "problem_id": _required_int(
+                    row["problem_id"],
+                    "agent roster problem_id",
+                ),
+                "problem_slug": str(row["problem_slug"] or ""),
+            }
+            for row in rows
+        ]
+        return {
+            "contest_id": _required_int(contest["id"], "agent roster id"),
+            "contest_slug": str(contest["slug"] or ""),
+            "contest_title": str(contest["title"] or ""),
+            "source_generation": _required_int(
+                contest["source_generation"],
+                "agent roster source_generation",
+            ),
+            "problems": problems,
+        }
 
     def contest_context_by_id(self, contest_id: int) -> ContestContextRecord | None:
         row = self.db.fetch_one(

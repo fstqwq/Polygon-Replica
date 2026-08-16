@@ -25,3 +25,19 @@ class ContestBuildItemRecord(TypedDict):
     revision_number: int
     materialization_id: str
     archive_sha256: str
+
+
+class AgentContestRosterProblem(TypedDict):
+    contest_problem_id: int
+    position: int
+    idx: str
+    problem_id: int
+    problem_slug: str
+
+
+class AgentContestRoster(TypedDict):
+    contest_id: int
+    contest_slug: str
+    contest_title: str
+    source_generation: int
+    problems: list[AgentContestRosterProblem]

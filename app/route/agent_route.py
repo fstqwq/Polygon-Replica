@@ -5,6 +5,8 @@ from app.impl.agent.api import (
     agent_auth_status,
     agent_commit,
     agent_commit_status,
+    agent_contest_problem_snapshot,
+    agent_contest_problems,
     agent_export_download,
     agent_export_start,
     agent_export_status,
@@ -29,37 +31,115 @@ from app.impl.agent.pages import (
     agent_approve_submit,
     agent_connect,
     agent_disconnect_session,
-    agent_revoke_token,
+    agent_revoke_grant,
     agent_sessions_page,
+    agent_set_general_scope,
 )
 
 router = APIRouter()
 
-router.add_api_route("/agent/sessions", agent_sessions_page, methods=["GET"], response_class=HTMLResponse)
+router.add_api_route(
+    "/agent/sessions",
+    agent_sessions_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
 router.add_api_route("/agent/connect", agent_connect, methods=["POST"])
-router.add_api_route("/agent/approve/{request_id}", agent_approve_page, methods=["GET"], response_class=HTMLResponse)
-router.add_api_route("/agent/approve/{request_id}", agent_approve_submit, methods=["POST"])
-router.add_api_route("/agent/revoke/{token_id}", agent_revoke_token, methods=["POST"])
-router.add_api_route("/agent/disconnect/{session_id}", agent_disconnect_session, methods=["POST"])
+router.add_api_route(
+    "/agent/approve/{request_id}",
+    agent_approve_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/agent/approve/{request_id}",
+    agent_approve_submit,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/agent/grants/{grant_id}/revoke",
+    agent_revoke_grant,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/agent/sessions/{session_id}/general-scope",
+    agent_set_general_scope,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/agent/disconnect/{session_id}",
+    agent_disconnect_session,
+    methods=["POST"],
+)
 
 router.add_api_route("/agent/v1/register/{code}", agent_register, methods=["POST"])
 router.add_api_route("/agent/v1/auth/status", agent_auth_status, methods=["GET"])
-router.add_api_route("/agent/v1/auth/request-access", agent_request_access, methods=["POST"])
-router.add_api_route("/agent/v1/auth/poll/{request_id}", agent_poll_access, methods=["GET"])
+router.add_api_route(
+    "/agent/v1/auth/request-access",
+    agent_request_access,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/agent/v1/auth/poll/{request_id}",
+    agent_poll_access,
+    methods=["GET"],
+)
 router.add_api_route("/agent/v1/problems", agent_problem_create, methods=["POST"])
-router.add_api_route("/agent/v1/verification/start", agent_verification_start, methods=["POST"])
-router.add_api_route("/agent/v1/verification/{verification_id}/status", agent_verification_status, methods=["GET"])
-router.add_api_route("/agent/v1/verification/{verification_id}/detail", agent_verification_detail, methods=["GET"])
+router.add_api_route(
+    "/agent/v1/contests/{contest_slug}/problems",
+    agent_contest_problems,
+    methods=["GET"],
+)
+router.add_api_route(
+    "/agent/v1/contests/{contest_slug}/problems/{contest_problem_id}/workspace/snapshot",
+    agent_contest_problem_snapshot,
+    methods=["GET"],
+)
+router.add_api_route(
+    "/agent/v1/verification/start",
+    agent_verification_start,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/agent/v1/verification/{verification_id}/status",
+    agent_verification_status,
+    methods=["GET"],
+)
+router.add_api_route(
+    "/agent/v1/verification/{verification_id}/detail",
+    agent_verification_detail,
+    methods=["GET"],
+)
 router.add_api_route("/agent/v1/export/start", agent_export_start, methods=["POST"])
 router.add_api_route("/agent/v1/export/{job_id}/status", agent_export_status, methods=["GET"])
-router.add_api_route("/agent/v1/export/{job_id}/download", agent_export_download, methods=["GET"])
+router.add_api_route(
+    "/agent/v1/export/{job_id}/download",
+    agent_export_download,
+    methods=["GET"],
+)
 router.add_api_route("/agent/v1/workspace/files", agent_workspace_files, methods=["GET"])
 router.add_api_route("/agent/v1/workspace/status", agent_workspace_status, methods=["GET"])
-router.add_api_route("/agent/v1/workspace/snapshot", agent_workspace_snapshot, methods=["GET"])
-router.add_api_route("/agent/v1/workspace/compare", agent_workspace_compare, methods=["POST"])
-router.add_api_route("/agent/v1/workspace/apply", agent_workspace_apply, methods=["POST"])
+router.add_api_route(
+    "/agent/v1/workspace/snapshot",
+    agent_workspace_snapshot,
+    methods=["GET"],
+)
+router.add_api_route(
+    "/agent/v1/workspace/compare",
+    agent_workspace_compare,
+    methods=["POST"],
+)
+router.add_api_route(
+    "/agent/v1/workspace/apply",
+    agent_workspace_apply,
+    methods=["POST"],
+)
 router.add_api_route("/agent/v1/workspace/file", agent_workspace_file, methods=["GET"])
 router.add_api_route("/agent/v1/workspace/upload", agent_workspace_upload, methods=["POST"])
-router.add_api_route("/agent/v1/workspace/files/{path:path}", agent_workspace_delete, methods=["DELETE"])
+router.add_api_route(
+    "/agent/v1/workspace/files/{path:path}",
+    agent_workspace_delete,
+    methods=["DELETE"],
+)
 router.add_api_route("/agent/v1/commit", agent_commit, methods=["POST"])
 router.add_api_route("/agent/v1/commit/{ref}/status", agent_commit_status, methods=["GET"])

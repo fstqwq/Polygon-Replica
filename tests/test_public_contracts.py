@@ -109,6 +109,81 @@ def _is_db_handle(node: ast.AST) -> bool:
 
 
 class TestPublicContracts(unittest.TestCase):
+    def test_agent_runtime_has_no_problem_bearer_compatibility(self) -> None:
+        paths = [
+            ROOT / "app" / "db.py",
+            ROOT / "app" / "impl" / "agent" / "api.py",
+            ROOT / "app" / "impl" / "agent" / "shared.py",
+            ROOT / "app" / "route" / "agent_route.py",
+            ROOT / "app" / "service" / "agent" / "service.py",
+            ROOT / "app" / "service" / "agent" / "store.py",
+        ]
+        source = "\n".join(path.read_text(encoding="utf-8") for path in paths)
+        for obsolete in (
+            "agent_tokens",
+            "delivery_token",
+            "delivered_at",
+            "poly_",
+            "require_agent_token",
+        ):
+            with self.subTest(obsolete=obsolete):
+                self.assertNotIn(obsolete, source)
+        self.assertIn("X-Polygon-Agent-Session-ID", source)
+        self.assertIn("X-Polygon-Agent-Identity-Hash", source)
+        self.assertIn("agent_problem_grants", source)
+
+    def test_agent_problem_routes_require_explicit_problem_scope(self) -> None:
+        route_tree = ast.parse(
+            (ROOT / "app" / "route" / "agent_route.py").read_text(encoding="utf-8")
+        )
+        api_tree = ast.parse(
+            (ROOT / "app" / "impl" / "agent" / "api.py").read_text(encoding="utf-8")
+        )
+        api_functions = {
+            node.name: node
+            for node in api_tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        exempt_prefixes = (
+            "/agent/v1/auth/",
+            "/agent/v1/contests/",
+            "/agent/v1/register/",
+        )
+        exempt_paths = {"/agent/v1/problems"}
+        handlers: list[str] = []
+        for node in ast.walk(route_tree):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "add_api_route"
+                and len(node.args) >= 2
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+                and isinstance(node.args[1], ast.Name)
+            ):
+                continue
+            path = node.args[0].value
+            if (
+                not path.startswith("/agent/v1/")
+                or path in exempt_paths
+                or path.startswith(exempt_prefixes)
+            ):
+                continue
+            handlers.append(node.args[1].id)
+        self.assertTrue(handlers)
+        for handler in handlers:
+            with self.subTest(handler=handler):
+                function = api_functions.get(handler)
+                self.assertIsNotNone(function)
+                self.assertTrue(
+                    any(
+                        isinstance(call, ast.Call)
+                        and isinstance(call.func, ast.Name)
+                        and call.func.id == "require_agent_problem"
+                        for call in ast.walk(function)
+                    )
+                )
+
     def test_first_party_text_files_are_ascii(self) -> None:
         offenders: list[str] = []
         invalid_pragmas: list[str] = []

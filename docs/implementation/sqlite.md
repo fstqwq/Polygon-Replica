@@ -6,7 +6,7 @@ The physical DDL and required-column manifest are maintained together in
 | Responsibility | Tables |
 | --- | --- |
 | authentication | `users`, `auth_sessions`, `sudo_sessions`, `pending_registrations`, `auth_rate_limits` |
-| agent access | `agent_registration_codes`, `agent_sessions`, `agent_access_requests`, `agent_tokens` |
+| agent access | `agent_registration_codes`, `agent_sessions`, `agent_access_requests`, `agent_problem_grants` |
 | authoring | `problems`, `repo_acl`, `workspaces` |
 | contests | `contests`, `contest_members`, `contest_problems`, `contest_jobs`, `contest_build_items`, `contest_artifacts`, `contest_attachments` |
 | execution | `previews`, `verifications`, `verification_selected_tests`, `verification_source_paths`, `verification_sanity_checks`, `verification_sanity_check_messages`, `verification_tests_meta`, `verification_tasks`, `verification_task_artifacts`, `verification_task_diagnostics` |

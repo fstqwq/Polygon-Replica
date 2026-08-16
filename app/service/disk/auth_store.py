@@ -224,10 +224,6 @@ class AuthStore:
             "UPDATE agent_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL",
             [now_text, int(user_id)],
         )
-        self.db.execute(
-            "UPDATE agent_tokens SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL",
-            [now_text, int(user_id)],
-        )
 
     def set_system_admin(self, *, actor_user_id: int, username: str, enabled: bool) -> AuthUserRow:
         safe_username = username.strip()
@@ -335,10 +331,6 @@ class AuthStore:
                 )
                 conn.execute(
                     "UPDATE agent_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL",
-                    [now_text, target_id],
-                )
-                conn.execute(
-                    "UPDATE agent_tokens SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL",
                     [now_text, target_id],
                 )
             updated = conn.execute(

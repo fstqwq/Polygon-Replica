@@ -51,7 +51,10 @@ def agent_connect(request: Request):
 def agent_approve_page(request: Request, request_id: str):
     user = current_web_user(request)
     try:
-        access_request = runtime().agent_service.access_request_for_user(actor_user_id=user["user_id"], request_id=request_id)
+        access_request = runtime().agent_service.access_request_for_user(
+            actor_user_id=user["user_id"],
+            request_id=request_id,
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return template_response(
@@ -61,7 +64,7 @@ def agent_approve_page(request: Request, request_id: str):
             "user": _template_user(user),
             "active_main": "settings",
             "access_request": access_request,
-            "default_scope": "readonly",
+            "default_scope": str(access_request["requested_scope"]),
             "default_ttl": "86400",
         },
     )
@@ -90,6 +93,8 @@ def agent_approve_submit(
             message = "agent access approved"
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        message = str(exc)
     except TimeoutError as exc:
         message = str(exc)
     except ValueError as exc:
@@ -97,19 +102,66 @@ def agent_approve_submit(
     return redirect_response("/agent/sessions", status_code=303, message=message)
 
 
-def agent_revoke_token(request: Request, token_id: str):
+def agent_revoke_grant(request: Request, grant_id: str):
     user = current_web_user(request)
     try:
-        runtime().agent_service.revoke_token(actor_user_id=user["user_id"], token_id=token_id)
-        return redirect_response("/agent/sessions", status_code=303, message="agent token revoked")
+        runtime().agent_service.revoke_grant(
+            actor_user_id=user["user_id"],
+            grant_id=grant_id,
+        )
+        return redirect_response(
+            "/agent/sessions",
+            status_code=303,
+            message="agent problem grant revoked",
+        )
     except LookupError as exc:
-        return redirect_response("/agent/sessions", status_code=303, message=str(exc))
+        return redirect_response(
+            "/agent/sessions",
+            status_code=303,
+            message=str(exc),
+        )
+
+
+def agent_set_general_scope(
+    request: Request,
+    session_id: str,
+    general_scope: str = Form("none"),
+):
+    user = current_web_user(request)
+    try:
+        runtime().agent_service.set_general_scope(
+            actor_user_id=user["user_id"],
+            session_id=session_id,
+            general_scope=general_scope,
+        )
+        return redirect_response(
+            "/agent/sessions",
+            status_code=303,
+            message="agent general permission updated",
+        )
+    except (LookupError, ValueError) as exc:
+        return redirect_response(
+            "/agent/sessions",
+            status_code=303,
+            message=str(exc),
+        )
 
 
 def agent_disconnect_session(request: Request, session_id: str):
     user = current_web_user(request)
     try:
-        runtime().agent_service.disconnect_session(actor_user_id=user["user_id"], session_id=session_id)
-        return redirect_response("/agent/sessions", status_code=303, message="agent disconnected")
+        runtime().agent_service.disconnect_session(
+            actor_user_id=user["user_id"],
+            session_id=session_id,
+        )
+        return redirect_response(
+            "/agent/sessions",
+            status_code=303,
+            message="agent disconnected",
+        )
     except LookupError as exc:
-        return redirect_response("/agent/sessions", status_code=303, message=str(exc))
+        return redirect_response(
+            "/agent/sessions",
+            status_code=303,
+            message=str(exc),
+        )

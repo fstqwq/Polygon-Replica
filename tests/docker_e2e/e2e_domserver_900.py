@@ -287,6 +287,10 @@ def _setup_product() -> None:
         )
         if initialized.get("user") != product.USERNAME:
             raise RuntimeError(f"Agent initialized for wrong user: {initialized!r}")
+        session_id = str(initialized.get("agent_session_id") or "")
+        if not session_id:
+            raise RuntimeError(f"Agent init omitted session identity: {initialized!r}")
+        product._agent_set_general_scope(client, session_id, "commit")
 
 
 def _setup_domserver() -> None:

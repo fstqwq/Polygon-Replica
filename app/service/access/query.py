@@ -1,9 +1,11 @@
+import sqlite3
 from collections.abc import Mapping, Sequence
 
 from app.db import DB
 from app.service.access.model import (
     AccessRole,
     Actor,
+    AgentScope,
     ContestAccessContext,
     PackageJobAccessContext,
     ProblemParticipationRow,
@@ -36,6 +38,19 @@ class AccessQuery:
 
     def problem_context(self, problem_id: int, user_id: int) -> ProblemAccessContext:
         return self.problem_contexts([problem_id], user_id)[int(problem_id)]
+
+    @staticmethod
+    def problem_role_in_transaction(
+        connection: sqlite3.Connection,
+        *,
+        problem_id: int,
+        user_id: int,
+    ) -> AccessRole:
+        return AccessStore.problem_role_in_transaction(
+            connection,
+            problem_id=problem_id,
+            user_id=user_id,
+        )
 
     def problem_contexts(
         self,
@@ -434,17 +449,17 @@ class AccessQuery:
     def effective_agent_scope(
         self,
         *,
-        token_scope: str,
+        declared_scope: str,
         problem_id: int,
         user_id: int,
     ) -> str:
         role = self.problem_context(problem_id, user_id)["role"]
-        return effective_agent_scope(token_scope, role) or ""
+        return effective_agent_scope(declared_scope, role) or ""
 
     @staticmethod
     def agent_scope_allows(granted_scope: str, minimum_scope: str) -> bool:
         return agent_scope_allows(granted_scope, minimum_scope)
 
     @staticmethod
-    def canonical_agent_scope(scope: str) -> str:
+    def canonical_agent_scope(scope: str) -> AgentScope:
         return agent_scope(scope)

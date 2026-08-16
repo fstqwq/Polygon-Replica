@@ -50,28 +50,70 @@
       </div>
       <div class="agent-session-section">
         <div class="agent-session-section-head">
+          <h3>General permission</h3>
+        </div>
+        <form
+          method="post"
+          action="/agent/sessions/{{ session.id }}/general-scope"
+          class="form-row"
+        >
+          <select name="general_scope" aria-label="General permission">
+            {% for scope in ['none', 'readonly', 'workspace', 'commit'] %}
+            <option
+              value="{{ scope }}"
+              {% if session.general_scope == scope %}selected{% endif %}
+            >{{ scope }}</option>
+            {% endfor %}
+          </select>
+          <button class="btn" type="submit">Update</button>
+        </form>
+        <p class="muted">
+          Applies to problems your account can currently access. Set to none
+          to require per-problem approval.
+        </p>
+      </div>
+      <div class="agent-session-section">
+        <div class="agent-session-section-head">
           <h3>Authorized Problems</h3>
         </div>
-        {% if session.tokens %}
+        {% if session.grants %}
         <table class="table-base agent-session-table">
           <thead>
             <tr>
               <th>Problem</th>
               <th>Scope</th>
+              <th>Created</th>
               <th>Expires</th>
+              <th>Status</th>
               <th>Action</th>
             </tr>
           </thead>
           <tbody>
-            {% for token in session.tokens %}
+            {% for grant in session.grants %}
             <tr>
-              <td><code>{{ token.problem_slug }}</code></td>
-              <td><code>{{ token.scope }}</code></td>
-              <td>{% if token.expires_at %}{{ token.expires_at | local_time }}{% else %}<span class="muted">forever</span>{% endif %}</td>
+              <td><code>{{ grant.problem }}</code></td>
+              <td><code>{{ grant.scope }}</code></td>
+              <td>{{ grant.created_at | local_time }}</td>
               <td>
-                <form method="post" action="/agent/revoke/{{ token.id }}" class="inline-form">
+                {% if grant.expires_at %}
+                {{ grant.expires_at | local_time }}
+                {% else %}
+                <span class="muted">forever</span>
+                {% endif %}
+              </td>
+              <td><code>{{ grant.status }}</code></td>
+              <td>
+                {% if grant.status == 'active' %}
+                <form
+                  method="post"
+                  action="/agent/grants/{{ grant.grant_id }}/revoke"
+                  class="inline-form"
+                >
                   <a href="#" class="linkish danger-link" data-submit-form="1">Revoke</a>
                 </form>
+                {% else %}
+                <span class="muted">-</span>
+                {% endif %}
               </td>
             </tr>
             {% endfor %}

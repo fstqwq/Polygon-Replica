@@ -1,19 +1,32 @@
 import re
 from pathlib import Path
 from typing import cast
+from urllib.parse import urlencode
 
 from fastapi import File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 
-from app.impl.agent.shared import require_agent_token, workspace_context_for_identity
+from app.impl.agent.shared import (
+    AGENT_IDENTITY_HEADER,
+    require_agent_general,
+    require_agent_problem,
+    require_agent_session,
+    workspace_context_for_identity,
+)
 from app.impl.auth.shared import json_error_response
 from app.impl.runtime.dependency import runtime
 from app.impl.workspace.context_job import start_export_job, start_verification_job
 from app.impl.workspace.context_job_helper import allocate_verification_id
 from app.impl.workspace.context_run_detail import normalize_run_test_name_token
 from app.impl.workspace.problem_config import read_problem_config
-from app.service.problem_package.workflow import build_full_verification_targets
 from app.impl.workspace.run_view_detail import build_run_detail_context
+from app.service.agent.service import (
+    AgentGeneralPermissionRequired,
+    AgentPermissionRequired,
+    AgentProblemIdentity,
+    AgentSessionIdentity,
+)
+from app.service.contest.model import AgentContestRoster
 from app.service.execution.identity import new_run_id
 from app.service.importing.archive import (
     ArchiveView,
@@ -21,6 +34,7 @@ from app.service.importing.archive import (
 )
 from app.service.importing.upload import spool_upload
 from app.service.platform.git_process import run_git
+from app.service.problem_package.workflow import build_full_verification_targets
 from app.service.repository.workspace import WorkspaceContext
 from app.service.verification.task_store import VerificationTaskRow
 from app.service.workspace.mutation import WorkspaceMutationConflict
@@ -40,7 +54,7 @@ async def _read_json(request: Request) -> dict[str, object]:
     return cast(dict[str, object], payload)
 
 
-def _agent_problem_ctx(identity) -> WorkspaceContext:
+def _agent_problem_ctx(identity: AgentProblemIdentity) -> WorkspaceContext:
     return workspace_context_for_identity(identity)
 
 
@@ -66,15 +80,17 @@ async def agent_register(request: Request, code: str):
 
 async def agent_request_access(request: Request):
     payload = await _read_json(request)
+    session = require_agent_session(request)
     try:
         result = runtime().agent_service.request_problem_access(
-            agent_session_id=str(payload.get("agent_session_id") or ""),
-            identity_hash=str(payload.get("identity_hash") or ""),
+            agent_session_id=session.agent_session_id,
+            identity_hash=str(request.headers.get(AGENT_IDENTITY_HEADER) or ""),
             problem=str(payload.get("problem") or ""),
+            requested_scope=str(payload.get("scope") or "readonly"),
         )
         return _json_body(result)
     except PermissionError as exc:
-        return json_error_response(str(exc), status_code=401)
+        return json_error_response(str(exc), status_code=403)
     except LookupError:
         return json_error_response("problem not found", status_code=404)
     except ValueError as exc:
@@ -82,12 +98,11 @@ async def agent_request_access(request: Request):
 
 
 async def agent_poll_access(request: Request, request_id: str):
-    session_id = str(request.query_params.get("agent_session_id") or "")
-    identity_hash = str(request.query_params.get("identity_hash") or "")
+    session = require_agent_session(request)
     try:
         result = runtime().agent_service.poll_access_request(
-            agent_session_id=session_id,
-            identity_hash=identity_hash,
+            agent_session_id=session.agent_session_id,
+            identity_hash=str(request.headers.get(AGENT_IDENTITY_HEADER) or ""),
             request_id=request_id,
         )
         return _json_body(result)
@@ -98,12 +113,11 @@ async def agent_poll_access(request: Request, request_id: str):
 
 
 async def agent_auth_status(request: Request):
-    session_id = str(request.query_params.get("agent_session_id") or "")
-    identity_hash = str(request.query_params.get("identity_hash") or "")
+    session = require_agent_session(request)
     try:
         result = runtime().agent_service.session_status(
-            agent_session_id=session_id,
-            identity_hash=identity_hash,
+            agent_session_id=session.agent_session_id,
+            identity_hash=str(request.headers.get(AGENT_IDENTITY_HEADER) or ""),
         )
         return _json_body(result)
     except PermissionError as exc:
@@ -112,13 +126,25 @@ async def agent_auth_status(request: Request):
 
 async def agent_problem_create(request: Request):
     payload = await _read_json(request)
+    session = require_agent_session(request)
     try:
         result = runtime().agent_service.create_problem(
-            agent_session_id=str(payload.get("agent_session_id") or ""),
-            identity_hash=str(payload.get("identity_hash") or ""),
+            agent_session_id=session.agent_session_id,
+            identity_hash=str(request.headers.get(AGENT_IDENTITY_HEADER) or ""),
             problem=str(payload.get("problem") or ""),
         )
         return _json_body(result)
+    except AgentGeneralPermissionRequired as exc:
+        return _json_body(
+            {
+                "error": "agent_general_permission_required",
+                "required_scope": exc.required_scope,
+                "settings_url": (
+                    f"{str(request.base_url).rstrip('/')}/agent/sessions"
+                ),
+            },
+            status_code=403,
+        )
     except PermissionError as exc:
         return json_error_response(str(exc), status_code=401)
     except FileExistsError as exc:
@@ -127,8 +153,172 @@ async def agent_problem_create(request: Request):
         return json_error_response(str(exc), status_code=422)
 
 
+def _contest_roster_for_agent(
+    request: Request,
+    contest_slug: str,
+) -> tuple[AgentSessionIdentity, AgentContestRoster]:
+    session = require_agent_general(request, min_scope="readonly")
+    roster = runtime().contest_service.agent_roster(contest_slug)
+    if roster is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "contest_not_found"},
+        )
+    access = runtime().access_query.contest_context(
+        roster["contest_id"],
+        session.user_id,
+    )
+    if not access["can_read"]:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "contest_access_denied"},
+        )
+    return session, roster
+
+
+async def agent_contest_problems(request: Request, contest_slug: str):
+    _session, roster = _contest_roster_for_agent(request, contest_slug)
+    problems = [
+        {
+            "contest_problem_id": item["contest_problem_id"],
+            "position": item["position"],
+            "idx": item["idx"],
+            "problem": item["problem_slug"],
+        }
+        for item in roster["problems"]
+    ]
+    return _json_body(
+        {
+            "contest_id": roster["contest_id"],
+            "contest_slug": roster["contest_slug"],
+            "contest_title": roster["contest_title"],
+            "source_generation": roster["source_generation"],
+            "problem_count": len(problems),
+            "problems": problems,
+        }
+    )
+
+
+def _required_source_generation(request: Request) -> int:
+    values = request.query_params.getlist("source_generation")
+    if len(values) != 1:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "exactly_one_source_generation_required"},
+        )
+    try:
+        generation = int(values[0])
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_source_generation"},
+        ) from exc
+    if generation <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_source_generation"},
+        )
+    return generation
+
+
+async def agent_contest_problem_snapshot(
+    request: Request,
+    contest_slug: str,
+    contest_problem_id: int,
+):
+    expected_generation = _required_source_generation(request)
+    session, roster = _contest_roster_for_agent(request, contest_slug)
+    if roster["source_generation"] != expected_generation:
+        return _json_body(
+            {"error": "contest_roster_changed"},
+            status_code=409,
+        )
+    target = next(
+        (
+            item
+            for item in roster["problems"]
+            if item["contest_problem_id"] == int(contest_problem_id)
+        ),
+        None,
+    )
+    if target is None:
+        return _json_body(
+            {"error": "contest_roster_changed"},
+            status_code=409,
+        )
+    try:
+        identity = runtime().agent_service.problem_identity_for_session(
+            session,
+            problem=target["problem_slug"],
+            minimum_scope="readonly",
+            general_only=True,
+        )
+    except AgentPermissionRequired:
+        return _json_body(
+            {"error": "contest_problem_access_denied"},
+            status_code=403,
+        )
+    except LookupError:
+        return _json_body(
+            {"error": "contest_roster_changed"},
+            status_code=409,
+        )
+    ctx = _agent_problem_ctx(identity)
+    workspace = Path(str(ctx["workspace"]["path"])).resolve()
+    try:
+        result = runtime().workspace_mutation_service.read_locked(
+            workspace,
+            lambda: runtime().workspace_archive_service.build_snapshot_zip(
+                workspace
+            ),
+        )
+    except ValueError as exc:
+        return json_error_response(str(exc), status_code=400)
+    current = runtime().contest_service.agent_roster(contest_slug)
+    current_target = (
+        next(
+            (
+                item
+                for item in current["problems"]
+                if item["contest_problem_id"] == int(contest_problem_id)
+            ),
+            None,
+        )
+        if current is not None
+        else None
+    )
+    if (
+        current is None
+        or current["source_generation"] != expected_generation
+        or current_target is None
+        or current_target["problem_slug"] != target["problem_slug"]
+    ):
+        return _json_body(
+            {"error": "contest_roster_changed"},
+            status_code=409,
+        )
+    status = result.status
+    return Response(
+        content=result.value,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": (
+                "attachment; filename=\""
+                f"{_workspace_zip_filename(identity.problem_slug, 'snapshot')}\""
+            ),
+            "X-Problem": identity.problem_slug,
+            "X-Head-Commit": str(status.get("head_commit") or ""),
+            "X-Workspace-Dirty": (
+                "true" if bool(status.get("dirty")) else "false"
+            ),
+            "X-Contest-Source-Generation": str(expected_generation),
+            "X-Contest-Problem-ID": str(contest_problem_id),
+        },
+    )
+
+
 async def agent_verification_start(request: Request):
-    identity = require_agent_token(request, min_scope="readonly")
+    identity = require_agent_problem(request, min_scope="readonly")
     ctx = _agent_problem_ctx(identity)
     workspace = Path(str(ctx["workspace"]["path"])).resolve()
     verification_id = allocate_verification_id()
@@ -155,7 +345,7 @@ async def agent_verification_start(request: Request):
 
 
 async def agent_verification_status(request: Request, verification_id: str):
-    identity = require_agent_token(request, min_scope="readonly")
+    identity = require_agent_problem(request, min_scope="readonly")
     ctx = _agent_problem_ctx(identity)
     snapshot = runtime().verification_service.verification_snapshot(verification_id)
     if (
@@ -539,7 +729,7 @@ def _agent_verification_detail_yaml(
 
 
 async def agent_verification_detail(request: Request, verification_id: str):
-    identity = require_agent_token(request, min_scope="readonly")
+    identity = require_agent_problem(request, min_scope="readonly")
     ctx = _agent_problem_ctx(identity)
     detail = runtime().verification_service.workspace_verification_detail(
         int(identity.problem_id),
@@ -560,7 +750,7 @@ async def agent_verification_detail(request: Request, verification_id: str):
 
 
 async def agent_export_start(request: Request):
-    identity = require_agent_token(request, min_scope="workspace")
+    identity = require_agent_problem(request, min_scope="workspace")
     payload = await _read_json(request)
     package_format = str(payload.get("format") or "").strip().lower()
     if not runtime().export_service.package_adapters.supports(package_format):
@@ -586,7 +776,7 @@ async def agent_export_start(request: Request):
 
 
 async def agent_export_status(request: Request, job_id: str):
-    identity = require_agent_token(request, min_scope="readonly")
+    identity = require_agent_problem(request, min_scope="readonly")
     job = runtime().export_service.export_job(
         int(identity.problem_id),
         job_id,
@@ -612,13 +802,16 @@ async def agent_export_status(request: Request, job_id: str):
         "error": str(job.get("error") or ""),
     }
     if status == "succeeded" and str(job.get("export_id") or "") and str(job.get("filename") or ""):
-        payload["download_path"] = f"/agent/v1/export/{job_id}/download"
+        payload["download_path"] = (
+            f"/agent/v1/export/{job_id}/download?"
+            f"{urlencode({'problem': identity.problem_slug})}"
+        )
         payload["filename"] = str(job.get("filename") or "")
     return _json_body(payload)
 
 
 async def agent_export_download(request: Request, job_id: str):
-    identity = require_agent_token(request, min_scope="readonly")
+    identity = require_agent_problem(request, min_scope="readonly")
     job = runtime().export_service.export_job(
         int(identity.problem_id),
         job_id,
@@ -652,7 +845,7 @@ async def agent_export_download(request: Request, job_id: str):
 
 
 async def agent_workspace_files(request: Request):
-    identity = require_agent_token(request, min_scope="readonly")
+    identity = require_agent_problem(request, min_scope="readonly")
     workspace = Path(str(_agent_problem_ctx(identity)["workspace"]["path"])).resolve()
     rel = str(request.query_params.get("path") or "").strip()
     try:
@@ -671,7 +864,7 @@ async def agent_workspace_files(request: Request):
 
 
 async def agent_workspace_status(request: Request):
-    identity = require_agent_token(request, min_scope="readonly")
+    identity = require_agent_problem(request, min_scope="readonly")
     ctx = _agent_problem_ctx(identity)
     workspace = Path(str(ctx["workspace"]["path"])).resolve()
     return _json_body(
@@ -694,7 +887,7 @@ def _workspace_zip_filename(problem_slug: str, suffix: str) -> str:
 
 async def agent_workspace_snapshot(request: Request):
     request_runtime = runtime()
-    identity = require_agent_token(request, min_scope="readonly")
+    identity = require_agent_problem(request, min_scope="readonly")
     ctx = _agent_problem_ctx(identity)
     workspace = Path(str(ctx["workspace"]["path"])).resolve()
     try:
@@ -724,7 +917,7 @@ async def agent_workspace_snapshot(request: Request):
 
 async def agent_workspace_compare(request: Request, archive: UploadFile = File(...)):
     request_runtime = runtime()
-    identity = require_agent_token(request, min_scope="readonly")
+    identity = require_agent_problem(request, min_scope="readonly")
     ctx = _agent_problem_ctx(identity)
     workspace = Path(str(ctx["workspace"]["path"])).resolve()
     try:
@@ -767,7 +960,7 @@ async def agent_workspace_apply(
     base_head_commit: str = Form(""),
 ):
     request_runtime = runtime()
-    identity = require_agent_token(request, min_scope="workspace")
+    identity = require_agent_problem(request, min_scope="workspace")
     ctx = _agent_problem_ctx(identity)
     workspace = Path(str(ctx["workspace"]["path"])).resolve()
     expected_head = str(base_head_commit or "").strip()
@@ -817,7 +1010,7 @@ async def agent_workspace_apply(
 
 
 async def agent_workspace_file(request: Request):
-    identity = require_agent_token(request, min_scope="readonly")
+    identity = require_agent_problem(request, min_scope="readonly")
     workspace = Path(str(_agent_problem_ctx(identity)["workspace"]["path"])).resolve()
     rel = str(request.query_params.get("path") or "").strip()
     try:
@@ -845,7 +1038,7 @@ async def agent_workspace_file(request: Request):
 
 
 async def agent_workspace_upload(request: Request, file: UploadFile = File(...)):
-    identity = require_agent_token(request, min_scope="workspace")
+    identity = require_agent_problem(request, min_scope="workspace")
     ctx = _agent_problem_ctx(identity)
     workspace = Path(str(ctx["workspace"]["path"])).resolve()
     form = await request.form()
@@ -862,7 +1055,7 @@ async def agent_workspace_upload(request: Request, file: UploadFile = File(...))
 
 
 async def agent_workspace_delete(request: Request, path: str):
-    identity = require_agent_token(request, min_scope="workspace")
+    identity = require_agent_problem(request, min_scope="workspace")
     ctx = _agent_problem_ctx(identity)
     workspace = Path(str(ctx["workspace"]["path"])).resolve()
     try:
@@ -875,7 +1068,7 @@ async def agent_workspace_delete(request: Request, path: str):
 
 
 async def agent_commit(request: Request):
-    identity = require_agent_token(request, min_scope="commit")
+    identity = require_agent_problem(request, min_scope="commit")
     ctx = _agent_problem_ctx(identity)
     workspace = Path(str(ctx["workspace"]["path"])).resolve()
     payload = await _read_json(request)
@@ -906,12 +1099,26 @@ async def agent_commit(request: Request):
 
 
 async def agent_commit_status(request: Request, ref: str):
-    identity = require_agent_token(request, min_scope="readonly")
+    identity = require_agent_problem(request, min_scope="readonly")
     ctx = _agent_problem_ctx(identity)
     workspace = Path(str(ctx["workspace"]["path"])).resolve()
     local_head = run_git(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
     remote_head = run_git(["git", "-C", str(workspace), "rev-parse", "refs/remotes/origin/main"]).stdout.strip()
     safe_ref = str(ref or "").strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", safe_ref):
+        return json_error_response("commit not found", status_code=404)
+    known_commit = run_git(
+        [
+            "git",
+            "-C",
+            str(workspace),
+            "cat-file",
+            "-e",
+            f"{safe_ref}^{{commit}}",
+        ]
+    )
+    if known_commit.returncode != 0:
+        return json_error_response("commit not found", status_code=404)
     status = "unknown"
     if safe_ref and safe_ref == local_head == remote_head:
         status = "published"

@@ -4,6 +4,7 @@ from typing import Literal, TypedDict
 
 AccessRole = Literal["none", "read", "write", "owner", "admin"]
 AgentScope = Literal["readonly", "workspace", "commit"]
+AgentGeneralScope = Literal["none", "readonly", "workspace", "commit"]
 ResourceKind = Literal[
     "problem",
     "workspace",

@@ -173,6 +173,30 @@ step is missed, the process remains available only as a raw `503` diagnostic
 that lists the missing schema objects; no workers or Judgehost runtime start.
 Extra tables, columns, indexes, and rows do not block startup and are preserved.
 
+The Agent identity/grants release has a stopped-service schema replacement.
+For that release, stop the service and pull the exact new revision before the
+migration, then use SQLite's backup operation to capture the stopped database,
+including any committed WAL state, verify that independent copy, and run:
+
+```bash
+sudo systemctl stop polygon-replica.service
+cd /opt/polygon-replica
+sudo -u polygon git pull --ff-only
+agent_grants_backup="/var/backups/polygon-replica/metadata-pre-agent-grants-$(date -u +%Y%m%dT%H%M%SZ).db"
+sqlite3 /var/lib/polygon-replica/metadata.db ".backup '$agent_grants_backup'"
+sqlite3 "$agent_grants_backup" 'PRAGMA integrity_check'
+sudo -u polygon .venv/bin/python scripts/upgrade_agent_identity_grants.py \
+  --db /var/lib/polygon-replica/metadata.db
+sqlite3 /var/lib/polygon-replica/metadata.db \
+  'PRAGMA foreign_key_check; PRAGMA integrity_check'
+```
+
+Use the configured SQLite path if it differs. The procedure converts every
+still-effective problem bearer authorization to one grant with the same scope,
+creation time, and expiry, discards obsolete delivery requests, and removes the
+old token table. It is atomic and intentionally refuses an already-upgraded or
+unexpected schema. Deploy the matching Polygon Agent CLI at the same time.
+
 Systemd:
 
 ```bash

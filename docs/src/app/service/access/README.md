@@ -12,7 +12,7 @@ The user-visible role and capability semantics are owned by the
 contexts. `policy.py` contains pure role and agent-scope rules. `store.py` owns
 the access-specific SQLite queries. `query.py` composes persisted facts with the
 policy. HTTP handlers translate the returned decisions; they do not reconstruct
-roles or broaden an agent token.
+roles or broaden an Agent identity's declared scope.
 
 Problem access derived from a contest never grants problem ownership. A problem
 reader may view and rejudge a visible verification, but only the workspace that

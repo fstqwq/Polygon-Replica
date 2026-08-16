@@ -1,37 +1,69 @@
 import secrets
+import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from app.db import DB, now_iso
-from app.service.access.policy import stronger_agent_scope
+from app.service.access.model import AgentGeneralScope, AgentScope
+from app.service.access.policy import (
+    agent_general_scope,
+    effective_agent_scope,
+    stronger_agent_scope,
+)
 from app.service.access.query import AccessQuery
-from app.service.agent.store import AgentSessionRow, AgentStore
+from app.service.agent.store import (
+    AgentProblemGrantRow,
+    AgentSessionRow,
+    AgentStore,
+)
 from app.service.platform.hashing import canonical_json, sha256_hex_text
 from app.service.repository.workspace import WorkspaceService
 
 
 _DEFAULT_REGISTER_TTL_SEC = 900
 _DEFAULT_REQUEST_TTL_SEC = 900
-_DEFAULT_TOKEN_TTL_SEC = 86400
 _ALLOWED_APPROVAL_TTLS = {3600, 86400, 604800, 2592000}
 
 
 @dataclass(frozen=True)
-class AgentTokenIdentity:
-    token_id: str
+class AgentSessionIdentity:
+    agent_session_id: str
+    user_id: int
+    username: str
+    general_scope: AgentGeneralScope
+
+
+@dataclass(frozen=True)
+class AgentProblemIdentity:
     agent_session_id: str
     user_id: int
     username: str
     problem_id: int
     problem_slug: str
-    scope: str
-    effective_scope: str
-    created_at: str
-    expires_at: str
+    declared_scope: AgentScope
+    effective_scope: AgentScope
+
+
+class AgentPermissionRequired(PermissionError):
+    def __init__(self, *, problem: str, required_scope: str):
+        super().__init__("agent permission required")
+        self.problem = problem
+        self.required_scope = required_scope
+
+
+class AgentGeneralPermissionRequired(PermissionError):
+    def __init__(self, *, required_scope: str):
+        super().__init__("agent general permission required")
+        self.required_scope = required_scope
 
 
 class AgentService:
-    def __init__(self, db: DB, workspace_service: WorkspaceService, access_query: AccessQuery):
+    def __init__(
+        self,
+        db: DB,
+        workspace_service: WorkspaceService,
+        access_query: AccessQuery,
+    ):
         self.db = db
         self.workspace_service = workspace_service
         self.access_query = access_query
@@ -50,21 +82,31 @@ class AgentService:
             text = text[:-1] + "+00:00"
         try:
             value = datetime.fromisoformat(text)
-        except Exception:
+        except ValueError:
             return None
         if value.tzinfo is None:
             return value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc)
 
     @staticmethod
-    def _identity_payload(agent_name: str, desktop_id: str, init_ts: str) -> dict[str, str]:
+    def _identity_payload(
+        agent_name: str,
+        desktop_id: str,
+        init_ts: str,
+    ) -> dict[str, str]:
         return {
             "agent_name": str(agent_name or "").strip(),
             "desktop_id": str(desktop_id or "").strip(),
             "init_ts": str(init_ts or "").strip(),
         }
 
-    def _identity_hash(self, *, agent_name: str, desktop_id: str, init_ts: str) -> str:
+    def _identity_hash(
+        self,
+        *,
+        agent_name: str,
+        desktop_id: str,
+        init_ts: str,
+    ) -> str:
         payload = self._identity_payload(agent_name, desktop_id, init_ts)
         if not payload["agent_name"] or not payload["desktop_id"] or not payload["init_ts"]:
             raise ValueError("identity payload is incomplete")
@@ -74,7 +116,9 @@ class AgentService:
     def _format_expiry(seconds: int | None) -> str | None:
         if seconds is None:
             return None
-        return (datetime.now(timezone.utc) + timedelta(seconds=max(1, int(seconds)))).isoformat()
+        return (
+            datetime.now(timezone.utc) + timedelta(seconds=max(1, int(seconds)))
+        ).isoformat()
 
     @staticmethod
     def _require_problem_slug(problem: str) -> str:
@@ -89,99 +133,220 @@ class AgentService:
         agent_session_id: str,
         identity_hash: str,
     ) -> AgentSessionRow:
-        session = self._store.session_by_id(agent_session_id)
-        if session is None or str(session.get("revoked_at") or ""):
+        session = self._store.session_by_id(str(agent_session_id or ""))
+        if session is None or session["revoked_at"]:
             raise PermissionError("agent session is invalid")
-        if str(session.get("identity_hash") or "") != str(identity_hash or ""):
+        supplied_hash = str(identity_hash or "")
+        if not secrets.compare_digest(session["identity_hash"], supplied_hash):
             raise PermissionError("agent identity mismatch")
         return session
 
-    def _touch_session(self, session_id: str, *, last_seen_at: str | None = None) -> str:
+    def _touch_session(
+        self,
+        session_id: str,
+        *,
+        last_seen_at: str | None = None,
+    ) -> str:
         now_text = now_iso() if last_seen_at is None else last_seen_at
         self._store.touch_session(session_id, last_seen_at=now_text)
         return now_text
 
-    def _authorized_problems_for_session(self, *, session_id: str, user_id: int) -> list[dict[str, object]]:
-        now_dt = datetime.now(timezone.utc)
-        merged: dict[str, dict[str, object]] = {}
-        for token_row in self._store.list_session_tokens(session_id):
-            if str(token_row.get("revoked_at") or ""):
-                continue
-            expires_at_text = str(token_row.get("expires_at") or "")
-            expires_at = self._parse_iso_utc(expires_at_text)
-            if expires_at is not None and expires_at <= now_dt:
-                continue
-            effective_scope = self.access_query.effective_agent_scope(
-                token_scope=str(token_row.get("scope") or ""),
-                problem_id=int(token_row["problem_id"]),
-                user_id=int(user_id),
-            )
-            if not effective_scope:
-                continue
-            problem_slug = str(token_row["problem_slug"] or "")
-            candidate: dict[str, object] = {
-                "problem": problem_slug,
-                "scope": effective_scope,
-                "expires_at": expires_at_text or None,
-                "created_at": str(token_row.get("created_at") or ""),
-            }
-            existing = merged.get(problem_slug)
-            if existing is None:
-                merged[problem_slug] = candidate
-                continue
-            stronger_scope = stronger_agent_scope(
-                str(candidate["scope"]),
-                str(existing["scope"]),
-            )
-            if stronger_scope == candidate["scope"] and candidate["scope"] != existing["scope"]:
-                merged[problem_slug] = candidate
-                continue
-            if stronger_scope == existing["scope"] and candidate["scope"] != existing["scope"]:
-                continue
-            candidate_expires = str(candidate.get("expires_at") or "")
-            existing_expires = str(existing.get("expires_at") or "")
-            if not existing_expires and candidate_expires:
-                continue
-            if not candidate_expires and existing_expires:
-                merged[problem_slug] = candidate
-                continue
-            if candidate_expires > existing_expires:
-                merged[problem_slug] = candidate
-                continue
-            if candidate_expires == existing_expires and str(candidate["created_at"]) > str(existing["created_at"]):
-                merged[problem_slug] = candidate
-        items = [
-            {
-                "problem": str(item["problem"] or ""),
-                "scope": str(item["scope"] or ""),
-                "expires_at": item["expires_at"],
-            }
-            for item in merged.values()
-        ]
-        items.sort(key=lambda item: str(item["problem"] or ""))
-        return items
+    def session_identity(
+        self,
+        *,
+        agent_session_id: str,
+        identity_hash: str,
+    ) -> AgentSessionIdentity:
+        session = self._require_active_session(
+            agent_session_id=agent_session_id,
+            identity_hash=identity_hash,
+        )
+        self._touch_session(session["id"])
+        return AgentSessionIdentity(
+            agent_session_id=session["id"],
+            user_id=session["user_id"],
+            username=session["username"],
+            general_scope=session["general_scope"],
+        )
 
-    def create_registration_code(self, *, user_id: int, ttl_sec: int = _DEFAULT_REGISTER_TTL_SEC) -> dict[str, object]:
+    def require_general_scope(
+        self,
+        *,
+        agent_session_id: str,
+        identity_hash: str,
+        minimum_scope: str,
+    ) -> AgentSessionIdentity:
+        identity = self.session_identity(
+            agent_session_id=agent_session_id,
+            identity_hash=identity_hash,
+        )
+        safe_minimum = self.access_query.canonical_agent_scope(minimum_scope)
+        if identity.general_scope == "none" or not self.access_query.agent_scope_allows(
+            identity.general_scope,
+            safe_minimum,
+        ):
+            raise AgentGeneralPermissionRequired(required_scope=safe_minimum)
+        return identity
+
+    def _active_grants(
+        self,
+        session_id: str,
+    ) -> list[AgentProblemGrantRow]:
+        now_value = datetime.now(timezone.utc)
+        result: list[AgentProblemGrantRow] = []
+        for grant in self._store.list_session_grants(session_id):
+            if grant["revoked_at"]:
+                continue
+            expires_at = self._parse_iso_utc(grant["expires_at"])
+            if grant["expires_at"] and (
+                expires_at is None or expires_at <= now_value
+            ):
+                continue
+            result.append(grant)
+        return result
+
+    def _declared_problem_scope(
+        self,
+        session: AgentSessionIdentity,
+        problem_id: int,
+        *,
+        general_only: bool,
+    ) -> AgentGeneralScope:
+        declared = session.general_scope
+        if general_only:
+            return declared
+        for grant in self._active_grants(session.agent_session_id):
+            if grant["problem_id"] != int(problem_id):
+                continue
+            if declared == "none":
+                declared = grant["scope"]
+            else:
+                declared = stronger_agent_scope(declared, grant["scope"])
+        return declared
+
+    def problem_identity_for_session(
+        self,
+        session: AgentSessionIdentity,
+        *,
+        problem: str,
+        minimum_scope: str,
+        general_only: bool = False,
+    ) -> AgentProblemIdentity:
+        safe_problem = self._require_problem_slug(problem)
+        try:
+            problem_id = self.workspace_service.known_problem_id(safe_problem)
+        except ValueError as exc:
+            raise ValueError("invalid problem") from exc
+        if problem_id is None:
+            raise LookupError("problem not found")
+        problem_access = self.access_query.problem_context(
+            int(problem_id),
+            session.user_id,
+        )
+        if not problem_access["can_read"]:
+            raise LookupError("problem not found")
+        declared_scope = self._declared_problem_scope(
+            session,
+            int(problem_id),
+            general_only=general_only,
+        )
+        safe_minimum = self.access_query.canonical_agent_scope(minimum_scope)
+        if declared_scope == "none":
+            raise AgentPermissionRequired(
+                problem=safe_problem,
+                required_scope=safe_minimum,
+            )
+        effective_scope = effective_agent_scope(
+            declared_scope,
+            problem_access["role"],
+        )
+        if effective_scope is None or not self.access_query.agent_scope_allows(
+            effective_scope,
+            safe_minimum,
+        ):
+            raise AgentPermissionRequired(
+                problem=safe_problem,
+                required_scope=safe_minimum,
+            )
+        return AgentProblemIdentity(
+            agent_session_id=session.agent_session_id,
+            user_id=session.user_id,
+            username=session.username,
+            problem_id=int(problem_id),
+            problem_slug=safe_problem,
+            declared_scope=declared_scope,
+            effective_scope=effective_scope,
+        )
+
+    def problem_identity(
+        self,
+        *,
+        agent_session_id: str,
+        identity_hash: str,
+        problem: str,
+        minimum_scope: str,
+    ) -> AgentProblemIdentity:
+        session = self.session_identity(
+            agent_session_id=agent_session_id,
+            identity_hash=identity_hash,
+        )
+        return self.problem_identity_for_session(
+            session,
+            problem=problem,
+            minimum_scope=minimum_scope,
+        )
+
+    def create_registration_code(
+        self,
+        *,
+        user_id: int,
+        ttl_sec: int = _DEFAULT_REGISTER_TTL_SEC,
+    ) -> dict[str, object]:
         safe_ttl = max(60, min(3600, int(ttl_sec)))
         code = f"reg-{secrets.token_hex(8)}"
         expires_at = self._format_expiry(safe_ttl)
         if expires_at is None:
             raise RuntimeError("registration expiry required")
-        self._store.create_registration_code(code=code, user_id=int(user_id), expires_at=expires_at)
-        return {"code": code, "expires_at": expires_at, "expires_in": safe_ttl}
+        self._store.create_registration_code(
+            code=code,
+            user_id=int(user_id),
+            expires_at=expires_at,
+        )
+        return {
+            "code": code,
+            "expires_at": expires_at,
+            "expires_in": safe_ttl,
+        }
 
-    def register_agent(self, *, code: str, agent_name: str, desktop_id: str, init_ts: str) -> dict[str, object]:
+    def register_agent(
+        self,
+        *,
+        code: str,
+        agent_name: str,
+        desktop_id: str,
+        init_ts: str,
+    ) -> dict[str, object]:
         now_text = now_iso()
-        claimed = self._store.claim_registration_code(str(code or "").strip(), now_text=now_text)
+        claimed = self._store.claim_registration_code(
+            str(code or "").strip(),
+            now_text=now_text,
+        )
         if claimed is None:
             raise LookupError("registration code not found")
-        if str(claimed.get("used_at") or "") and str(claimed.get("used_at") or "") != now_text:
+        if claimed["used_at"] and claimed["used_at"] != now_text:
             raise RuntimeError("registration code already used")
-        expires_at = self._parse_iso_utc(str(claimed.get("expires_at") or ""))
+        expires_at = self._parse_iso_utc(claimed["expires_at"])
         if expires_at is None or expires_at <= datetime.now(timezone.utc):
             raise TimeoutError("registration code expired")
-        identity_hash = self._identity_hash(agent_name=agent_name, desktop_id=desktop_id, init_ts=init_ts)
-        existing = self._store.active_session_by_identity(user_id=int(claimed["user_id"]), identity_hash=identity_hash)
+        identity_hash = self._identity_hash(
+            agent_name=agent_name,
+            desktop_id=desktop_id,
+            init_ts=init_ts,
+        )
+        existing = self._store.active_session_by_identity(
+            user_id=claimed["user_id"],
+            identity_hash=identity_hash,
+        )
         if existing is not None:
             self._store.touch_session(existing["id"], last_seen_at=now_text)
             return {
@@ -190,10 +355,10 @@ class AgentService:
                 "server_name": "Polygon Replica",
                 "identity_hash": identity_hash,
             }
-        session_id = f"as-{secrets.token_hex(8)}"
+        session_id = f"as-{secrets.token_hex(24)}"
         self._store.insert_session(
             session_id=session_id,
-            user_id=int(claimed["user_id"]),
+            user_id=claimed["user_id"],
             identity_hash=identity_hash,
             agent_name=str(agent_name or "").strip(),
             desktop_id=str(desktop_id or "").strip(),
@@ -202,7 +367,7 @@ class AgentService:
         )
         return {
             "agent_session_id": session_id,
-            "user": str(claimed["username"] or ""),
+            "user": claimed["username"],
             "server_name": "Polygon Replica",
             "identity_hash": identity_hash,
         }
@@ -213,78 +378,197 @@ class AgentService:
         agent_session_id: str,
         identity_hash: str,
         problem: str,
+        requested_scope: str,
         ttl_sec: int = _DEFAULT_REQUEST_TTL_SEC,
     ) -> dict[str, object]:
-        session = self._require_active_session(agent_session_id=agent_session_id, identity_hash=identity_hash)
+        session = self.session_identity(
+            agent_session_id=agent_session_id,
+            identity_hash=identity_hash,
+        )
         safe_problem = self._require_problem_slug(problem)
-        problem_id = self.workspace_service.known_problem_id(safe_problem)
+        safe_scope = self.access_query.canonical_agent_scope(requested_scope)
+        try:
+            problem_id = self.workspace_service.known_problem_id(safe_problem)
+        except ValueError as exc:
+            raise ValueError("invalid problem") from exc
         if problem_id is None:
             raise LookupError("problem not found")
-        access = self.access_query.problem_context(int(problem_id), int(session["user_id"]))
+        access = self.access_query.problem_context(problem_id, session.user_id)
         if not access["can_read"]:
             raise LookupError("problem not found")
+        possible_scope = effective_agent_scope(safe_scope, access["role"])
+        if possible_scope != safe_scope:
+            raise PermissionError(
+                "current problem access does not allow requested scope"
+            )
+        now_text = now_iso()
+        pending = self._store.pending_access_request(
+            agent_session_id=session.agent_session_id,
+            problem_id=problem_id,
+            requested_scope=safe_scope,
+            now_text=now_text,
+        )
         safe_ttl = max(60, min(3600, int(ttl_sec)))
+        if pending is not None:
+            remaining = self._parse_iso_utc(pending["expires_at"])
+            remaining_seconds = (
+                max(
+                    0,
+                    int(
+                        (remaining - datetime.now(timezone.utc)).total_seconds()
+                    ),
+                )
+                if remaining is not None
+                else 0
+            )
+            return {
+                "request_id": pending["id"],
+                "approve_path": f"/agent/approve/{pending['id']}",
+                "expires_in": remaining_seconds,
+                "requested_scope": safe_scope,
+            }
         request_id = f"ar-{secrets.token_hex(8)}"
         expires_at = self._format_expiry(safe_ttl)
         if expires_at is None:
             raise RuntimeError("request expiry required")
         self._store.create_access_request(
             request_id=request_id,
-            agent_session_id=session["id"],
-            problem_id=int(problem_id),
+            agent_session_id=session.agent_session_id,
+            problem_id=problem_id,
+            requested_scope=safe_scope,
             expires_at=expires_at,
         )
-        self._touch_session(str(session["id"]))
-        return {"request_id": request_id, "approve_path": f"/agent/approve/{request_id}", "expires_in": safe_ttl}
-
-    def poll_access_request(self, *, agent_session_id: str, identity_hash: str, request_id: str) -> dict[str, object]:
-        session = self._require_active_session(agent_session_id=agent_session_id, identity_hash=identity_hash)
-        row = self._store.access_request_by_id(request_id)
-        if row is None or row["agent_session_id"] != session["id"]:
-            raise LookupError("access request not found")
-        now_dt = datetime.now(timezone.utc)
-        expires_at = self._parse_iso_utc(row["expires_at"])
-        if row["status"] == "pending" and (expires_at is None or expires_at <= now_dt):
-            self._store.resolve_access_request(request_id=row["id"], status="expired", resolved_at=now_iso())
-            row = self._store.access_request_by_id(request_id)
-            if row is None:
-                self._touch_session(str(session["id"]))
-                return {"status": "expired"}
-        status = str(row["status"] or "pending")
-        if status != "approved":
-            self._touch_session(str(session["id"]))
-            return {"status": status}
-        token = str(row.get("delivery_token") or "")
-        if token and not str(row.get("delivered_at") or ""):
-            self._store.mark_request_delivered(row["id"], delivered_at=now_iso())
-            self._touch_session(str(session["id"]))
-            return {
-                "status": "approved",
-                "token": token,
-                "problem": row["problem_slug"],
-                "expires_at": self._token_expires_at(row.get("token_id") or ""),
-            }
-        self._touch_session(str(session["id"]))
         return {
-            "status": "approved",
-            "problem": row["problem_slug"],
-            "expires_at": self._token_expires_at(row.get("token_id") or ""),
+            "request_id": request_id,
+            "approve_path": f"/agent/approve/{request_id}",
+            "expires_in": safe_ttl,
+            "requested_scope": safe_scope,
         }
 
-    def session_status(self, *, agent_session_id: str, identity_hash: str) -> dict[str, object]:
-        session = self._require_active_session(agent_session_id=agent_session_id, identity_hash=identity_hash)
-        last_seen_at = self._touch_session(str(session["id"]))
+    def poll_access_request(
+        self,
+        *,
+        agent_session_id: str,
+        identity_hash: str,
+        request_id: str,
+    ) -> dict[str, object]:
+        session = self.session_identity(
+            agent_session_id=agent_session_id,
+            identity_hash=identity_hash,
+        )
+        row = self._store.access_request_by_id(request_id)
+        if row is None or row["agent_session_id"] != session.agent_session_id:
+            raise LookupError("access request not found")
+        expires_at = self._parse_iso_utc(row["expires_at"])
+        if row["status"] == "pending" and (
+            expires_at is None or expires_at <= datetime.now(timezone.utc)
+        ):
+            self._store.resolve_pending_request(
+                request_id=row["id"],
+                status="expired",
+                resolved_at=now_iso(),
+            )
+            row = self._store.access_request_by_id(request_id)
+            if row is None:
+                raise LookupError("access request not found")
+        result: dict[str, object] = {
+            "status": row["status"],
+            "problem": row["problem_slug"],
+            "requested_scope": row["requested_scope"],
+        }
+        if row["status"] == "approved":
+            result.update(
+                {
+                    "grant_id": row["grant_id"],
+                    "granted_scope": row["granted_scope"],
+                    "expires_at": row["grant_expires_at"] or None,
+                }
+            )
+        return result
+
+    def _status_grants(
+        self,
+        session: AgentSessionIdentity,
+    ) -> list[dict[str, object]]:
+        result: list[dict[str, object]] = []
+        for grant in self._active_grants(session.agent_session_id):
+            effective = self.access_query.effective_agent_scope(
+                declared_scope=grant["scope"],
+                problem_id=grant["problem_id"],
+                user_id=session.user_id,
+            )
+            result.append(
+                {
+                    "grant_id": grant["id"],
+                    "problem": grant["problem_slug"],
+                    "scope": grant["scope"],
+                    "effective_scope": effective or "none",
+                    "created_at": grant["created_at"],
+                    "expires_at": grant["expires_at"] or None,
+                }
+            )
+        return result
+
+    def _settings_grants(
+        self,
+        *,
+        session_id: str,
+        user_id: int,
+    ) -> list[dict[str, object]]:
+        now_value = datetime.now(timezone.utc)
+        result: list[dict[str, object]] = []
+        for grant in self._store.list_session_grants(session_id):
+            expires_at = self._parse_iso_utc(grant["expires_at"])
+            if grant["revoked_at"]:
+                status = "revoked"
+            elif grant["expires_at"] and (
+                expires_at is None or expires_at <= now_value
+            ):
+                status = "expired"
+            else:
+                status = "active"
+            effective = None
+            if status == "active":
+                effective = self.access_query.effective_agent_scope(
+                    declared_scope=grant["scope"],
+                    problem_id=grant["problem_id"],
+                    user_id=user_id,
+                )
+            result.append(
+                {
+                    "grant_id": grant["id"],
+                    "problem": grant["problem_slug"],
+                    "scope": grant["scope"],
+                    "effective_scope": effective or "none",
+                    "created_at": grant["created_at"],
+                    "expires_at": grant["expires_at"] or None,
+                    "revoked_at": grant["revoked_at"] or None,
+                    "status": status,
+                }
+            )
+        return result
+
+    def session_status(
+        self,
+        *,
+        agent_session_id: str,
+        identity_hash: str,
+    ) -> dict[str, object]:
+        session = self.session_identity(
+            agent_session_id=agent_session_id,
+            identity_hash=identity_hash,
+        )
+        row = self._store.session_by_id(session.agent_session_id)
+        if row is None:
+            raise PermissionError("agent session is invalid")
         return {
             "status": "ok",
-            "agent_session_id": str(session["id"] or ""),
-            "identity_hash": str(session["identity_hash"] or ""),
-            "user": str(session["username"] or ""),
+            "agent_session_id": session.agent_session_id,
+            "user": session.username,
             "server_name": "Polygon Replica",
-            "last_seen_at": last_seen_at,
-            "authorized_problems": self._authorized_problems_for_session(
-                session_id=str(session["id"] or ""),
-                user_id=int(session["user_id"]),
-            ),
+            "last_seen_at": row["last_seen_at"],
+            "general_scope": session.general_scope,
+            "problem_grants": self._status_grants(session),
         }
 
     def create_problem(
@@ -294,44 +578,29 @@ class AgentService:
         identity_hash: str,
         problem: str,
     ) -> dict[str, object]:
-        session = self._require_active_session(
+        session = self.require_general_scope(
             agent_session_id=agent_session_id,
             identity_hash=identity_hash,
+            minimum_scope="commit",
         )
         safe_problem = self._require_problem_slug(problem)
-        expected_owner = str(session["username"]).lower()
+        expected_owner = session.username.lower()
         if not safe_problem.startswith(f"{expected_owner}/"):
-            raise ValueError(
-                f"new problem must be owned by {expected_owner}"
-            )
+            raise ValueError(f"new problem must be owned by {expected_owner}")
         if self.workspace_service.known_problem_id(safe_problem) is not None:
             raise FileExistsError("problem already exists")
-
         self.workspace_service.ensure_problem(safe_problem)
         self.workspace_service.grant_repo_access(
             safe_problem,
-            str(session["username"]),
+            session.username,
             "owner",
         )
         self.workspace_service.ensure_workspace(
             safe_problem,
-            str(session["username"]),
+            session.username,
         )
-        problem_id, _user_id = self.workspace_service.page_identity(
-            safe_problem,
-            str(session["username"]),
-        )
-        self._touch_session(str(session["id"]))
+        self.workspace_service.page_identity(safe_problem, session.username)
         return {"problem": safe_problem}
-
-    def _token_expires_at(self, token_id: str) -> str | None:
-        if not token_id:
-            return None
-        row = self._store.token_by_id(str(token_id or ""))
-        if row is None:
-            return None
-        expires_at = str(row["expires_at"] or "")
-        return expires_at or None
 
     def resolve_access_request(
         self,
@@ -343,22 +612,31 @@ class AgentService:
         ttl: str,
     ) -> dict[str, object]:
         row = self._store.access_request_by_id(request_id)
-        if row is None:
+        if row is None or row["user_id"] != int(actor_user_id):
             raise LookupError("access request not found")
-        if int(row["user_id"]) != int(actor_user_id):
-            raise LookupError("access request not found")
-        if str(row.get("status") or "") != "pending":
-            raise ValueError("access request is no longer pending")
-        expires_at = self._parse_iso_utc(row["expires_at"])
-        if expires_at is None or expires_at <= datetime.now(timezone.utc):
-            self._store.resolve_access_request(request_id=row["id"], status="expired", resolved_at=now_iso())
-            raise TimeoutError("access request expired")
         safe_decision = str(decision or "").strip().lower()
         if safe_decision not in {"approve", "deny"}:
             raise ValueError("invalid decision")
         if safe_decision == "deny":
-            self._store.resolve_access_request(request_id=row["id"], status="denied", resolved_at=now_iso())
+            if row["status"] == "denied":
+                return {"status": "denied"}
+            if row["status"] != "pending":
+                raise ValueError("access request is no longer pending")
+            updated = self._store.resolve_pending_request(
+                request_id=request_id,
+                status="denied",
+                resolved_at=now_iso(),
+            )
+            if updated != 1:
+                raise ValueError("access request is no longer pending")
             return {"status": "denied"}
+        if row["status"] == "approved":
+            return {
+                "status": "approved",
+                "grant_id": row["grant_id"],
+                "granted_scope": row["granted_scope"],
+                "expires_at": row["grant_expires_at"] or None,
+            }
         safe_scope = self.access_query.canonical_agent_scope(scope)
         ttl_seconds: int | None
         if str(ttl or "").strip().lower() == "forever":
@@ -366,127 +644,113 @@ class AgentService:
         else:
             try:
                 ttl_value = int(str(ttl or "").strip())
-            except Exception as exc:
+            except ValueError as exc:
                 raise ValueError("invalid ttl") from exc
             if ttl_value not in _ALLOWED_APPROVAL_TTLS:
                 raise ValueError("invalid ttl")
             ttl_seconds = ttl_value
-        token = f"poly_{secrets.token_urlsafe(24)}"
-        token_id = f"at-{secrets.token_hex(8)}"
-        token_hash = sha256_hex_text(token)
         created_at = now_iso()
-        token_expires_at = self._format_expiry(ttl_seconds)
-        self._store.insert_token(
-            token_id=token_id,
-            token_hash=token_hash,
-            agent_session_id=row["agent_session_id"],
-            user_id=int(row["user_id"]),
-            problem_id=int(row["problem_id"]),
-            scope=safe_scope,
-            created_at=created_at,
-            expires_at=token_expires_at,
+
+        def access_check(
+            connection: sqlite3.Connection,
+            user_id: int,
+            problem_id: int,
+            granted_scope: str,
+        ) -> bool:
+            role = self.access_query.problem_role_in_transaction(
+                connection,
+                problem_id=problem_id,
+                user_id=user_id,
+            )
+            return effective_agent_scope(granted_scope, role) == granted_scope
+
+        result = self._store.approve_access_request(
+            actor_user_id=int(actor_user_id),
+            request_id=request_id,
+            grant_id=f"ag-{secrets.token_hex(8)}",
+            granted_scope=safe_scope,
+            grant_created_at=created_at,
+            grant_expires_at=self._format_expiry(ttl_seconds),
+            access_check=access_check,
         )
-        self._store.resolve_access_request(
-            request_id=row["id"],
-            status="approved",
-            resolved_at=created_at,
-            token_id=token_id,
-            delivery_token=token,
-        )
-        return {"status": "approved", "token_id": token_id, "expires_at": token_expires_at}
+        if result["outcome"] == "expired":
+            raise TimeoutError("access request expired")
+        approved = result["request"]
+        return {
+            "status": "approved",
+            "grant_id": approved["grant_id"],
+            "granted_scope": approved["granted_scope"],
+            "expires_at": approved["grant_expires_at"] or None,
+        }
 
     def list_user_sessions(self, *, user_id: int) -> list[dict[str, object]]:
         items: list[dict[str, object]] = []
-        now_dt = datetime.now(timezone.utc)
-        for session in self._store.list_user_sessions(int(user_id)):
-            tokens = []
-            for token in self._store.list_session_tokens(session["id"]):
-                if str(token.get("revoked_at") or ""):
-                    continue
-                expires_at = self._parse_iso_utc(str(token.get("expires_at") or ""))
-                if expires_at is not None and expires_at <= now_dt:
-                    continue
-                tokens.append(token)
+        for session_row in self._store.list_user_sessions(int(user_id)):
             items.append(
                 {
-                    "id": session["id"],
-                    "identity_hash": session["identity_hash"],
-                    "agent_name": session["agent_name"],
-                    "desktop_id": session["desktop_id"],
-                    "init_ts": session["init_ts"],
-                    "created_at": session["created_at"],
-                    "last_seen_at": session["last_seen_at"],
-                    "tokens": list(tokens),
+                    "id": session_row["id"],
+                    "agent_name": session_row["agent_name"],
+                    "desktop_id": session_row["desktop_id"],
+                    "init_ts": session_row["init_ts"],
+                    "created_at": session_row["created_at"],
+                    "last_seen_at": session_row["last_seen_at"],
+                    "general_scope": session_row["general_scope"],
+                    "grants": self._settings_grants(
+                        session_id=session_row["id"],
+                        user_id=session_row["user_id"],
+                    ),
                 }
             )
         return items
 
-    def access_request_for_user(self, *, actor_user_id: int, request_id: str) -> dict[str, object]:
+    def set_general_scope(
+        self,
+        *,
+        actor_user_id: int,
+        session_id: str,
+        general_scope: str,
+    ) -> None:
+        safe_scope = agent_general_scope(str(general_scope or "").strip())
+        updated = self._store.set_general_scope(
+            session_id=session_id,
+            user_id=int(actor_user_id),
+            general_scope=safe_scope,
+        )
+        if updated != 1:
+            raise LookupError("agent session not found")
+
+    def access_request_for_user(
+        self,
+        *,
+        actor_user_id: int,
+        request_id: str,
+    ) -> dict[str, object]:
         row = self._store.access_request_by_id(request_id)
-        if row is None or int(row["user_id"]) != int(actor_user_id):
+        if row is None or row["user_id"] != int(actor_user_id):
             raise LookupError("access request not found")
         return dict(row)
 
-    def revoke_token(self, *, actor_user_id: int, token_id: str) -> None:
-        row = self.db.fetch_one(
-            "SELECT problem_id FROM agent_tokens WHERE id=? AND user_id=?",
-            [str(token_id or ""), int(actor_user_id)],
+    def revoke_grant(self, *, actor_user_id: int, grant_id: str) -> None:
+        updated = self._store.revoke_grant(
+            grant_id=str(grant_id or ""),
+            user_id=int(actor_user_id),
+            revoked_at=now_iso(),
         )
-        if row is None:
-            raise LookupError("token not found")
-        updated = self._store.revoke_token(token_id=str(token_id or ""), user_id=int(actor_user_id), revoked_at=now_iso())
-        if updated <= 0:
-            raise LookupError("token not found")
+        if updated != 1:
+            raise LookupError("grant not found")
 
-    def disconnect_session(self, *, actor_user_id: int, session_id: str) -> None:
+    def disconnect_session(
+        self,
+        *,
+        actor_user_id: int,
+        session_id: str,
+    ) -> None:
         row = self._store.session_by_id(session_id)
-        if row is None or int(row["user_id"]) != int(actor_user_id):
+        if row is None or row["user_id"] != int(actor_user_id):
             raise LookupError("agent session not found")
-        deleted = self._store.delete_session_state(session_id=str(session_id or ""), user_id=int(actor_user_id))
-        if int(deleted["session_count"]) <= 0:
+        deleted = self._store.delete_session_state(
+            session_id=str(session_id or ""),
+            user_id=int(actor_user_id),
+        )
+        if deleted["session_count"] <= 0:
             raise LookupError("agent session not found")
-
-    def token_identity(self, raw_token: str) -> AgentTokenIdentity | None:
-        safe_token = str(raw_token or "").strip()
-        if not safe_token:
-            return None
-        token_row = self._store.token_by_hash(sha256_hex_text(safe_token))
-        if token_row is None:
-            return None
-        if str(token_row.get("revoked_at") or ""):
-            return None
-        expires_at = self._parse_iso_utc(str(token_row.get("expires_at") or ""))
-        if expires_at is not None and expires_at <= datetime.now(timezone.utc):
-            self._store.revoke_token(token_id=token_row["id"], user_id=int(token_row["user_id"]), revoked_at=now_iso())
-            return None
-        session = self._store.session_by_id(token_row["agent_session_id"])
-        if session is None or str(session.get("revoked_at") or ""):
-            return None
-        effective_scope = self.access_query.effective_agent_scope(
-            token_scope=str(token_row["scope"] or ""),
-            problem_id=int(token_row["problem_id"]),
-            user_id=int(token_row["user_id"]),
-        )
-        if not effective_scope:
-            return None
-        return AgentTokenIdentity(
-            token_id=token_row["id"],
-            agent_session_id=token_row["agent_session_id"],
-            user_id=int(token_row["user_id"]),
-            username=token_row["username"],
-            problem_id=int(token_row["problem_id"]),
-            problem_slug=token_row["problem_slug"],
-            scope=token_row["scope"],
-            effective_scope=effective_scope,
-            created_at=token_row["created_at"],
-            expires_at=str(token_row.get("expires_at") or ""),
-        )
-
-    def require_token(self, raw_token: str, *, min_scope: str) -> AgentTokenIdentity:
-        identity = self.token_identity(raw_token)
-        if identity is None:
-            raise PermissionError("invalid bearer token")
-        safe_min_scope = self.access_query.canonical_agent_scope(min_scope)
-        if not self.access_query.agent_scope_allows(identity.effective_scope, safe_min_scope):
-            raise RuntimeError("token scope does not allow this operation")
-        return identity

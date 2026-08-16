@@ -1,3 +1,5 @@
+import sqlite3
+
 from app.db import DB
 from app.service.access.model import AccessRole, ProblemParticipationRow
 from app.service.access.policy import access_role, derived_problem_role, stronger_role
@@ -53,6 +55,42 @@ class AccessStore:
                 role = derived_problem_role(role)
             result[problem_id] = stronger_role(result[problem_id], role)
         return result
+
+    @staticmethod
+    def problem_role_in_transaction(
+        connection: sqlite3.Connection,
+        *,
+        problem_id: int,
+        user_id: int,
+    ) -> AccessRole:
+        user = connection.execute(
+            "SELECT is_system_admin FROM users WHERE id=?",
+            [int(user_id)],
+        ).fetchone()
+        if user is None:
+            return "none"
+        if int(user[0] or 0) == 1:
+            return "admin"
+        rows = connection.execute(
+            """
+            SELECT role,'direct' AS source
+            FROM repo_acl
+            WHERE problem_id=? AND user_id=?
+            UNION ALL
+            SELECT cm.role,'contest' AS source
+            FROM contest_problems cp
+            JOIN contest_members cm ON cm.contest_id=cp.contest_id
+            WHERE cp.problem_id=? AND cm.user_id=?
+            """,
+            [int(problem_id), int(user_id), int(problem_id), int(user_id)],
+        ).fetchall()
+        role: AccessRole = "none"
+        for row in rows:
+            candidate = access_role(str(row[0]))
+            if str(row[1]) == "contest":
+                candidate = derived_problem_role(candidate)
+            role = stronger_role(role, candidate)
+        return role
 
     def contest_role(self, contest_id: int, user_id: int) -> AccessRole:
         if self.is_system_admin(user_id):

@@ -3,6 +3,7 @@ import io
 import json
 import zipfile
 from pathlib import Path
+from typing import NamedTuple
 from urllib.parse import urlparse
 
 from fastapi.testclient import TestClient
@@ -17,7 +18,12 @@ from tests.db_helpers import (
     verification_programs_for_tasks,
 )
 from tests.execution_result_helpers import execution_result
-from tests.ui_support import AUTH_COOKIE_NAME, _cookie_value_from_response, _register_with_password_envelope
+from tests.ui_support import (
+    AUTH_COOKIE_NAME,
+    _cookie_value_from_response,
+    _flash_messages_from_response,
+    _register_with_password_envelope,
+)
 from app.main import runtime
 from app.main import app
 from app.service.verification.lifecycle import PlannedTask, verification_task_id
@@ -25,6 +31,11 @@ from app.service.verification.task_completion import TaskCompletion
 from app.service.verification.types import VerificationTaskStatus
 
 workspace_service = runtime.workspace_service
+
+
+class AgentTestGrant(NamedTuple):
+    headers: dict[str, str]
+    grant_id: str
 
 
 class TestAgentAPI(E2ETestBase):
@@ -67,11 +78,37 @@ class TestAgentAPI(E2ETestBase):
         )
         self.assertEqual(resp.status_code, 200, resp.text)
         payload = resp.json()
-        self.assertRegex(str(payload.get("agent_session_id") or ""), r"^as-[0-9a-f]{16}$")
+        self.assertRegex(str(payload.get("agent_session_id") or ""), r"^as-[0-9a-f]{48}$")
         self.assertRegex(str(payload.get("identity_hash") or ""), r"^[0-9a-f]{64}$")
         return payload
 
-    def _approve_token(
+    @staticmethod
+    def _identity_headers(
+        agent_session_id: str,
+        identity_hash: str,
+    ) -> dict[str, str]:
+        return {
+            "X-Polygon-Agent-Session-ID": agent_session_id,
+            "X-Polygon-Agent-Identity-Hash": identity_hash,
+        }
+
+    def _set_general_scope(
+        self,
+        client: TestClient,
+        *,
+        auth_cookie: str,
+        agent_session_id: str,
+        scope: str,
+    ) -> None:
+        response = client.post(
+            f"/agent/sessions/{agent_session_id}/general-scope",
+            data={"general_scope": scope},
+            headers={"cookie": auth_cookie, "origin": "http://testserver"},
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 303, response.text)
+
+    def _approve_grant(
         self,
         client: TestClient,
         *,
@@ -81,15 +118,16 @@ class TestAgentAPI(E2ETestBase):
         scope: str = "readonly",
         ttl: str = "86400",
         problem: str | None = None,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, AgentTestGrant]:
         problem_slug = problem or self.problem
+        headers = self._identity_headers(agent_session_id, identity_hash)
         request_resp = client.post(
             "/agent/v1/auth/request-access",
             json={
-                "agent_session_id": agent_session_id,
-                "identity_hash": identity_hash,
                 "problem": problem_slug,
+                "scope": scope,
             },
+            headers=headers,
         )
         self.assertEqual(request_resp.status_code, 200, request_resp.text)
         request_payload = request_resp.json()
@@ -114,27 +152,30 @@ class TestAgentAPI(E2ETestBase):
 
         first_poll = client.get(
             f"/agent/v1/auth/poll/{request_id}",
-            params={"agent_session_id": agent_session_id, "identity_hash": identity_hash},
+            headers=headers,
         )
         self.assertEqual(first_poll.status_code, 200, first_poll.text)
         first_payload = first_poll.json()
         self.assertEqual(str(first_payload.get("status") or ""), "approved")
-        raw_token = str(first_payload.get("token") or "")
-        self.assertRegex(raw_token, r"^poly_")
+        grant_id = str(first_payload.get("grant_id") or "")
+        self.assertRegex(grant_id, r"^ag-[0-9a-f]{16}$")
+        self.assertEqual(first_payload.get("granted_scope"), scope)
+        self.assertNotIn("token", first_payload)
 
         second_poll = client.get(
             f"/agent/v1/auth/poll/{request_id}",
-            params={"agent_session_id": agent_session_id, "identity_hash": identity_hash},
+            headers=headers,
         )
         self.assertEqual(second_poll.status_code, 200, second_poll.text)
         second_payload = second_poll.json()
         self.assertEqual(str(second_payload.get("status") or ""), "approved")
+        self.assertEqual(second_payload.get("grant_id"), grant_id)
         self.assertNotIn("token", second_payload)
-        return (request_id, raw_token)
+        return (request_id, AgentTestGrant(headers=headers, grant_id=grant_id))
 
     @staticmethod
-    def _bearer(raw_token: str) -> dict[str, str]:
-        return {"authorization": f"Bearer {raw_token}"}
+    def _agent_headers(grant: AgentTestGrant) -> dict[str, str]:
+        return grant.headers
 
     @staticmethod
     def _workspace_zip(files: dict[str, bytes | str], dirs: list[str] | None = None) -> bytes:
@@ -150,18 +191,45 @@ class TestAgentAPI(E2ETestBase):
     def test_registered_agent_creates_one_owned_problem(self) -> None:
         username = self.random_id("agent-create").lower()
         _password, auth_cookie = self._issue_auth_cookie(username)
+        self._grant_problem_owner(username)
         problem = f"{username}/created"
 
         with TestClient(app, raise_server_exceptions=False) as client:
             connect = self._connect_agent(client, auth_cookie)
             register = self._register_agent(client, str(connect["register_url"]))
-            create_payload = {
-                "agent_session_id": str(register["agent_session_id"]),
-                "identity_hash": str(register["identity_hash"]),
-                "problem": problem,
-            }
+            headers = self._identity_headers(
+                str(register["agent_session_id"]),
+                str(register["identity_hash"]),
+            )
+            self._approve_grant(
+                client,
+                auth_cookie=auth_cookie,
+                agent_session_id=str(register["agent_session_id"]),
+                identity_hash=str(register["identity_hash"]),
+                scope="commit",
+            )
+            denied = client.post(
+                "/agent/v1/problems",
+                json={"problem": problem},
+                headers=headers,
+            )
+            self.assertEqual(denied.status_code, 403, denied.text)
+            self.assertEqual(
+                denied.json().get("error"),
+                "agent_general_permission_required",
+            )
+            self._set_general_scope(
+                client,
+                auth_cookie=auth_cookie,
+                agent_session_id=str(register["agent_session_id"]),
+                scope="commit",
+            )
 
-            created = client.post("/agent/v1/problems", json=create_payload)
+            created = client.post(
+                "/agent/v1/problems",
+                json={"problem": problem},
+                headers=headers,
+            )
             self.assertEqual(created.status_code, 200, created.text)
             self.assertEqual(created.json(), {"problem": problem})
 
@@ -178,18 +246,60 @@ class TestAgentAPI(E2ETestBase):
             )
             self.assertTrue(Path(str(workspace["workspace"]["path"])).is_dir())
 
-            duplicate = client.post("/agent/v1/problems", json=create_payload)
+            duplicate = client.post(
+                "/agent/v1/problems",
+                json={"problem": problem},
+                headers=headers,
+            )
             self.assertEqual(duplicate.status_code, 409, duplicate.text)
             foreign = client.post(
                 "/agent/v1/problems",
-                json={**create_payload, "problem": "someone-else/created"},
+                json={"problem": "someone-else/created"},
+                headers=headers,
             )
             self.assertEqual(foreign.status_code, 422, foreign.text)
             bad_identity = client.post(
                 "/agent/v1/problems",
-                json={**create_payload, "identity_hash": "bad"},
+                json={"problem": f"{username}/other"},
+                headers=self._identity_headers(
+                    str(register["agent_session_id"]),
+                    "bad",
+                ),
             )
             self.assertEqual(bad_identity.status_code, 401, bad_identity.text)
+
+    def test_problem_deletion_removes_agent_grants_and_requests(self) -> None:
+        username = self.random_id("agent-delete")
+        _password, auth_cookie = self._issue_auth_cookie(username)
+        self._grant_problem_owner(username)
+
+        with TestClient(app, raise_server_exceptions=False) as client:
+            connect = self._connect_agent(client, auth_cookie)
+            register = self._register_agent(client, str(connect["register_url"]))
+            request_id, grant = self._approve_grant(
+                client,
+                auth_cookie=auth_cookie,
+                agent_session_id=str(register["agent_session_id"]),
+                identity_hash=str(register["identity_hash"]),
+                scope="commit",
+            )
+            problem_id = workspace_service.known_problem_id(self.problem)
+            self.assertIsNotNone(problem_id)
+            self.assertIsNotNone(
+                db_fetch_one("SELECT id FROM agent_problem_grants WHERE id=?", [grant.grant_id])
+            )
+            self.assertIsNotNone(
+                db_fetch_one("SELECT id FROM agent_access_requests WHERE id=?", [request_id])
+            )
+
+            workspace_service.delete_problem(self.problem)
+
+        self.assertIsNone(
+            db_fetch_one("SELECT id FROM agent_problem_grants WHERE id=?", [grant.grant_id])
+        )
+        self.assertIsNone(
+            db_fetch_one("SELECT id FROM agent_access_requests WHERE id=?", [request_id])
+        )
 
     def test_export_status_and_download_resolve_export_job_directly(self) -> None:
         username = self.random_id("agent-export-job")
@@ -355,15 +465,31 @@ class TestAgentAPI(E2ETestBase):
                 str(connect["register_url"]),
                 desktop_id="D-export-job",
             )
-            _request_id, token = self._approve_token(
+            _request_id, grant = self._approve_grant(
                 client,
                 auth_cookie=auth_cookie,
                 agent_session_id=str(register["agent_session_id"]),
                 identity_hash=str(register["identity_hash"]),
             )
+            other_problem = f"{username}/other-export"
+            workspace_service.ensure_problem(other_problem)
+            workspace_service.grant_repo_access(other_problem, username, "read")
+            self._set_general_scope(
+                client,
+                auth_cookie=auth_cookie,
+                agent_session_id=str(register["agent_session_id"]),
+                scope="readonly",
+            )
+            cross_problem = client.get(
+                f"/agent/v1/export/{job_id}/status",
+                headers=self._agent_headers(grant),
+                params={"problem": other_problem},
+            )
+            self.assertEqual(cross_problem.status_code, 404, cross_problem.text)
             status = client.get(
                 f"/agent/v1/export/{job_id}/status",
-                headers=self._bearer(token),
+                headers=self._agent_headers(grant),
+                params={"problem": self.problem},
             )
             self.assertEqual(status.status_code, 200, status.text)
             payload = status.json()
@@ -382,13 +508,14 @@ class TestAgentAPI(E2ETestBase):
             )
             self.assertEqual(
                 str(payload.get("download_path") or ""),
-                f"/agent/v1/export/{job_id}/download",
+                f"/agent/v1/export/{job_id}/download?problem={self.problem.replace('/', '%2F')}",
             )
             self.assertEqual(str(payload.get("filename") or ""), filename)
 
             download = client.get(
                 f"/agent/v1/export/{job_id}/download",
-                headers=self._bearer(token),
+                headers=self._agent_headers(grant),
+                params={"problem": self.problem},
             )
             self.assertEqual(download.status_code, 200, download.text)
             self.assertEqual(download.content, b"agent export payload")
@@ -449,7 +576,220 @@ class TestAgentAPI(E2ETestBase):
             )
             self.assertEqual(reused_attempt.status_code, 410)
 
-    def test_agent_auth_status_reports_authorized_problems_and_updates_last_seen(self) -> None:
+    def test_problem_routes_require_one_explicit_problem_before_provisioning(self) -> None:
+        username = self.random_id("agent-explicit-problem")
+        _password, auth_cookie = self._issue_auth_cookie(username)
+        workspace_service.grant_repo_access(self.problem, username, "read")
+        user_id = workspace_service.known_user_id(username)
+        self.assertIsNotNone(user_id)
+
+        with TestClient(app, raise_server_exceptions=False) as client:
+            connect = self._connect_agent(client, auth_cookie)
+            register = self._register_agent(client, str(connect["register_url"]))
+            _request_id, grant = self._approve_grant(
+                client,
+                auth_cookie=auth_cookie,
+                agent_session_id=str(register["agent_session_id"]),
+                identity_hash=str(register["identity_hash"]),
+            )
+            before = db_fetch_one(
+                "SELECT COUNT(*) AS n FROM workspaces WHERE user_id=?",
+                [int(user_id)],
+            )
+            self.assertEqual(int(before["n"]), 0)
+
+            missing_identity = client.get(
+                "/agent/v1/workspace/status",
+                params={"problem": self.problem},
+            )
+            self.assertEqual(missing_identity.status_code, 401, missing_identity.text)
+            wrong_identity = client.get(
+                "/agent/v1/workspace/status",
+                params={"problem": self.problem},
+                headers=self._identity_headers(
+                    str(register["agent_session_id"]),
+                    "wrong",
+                ),
+            )
+            self.assertEqual(wrong_identity.status_code, 401, wrong_identity.text)
+
+            missing = client.get(
+                "/agent/v1/workspace/status",
+                headers=self._agent_headers(grant),
+            )
+            self.assertEqual(missing.status_code, 400, missing.text)
+            empty = client.get(
+                "/agent/v1/workspace/status?problem=",
+                headers=self._agent_headers(grant),
+            )
+            self.assertEqual(empty.status_code, 400, empty.text)
+            repeated = client.get(
+                "/agent/v1/workspace/status"
+                f"?problem={self.problem}&problem={self.problem}",
+                headers=self._agent_headers(grant),
+            )
+            self.assertEqual(repeated.status_code, 400, repeated.text)
+            invalid = client.get(
+                "/agent/v1/workspace/status",
+                params={"problem": "not-a-canonical-slug"},
+                headers=self._agent_headers(grant),
+            )
+            self.assertEqual(invalid.status_code, 400, invalid.text)
+            unchanged = db_fetch_one(
+                "SELECT COUNT(*) AS n FROM workspaces WHERE user_id=?",
+                [int(user_id)],
+            )
+            self.assertEqual(int(unchanged["n"]), 0)
+
+            valid = client.get(
+                "/agent/v1/workspace/status",
+                params={"problem": self.problem},
+                headers=self._agent_headers(grant),
+            )
+            self.assertEqual(valid.status_code, 200, valid.text)
+
+    def test_contest_roster_and_snapshot_use_general_permission(self) -> None:
+        username = self.random_id("agent-contest")
+        _password, auth_cookie = self._issue_auth_cookie(username)
+        user_id = workspace_service.known_user_id(username)
+        owner_id = workspace_service.known_user_id("alice")
+        self.assertIsNotNone(user_id)
+        self.assertIsNotNone(owner_id)
+        contest_slug = self.random_id("agent-roster")
+        contest_id = runtime.contest_service.create_contest_with_owner(
+            slug=contest_slug,
+            title="Agent Roster",
+            owner_user_id=int(owner_id),
+        )
+        roster_items: list[tuple[int, str, str]] = []
+        for label in ("A", "B"):
+            problem_slug = f"alice/{self.random_id(f'agent-contest-{label.lower()}')}"
+            workspace_service.ensure_problem(problem_slug)
+            problem_id = workspace_service.known_problem_id(problem_slug)
+            self.assertIsNotNone(problem_id)
+            runtime.contest_service.add_problem(
+                contest_id,
+                label,
+                int(problem_id),
+                int(owner_id),
+            )
+            row = db_fetch_one(
+                "SELECT id FROM contest_problems WHERE contest_id=? AND problem_id=?",
+                [contest_id, int(problem_id)],
+            )
+            self.assertIsNotNone(row)
+            roster_items.append((int(row["id"]), label, problem_slug))
+        runtime.contest_service.grant_member_role(contest_id, username, "read")
+
+        with TestClient(app, raise_server_exceptions=False) as client:
+            connect = self._connect_agent(client, auth_cookie)
+            register = self._register_agent(client, str(connect["register_url"]))
+            session_id = str(register["agent_session_id"])
+            headers = self._identity_headers(
+                session_id,
+                str(register["identity_hash"]),
+            )
+            self._approve_grant(
+                client,
+                auth_cookie=auth_cookie,
+                agent_session_id=session_id,
+                identity_hash=str(register["identity_hash"]),
+                scope="readonly",
+                problem=roster_items[0][2],
+            )
+            denied = client.get(
+                f"/agent/v1/contests/{contest_slug}/problems",
+                headers=headers,
+            )
+            self.assertEqual(denied.status_code, 403, denied.text)
+            self.assertEqual(
+                denied.json()["detail"]["error"],
+                "agent_general_permission_required",
+            )
+            self.assertEqual(
+                denied.json()["detail"]["settings_url"],
+                "http://testserver/agent/sessions",
+            )
+            self._set_general_scope(
+                client,
+                auth_cookie=auth_cookie,
+                agent_session_id=session_id,
+                scope="readonly",
+            )
+            before = db_fetch_one(
+                "SELECT COUNT(*) AS n FROM workspaces WHERE user_id=?",
+                [int(user_id)],
+            )
+            roster = client.get(
+                f"/agent/v1/contests/{contest_slug}/problems",
+                headers=headers,
+            )
+            self.assertEqual(roster.status_code, 200, roster.text)
+            roster_payload = roster.json()
+            self.assertEqual(roster_payload["problem_count"], 2)
+            self.assertEqual(
+                [item["idx"] for item in roster_payload["problems"]],
+                ["A", "B"],
+            )
+            self.assertEqual(
+                [item["problem"] for item in roster_payload["problems"]],
+                [item[2] for item in roster_items],
+            )
+            after_roster = db_fetch_one(
+                "SELECT COUNT(*) AS n FROM workspaces WHERE user_id=?",
+                [int(user_id)],
+            )
+            self.assertEqual(int(after_roster["n"]), int(before["n"]))
+
+            generation = int(roster_payload["source_generation"])
+            first_id = roster_items[0][0]
+            stale = client.get(
+                f"/agent/v1/contests/{contest_slug}/problems/{first_id}"
+                "/workspace/snapshot",
+                params={"source_generation": generation + 1},
+                headers=headers,
+            )
+            self.assertEqual(stale.status_code, 409, stale.text)
+            after_stale = db_fetch_one(
+                "SELECT COUNT(*) AS n FROM workspaces WHERE user_id=?",
+                [int(user_id)],
+            )
+            self.assertEqual(int(after_stale["n"]), int(before["n"]))
+
+            snapshot = client.get(
+                f"/agent/v1/contests/{contest_slug}/problems/{first_id}"
+                "/workspace/snapshot",
+                params={"source_generation": generation},
+                headers=headers,
+            )
+            self.assertEqual(snapshot.status_code, 200, snapshot.text)
+            self.assertEqual(snapshot.headers["x-contest-problem-id"], str(first_id))
+
+            runtime.contest_service.revoke_member(contest_id, int(user_id))
+            revoked = client.get(
+                f"/agent/v1/contests/{contest_slug}/problems",
+                headers=headers,
+            )
+            self.assertEqual(revoked.status_code, 403, revoked.text)
+            ordinary_hidden = client.get(
+                "/agent/v1/workspace/status",
+                params={"problem": roster_items[0][2]},
+                headers=headers,
+            )
+            self.assertEqual(ordinary_hidden.status_code, 404, ordinary_hidden.text)
+            workspace_service.grant_repo_access(
+                roster_items[0][2],
+                username,
+                "read",
+            )
+            ordinary_direct = client.get(
+                "/agent/v1/workspace/status",
+                params={"problem": roster_items[0][2]},
+                headers=headers,
+            )
+            self.assertEqual(ordinary_direct.status_code, 200, ordinary_direct.text)
+
+    def test_agent_auth_status_reports_general_scope_and_individual_grants(self) -> None:
         username = self.random_id("agent-status")
         _password, auth_cookie = self._issue_auth_cookie(username)
         self._grant_problem_owner(username)
@@ -460,18 +800,20 @@ class TestAgentAPI(E2ETestBase):
             register = self._register_agent(client, str(connect["register_url"]))
             session_id = str(register["agent_session_id"])
             identity_hash = str(register["identity_hash"])
+            headers = self._identity_headers(session_id, identity_hash)
 
             runtime.agent_service.store.touch_session(session_id, last_seen_at=stale_seen)
             empty_status = client.get(
                 "/agent/v1/auth/status",
-                params={"agent_session_id": session_id, "identity_hash": identity_hash},
+                headers=headers,
             )
             self.assertEqual(empty_status.status_code, 200, empty_status.text)
             empty_payload = empty_status.json()
             self.assertEqual(str(empty_payload.get("status") or ""), "ok")
             self.assertEqual(str(empty_payload.get("agent_session_id") or ""), session_id)
             self.assertEqual(str(empty_payload.get("user") or ""), username)
-            self.assertEqual(list(empty_payload.get("authorized_problems") or []), [])
+            self.assertEqual(empty_payload.get("general_scope"), "none")
+            self.assertEqual(list(empty_payload.get("problem_grants") or []), [])
             touched_after_status = str(runtime.agent_service.store.session_by_id(session_id)["last_seen_at"])
             self.assertNotEqual(touched_after_status, stale_seen)
             self.assertEqual(touched_after_status, str(empty_payload.get("last_seen_at") or ""))
@@ -479,11 +821,8 @@ class TestAgentAPI(E2ETestBase):
             runtime.agent_service.store.touch_session(session_id, last_seen_at=stale_seen)
             request_resp = client.post(
                 "/agent/v1/auth/request-access",
-                json={
-                    "agent_session_id": session_id,
-                    "identity_hash": identity_hash,
-                    "problem": self.problem,
-                },
+                json={"problem": self.problem, "scope": "readonly"},
+                headers=headers,
             )
             self.assertEqual(request_resp.status_code, 200, request_resp.text)
             request_id = str(request_resp.json().get("request_id") or "")
@@ -494,7 +833,7 @@ class TestAgentAPI(E2ETestBase):
             runtime.agent_service.store.touch_session(session_id, last_seen_at=stale_seen)
             pending_poll = client.get(
                 f"/agent/v1/auth/poll/{request_id}",
-                params={"agent_session_id": session_id, "identity_hash": identity_hash},
+                headers=headers,
             )
             self.assertEqual(pending_poll.status_code, 200, pending_poll.text)
             self.assertEqual(str(pending_poll.json().get("status") or ""), "pending")
@@ -509,24 +848,25 @@ class TestAgentAPI(E2ETestBase):
             self.assertEqual(approve.status_code, 303, approve.text)
             readonly_poll = client.get(
                 f"/agent/v1/auth/poll/{request_id}",
-                params={"agent_session_id": session_id, "identity_hash": identity_hash},
+                headers=headers,
             )
             self.assertEqual(readonly_poll.status_code, 200, readonly_poll.text)
-            readonly_token = str(readonly_poll.json().get("token") or "")
-            self.assertRegex(readonly_token, r"^poly_")
+            readonly_grant_id = str(readonly_poll.json().get("grant_id") or "")
+            self.assertRegex(readonly_grant_id, r"^ag-[0-9a-f]{16}$")
+            self.assertNotIn("token", readonly_poll.json())
 
             readonly_status = client.get(
                 "/agent/v1/auth/status",
-                params={"agent_session_id": session_id, "identity_hash": identity_hash},
+                headers=headers,
             )
             self.assertEqual(readonly_status.status_code, 200, readonly_status.text)
-            readonly_items = list(readonly_status.json().get("authorized_problems") or [])
+            readonly_items = list(readonly_status.json().get("problem_grants") or [])
             self.assertEqual(len(readonly_items), 1)
             self.assertEqual(str(readonly_items[0].get("problem") or ""), self.problem)
             self.assertEqual(str(readonly_items[0].get("scope") or ""), "readonly")
             self.assertTrue(str(readonly_items[0].get("expires_at") or ""))
 
-            _workspace_request_id, workspace_token = self._approve_token(
+            _workspace_request_id, workspace_grant = self._approve_grant(
                 client,
                 auth_cookie=auth_cookie,
                 agent_session_id=session_id,
@@ -535,39 +875,38 @@ class TestAgentAPI(E2ETestBase):
             )
             workspace_status = client.get(
                 "/agent/v1/auth/status",
-                params={"agent_session_id": session_id, "identity_hash": identity_hash},
+                headers=headers,
             )
             self.assertEqual(workspace_status.status_code, 200, workspace_status.text)
-            workspace_items = list(workspace_status.json().get("authorized_problems") or [])
-            self.assertEqual(len(workspace_items), 1)
-            self.assertEqual(str(workspace_items[0].get("problem") or ""), self.problem)
-            self.assertEqual(str(workspace_items[0].get("scope") or ""), "workspace")
+            workspace_items = list(workspace_status.json().get("problem_grants") or [])
+            self.assertEqual(len(workspace_items), 2)
+            self.assertEqual(
+                {str(item.get("scope") or "") for item in workspace_items},
+                {"readonly", "workspace"},
+            )
 
             workspace_service.grant_repo_access(self.problem, username, "read")
             downgraded_status = client.get(
                 "/agent/v1/auth/status",
-                params={"agent_session_id": session_id, "identity_hash": identity_hash},
+                headers=headers,
             )
             self.assertEqual(downgraded_status.status_code, 200, downgraded_status.text)
-            downgraded_items = list(downgraded_status.json().get("authorized_problems") or [])
-            self.assertEqual(len(downgraded_items), 1)
-            self.assertEqual(str(downgraded_items[0].get("problem") or ""), self.problem)
-            self.assertEqual(str(downgraded_items[0].get("scope") or ""), "readonly")
+            downgraded_items = list(downgraded_status.json().get("problem_grants") or [])
+            self.assertEqual(len(downgraded_items), 2)
+            self.assertEqual(
+                {str(item.get("effective_scope") or "") for item in downgraded_items},
+                {"readonly"},
+            )
 
             workspace_service.grant_repo_access(self.problem, username, "owner")
-            readonly_identity = runtime.agent_service.token_identity(readonly_token)
-            workspace_identity = runtime.agent_service.token_identity(workspace_token)
-            self.assertIsNotNone(readonly_identity)
-            self.assertIsNotNone(workspace_identity)
-
             revoke_readonly = client.post(
-                f"/agent/revoke/{readonly_identity.token_id}",
+                f"/agent/grants/{readonly_grant_id}/revoke",
                 headers={"cookie": auth_cookie, "origin": "http://testserver"},
                 follow_redirects=False,
             )
             self.assertEqual(revoke_readonly.status_code, 303)
             revoke_workspace = client.post(
-                f"/agent/revoke/{workspace_identity.token_id}",
+                f"/agent/grants/{workspace_grant.grant_id}/revoke",
                 headers={"cookie": auth_cookie, "origin": "http://testserver"},
                 follow_redirects=False,
             )
@@ -575,20 +914,30 @@ class TestAgentAPI(E2ETestBase):
 
             revoked_status = client.get(
                 "/agent/v1/auth/status",
-                params={"agent_session_id": session_id, "identity_hash": identity_hash},
+                headers=headers,
             )
             self.assertEqual(revoked_status.status_code, 200, revoked_status.text)
-            self.assertEqual(list(revoked_status.json().get("authorized_problems") or []), [])
+            self.assertEqual(list(revoked_status.json().get("problem_grants") or []), [])
+
+            self._set_general_scope(
+                client,
+                auth_cookie=auth_cookie,
+                agent_session_id=session_id,
+                scope="workspace",
+            )
+            general_status = client.get("/agent/v1/auth/status", headers=headers)
+            self.assertEqual(general_status.status_code, 200, general_status.text)
+            self.assertEqual(general_status.json().get("general_scope"), "workspace")
 
             bad_identity = client.get(
                 "/agent/v1/auth/status",
-                params={"agent_session_id": session_id, "identity_hash": "bad"},
+                headers=self._identity_headers(session_id, "bad"),
             )
             self.assertEqual(bad_identity.status_code, 401)
 
             bad_session = client.get(
                 "/agent/v1/auth/status",
-                params={"agent_session_id": "as-missing", "identity_hash": identity_hash},
+                headers=self._identity_headers("as-missing", identity_hash),
             )
             self.assertEqual(bad_session.status_code, 401)
 
@@ -599,11 +948,11 @@ class TestAgentAPI(E2ETestBase):
             )
             self.assertEqual(disconnect.status_code, 303)
             self.assertIsNone(runtime.agent_service.store.session_by_id(session_id))
-            token_count_row = db_fetch_one(
-                "SELECT COUNT(*) AS n FROM agent_tokens WHERE agent_session_id=?",
+            grant_count_row = db_fetch_one(
+                "SELECT COUNT(*) AS n FROM agent_problem_grants WHERE agent_session_id=?",
                 [session_id],
             )
-            self.assertEqual(int(token_count_row["n"]), 0)
+            self.assertEqual(int(grant_count_row["n"]), 0)
             request_count_row = db_fetch_one(
                 "SELECT COUNT(*) AS n FROM agent_access_requests WHERE agent_session_id=?",
                 [session_id],
@@ -611,21 +960,18 @@ class TestAgentAPI(E2ETestBase):
             self.assertEqual(int(request_count_row["n"]), 0)
             disconnected_status = client.get(
                 "/agent/v1/auth/status",
-                params={"agent_session_id": session_id, "identity_hash": identity_hash},
+                headers=headers,
             )
             self.assertEqual(disconnected_status.status_code, 401)
             disconnected_request = client.post(
                 "/agent/v1/auth/request-access",
-                json={
-                    "agent_session_id": session_id,
-                    "identity_hash": identity_hash,
-                    "problem": self.problem,
-                },
+                json={"problem": self.problem, "scope": "readonly"},
+                headers=headers,
             )
             self.assertEqual(disconnected_request.status_code, 401)
             disconnected_poll = client.get(
                 f"/agent/v1/auth/poll/{request_id}",
-                params={"agent_session_id": session_id, "identity_hash": identity_hash},
+                headers=headers,
             )
             self.assertEqual(disconnected_poll.status_code, 401)
             sessions_page = client.get("/agent/sessions", headers={"cookie": auth_cookie}, follow_redirects=False)
@@ -633,7 +979,146 @@ class TestAgentAPI(E2ETestBase):
             self.assertIn("No agents connected.", sessions_page.text)
             self.assertNotIn("Disconnected at", sessions_page.text)
 
-    def test_agent_token_revocation_and_disconnect_invalidate_access(self) -> None:
+    def test_approval_access_recheck_returns_a_controlled_failure(self) -> None:
+        username = self.random_id("agent-approval-recheck")
+        _password, auth_cookie = self._issue_auth_cookie(username)
+        self._grant_problem_owner(username)
+
+        with TestClient(app, raise_server_exceptions=False) as client:
+            connect = self._connect_agent(client, auth_cookie)
+            register = self._register_agent(client, str(connect["register_url"]))
+            session_id = str(register["agent_session_id"])
+            headers = self._identity_headers(
+                session_id,
+                str(register["identity_hash"]),
+            )
+            requested = client.post(
+                "/agent/v1/auth/request-access",
+                json={"problem": self.problem, "scope": "commit"},
+                headers=headers,
+            )
+            self.assertEqual(requested.status_code, 200, requested.text)
+            request_id = str(requested.json().get("request_id") or "")
+
+            workspace_service.grant_repo_access(self.problem, username, "read")
+            approved = client.post(
+                f"/agent/approve/{request_id}",
+                data={"decision": "approve", "scope": "commit", "ttl": "86400"},
+                headers={"cookie": auth_cookie, "origin": "http://testserver"},
+                follow_redirects=False,
+            )
+
+            self.assertEqual(approved.status_code, 303, approved.text)
+            self.assertEqual(
+                _flash_messages_from_response(approved),
+                ["current problem access does not allow granted scope."],
+            )
+            access_request = runtime.agent_service.store.access_request_by_id(
+                request_id
+            )
+            self.assertIsNotNone(access_request)
+            assert access_request is not None
+            self.assertEqual(access_request["status"], "pending")
+            self.assertEqual(
+                runtime.agent_service.store.list_session_grants(session_id),
+                [],
+            )
+
+    def test_problem_grants_keep_independent_scopes_expiries_and_revocation(self) -> None:
+        username = self.random_id("agent-grant-lifetimes")
+        _password, auth_cookie = self._issue_auth_cookie(username)
+        self._grant_problem_owner(username)
+
+        with TestClient(app, raise_server_exceptions=False) as client:
+            connect = self._connect_agent(client, auth_cookie)
+            register = self._register_agent(client, str(connect["register_url"]))
+            session_id = str(register["agent_session_id"])
+            identity_hash = str(register["identity_hash"])
+            headers = self._identity_headers(session_id, identity_hash)
+            grants: list[AgentTestGrant] = []
+            for ttl in ("3600", "86400", "604800", "2592000", "forever"):
+                _request_id, grant = self._approve_grant(
+                    client,
+                    auth_cookie=auth_cookie,
+                    agent_session_id=session_id,
+                    identity_hash=identity_hash,
+                    scope="readonly",
+                    ttl=ttl,
+                )
+                grants.append(grant)
+            rows = runtime.agent_service.store.list_session_grants(session_id)
+            self.assertEqual(len(rows), 5)
+            self.assertEqual(sum(1 for row in rows if not row["expires_at"]), 1)
+
+            request_id, commit_grant = self._approve_grant(
+                client,
+                auth_cookie=auth_cookie,
+                agent_session_id=session_id,
+                identity_hash=identity_hash,
+                scope="commit",
+                ttl="3600",
+            )
+            duplicate_approval = client.post(
+                f"/agent/approve/{request_id}",
+                data={
+                    "decision": "approve",
+                    "scope": "workspace",
+                    "ttl": "2592000",
+                },
+                headers={"cookie": auth_cookie, "origin": "http://testserver"},
+                follow_redirects=False,
+            )
+            self.assertEqual(duplicate_approval.status_code, 303)
+            after_duplicate = runtime.agent_service.store.list_session_grants(
+                session_id
+            )
+            self.assertEqual(len(after_duplicate), 6)
+            approved_request = runtime.agent_service.store.access_request_by_id(
+                request_id
+            )
+            self.assertIsNotNone(approved_request)
+            assert approved_request is not None
+            self.assertEqual(approved_request["grant_id"], commit_grant.grant_id)
+            self.assertEqual(approved_request["granted_scope"], "commit")
+
+            db_execute(
+                "UPDATE agent_problem_grants SET expires_at=? WHERE id=?",
+                ["2000-01-01T00:00:00+00:00", commit_grant.grant_id],
+            )
+            commit_after_expiry = client.post(
+                "/agent/v1/commit",
+                params={"problem": self.problem},
+                headers=headers,
+                json={"message": "must not commit"},
+            )
+            self.assertEqual(commit_after_expiry.status_code, 403)
+            self.assertEqual(
+                commit_after_expiry.json()["detail"]["error"],
+                "agent_permission_required",
+            )
+            readable = client.get(
+                "/agent/v1/workspace/status",
+                params={"problem": self.problem},
+                headers=headers,
+            )
+            self.assertEqual(readable.status_code, 200, readable.text)
+
+            revoke = client.post(
+                f"/agent/grants/{grants[0].grant_id}/revoke",
+                headers={"cookie": auth_cookie, "origin": "http://testserver"},
+                follow_redirects=False,
+            )
+            self.assertEqual(revoke.status_code, 303)
+            active_status = client.get("/agent/v1/auth/status", headers=headers)
+            self.assertEqual(active_status.status_code, 200, active_status.text)
+            active_ids = {
+                str(item["grant_id"])
+                for item in active_status.json()["problem_grants"]
+            }
+            self.assertNotIn(grants[0].grant_id, active_ids)
+            self.assertIn(grants[1].grant_id, active_ids)
+
+    def test_agent_grant_revocation_and_disconnect_invalidate_access(self) -> None:
         username = self.random_id("agent-revoke")
         _password, auth_cookie = self._issue_auth_cookie(username)
         self._grant_problem_owner(username)
@@ -643,7 +1128,7 @@ class TestAgentAPI(E2ETestBase):
             register = self._register_agent(client, str(connect["register_url"]))
             session_id = str(register["agent_session_id"])
             identity_hash = str(register["identity_hash"])
-            _request_id, raw_token = self._approve_token(
+            _request_id, grant = self._approve_grant(
                 client,
                 auth_cookie=auth_cookie,
                 agent_session_id=session_id,
@@ -651,29 +1136,39 @@ class TestAgentAPI(E2ETestBase):
                 scope="readonly",
             )
 
-            before = client.get("/agent/v1/workspace/status", headers=self._bearer(raw_token))
+            before = client.get(
+                "/agent/v1/workspace/status",
+                params={"problem": self.problem},
+                headers=self._agent_headers(grant),
+            )
             self.assertEqual(before.status_code, 200, before.text)
 
-            token_identity = runtime.agent_service.token_identity(raw_token)
-            self.assertIsNotNone(token_identity)
             revoke = client.post(
-                f"/agent/revoke/{token_identity.token_id}",
+                f"/agent/grants/{grant.grant_id}/revoke",
                 headers={"cookie": auth_cookie, "origin": "http://testserver"},
                 follow_redirects=False,
             )
             self.assertEqual(revoke.status_code, 303)
 
-            after_revoke = client.get("/agent/v1/workspace/status", headers=self._bearer(raw_token))
-            self.assertEqual(after_revoke.status_code, 401)
+            after_revoke = client.get(
+                "/agent/v1/workspace/status",
+                params={"problem": self.problem},
+                headers=self._agent_headers(grant),
+            )
+            self.assertEqual(after_revoke.status_code, 403)
 
-            _request_id2, raw_token2 = self._approve_token(
+            _request_id2, grant2 = self._approve_grant(
                 client,
                 auth_cookie=auth_cookie,
                 agent_session_id=session_id,
                 identity_hash=identity_hash,
                 scope="readonly",
             )
-            before_disconnect = client.get("/agent/v1/workspace/status", headers=self._bearer(raw_token2))
+            before_disconnect = client.get(
+                "/agent/v1/workspace/status",
+                params={"problem": self.problem},
+                headers=self._agent_headers(grant2),
+            )
             self.assertEqual(before_disconnect.status_code, 200, before_disconnect.text)
 
             disconnect = client.post(
@@ -684,7 +1179,11 @@ class TestAgentAPI(E2ETestBase):
             self.assertEqual(disconnect.status_code, 303)
             self.assertIsNone(runtime.agent_service.store.session_by_id(session_id))
 
-            after_disconnect = client.get("/agent/v1/workspace/status", headers=self._bearer(raw_token2))
+            after_disconnect = client.get(
+                "/agent/v1/workspace/status",
+                params={"problem": self.problem},
+                headers=self._agent_headers(grant2),
+            )
             self.assertEqual(after_disconnect.status_code, 401)
 
     def test_agent_scope_enforcement_and_acl_downgrade(self) -> None:
@@ -701,7 +1200,7 @@ class TestAgentAPI(E2ETestBase):
             session_id = str(register["agent_session_id"])
             identity_hash = str(register["identity_hash"])
 
-            _readonly_request, readonly_token = self._approve_token(
+            _readonly_request, readonly_token = self._approve_grant(
                 client,
                 auth_cookie=auth_cookie,
                 agent_session_id=session_id,
@@ -710,13 +1209,14 @@ class TestAgentAPI(E2ETestBase):
             )
             readonly_upload = client.post(
                 "/agent/v1/workspace/upload",
-                headers=self._bearer(readonly_token),
+                params={"problem": self.problem},
+                headers=self._agent_headers(readonly_token),
                 data={"path": "solutions/readonly.txt"},
                 files={"file": ("readonly.txt", b"blocked")},
             )
             self.assertEqual(readonly_upload.status_code, 403, readonly_upload.text)
 
-            _workspace_request, workspace_token = self._approve_token(
+            _workspace_request, workspace_token = self._approve_grant(
                 client,
                 auth_cookie=auth_cookie,
                 agent_session_id=session_id,
@@ -725,7 +1225,8 @@ class TestAgentAPI(E2ETestBase):
             )
             upload = client.post(
                 "/agent/v1/workspace/upload",
-                headers=self._bearer(workspace_token),
+                params={"problem": self.problem},
+                headers=self._agent_headers(workspace_token),
                 data={"path": "solutions/agent.txt"},
                 files={"file": ("agent.txt", b"hello\r\nagent\r\n")},
             )
@@ -745,14 +1246,15 @@ class TestAgentAPI(E2ETestBase):
 
             hidden_read = client.get(
                 "/agent/v1/workspace/file",
-                headers=self._bearer(workspace_token),
-                params={"path": ".env"},
+                headers=self._agent_headers(workspace_token),
+                params={"problem": self.problem, "path": ".env"},
             )
             self.assertEqual(hidden_read.status_code, 400, hidden_read.text)
 
             hidden_list = client.get(
                 "/agent/v1/workspace/files",
-                headers=self._bearer(workspace_token),
+                headers=self._agent_headers(workspace_token),
+                params={"problem": self.problem},
             )
             self.assertEqual(hidden_list.status_code, 200, hidden_list.text)
             listed_paths = {str(item.get("path") or "") for item in hidden_list.json().get("entries") or []}
@@ -762,7 +1264,8 @@ class TestAgentAPI(E2ETestBase):
 
             invalid_root_upload = client.post(
                 "/agent/v1/workspace/upload",
-                headers=self._bearer(workspace_token),
+                params={"problem": self.problem},
+                headers=self._agent_headers(workspace_token),
                 data={"path": "README.md"},
                 files={"file": ("README.md", b"blocked")},
             )
@@ -770,7 +1273,8 @@ class TestAgentAPI(E2ETestBase):
 
             hidden_upload = client.post(
                 "/agent/v1/workspace/upload",
-                headers=self._bearer(workspace_token),
+                params={"problem": self.problem},
+                headers=self._agent_headers(workspace_token),
                 data={"path": ".env"},
                 files={"file": ("env.txt", b"blocked")},
             )
@@ -778,21 +1282,23 @@ class TestAgentAPI(E2ETestBase):
 
             hidden_delete = client.delete(
                 "/agent/v1/workspace/files/.env",
-                headers=self._bearer(workspace_token),
+                params={"problem": self.problem},
+                headers=self._agent_headers(workspace_token),
             )
             self.assertEqual(hidden_delete.status_code, 400, hidden_delete.text)
 
             read_back = client.get(
                 "/agent/v1/workspace/file",
-                headers=self._bearer(workspace_token),
-                params={"path": "solutions/agent.txt"},
+                headers=self._agent_headers(workspace_token),
+                params={"problem": self.problem, "path": "solutions/agent.txt"},
             )
             self.assertEqual(read_back.status_code, 200, read_back.text)
             self.assertEqual(str(read_back.json().get("content") or ""), "hello\r\nagent\r\n")
 
             delete = client.delete(
                 "/agent/v1/workspace/files/solutions/agent.txt",
-                headers=self._bearer(workspace_token),
+                params={"problem": self.problem},
+                headers=self._agent_headers(workspace_token),
             )
             self.assertEqual(delete.status_code, 200, delete.text)
             self.assertFalse((workspace / "solutions/agent.txt").exists())
@@ -804,13 +1310,18 @@ class TestAgentAPI(E2ETestBase):
             workspace_service.grant_repo_access(self.problem, username, "read")
             downgraded_upload = client.post(
                 "/agent/v1/workspace/upload",
-                headers=self._bearer(workspace_token),
+                params={"problem": self.problem},
+                headers=self._agent_headers(workspace_token),
                 data={"path": "solutions/downgraded.txt"},
                 files={"file": ("downgraded.txt", b"blocked")},
             )
             self.assertEqual(downgraded_upload.status_code, 403, downgraded_upload.text)
 
-            still_readable = client.get("/agent/v1/workspace/status", headers=self._bearer(workspace_token))
+            still_readable = client.get(
+                "/agent/v1/workspace/status",
+                params={"problem": self.problem},
+                headers=self._agent_headers(workspace_token),
+            )
             self.assertEqual(still_readable.status_code, 200, still_readable.text)
 
     def test_agent_workspace_snapshot_compare_and_apply_full_zip(self) -> None:
@@ -838,14 +1349,14 @@ class TestAgentAPI(E2ETestBase):
             register = self._register_agent(client, str(connect["register_url"]), desktop_id="D-sync")
             session_id = str(register["agent_session_id"])
             identity_hash = str(register["identity_hash"])
-            _readonly_request, readonly_token = self._approve_token(
+            _readonly_request, readonly_token = self._approve_grant(
                 client,
                 auth_cookie=auth_cookie,
                 agent_session_id=session_id,
                 identity_hash=identity_hash,
                 scope="readonly",
             )
-            _workspace_request, workspace_token = self._approve_token(
+            _workspace_request, workspace_token = self._approve_grant(
                 client,
                 auth_cookie=auth_cookie,
                 agent_session_id=session_id,
@@ -853,7 +1364,11 @@ class TestAgentAPI(E2ETestBase):
                 scope="workspace",
             )
 
-            snapshot = client.get("/agent/v1/workspace/snapshot", headers=self._bearer(readonly_token))
+            snapshot = client.get(
+                "/agent/v1/workspace/snapshot",
+                params={"problem": self.problem},
+                headers=self._agent_headers(readonly_token),
+            )
             self.assertEqual(snapshot.status_code, 200, snapshot.text)
             self.assertIn("application/zip", snapshot.headers.get("content-type", ""))
             self.assertEqual(snapshot.headers.get("x-problem"), self.problem)
@@ -874,7 +1389,8 @@ class TestAgentAPI(E2ETestBase):
 
             compare = client.post(
                 "/agent/v1/workspace/compare",
-                headers=self._bearer(readonly_token),
+                params={"problem": self.problem},
+                headers=self._agent_headers(readonly_token),
                 files={"archive": ("workspace.zip", local_zip, "application/zip")},
             )
             self.assertEqual(compare.status_code, 200, compare.text)
@@ -886,14 +1402,16 @@ class TestAgentAPI(E2ETestBase):
 
             readonly_apply = client.post(
                 "/agent/v1/workspace/apply",
-                headers=self._bearer(readonly_token),
+                params={"problem": self.problem},
+                headers=self._agent_headers(readonly_token),
                 files={"archive": ("workspace.zip", local_zip, "application/zip")},
             )
             self.assertEqual(readonly_apply.status_code, 403, readonly_apply.text)
 
             conflict = client.post(
                 "/agent/v1/workspace/apply",
-                headers=self._bearer(workspace_token),
+                params={"problem": self.problem},
+                headers=self._agent_headers(workspace_token),
                 data={"base_head_commit": "not-current-head"},
                 files={"archive": ("workspace.zip", local_zip, "application/zip")},
             )
@@ -902,21 +1420,24 @@ class TestAgentAPI(E2ETestBase):
             invalid_zip = self._workspace_zip({"README.md": "bad\n"})
             invalid_compare = client.post(
                 "/agent/v1/workspace/compare",
-                headers=self._bearer(readonly_token),
+                params={"problem": self.problem},
+                headers=self._agent_headers(readonly_token),
                 files={"archive": ("workspace.zip", invalid_zip, "application/zip")},
             )
             self.assertEqual(invalid_compare.status_code, 400, invalid_compare.text)
             answer_zip = self._workspace_zip({"tests/answers/001.ans": "bad\n"})
             invalid_answer_compare = client.post(
                 "/agent/v1/workspace/compare",
-                headers=self._bearer(readonly_token),
+                params={"problem": self.problem},
+                headers=self._agent_headers(readonly_token),
                 files={"archive": ("workspace.zip", answer_zip, "application/zip")},
             )
             self.assertEqual(invalid_answer_compare.status_code, 400, invalid_answer_compare.text)
 
             apply = client.post(
                 "/agent/v1/workspace/apply",
-                headers=self._bearer(workspace_token),
+                params={"problem": self.problem},
+                headers=self._agent_headers(workspace_token),
                 files={"archive": ("workspace.zip", local_zip, "application/zip")},
             )
             self.assertEqual(apply.status_code, 200, apply.text)
@@ -976,15 +1497,12 @@ class TestAgentAPI(E2ETestBase):
 
             access_denied = client.post(
                 "/agent/v1/auth/request-access",
-                json={
-                    "agent_session_id": session_id,
-                    "identity_hash": identity_hash,
-                    "problem": self.default_problem,
-                },
+                json={"problem": self.default_problem, "scope": "readonly"},
+                headers=self._identity_headers(session_id, identity_hash),
             )
             self.assertEqual(access_denied.status_code, 404)
 
-            _readonly_request, readonly_token = self._approve_token(
+            _readonly_request, readonly_token = self._approve_grant(
                 client,
                 auth_cookie=auth_cookie,
                 agent_session_id=session_id,
@@ -993,19 +1511,28 @@ class TestAgentAPI(E2ETestBase):
             )
             traversal = client.get(
                 "/agent/v1/workspace/file",
-                headers=self._bearer(readonly_token),
-                params={"path": "../secrets.txt"},
+                headers=self._agent_headers(readonly_token),
+                params={"problem": self.problem, "path": "../secrets.txt"},
             )
             self.assertEqual(traversal.status_code, 400)
 
-            verify = client.post("/agent/v1/verification/start", headers=self._bearer(readonly_token), json={})
+            verify = client.post(
+                "/agent/v1/verification/start",
+                params={"problem": self.problem},
+                headers=self._agent_headers(readonly_token),
+                json={},
+            )
             self.assertEqual(verify.status_code, 200, verify.text)
             verify_payload = verify.json()
             verification_id = str(verify_payload.get("verification_id") or "")
             self.assertRegex(verification_id, r"^ver-[0-9a-f]+$")
             self.assertEqual(str(verify_payload.get("status") or ""), "queued")
 
-            verify_status = client.get(f"/agent/v1/verification/{verification_id}/status", headers=self._bearer(readonly_token))
+            verify_status = client.get(
+                f"/agent/v1/verification/{verification_id}/status",
+                params={"problem": self.problem},
+                headers=self._agent_headers(readonly_token),
+            )
             self.assertEqual(verify_status.status_code, 200, verify_status.text)
             self.assertIn(
                 str(verify_status.json().get("status") or ""),
@@ -1014,12 +1541,13 @@ class TestAgentAPI(E2ETestBase):
 
             domjudge_export = client.post(
                 "/agent/v1/export/start",
-                headers=self._bearer(readonly_token),
+                params={"problem": self.problem},
+                headers=self._agent_headers(readonly_token),
                 json={"format": "domjudge"},
             )
             self.assertEqual(domjudge_export.status_code, 403, domjudge_export.text)
 
-            _workspace_request, workspace_token = self._approve_token(
+            _workspace_request, workspace_token = self._approve_grant(
                 client,
                 auth_cookie=auth_cookie,
                 agent_session_id=session_id,
@@ -1028,14 +1556,16 @@ class TestAgentAPI(E2ETestBase):
             )
             missing_format = client.post(
                 "/agent/v1/export/start",
-                headers=self._bearer(workspace_token),
+                params={"problem": self.problem},
+                headers=self._agent_headers(workspace_token),
                 json={},
             )
             self.assertEqual(missing_format.status_code, 400, missing_format.text)
 
             icpc_export = client.post(
                 "/agent/v1/export/start",
-                headers=self._bearer(workspace_token),
+                params={"problem": self.problem},
+                headers=self._agent_headers(workspace_token),
                 json={"format": "icpc-2025-09"},
             )
             self.assertEqual(icpc_export.status_code, 400, icpc_export.text)
@@ -1043,7 +1573,8 @@ class TestAgentAPI(E2ETestBase):
 
             workspace_commit = client.post(
                 "/agent/v1/commit",
-                headers=self._bearer(workspace_token),
+                params={"problem": self.problem},
+                headers=self._agent_headers(workspace_token),
                 json={"message": "should fail"},
             )
             self.assertEqual(workspace_commit.status_code, 403)
@@ -1052,19 +1583,25 @@ class TestAgentAPI(E2ETestBase):
             commit_file.parent.mkdir(parents=True, exist_ok=True)
             commit_file.write_text("commit me\n", encoding="utf-8")
 
-            _commit_request, commit_token = self._approve_token(
+            _commit_request, commit_token = self._approve_grant(
                 client,
                 auth_cookie=auth_cookie,
                 agent_session_id=session_id,
                 identity_hash=identity_hash,
                 scope="commit",
             )
-            missing_message = client.post("/agent/v1/commit", headers=self._bearer(commit_token), json={})
+            missing_message = client.post(
+                "/agent/v1/commit",
+                params={"problem": self.problem},
+                headers=self._agent_headers(commit_token),
+                json={},
+            )
             self.assertEqual(missing_message.status_code, 400)
 
             commit_resp = client.post(
                 "/agent/v1/commit",
-                headers=self._bearer(commit_token),
+                params={"problem": self.problem},
+                headers=self._agent_headers(commit_token),
                 json={"message": "agent commit"},
             )
             self.assertEqual(commit_resp.status_code, 200, commit_resp.text)
@@ -1077,9 +1614,23 @@ class TestAgentAPI(E2ETestBase):
             self.assertEqual(str(commit_row["head_commit"] or ""), head)
             self.assertEqual(int(commit_row["dirty"] or 0), 0)
 
-            commit_status = client.get(f"/agent/v1/commit/{head}/status", headers=self._bearer(commit_token))
+            commit_status = client.get(
+                f"/agent/v1/commit/{head}/status",
+                params={"problem": self.problem},
+                headers=self._agent_headers(commit_token),
+            )
             self.assertEqual(commit_status.status_code, 200, commit_status.text)
             self.assertEqual(str(commit_status.json().get("status") or ""), "published")
+            foreign_commit_status = client.get(
+                f"/agent/v1/commit/{'f' * 40}/status",
+                params={"problem": self.problem},
+                headers=self._agent_headers(commit_token),
+            )
+            self.assertEqual(
+                foreign_commit_status.status_code,
+                404,
+                foreign_commit_status.text,
+            )
             self.assertNotEqual(stale_head, head)
 
             db_execute(
@@ -1087,20 +1638,29 @@ class TestAgentAPI(E2ETestBase):
                 [stale_head, workspace_id],
             )
 
-            live_status = client.get("/agent/v1/workspace/status", headers=self._bearer(readonly_token))
+            live_status = client.get(
+                "/agent/v1/workspace/status",
+                params={"problem": self.problem},
+                headers=self._agent_headers(readonly_token),
+            )
             self.assertEqual(live_status.status_code, 200, live_status.text)
             self.assertEqual(str(live_status.json().get("head_commit") or ""), head)
             self.assertFalse(bool(live_status.json().get("dirty")))
 
             fresh_icpc_export = client.post(
                 "/agent/v1/export/start",
-                headers=self._bearer(workspace_token),
+                params={"problem": self.problem},
+                headers=self._agent_headers(workspace_token),
                 json={"format": "icpc-2025-09"},
             )
             self.assertEqual(fresh_icpc_export.status_code, 200, fresh_icpc_export.text)
             fresh_export_job_id = str(fresh_icpc_export.json().get("job_id") or "")
             self.assertRegex(fresh_export_job_id, r"^exp-api-")
-            fresh_export_status = client.get(f"/agent/v1/export/{fresh_export_job_id}/status", headers=self._bearer(readonly_token))
+            fresh_export_status = client.get(
+                f"/agent/v1/export/{fresh_export_job_id}/status",
+                params={"problem": self.problem},
+                headers=self._agent_headers(readonly_token),
+            )
             self.assertEqual(fresh_export_status.status_code, 200, fresh_export_status.text)
             fresh_status_payload = fresh_export_status.json()
             self.assertEqual(str(fresh_status_payload.get("format") or ""), "icpc-2025-09")
@@ -1125,7 +1685,7 @@ class TestAgentAPI(E2ETestBase):
             register = self._register_agent(client, str(connect["register_url"]), desktop_id="D-detail")
             session_id = str(register["agent_session_id"])
             identity_hash = str(register["identity_hash"])
-            _readonly_request, readonly_token = self._approve_token(
+            _readonly_request, readonly_token = self._approve_grant(
                 client,
                 auth_cookie=auth_cookie,
                 agent_session_id=session_id,
@@ -1243,7 +1803,8 @@ class TestAgentAPI(E2ETestBase):
 
             detail_resp = client.get(
                 f"/agent/v1/verification/{verification_id}/detail",
-                headers=self._bearer(readonly_token),
+                params={"problem": self.problem},
+                headers=self._agent_headers(readonly_token),
             )
             self.assertEqual(detail_resp.status_code, 200, detail_resp.text)
             self.assertIn("text/plain", detail_resp.headers.get("content-type", ""))
@@ -1273,8 +1834,8 @@ class TestAgentAPI(E2ETestBase):
 
             zoom_resp = client.get(
                 f"/agent/v1/verification/{verification_id}/detail",
-                headers=self._bearer(readonly_token),
-                params={"test_name": "001.in"},
+                headers=self._agent_headers(readonly_token),
+                params={"problem": self.problem, "test_name": "001.in"},
             )
             self.assertEqual(zoom_resp.status_code, 200, zoom_resp.text)
             self.assertIn("test: 001.in", zoom_resp.text)
@@ -1285,8 +1846,12 @@ class TestAgentAPI(E2ETestBase):
 
             source_zoom_resp = client.get(
                 f"/agent/v1/verification/{verification_id}/detail",
-                headers=self._bearer(readonly_token),
-                params={"test_name": "001.in", "source": "solutions/ac_python.py"},
+                headers=self._agent_headers(readonly_token),
+                params={
+                    "problem": self.problem,
+                    "test_name": "001.in",
+                    "source": "solutions/ac_python.py",
+                },
             )
             self.assertEqual(source_zoom_resp.status_code, 200, source_zoom_resp.text)
             self.assertIn("cell:", source_zoom_resp.text)
@@ -1295,14 +1860,19 @@ class TestAgentAPI(E2ETestBase):
 
             missing_source_resp = client.get(
                 f"/agent/v1/verification/{verification_id}/detail",
-                headers=self._bearer(readonly_token),
-                params={"test_name": "001.in", "source": "solutions/missing.cpp"},
+                headers=self._agent_headers(readonly_token),
+                params={
+                    "problem": self.problem,
+                    "test_name": "001.in",
+                    "source": "solutions/missing.cpp",
+                },
             )
             self.assertEqual(missing_source_resp.status_code, 404, missing_source_resp.text)
             self.assertEqual(missing_source_resp.text, "source detail not found\n")
 
             removed_text_resp = client.get(
                 f"/agent/v1/verification/{verification_id}/detail/text",
-                headers=self._bearer(readonly_token),
+                params={"problem": self.problem},
+                headers=self._agent_headers(readonly_token),
             )
             self.assertEqual(removed_text_resp.status_code, 404)

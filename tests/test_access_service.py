@@ -1,5 +1,10 @@
 from app.db import now_iso
-from app.service.access.policy import agent_scope, contest_role, repo_role
+from app.service.access.policy import (
+    agent_general_scope,
+    agent_scope,
+    contest_role,
+    repo_role,
+)
 
 from tests.db_fixture import DBTestBase
 from tests.isolated_db_helpers import isolated_db_execute, isolated_db_fetch_one
@@ -257,7 +262,7 @@ class TestAccessService(DBTestBase):
 
         self.assertEqual(
             self.access_query.effective_agent_scope(
-                token_scope="commit",
+                declared_scope="commit",
                 problem_id=problem_id,
                 user_id=reader_user_id,
             ),
@@ -267,6 +272,8 @@ class TestAccessService(DBTestBase):
         self.assertFalse(self.access_query.agent_scope_allows("readonly", "workspace"))
 
     def test_role_boundaries_reject_noncanonical_tokens(self) -> None:
+        self.assertEqual(agent_general_scope("none"), "none")
+        self.assertEqual(agent_general_scope("readonly"), "readonly")
         for parser in (repo_role, contest_role, agent_scope):
             with self.subTest(parser=parser.__name__):
                 with self.assertRaises(ValueError):

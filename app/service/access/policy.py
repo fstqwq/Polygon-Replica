@@ -2,6 +2,7 @@ from app.service.access.model import (
     AccessDecision,
     AccessRole,
     Actor,
+    AgentGeneralScope,
     AgentScope,
     Capability,
     Resource,
@@ -144,14 +145,20 @@ def agent_scope(raw_scope: str) -> AgentScope:
     raise ValueError("invalid scope")
 
 
+def agent_general_scope(raw_scope: str) -> AgentGeneralScope:
+    if raw_scope == "none":
+        return "none"
+    return agent_scope(raw_scope)
+
+
 def agent_scope_allows(granted_scope: str, minimum_scope: str) -> bool:
     granted = agent_scope(granted_scope)
     minimum = agent_scope(minimum_scope)
     return _AGENT_SCOPE_LEVEL[granted] >= _AGENT_SCOPE_LEVEL[minimum]
 
 
-def effective_agent_scope(token_scope: str, role: AccessRole) -> AgentScope | None:
-    token = agent_scope(token_scope)
+def effective_agent_scope(declared_scope: str, role: AccessRole) -> AgentScope | None:
+    declared = agent_scope(declared_scope)
     role_level = {
         "none": 0,
         "read": 1,
@@ -159,7 +166,7 @@ def effective_agent_scope(token_scope: str, role: AccessRole) -> AgentScope | No
         "owner": 3,
         "admin": 3,
     }[role]
-    level = min(_AGENT_SCOPE_LEVEL[token], role_level)
+    level = min(_AGENT_SCOPE_LEVEL[declared], role_level)
     if level >= _AGENT_SCOPE_LEVEL["commit"]:
         return "commit"
     if level >= _AGENT_SCOPE_LEVEL["workspace"]:

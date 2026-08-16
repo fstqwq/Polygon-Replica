@@ -9,7 +9,10 @@
   <p><strong>{{ access_request.agent_name }}</strong></p>
   <p class="muted">Desktop: <code>{{ access_request.desktop_id }}</code> | Connected: {{ access_request.init_ts }}</p>
   <p>Requesting access to: <code>{{ access_request.problem_slug }}</code></p>
-  <p class="muted">Valid for this login until {{ access_request.expires_at | local_time }}.</p>
+  <p class="muted">
+    This approval request expires at
+    {{ access_request.expires_at | local_time }}.
+  </p>
   <form method="post" action="/agent/approve/{{ access_request.id }}" class="form-stack">
     <label for="scope">Scope</label>
     <select id="scope" name="scope">
@@ -18,7 +21,7 @@
       <option value="commit" {% if default_scope == 'commit' %}selected{% endif %}>commit</option>
     </select>
 
-    <label for="ttl">Token TTL</label>
+    <label for="ttl">Problem grant TTL</label>
     <select id="ttl" name="ttl">
       <option value="3600">1 hour</option>
       <option value="86400" {% if default_ttl == '86400' %}selected{% endif %}>24 hours</option>

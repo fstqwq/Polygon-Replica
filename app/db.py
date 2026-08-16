@@ -137,39 +137,43 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
     init_ts TEXT NOT NULL,
     created_at TEXT NOT NULL,
     last_seen_at TEXT NOT NULL,
+    general_scope TEXT NOT NULL DEFAULT 'none'
+        CHECK(general_scope IN ('none','readonly','workspace','commit')),
     revoked_at TEXT,
     UNIQUE(user_id, identity_hash),
     FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS agent_problem_grants (
+    id TEXT PRIMARY KEY,
+    agent_session_id TEXT NOT NULL,
+    problem_id INTEGER NOT NULL,
+    scope TEXT NOT NULL CHECK(scope IN ('readonly','workspace','commit')),
+    created_at TEXT NOT NULL,
+    expires_at TEXT,
+    revoked_at TEXT,
+    FOREIGN KEY(agent_session_id) REFERENCES agent_sessions(id),
+    FOREIGN KEY(problem_id) REFERENCES problems(id)
 );
 
 CREATE TABLE IF NOT EXISTS agent_access_requests (
     id TEXT PRIMARY KEY,
     agent_session_id TEXT NOT NULL,
     problem_id INTEGER NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
+    requested_scope TEXT NOT NULL
+        CHECK(requested_scope IN ('readonly','workspace','commit')),
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending','approved','denied','expired')),
     created_at TEXT NOT NULL,
     expires_at TEXT NOT NULL,
     resolved_at TEXT,
-    delivered_at TEXT,
-    token_id TEXT NOT NULL DEFAULT '',
-    delivery_token TEXT NOT NULL DEFAULT '',
+    grant_id TEXT,
+    granted_scope TEXT
+        CHECK(granted_scope IS NULL OR granted_scope IN ('readonly','workspace','commit')),
+    grant_expires_at TEXT,
     FOREIGN KEY(agent_session_id) REFERENCES agent_sessions(id),
-    FOREIGN KEY(problem_id) REFERENCES problems(id)
-);
-
-CREATE TABLE IF NOT EXISTS agent_tokens (
-    id TEXT PRIMARY KEY,
-    token_hash TEXT NOT NULL UNIQUE,
-    agent_session_id TEXT NOT NULL,
-    user_id INTEGER NOT NULL,
-    problem_id INTEGER NOT NULL,
-    scope TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    expires_at TEXT,
-    revoked_at TEXT,
-    FOREIGN KEY(agent_session_id) REFERENCES agent_sessions(id),
-    FOREIGN KEY(user_id) REFERENCES users(id),
-    FOREIGN KEY(problem_id) REFERENCES problems(id)
+    FOREIGN KEY(problem_id) REFERENCES problems(id),
+    FOREIGN KEY(grant_id) REFERENCES agent_problem_grants(id)
 );
 
 CREATE TABLE IF NOT EXISTS repo_acl (
@@ -582,7 +586,8 @@ CREATE INDEX IF NOT EXISTS idx_auth_rate_limits_expires ON auth_rate_limits(wind
 CREATE INDEX IF NOT EXISTS idx_agent_registration_codes_expires ON agent_registration_codes(expires_at);
 CREATE INDEX IF NOT EXISTS idx_agent_sessions_user_revoked_seen ON agent_sessions(user_id, revoked_at, last_seen_at DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_access_requests_session_status_created ON agent_access_requests(agent_session_id, status, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_agent_tokens_user_problem_active ON agent_tokens(user_id, problem_id, revoked_at, expires_at);
+CREATE INDEX IF NOT EXISTS idx_agent_problem_grants_session_problem_active
+ON agent_problem_grants(agent_session_id, problem_id, revoked_at, expires_at);
 CREATE INDEX IF NOT EXISTS idx_system_config_updated ON system_config(updated_at DESC);
 """
 
@@ -744,25 +749,25 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
         "init_ts",
         "created_at",
         "last_seen_at",
+        "general_scope",
         "revoked_at",
     ),
     "agent_access_requests": (
         "id",
         "agent_session_id",
         "problem_id",
+        "requested_scope",
         "status",
         "created_at",
         "expires_at",
         "resolved_at",
-        "delivered_at",
-        "token_id",
-        "delivery_token",
+        "grant_id",
+        "granted_scope",
+        "grant_expires_at",
     ),
-    "agent_tokens": (
+    "agent_problem_grants": (
         "id",
-        "token_hash",
         "agent_session_id",
-        "user_id",
         "problem_id",
         "scope",
         "created_at",
