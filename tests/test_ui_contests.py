@@ -174,6 +174,9 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertIsNotNone(readiness)
         assert readiness is not None
         readiness["package"]["state"] = "ready"
+        readiness["workspace"]["local_revision"] = 1
+        readiness["workspace"]["upstream_revision"] = 2
+        readiness["workspace"]["needs_update"] = True
         with patch.object(
             runtime.contest_problem_query_service,
             "problem_rows",
@@ -188,6 +191,8 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertIn("Packages:", completed_html)
         self.assertIn("1 ready", completed_html)
         self.assertNotIn("Build All Packages", completed_html)
+        self.assertIn('<strong class="">v1</strong>', completed_html)
+        self.assertIn('<strong class="danger">sync required</strong>', completed_html)
 
     def test_existing_over_limit_contest_remains_mutable_except_for_addition(self) -> None:
         previous = dict(runtime.config_values.snapshot())

@@ -20,10 +20,17 @@
 {% macro workspace_notice(notice) -%}
 {% if notice %}
 {% set notice_tone = 'warn' if notice.tone == 'warning' else 'danger' if notice.tone == 'danger' else '' %}
+{% set display_tone = '' if notice.meta == 'sync required' else notice_tone %}
 <span class="compact-fact-row">
   <span class="compact-fact-label">Workspace</span>
   <span class="compact-fact-value">
-    <strong class="{{ notice_tone }}">{{ notice.display }}</strong>{% if notice.meta %}<span class="compact-fact-meta"> &middot; {{ notice.meta }}</span>{% endif %}
+    <strong class="{{ display_tone }}">{{ notice.display }}</strong>
+    {% if notice.meta %}
+    <span class="compact-fact-meta">
+      &middot;
+      {% if notice.meta == 'sync required' %}<strong class="danger">{{ notice.meta }}</strong>{% else %}{{ notice.meta }}{% endif %}
+    </span>
+    {% endif %}
   </span>
 </span>
 {% endif %}
