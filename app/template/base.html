@@ -41,7 +41,6 @@
   <link rel="stylesheet" href="{{ static_asset_url('css/problem_components.css') }}" />
   {% block page_styles %}{% endblock %}
   <script type="module" src="{{ static_asset_url('js/core.js') }}"></script>
-  <script type="module" src="{{ static_asset_url('ui.js') }}"></script>
 </head>
 <body class="problem-layout{% if ctx.topbar_max_1400 %} topbar-max-1400{% endif %}{% block body_class %}{% endblock %}">
   {% set flash_presenter = 'topbar' %}

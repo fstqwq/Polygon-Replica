@@ -1014,23 +1014,6 @@ form {
   }
 }
 
-.form-row-inline-controls {
-  display: flex;
-  flex-wrap: nowrap;
-  align-items: center;
-  gap: var(--space-3);
-  min-width: 0;
-}
-
-.form-row-inline-controls > label {
-  flex: 0 0 auto;
-}
-
-.form-row-inline-controls > select {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
 .form-row-actions {
   display: inline-flex;
   align-items: center;
@@ -1223,7 +1206,6 @@ textarea.textarea-md {
 .verification-list-table .linkish,
 .verification-actions > a,
 .workspace-side-link,
-.status-inline-link,
 .linkish.danger-link,
 .linkish-button.danger-link {
   text-decoration: underline;
@@ -1385,41 +1367,6 @@ tr.verification-row-failed > td {
   border-color: var(--tag-fail-border);
 }
 
-.status-row-inline {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.status-title {
-  color: var(--muted);
-}
-
-.status-title.danger {
-  color: var(--danger);
-}
-
-.status-title.warn {
-  color: var(--warn);
-}
-
-.status-value {
-  color: var(--text);
-}
-
-.status-value.danger {
-  color: var(--danger);
-}
-
-.status-value.warn {
-  color: var(--warn);
-}
-
-.status-error {
-  margin: 0;
-  color: var(--danger);
-}
-
 .ui-tooltip {
   position: fixed;
   z-index: 1200;
@@ -1443,26 +1390,6 @@ tr.verification-row-failed > td {
   opacity: 1;
   transform: translateY(0);
 }
-
-.status-inline-link {
-  font-size: var(--font-size-ui-xs);
-  font-weight: 400;
-  line-height: 13.2px;
-  padding: 0;
-  min-height: 0;
-  vertical-align: baseline;
-  border: 0;
-  background: transparent;
-  -webkit-appearance: none;
-  appearance: none;
-  border-radius: 0;
-  display: inline;
-}
-
-
-
-
-
 
 .danger-link {
   margin-left: auto;

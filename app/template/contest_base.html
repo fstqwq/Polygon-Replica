@@ -58,12 +58,17 @@
       </main>
       <aside class="side-panel contest-side-panel">
         {% include "_contest_workspace_card.html" %}
+        <section class="action-card">
+          <div class="workspace-card-head">
+            <h3>Contest</h3>
+            <a class="workspace-side-link" href="{{ ctx.contest_access_href }}"{% if ctx.contest_access_active %} aria-current="page"{% endif %}>Manage access</a>
+          </div>
+        </section>
       </aside>
     </div>
   </div>
   {% include "_page_profile.html" %}
   <script type="module" src="{{ static_asset_url('js/core.js') }}"></script>
-  <script type="module" src="{{ static_asset_url('ui.js') }}"></script>
   {% block page_scripts %}{% endblock %}
 </body>
 </html>

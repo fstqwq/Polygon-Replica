@@ -1,19 +1,4 @@
 /* Solutions lists and source editor. */
-.solutions-editor-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1.7fr) minmax(320px, 1fr);
-  gap: var(--space-4);
-  align-items: start;
-}
-
-.solutions-editor-layout > section {
-  min-width: 0;
-}
-
-.solutions-editor-layout table {
-  table-layout: fixed;
-}
-
 .solution-editor-panel {
   min-width: 0;
 }

@@ -409,7 +409,7 @@ function initProfileTiming() {
   if (network) network.textContent = format(Number.isFinite(ttfb) && Number.isFinite(backendMs) ? Math.max(0, ttfb - backendMs) : NaN);
 }
 
-export function initCore() {
+function initCore() {
   initSudoBridge();
   initTopEventNotice();
   initTooltips();
@@ -424,7 +424,6 @@ export function initCore() {
 Object.defineProperty(window, "PolygonUI", {
   value: Object.freeze({
     findCodeMirrorEditorForTextarea,
-    initCore,
     localStorageAvailable,
     onReady,
     setSubmitting,
@@ -438,3 +437,5 @@ Object.defineProperty(window, "PolygonUI", {
   writable: false,
   configurable: false,
 });
+
+onReady(initCore);

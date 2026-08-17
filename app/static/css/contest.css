@@ -102,13 +102,6 @@
   grid-column: 1 / -1;
 }
 
-.contest-property-value {
-  min-height: 34px;
-  display: flex;
-  align-items: center;
-  color: var(--text-secondary);
-}
-
 .contest-properties-actions {
   padding-top: var(--space-1);
 }
@@ -196,7 +189,6 @@
 .contest-package-summary {
   margin: 0;
   color: var(--muted);
-  font-size: var(--font-size-ui-sm);
   white-space: nowrap;
 }
 
@@ -233,14 +225,9 @@
   gap: var(--space-3);
 }
 
-.contest-package-tools > form,
-.contest-package-tools .contest-package-summary {
-  margin: 0;
-}
-
-.contest-package-tools > a,
 .contest-package-tools > form {
   flex: 0 0 auto;
+  margin: 0;
 }
 
 @media (max-width: 640px) {

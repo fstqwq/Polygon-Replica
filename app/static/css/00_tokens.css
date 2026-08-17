@@ -174,11 +174,6 @@ pre {
   align-items: baseline;
 }
 
-.page-title-status {
-  white-space: nowrap;
-  font-weight: 600;
-}
-
 .page-title-inline .button-link {
   white-space: nowrap;
   flex-shrink: 0;
@@ -247,11 +242,6 @@ pre {
 
 .info {
   color: var(--tag-info-fg);
-  font-weight: 700;
-}
-
-.revision-alert {
-  color: var(--danger);
   font-weight: 700;
 }
 

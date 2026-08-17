@@ -4,9 +4,6 @@
     <h3 id="contest-workspace-title">
       <a href="{{ contest_workspace.contest_href }}">{{ contest_workspace.contest_title }}</a>
     </h3>
-    {% if ctx.get('contest_access_href') %}
-    <a class="workspace-side-link" href="{{ ctx.contest_access_href }}"{% if ctx.contest_access_active %} aria-current="page"{% endif %}>Manage access</a>
-    {% endif %}
   </div>
   <p class="contest-workspace-count">{{ contest_workspace.problem_count }} problem{% if contest_workspace.problem_count != 1 %}s{% endif %}</p>
   <nav class="contest-problem-nav" aria-label="Contest problems">

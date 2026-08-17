@@ -1,27 +1,4 @@
 /* Tests list, samples, and generation-script editor. */
-.tests-mode-switch {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.tests-mode-button {
-  border-color: var(--line);
-  background: var(--surface-alt);
-  color: var(--text);
-  font-weight: 500;
-}
-
-.tests-mode-button:hover:not(:disabled) {
-  background: var(--surface-hover);
-}
-
-.tests-mode-button.active {
-  border-color: var(--btn-primary-border);
-  background: var(--btn-primary-bg);
-  color: var(--btn-primary-text);
-}
-
 .tests-heading-row {
   display: flex;
   justify-content: flex-end;
@@ -38,10 +15,6 @@
 
 .tests-editor-table {
   table-layout: auto;
-}
-
-.tests-index {
-  font-weight: 700;
 }
 
 .tests-kind {
@@ -72,9 +45,7 @@
   gap: var(--space-4);
 }
 
-.tests-editor-actions-row form,
-.verification-start-form,
-.action-link-form {
+.tests-editor-actions-row form {
   display: inline-flex;
   margin: 0;
 }

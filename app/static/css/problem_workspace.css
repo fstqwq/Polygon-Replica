@@ -117,10 +117,6 @@
   margin: 0;
 }
 
-.workspace-section-head-action {
-  margin-left: auto;
-}
-
 .workspace-links {
   display: flex;
   align-items: center;
@@ -133,13 +129,6 @@
   margin: var(--space-4) 0 0;
   padding-top: var(--space-3);
   border-top: 1px solid var(--line);
-}
-
-.revision-history-table .revision-history-col-tight {
-  width: 1%;
-  white-space: nowrap;
-  overflow-wrap: normal;
-  word-break: keep-all;
 }
 
 .workspace-link-sep {
@@ -278,12 +267,6 @@
 
 .access-grant-form .form-field-stack {
   min-width: 0;
-}
-
-.problem-action-card-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
-  gap: var(--space-4);
 }
 
 .backup-restore-title {
