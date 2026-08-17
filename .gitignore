@@ -8,6 +8,9 @@ migration-gates/*
 .*
 !.gitattributes
 !.dockerignore
+!.github/
+!.github/workflows/
+!.github/workflows/*.yml
 !.githooks/
 !.githooks/pre-push
 tmp/
