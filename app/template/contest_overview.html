@@ -4,7 +4,10 @@
 {% from "_revision_pair.html" import fact_row %}
 {% block content %}
 <div class="page-title-inline contest-problems-title">
-  <h1 class="page-title">Problems</h1>
+  <div class="contest-problems-heading">
+    <h1 class="page-title">Problems</h1>
+    <a class="linkish" href="/contests/{{ ctx.contest.slug }}/problems">Manage problems</a>
+  </div>
   <div class="contest-package-tools">
     <p class="contest-package-summary">
       Packages:
@@ -13,9 +16,9 @@
       <span class="warn">{{ package_stale_count }} stale</span>{% endif %}{% if package_none_count %},
       <span class="danger">{{ package_none_count }} none</span>{% endif %}
     </p>
-    {% if ctx.access.can_build %}
-    <form method="post" action="/contests/{{ ctx.contest.slug }}/packages/build-all">
-      <button class="btn" type="submit">Build All Packages</button>
+    {% if ctx.access.can_build and not package_all_ready %}
+    <form class="action-link-form" method="post" action="/contests/{{ ctx.contest.slug }}/packages/build-all">
+      <button class="linkish-button" type="submit">Build All Packages</button>
     </form>
     {% endif %}
   </div>

@@ -75,6 +75,7 @@ def contest_overview_page(request: Request, contest: str, user: Annotated[str, D
         - package_queued_count
         - package_stale_count
     )
+    package_all_ready = package_ready_count == len(rows)
     return template_response(
         request,
         "contest_overview.html",
@@ -86,6 +87,7 @@ def contest_overview_page(request: Request, contest: str, user: Annotated[str, D
             "package_queued_count": package_queued_count,
             "package_stale_count": package_stale_count,
             "package_none_count": package_none_count,
+            "package_all_ready": package_all_ready,
         },
     )
 

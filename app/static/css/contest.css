@@ -219,6 +219,17 @@
   align-items: baseline;
 }
 
+.contest-problems-heading {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.contest-problems-heading > a {
+  flex: 0 0 auto;
+}
+
 .contest-package-summary {
   margin: 0;
   color: var(--muted);
@@ -260,9 +271,18 @@
   margin: 0;
 }
 
+.contest-package-tools > a,
+.contest-package-tools > form {
+  flex: 0 0 auto;
+}
+
 @media (max-width: 640px) {
+  .contest-problems-heading {
+    flex-wrap: wrap;
+  }
+
   .contest-package-tools {
-    align-items: flex-end;
+    align-items: flex-start;
     flex-direction: column;
   }
 

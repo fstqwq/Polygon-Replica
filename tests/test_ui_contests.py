@@ -1,5 +1,6 @@
 import tempfile
 import threading
+from unittest.mock import patch
 
 from tests.db_helpers import (
     activate_test_verification,
@@ -123,6 +124,70 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             ),
             1,
         )
+
+    def test_contest_overview_moves_problem_management_and_hides_completed_build_all(self) -> None:
+        contest_slug = f"overview-actions-{uuid.uuid4().hex[:8]}"
+        contest_id = self._create_contest(contest_slug)
+
+        empty = contest_overview_page(
+            _app_request(f"/contests/{contest_slug}/overview"),
+            contest_slug,
+            "alice",
+        )
+        empty_html = empty.body.decode("utf-8", errors="replace")
+        self.assertNotIn("Build All Packages", empty_html)
+
+        workspace_service.grant_repo_access("alice/sample", "alice", "owner")
+        add_resp = contest_problems_add(
+            contest=contest_slug,
+            user="alice",
+            problem_slugs=["alice/sample"],
+            q="",
+        )
+        self.assertEqual(add_resp.status_code, 303)
+
+        request = _app_request(f"/contests/{contest_slug}/overview")
+        overview = contest_overview_page(request, contest_slug, "alice")
+        self.assertEqual(overview.status_code, 200)
+        html = overview.body.decode("utf-8", errors="replace")
+        self.assertEqual(html.count(">Manage problems</a>"), 1)
+        self.assertLess(
+            html.index(">Manage problems</a>"),
+            html.index("Packages:"),
+        )
+        self.assertIn('<div class="contest-problems-heading">', html)
+        self.assertIn(
+            '<button class="linkish-button" type="submit">Build All Packages</button>',
+            html,
+        )
+
+        alice_row = db_fetch_one("SELECT id FROM users WHERE username='alice'")
+        self.assertIsNotNone(alice_row)
+        source_rows = runtime.contest_problem_query_service.problem_rows(
+            contest_id,
+            "alice",
+            int(alice_row["id"]),
+            include_review=True,
+        )
+        self.assertEqual(len(source_rows), 1)
+        readiness = source_rows[0]["readiness"]
+        self.assertIsNotNone(readiness)
+        assert readiness is not None
+        readiness["package"]["state"] = "ready"
+        with patch.object(
+            runtime.contest_problem_query_service,
+            "problem_rows",
+            return_value=source_rows,
+        ):
+            completed = contest_overview_page(
+                _app_request(f"/contests/{contest_slug}/overview"),
+                contest_slug,
+                "alice",
+            )
+        completed_html = completed.body.decode("utf-8", errors="replace")
+        self.assertIn("Packages:", completed_html)
+        self.assertIn("1 ready", completed_html)
+        self.assertNotIn("Build All Packages", completed_html)
 
     def test_existing_over_limit_contest_remains_mutable_except_for_addition(self) -> None:
         previous = dict(runtime.config_values.snapshot())

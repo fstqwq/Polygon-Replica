@@ -41,12 +41,6 @@ def _contest_manage_nav(contest_slug: str, active: str) -> list[dict[str, str | 
     base = f"/contests/{contest_slug}"
     return [
         {
-            "key": "manage-problems",
-            "label": "Manage problems",
-            "href": f"{base}/problems",
-            "active": active == "problems",
-        },
-        {
             "key": "access",
             "label": "Access",
             "href": f"{base}/access",
