@@ -122,6 +122,11 @@ class TestProblemReadinessUnit(unittest.TestCase):
         self.assertEqual(pair["status"], "stale")
         self.assertEqual(pair["left_tone"], "danger")
 
+        dirty_pair = workspace_published_revision_pair(0, 0, dirty=True)
+        self.assertEqual(dirty_pair["status"], "current")
+        self.assertEqual(dirty_pair["left_tone"], "normal")
+        self.assertIn("workspace has local changes", dirty_pair["aria_label"])
+
     def test_content_review_returns_only_actionable_checks(self) -> None:
         review = problem_content_review(
             time_limit_ms=400,

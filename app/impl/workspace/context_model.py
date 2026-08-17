@@ -243,7 +243,8 @@ def workspace_published_revision_pair(
         )
     else:
         status = "current"
-        tone = "warning" if dirty else "normal"
+        tone = "normal"
+    dirty_aria = "; workspace has local changes" if dirty else ""
     return {
         "left_label": "Workspace",
         "left_display": local_display,
@@ -254,7 +255,7 @@ def workspace_published_revision_pair(
         "aria_label": (
             f"Workspace revision {_revision_aria(local_revision)}; "
             f"published revision {_revision_aria(published_revision)}; "
-            f"workspace is {status}"
+            f"workspace is {status}{dirty_aria}"
         ),
     }
 
