@@ -6034,7 +6034,12 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn('<option value="domjudge">DOMjudge</option>', html)
         self.assertIn('<option value="icpc-2025-09">ICPC 2025-09</option>', html)
+        self.assertIn('<option value="qoj">QOJ</option>', html)
         self.assertIn('<option value="nowcoder">Nowcoder</option>', html)
+        self.assertLess(
+            html.index('<option value="qoj">QOJ</option>'),
+            html.index('<option value="nowcoder">Nowcoder</option>'),
+        )
         self.assertIn("<strong>v5</strong>", html)
         self.assertIn("Published:", html)
         self.assertIn("Package:</", html)

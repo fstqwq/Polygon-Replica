@@ -7,6 +7,7 @@ from app.config import ConfigValues
 from app.service.export.adapters.domjudge import DOMjudgePackageAdapter
 from app.service.export.adapters.icpc_2025 import ICPC2025PackageAdapter
 from app.service.export.adapters.nowcoder import NowcoderPackageAdapter
+from app.service.export.adapters.qoj import QOJPackageAdapter
 from app.service.export.adapters.shared import PackageAdapter, PackageFormat
 from app.service.statement.tex_compile import TexCompileService
 
@@ -27,8 +28,12 @@ class PackageAdapterRegistry:
             config_values,
             tex_compile_service,
         )
+        qoj: PackageAdapter = QOJPackageAdapter(
+            config_values,
+            tex_compile_service,
+        )
         nowcoder: PackageAdapter = NowcoderPackageAdapter()
-        adapters = (domjudge, icpc_2025, nowcoder)
+        adapters = (domjudge, icpc_2025, qoj, nowcoder)
         by_format = {adapter.format: adapter for adapter in adapters}
         if len(by_format) != len(adapters):
             raise RuntimeError("duplicate package adapter format")

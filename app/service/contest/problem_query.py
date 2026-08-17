@@ -28,7 +28,7 @@ from app.service.problem.source_file import require_regular_source_file
 from app.service.problem.source_tree import solution_sources
 from app.service.repository.workspace import WorkspaceService
 from app.service.statement.context import statement_languages
-from app.service.verification.standard_checker import detect_standard_checker
+from app.service.problem.standard_checker import detect_standard_checker
 from app.service.workspace.state import WorkspaceState
 
 

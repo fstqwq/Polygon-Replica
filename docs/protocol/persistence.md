@@ -106,23 +106,23 @@ remains the only removal rule. Their table has no write path to any decision
 column. This separation makes a late diagnostic incapable of reopening
 execution even when it arrives concurrently with completion or cancellation.
 
-Preview, Package Export, verified-revision-build, and contest-job rows survive
+Preview, Package Export, Native Package build, and Contest-job rows survive
 normal restarts. Unfinished rows are moved to `failed` because their
 process-local work cannot resume. Startup does not open and validate every
-completed verified-revision archive; integrity is checked when a consumer opens
+completed Native Package archive; integrity is checked when a consumer opens
 one. Administrative generated-data cleanup removes the
 execution/package/export/build subset described by the
 [storage protocol](storage.md#maintenance-cleanup), while identity, authoring,
 contest source, attachment, and configuration rows remain.
 
 `problem_package_materializations` owns the durable identity and locator for one
-verified revision per problem/source commit. `exports` owns its cached
-`domjudge`, `icpc-2025-09`, and `nowcoder` projections. `export_jobs` owns
+Native Package per problem/source commit. `exports` owns its cached
+`domjudge`, `icpc-2025-09`, `qoj`, and `nowcoder` external packages. `export_jobs` owns
 request attempts:
 distinct requests retain distinct job IDs even when they finish by referencing
-the same cached projection. A Native preparation attempt finishes with a
+the same cached external package. A Native preparation attempt finishes with a
 materialization reference and a null `export_id`; it does not add a second
-archive. Direct Polygon Replica package downloads create no job or `exports`
+archive. Direct Native Package downloads create no job or `exports`
 row. Contest child packages are Contest-owned temporary bundle members and do
 not enter `exports` or `export_jobs`.
 
@@ -132,10 +132,10 @@ SQLite collation is not an ordering authority. A complete `id -> idx` edit
 uses temporary non-canonical values to exchange unique indices and increments
 `source_generation` once in the same writer transaction; an unchanged mapping
 performs no write. Contest build admission inserts
-the job, selected verified-revision identities, frozen archive checksums, and a
+the job, selected Native Package identities, frozen archive checksums, and a
 consecutive derived `ordinal` in one `BEGIN IMMEDIATE` transaction. The frozen
 build keeps that `idx` and `ordinal` even when the current Contest is edited. A
-roster problem with no available verified revision aborts admission without a
+roster problem with no available Native Package aborts admission without a
 partial job. Filesystem reads occur after that transaction and must match the
 frozen identities and checksums.
 

@@ -948,7 +948,7 @@ class TestSecurity(E2ETestBase):
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         cfg = ws / "config" / "build.json"
         cfg.parent.mkdir(parents=True, exist_ok=True)
-        from app.service.verification.standard_checker import copy_standard_checker
+        from app.service.problem.standard_checker import copy_standard_checker
         copy_standard_checker("wcmp.cpp", ws)
         build = json.loads(cfg.read_text(encoding="utf-8"))
         build["checker_source"] = "checkers/wcmp.cpp"

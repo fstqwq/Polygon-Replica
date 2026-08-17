@@ -183,7 +183,10 @@ def checker_status_context(
     expected_standard_name = ''
     standard_warning = ''
     if repo_exists:
-        from app.service.verification.standard_checker import detect_standard_checker, standard_checker_hash_map
+        from app.service.problem.standard_checker import (
+            detect_standard_checker,
+            standard_checker_hash_map,
+        )
         from app.service.platform.workspace_path import safe_workspace_path
         try:
             abs_path = safe_workspace_path(workspace, repo_source)

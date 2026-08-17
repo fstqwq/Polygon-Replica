@@ -1,15 +1,18 @@
-# Package import, verified revisions, and projections
+# Package import, Native Packages, and external packages
 
 The package lifecycle is one-way:
 
 ```text
-published source -> verified revision -> package projections
+published source -> Native Package -> external packages
 ```
 
-A verified revision is not another source revision. It is the cleanup-safe
-result of fully verifying one immutable published Git commit and retaining the
+A Native Package is not another source revision. It is the cleanup-safe result
+of fully verifying one immutable published Git commit and retaining the
 committed source, generated testcase inputs, and official answers needed by
-delivery consumers.
+delivery consumers. The implementation persists this object as a verified
+revision/materialization and exposes it to adapters through
+`VerifiedRevisionReader`; those internal names do not define a second package
+kind.
 
 ## Import boundary
 
@@ -38,7 +41,7 @@ bounded by the fixed 4 MiB metadata limit. Import writes canonical workspace
 source and discards the uploaded archive after conversion.
 
 The application detects Polygon packages by `problem.xml`, ICPC/DOMjudge
-packages by `problem.yaml`, and Polygon Replica packages by
+packages by `problem.yaml`, and Native Packages by
 `config/problem.json`. Their importers convert accepted files
 into the current workspace source model and report validation errors at the
 archive boundary.
@@ -54,15 +57,15 @@ result, and pushes `main`. Importing into an existing problem converts in a
 staging directory, overwrites paths present in the converted tree, and keeps
 existing paths absent from that tree; it leaves the merged changes uncommitted.
 
-A Polygon Replica package contains a complete verified-revision payload, but
-source import does not transfer verified-revision identity. Native source is
+A Native Package contains a complete verified payload, but source import does
+not transfer its materialization identity. Native source is
 identified by `config/problem.json`. The importer selects only canonical
 authored roots; `test-data/`, `statement-build/`, and every other unknown
 top-level member all remain unopened under the same rule. It validates and
 imports only authored source. Generated inputs, answers, verification
 provenance, and offline statement products never enter the destination
 workspace, Git, or materialization tables. The imported problem must run its
-own Verification before it has a verified revision.
+own Verification before it has a Native Package.
 
 The ICPC importer accepts standard 2025-09 packages and the supported
 DOMjudge-compatible layout. It parses scalar or sequence problem types,
@@ -73,14 +76,15 @@ Agent workspace compare/apply uses the same file-backed archive admission and
 consumed-byte accounting. Its selected files are streamed into a temporary
 workspace tree before comparison or replacement.
 
-## Verified revision identity and contents
+## Native Package identity and contents
 
-At most one verified-revision record exists for a `(problem_id, source_commit)`
-pair. It keeps the published revision number, source digest, verification
-provenance, archive locator, archive size and SHA-256, timestamps, and current
-availability. Rebuilding the same Git revision reuses that identity.
+At most one Native Package materialization exists for a
+`(problem_id, source_commit)` pair. Its internal verified-revision record keeps
+the published revision number, source digest, Verification provenance, archive
+locator, archive size and SHA-256, timestamps, and current availability.
+Rebuilding the same Git revision reuses that identity.
 
-The Polygon Replica package keeps the committed source at its root without
+The Native Package keeps the committed source at its root without
 renaming `statement/`. It adds two package-owned derived trees:
 
 ```text
@@ -121,14 +125,14 @@ xelatex -interaction=nonstopmode -halt-on-error statements.tex
 ```
 
 This render consumes authored statement source plus an ephemeral
-`StatementExamplesBundle` projected from the full Verification that created the
-verified revision. Browser Preview uses the same producer with its sample-only
+`StatementExamplesBundle` derived from the full Verification that created the
+Native Package. Browser Preview uses the same producer with its sample-only
 Verification, so pass order and resource bytes follow one contract. The bundle
 does not backfill source from `test-data/`, modify `tests/spec.json`, or become a
 manifest field.
 
 `test-data/` is not Git source, but it is the verified payload consumed when the
-platform opens a verified revision or builds a package projection. Those read
+platform opens a Native Package or runs an external-package adapter. Those read
 paths validate its manifest, checksums, paths, and complete inventory. Source
 import deliberately does none of that because it neither consumes nor stores
 the verified payload. `statement-build/` is a reproducible convenience product:
@@ -143,7 +147,7 @@ available payloads. A descriptor contains a canonical path, SHA-256, and size.
 This is the current complete shape; it does not carry a speculative
 project-owned format or materializer version.
 
-Opening a verified revision checks the stored archive size and SHA, safe ZIP
+Opening a Native Package checks the stored archive size and SHA, safe ZIP
 member paths and types, manifest identity, every declared payload, absence of
 undeclared testcase payloads, canonical source shape, and committed-source
 digest. Both `test-data/` and `statement-build/` are excluded from that source
@@ -152,13 +156,13 @@ admission. The reader exposes only the extracted, validated revision; it does
 not expose Git, a workspace, verification rows, or runtime cache references.
 
 Availability, Git provenance, and current publication are separate facts. An
-older verified revision remains usable after `main` advances. A missing or
-corrupt archive marks that verified revision unavailable and invalidates its
-package projections; it does not remove the Git revision.
+older Native Package remains usable after `main` advances. A missing or corrupt
+archive marks that Native Package unavailable and invalidates its cached
+external packages; it does not remove the Git revision.
 
 ## Package Export
 
-Package Export is the only workflow allowed to prepare a verified revision.
+Package Export is the only workflow allowed to prepare a Native Package.
 Admission freezes the current published `main` commit and permits only one
 Package Export for the same problem/commit at a time. A competing request fails
 immediately instead of waiting.
@@ -169,45 +173,47 @@ Derived-package jobs proceed through these observable phases:
 queued -> verifying -> packaging -> complete
 ```
 
-A Native job omits `packaging` because the verified revision is the package it
-prepares.
+A Native job omits `packaging` because its result is the Native Package itself.
 
 For the frozen commit, the worker:
 
-1. reuses the verified revision when its complete integrity check succeeds;
-2. otherwise removes an unavailable or corrupt payload and its projections,
-   runs one full verification, and rebuilds the same verified-revision identity;
-3. finishes immediately for a Native request, or builds or reuses the requested
-   DOMjudge, ICPC 2025-09, or Nowcoder projection.
+1. reuses the Native Package when its complete integrity check succeeds;
+2. otherwise removes an unavailable or corrupt payload and its cached external
+   packages, runs one full Verification, and rebuilds the same materialization
+   identity;
+3. finishes immediately for a Native request, or runs the requested DOMjudge,
+   ICPC 2025-09, QOJ, or Nowcoder adapter (or reuses its cached package).
 
-The problem Packages page accepts `native`, `domjudge`, `icpc-2025-09`, and
-`nowcoder`.
-`native` prepares the verified revision when necessary and creates no row in
-`exports`; the Agent Package Export API exposes the three derived formats.
+The problem Packages page accepts `native`, `domjudge`, `icpc-2025-09`, `qoj`,
+and `nowcoder`.
+`native` prepares the Native Package when necessary and creates no row in
+`exports`; the Agent Package Export API exposes the four derived formats.
 Separate request attempts keep separate job IDs even when they resolve
-to the same cached projection. Problem-level projection cache identity is the
-verified revision and target format. A standalone DOMjudge package always
-derives its short name from the public slug segment; Contest index projections
-are temporary Contest-owned children and are not stored in this cache.
+to the same cached external package. Problem-level external-package cache
+identity is the Native Package materialization and target format. A standalone
+DOMjudge package always derives its short name from the public slug segment;
+Contest-indexed packages are temporary Contest-owned children and are not
+stored in this cache.
 
-The Polygon Replica package is downloaded directly from verified-revision
-history. That read creates neither an export job nor a projection row. Preparing
-a missing current verified revision through the Native action creates a job but
-not a projection. Package Export always targets the published revision frozen at
-request time; it does not accept a historical revision selector.
+The Native Package is downloaded directly from package history. That read
+creates neither an export job nor an `exports` row. Preparing a missing current
+Native Package through the Native action creates a job but no external package.
+Package Export always targets the published revision frozen at request time; it
+does not accept a historical revision selector.
 
-## Projection boundary
+## Package adapter boundary
 
-A package projector accepts only:
+A package adapter accepts only:
 
-- an already validated verified-revision reader;
+- an already validated `VerifiedRevisionReader` for a Native Package;
 - the target external format;
 - canonical naming options; and
 - a caller-owned empty staging directory.
 
 It may render and compile statement source from that reader. It MUST NOT read
 Git, a workspace, verification tables, runtime cache, or another package
-projection. It MUST NOT run verification or write export, Contest, or job rows.
+adapter's output. It MUST NOT run Verification or write export, Contest, or job
+rows.
 The caller owns atomic archive publication and persistence.
 
 A package adapter MUST NOT execute problem source or invoke a source compiler
@@ -218,7 +224,7 @@ defines it as advisory; it does not authorize a local compiler fallback.
 
 ### ICPC Problem Package 2025-09
 
-The `icpc-2025-09` projection emits the strict supported subset of that
+The `icpc-2025-09` adapter emits the strict supported subset of that
 external format:
 
 - `problem.yaml` with `problem_format_version: 2025-09`;
@@ -242,7 +248,7 @@ not annotated. The archive excludes `domjudge-problem.ini` and
 
 ### DOMjudge package
 
-The `domjudge` projection emits a DOMjudge-compatible package rather than
+The `domjudge` adapter emits a DOMjudge-compatible package rather than
 claiming strict ICPC 2025-09 conformance. It contains:
 
 - `domjudge-problem.ini` with the requested short name;
@@ -251,7 +257,7 @@ claiming strict ICPC 2025-09 conformance. It contains:
 - `problem_statement/problem.pdf`;
 - testcase data, validators, verdict directories, and attachments.
 
-C and C++ validators and interactors in both projections include executable
+C and C++ validators and interactors in both external packages include executable
 `build` and `run` files. The build file compiles the copied source with
 `DOMJUDGE` defined and produces the executable used by `run`. This keeps the
 program contract explicit in both layouts instead of relying on an importer's
@@ -261,15 +267,57 @@ It excludes `statement/` and `submissions/submissions.yaml`. Standard accepted,
 wrong-answer, time-limit, and runtime-error submissions use their conventional
 directories. Only the three mixed behaviors use a language-appropriate
 `@EXPECTED_RESULTS@` annotation in the copied source. Standalone export uses the
-public slug segment as the short name; Contest projection passes the frozen
-problem index.
+public slug segment as the short name; a Contest build passes the frozen problem
+index to the adapter.
+
+### QOJ package
+
+The `qoj` adapter emits the source data archive consumed by QOJ's **Sync Test
+Data** operation. Archive members are at the ZIP root. The adapter writes
+ordered verified testcase pairs as `1.in`, `1.ans`, and so on, and duplicates
+the verified display payload of each sample as `ex_1.in`, `ex_1.ans`, and so on.
+An interactive testcase without a canonical answer receives an empty `.ans`;
+the adapter does not reinterpret a transcript or jury log as an answer.
+
+`problem.conf` uses the built-in judger, one 100-point subtask, and the
+published time and memory limits. QOJ's documented 6144 MiB memory ceiling is
+enforced. The adapter supports one or two passes. Two-pass output uses
+`polygon_runtwice`; combined
+interactive/two-pass output also uses `polygon_runtwice_interactive` and
+`interactor_run_type default`. A higher pass limit is rejected rather than
+inventing a custom manager or judger.
+
+A checker that is byte-identical to the vendored `ncmp.cpp`, `wcmp.cpp`, or
+`fcmp.cpp` becomes the corresponding `use_builtin_checker` value. Other checker
+source is copied as `chk.cpp`. A pass-fail problem without a checker receives a
+deterministic byte-exact `chk.cpp`; it is not mapped to whitespace-insensitive
+`wcmp`. Interactive packages use `irscmp` and copy the configured interactor as
+`interactor.cpp`.
+
+The accepted solution, validator, and interactor are copied as QOJ Sync source
+inputs named `std.<extension>`, `val.cpp`, and `interactor.cpp`. The adapter does
+not compile those programs or publish QOJ's generated executables. Missing
+`std` or `val` produces a warning that Hack must be disabled. QOJ Sync owns
+program compilation, testcase validation and normalization, and the resulting
+diagnostics.
+
+The adapter compiles the preferred verified statement build to root
+`statement.pdf`, choosing English when present and otherwise the first authored
+language. Authored participant attachments are written below `download/` with
+their relative paths preserved. The adapter does not create `download.zip`;
+QOJ Sync packages `download/` for contestants.
+
+This supported subset follows the
+[QOJ problem-data guide](https://qoj.ac/blog/qingyu/blog/1423). It does not emit
+`require/`, a custom judger or manager, communication mode, submit-answer mode,
+or custom scoring and subtask dependencies.
 
 ### Nowcoder package
 
-The `nowcoder` projection accepts only a pass-fail problem with `pass_limit=1`.
+The `nowcoder` adapter accepts only a pass-fail problem with `pass_limit=1`.
 It writes the ordered verified testcase pairs at the archive root as `1.in`,
 `1.ans`, `2.in`, `2.ans`, and so on. When the problem selects a custom checker,
-the projection copies that source to `checker.cc`.
+the adapter copies that source to `checker.cc`.
 
 Nowcoder uses an older `testlib.h` and a C++14 compiler. The adapter does not
 claim to verify general compatibility with that toolchain. It performs only the
@@ -280,28 +328,28 @@ published. The adapter does not compile the checker.
 
 ## Contest builds
 
-Contest builds consume verified revisions that already exist. The current
+Contest builds consume Native Packages that already exist. The current
 roster has no independent position: normalized `idx` is both its displayed
 identity and its order. Pure-letter indices use Excel-style order (`Z` before
 `AA`); other indices use numeric-aware natural order. In one SQLite writer
 transaction, admission applies that shared order, checks for an active build,
-selects each problem's highest available verified revision, and inserts the job
+selects each problem's highest available Native Package, and inserts the job
 and all frozen build items with their archive checksums. Each item receives a
 derived, consecutive `ordinal`; that snapshot remains unchanged if the Contest
-indices are edited later. If any problem has no verified revision, admission
+indices are edited later. If any problem has no Native Package, admission
 returns `not_ready` without creating a job or copying Contest source.
 
 Selection is not restricted to current `main`: readiness reports `current`,
 `stale`, or `none`. A worker opens exactly the frozen identities and checksums.
 It never starts Verification, calls Package Export, repairs an unavailable
-revision, or falls back to an older revision within the job.
+Native Package, or falls back to an older package within the job.
 
 One build can request `statement_pdf`, `domjudge_bundle`, and
 `icpc_2025_09_bundle`. Readers are shared across requested outputs. Statement
 PDF reads statement source, verified samples, and assets directly. Package
-bundles call the same projectors described above and place temporary child ZIPs
+bundles call the same adapters described above and place temporary child ZIPs
 inside a Contest-owned outer bundle. Child packages do not become problem-level
-exports.
+external-package cache entries.
 
 Each package bundle is all-or-nothing: failure of one problem publishes no
 bundle of that format. Different requested outputs remain independent, so the
@@ -330,9 +378,9 @@ Contest; it only rejects new roster entries.
 
 ## Cleanup
 
-Verified revisions, their build rows and archives, projection-cache rows and
+Native Package materializations and archives, external-package cache rows and
 archives, Package Export jobs, and Contest build products are Derived data.
 Generated Artifacts cleanup removes them. Published Git commits, workspaces,
 Contest definitions and source, and operator backups remain. A cleaned Git
-revision is simply no longer verified and can become a verified revision again
-through a later Package Export.
+revision simply has no Native Package and can be packaged again through a later
+Package Export.

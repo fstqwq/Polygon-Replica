@@ -2,16 +2,17 @@
 
 Owns Package Export jobs, derived-package cache lookup and publication, and the
 package adapter registry. A request freezes the current published commit. Its worker
-prepares or reuses that commit's verified revision. A Native request ends there;
-it creates no `exports` row or second archive. A `domjudge`, `icpc-2025-09`, or
-`nowcoder` request then builds or reuses the requested projection. A separate
-request keeps a separate job ID even when it resolves to the same cached archive.
+prepares or reuses that commit's Native Package. A Native request ends there;
+it creates no `exports` row or second archive. A `domjudge`, `icpc-2025-09`,
+`qoj`, or `nowcoder` request then runs the requested adapter or reuses its cached
+external package. A separate request keeps a separate job ID even when it
+resolves to the same cached archive.
 
 Only one Package Export for a problem/commit is admitted at a time. Jobs expose
 the phases `queued`, `verifying`, `packaging`, and `complete`; a Native job skips
 `packaging`. Interrupted jobs become failed at startup. Missing or mismatched
 derived-package bytes invalidate only their cache row. Corruption in the
-underlying verified revision is handled by the problem-package workflow before
+underlying Native Package is handled by the problem-package workflow before
 an adapter runs.
 
 `adapters/` contains one module per external package format and the single
@@ -35,9 +36,16 @@ not claim broad toolchain compatibility. It only warns on the literal
 `setTestCase`, which the project checker guideline recommends but the older
 Nowcoder testlib may not support, and does not compile the checker.
 
-The Polygon Replica package is not a projection format: its direct download is
-owned by verified-revision history. The Packages page may submit a Native job to
-prepare a missing current verified revision, while the Agent Package Export API
-continues to expose only the derived formats. Format layouts, cache identity,
-and failure behavior are defined by the
+QOJ output is a source data archive for the target system's Sync Test Data
+operation. The adapter writes testcase pairs, supported built-in-checker
+selection, source programs, one preferred statement PDF, and participant files
+below `download/`. QOJ Sync owns program compilation and generation of the
+contestant download archive, together with target-side testcase validation and
+normalization. The supported layout and execution-mode subset are defined by
+the package protocol.
+
+The Native Package is downloaded directly from package history. The Packages
+page may submit a Native job to prepare a missing current Native Package, while
+the Agent Package Export API continues to expose only external formats. Format
+layouts, cache identity, and failure behavior are defined by the
 [package protocol](../../../../protocol/package.md).

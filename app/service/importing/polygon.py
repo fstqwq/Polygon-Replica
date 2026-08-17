@@ -35,7 +35,7 @@ from app.service.problem.runtime_config import (
     dumps_problem_config,
 )
 from app.service.problem.source_tree import load_problem_source_tree
-from app.service.verification.standard_checker import copy_standard_checker
+from app.service.problem.standard_checker import copy_standard_checker
 from app.service.statement.constant import (
     DEFAULT_PROBLEM_TITLE,
     DEFAULT_STATEMENT_PROBLEM_TEMPLATE,

@@ -1632,6 +1632,15 @@ class TestAgentAPI(E2ETestBase):
             self.assertEqual(icpc_export.status_code, 400, icpc_export.text)
             self.assertIn("no published main revision", icpc_export.text)
 
+            qoj_export = client.post(
+                "/agent/v1/export/start",
+                params={"problem": self.problem},
+                headers=self._agent_headers(workspace_token),
+                json={"format": "qoj"},
+            )
+            self.assertEqual(qoj_export.status_code, 400, qoj_export.text)
+            self.assertIn("no published main revision", qoj_export.text)
+
             workspace_commit = client.post(
                 "/agent/v1/commit",
                 params={"problem": self.problem},

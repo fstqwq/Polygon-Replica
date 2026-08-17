@@ -15,7 +15,7 @@ from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
 from app.main_util import enforce_textarea_max_bytes
 from app.service.platform.workspace_path import normalize_component_source_path, safe_workspace_path
-from app.service.verification.standard_checker import copy_standard_checker
+from app.service.problem.standard_checker import copy_standard_checker
 
 
 

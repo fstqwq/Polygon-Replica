@@ -703,6 +703,44 @@ class TestPublishedRevisionExport(E2ETestBase):
         )
         self.assertEqual(int(rows["c"]), 2)
 
+    def test_qoj_adapter_publishes_a_root_test_data_archive(self) -> None:
+        _problem_id, _commit, verified = self._verified_revision()
+        with patch.object(
+            runtime.tex_compile_service,
+            "compile_pdf",
+            side_effect=self._compile_statement,
+        ):
+            export_id, archive_path, warning = (
+                runtime.export_service.create_export(
+                    self.problem,
+                    "qoj",
+                    verified_revision_id=verified["id"],
+                )
+            )
+
+        self.assertRegex(export_id, r"^e-[0-9a-f]+$")
+        self.assertIn("-qoj-v", archive_path.name)
+        self.assertEqual(
+            warning,
+            "QOJ Hack must be disabled until std and val are available.",
+        )
+        with zipfile.ZipFile(archive_path) as package:
+            names = set(package.namelist())
+            self.assertTrue(
+                {
+                    "problem.conf",
+                    "statement.pdf",
+                    "1.in",
+                    "1.ans",
+                    "ex_1.in",
+                    "ex_1.ans",
+                    "std.cpp",
+                    "chk.cpp",
+                }.issubset(names)
+            )
+            self.assertFalse(any(name.startswith("package/") for name in names))
+            self.assertNotIn("download.zip", names)
+
     def test_ppf_omits_compile_error_submission_and_reuses_warning_with_cache(
         self,
     ) -> None:
