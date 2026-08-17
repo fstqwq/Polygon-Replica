@@ -178,12 +178,13 @@ For the frozen commit, the worker:
 2. otherwise removes an unavailable or corrupt payload and its projections,
    runs one full verification, and rebuilds the same verified-revision identity;
 3. finishes immediately for a Native request, or builds or reuses the requested
-   DOMjudge or ICPC 2025-09 projection.
+   DOMjudge, ICPC 2025-09, or Nowcoder projection.
 
-The problem Packages page accepts `native`, `domjudge`, and `icpc-2025-09`.
+The problem Packages page accepts `native`, `domjudge`, `icpc-2025-09`, and
+`nowcoder`.
 `native` prepares the verified revision when necessary and creates no row in
-`exports`; the Agent Package Export API continues to expose only the two derived
-formats. Separate request attempts keep separate job IDs even when they resolve
+`exports`; the Agent Package Export API exposes the three derived formats.
+Separate request attempts keep separate job IDs even when they resolve
 to the same cached projection. Problem-level projection cache identity is the
 verified revision and target format. A standalone DOMjudge package always
 derives its short name from the public slug segment; Contest label projections
@@ -208,6 +209,12 @@ It may render and compile statement source from that reader. It MUST NOT read
 Git, a workspace, verification tables, runtime cache, or another package
 projection. It MUST NOT run verification or write export, Contest, or job rows.
 The caller owns atomic archive publication and persistence.
+
+A package adapter MUST NOT execute problem source or invoke a source compiler
+inside the application process or its local bubblewrap sandbox. Format-specific
+source compatibility checks MUST use the Judgehost compile-only workflow. A
+failed compatibility check may become a package warning when the target format
+defines it as advisory; it does not authorize a local compiler fallback.
 
 ### ICPC Problem Package 2025-09
 
@@ -256,6 +263,20 @@ directories. Only the three mixed behaviors use a language-appropriate
 `@EXPECTED_RESULTS@` annotation in the copied source. Standalone export uses the
 public slug segment as the short name; Contest projection passes the frozen
 roster label.
+
+### Nowcoder package
+
+The `nowcoder` projection accepts only a pass-fail problem with `pass_limit=1`.
+It writes the ordered verified testcase pairs at the archive root as `1.in`,
+`1.ans`, `2.in`, `2.ans`, and so on. When the problem selects a custom checker,
+the projection copies that source to `checker.cc`.
+
+Nowcoder uses an older `testlib.h` and a C++14 compiler. The adapter does not
+claim to verify general compatibility with that toolchain. It performs only the
+most basic check for the literal `setTestCase`: this project's checker guideline
+recommends that API, while Nowcoder's older `testlib.h` may not provide it. A
+match is reported as an advisory Package Export warning; the archive is still
+published. The adapter does not compile the checker.
 
 ## Contest builds
 

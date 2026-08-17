@@ -312,7 +312,10 @@ class TestICPCExportPackage(unittest.TestCase):
 
         strict = self.root / "strict"
         domjudge = self.root / "domjudge"
-        self.assertEqual(adapters.formats, ("domjudge", "icpc-2025-09"))
+        self.assertEqual(
+            adapters.formats,
+            ("domjudge", "icpc-2025-09", "nowcoder"),
+        )
         domjudge_adapter = adapters.require("domjudge")
         strict_adapter = adapters.require("icpc-2025-09")
         with (

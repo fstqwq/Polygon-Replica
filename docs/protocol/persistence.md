@@ -117,7 +117,8 @@ contest source, attachment, and configuration rows remain.
 
 `problem_package_materializations` owns the durable identity and locator for one
 verified revision per problem/source commit. `exports` owns its cached
-`domjudge` and `icpc-2025-09` projections. `export_jobs` owns request attempts:
+`domjudge`, `icpc-2025-09`, and `nowcoder` projections. `export_jobs` owns
+request attempts:
 distinct requests retain distinct job IDs even when they finish by referencing
 the same cached projection. A Native preparation attempt finishes with a
 materialization reference and a null `export_id`; it does not add a second
