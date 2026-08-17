@@ -54,7 +54,6 @@ from app.impl.workspace.run_view_list import (
     _is_main_correct_task_kind,
     _run_test_answer_name,
     _run_test_sort_key,
-    _run_timeout_ms_from_summary,
 )
 from app.impl.workspace.run_display import (
     rewrite_failure_reason_with_source,
@@ -850,7 +849,6 @@ def build_run_detail_context(
             time_limit_ms=runtime_threshold_time_limit_ms,
         )
         has_materialized_tests = bool(tests_raw)
-        timeout_limit_ms = _run_timeout_ms_from_summary(summary)
         for idx, item in enumerate(tests_raw, start=1):
             test_name = _detail_text(
                 item.get("test"),
@@ -870,23 +868,11 @@ def build_run_detail_context(
                 item.get("time_ms"),
                 field=f"program.tests[{idx - 1}].time_ms",
             )
-            if (
-                (verdict or "").upper().startswith("TL")
-                and timeout_limit_ms > 0
-                and (time_ms > timeout_limit_ms)
-            ):
-                time_ms = timeout_limit_ms
             time_user_ms = _detail_int(
                 item.get("time_user_ms"),
                 field=f"program.tests[{idx - 1}].time_user_ms",
                 default=time_ms,
             )
-            if (
-                (verdict or "").upper().startswith("TL")
-                and timeout_limit_ms > 0
-                and (time_user_ms > timeout_limit_ms)
-            ):
-                time_user_ms = timeout_limit_ms
             time_wall_ms = _detail_int(
                 item.get("time_wall_ms"),
                 field=f"program.tests[{idx - 1}].time_wall_ms",
@@ -972,12 +958,6 @@ def build_run_detail_context(
                             else pass_item.get("time_ms"),
                             field=f"{pass_field}.time_user_ms",
                         )
-                        if (
-                            (pass_verdict or "").upper().startswith("TL")
-                            and timeout_limit_ms > 0
-                            and (pass_time_user_ms > timeout_limit_ms)
-                        ):
-                            pass_time_user_ms = timeout_limit_ms
                         pass_time_wall_ms = _detail_int(
                             pass_item.get("time_wall_ms"),
                             field=f"{pass_field}.time_wall_ms",

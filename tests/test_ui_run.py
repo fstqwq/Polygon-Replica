@@ -2695,6 +2695,71 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             html,
         )
 
+    def test_run_details_preserves_reported_time_for_time_limit_result(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        (ws / "solutions").mkdir(parents=True, exist_ok=True)
+        (ws / "solutions" / "slow.cpp").write_text(
+            "int main(){for(;;){}}\n",
+            encoding="utf-8",
+        )
+        ctx = workspace_service.workspace_context(
+            "alice/sample",
+            "alice",
+            include_recent=False,
+        )
+        verification_id = canonical_test_verification_id(
+            f"ver-details-tl-time-{uuid.uuid4().hex[:8]}"
+        )
+        self._insert_verification_row(
+            verification_id=verification_id,
+            problem_id=int(ctx["problem"]["id"]),
+            workspace_id=int(ctx["workspace"]["id"]),
+            build_id=self.random_id("b-details-tl-time"),
+            kind=Kind.ALL,
+            status="ok",
+            created_at="2026-08-17T00:00:00Z",
+            finished_at="2026-08-17T00:00:11Z",
+            runs=[
+                {
+                    "id": f"r-details-tl-time-{uuid.uuid4().hex[:8]}",
+                    "status": "ok",
+                    "source_label": "solutions/slow.cpp",
+                    "expected_behavior": "tle_or_correct",
+                    "summary": {
+                        "mode": "pass-fail",
+                        "source": "solutions/slow.cpp",
+                        "tests_total": 1,
+                        "tests": [
+                            {
+                                "test": "001.in",
+                                "verdict": "TL",
+                                "runtime_sec": 9.999,
+                                "cpu_sec": 9.999,
+                                "wall_sec": 10.1,
+                                "memory_kb": 1024,
+                                "output_ref": "blob://tl-output",
+                            }
+                        ],
+                    },
+                }
+            ],
+        )
+
+        detail = run_details_test_fragment(
+            _request(
+                "/problems/alice/sample/run/details/test-fragment",
+                (
+                    f"verification_id={verification_id}"
+                    "&test=001.in&program_id=solution-0"
+                ),
+            ),
+            "alice/sample",
+            "alice",
+        )
+
+        self.assertEqual(detail.status_code, 200)
+        self.assertIn("9999ms (10100ms wall)", detail.body.decode("utf-8"))
+
     def test_run_details_shows_task_status_for_verification(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         (ws / "solutions").mkdir(parents=True, exist_ok=True)

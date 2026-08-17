@@ -1,5 +1,3 @@
-import app.main_constant as _K
-
 import re
 from pathlib import Path
 
@@ -9,8 +7,6 @@ from app.service.access.model import VerificationAccessContext
 from app.service.repository.revision import verification_source_display
 from app.service.platform.error_text import bounded_display_text, normalize_display_text
 from app.service.problem.solution_metadata import normalize_expected_behavior
-from app.service.verification.runtime import coerce_int, normalize_problem_mode
-
 from app.service.verification.result_match import run_verdict_short, verification_solution_match
 
 _TASK_KIND_MAIN_CORRECT = "main-correct"
@@ -89,43 +85,6 @@ def _run_task_kind_from_summary(summary: dict | None) -> str:
 
 def _is_main_correct_task_kind(task_kind: str) -> bool:
     return task_kind == _TASK_KIND_MAIN_CORRECT
-
-
-def _run_timeout_ms_from_summary(summary: dict | None) -> int:
-    if summary is None:
-        return 0
-    limits = summary.get("limits")
-    if isinstance(limits, dict):
-        wall_ms = coerce_int(limits.get("wall_ms"), 0, 0, 10**9)
-        if wall_ms > 0:
-            return wall_ms
-        cpu_ms = coerce_int(limits.get("cpu_ms"), 0, 0, 10**9)
-        if cpu_ms > 0:
-            return cpu_ms
-    run_cfg = summary.get("run_config")
-    if not isinstance(run_cfg, dict):
-        return 0
-    mode = normalize_problem_mode(run_cfg.get("mode"), str(_K.GENERAL_CONFIG_DEFAULTS["mode"]))
-    time_limit_ms = coerce_int(
-        run_cfg.get("time_limit_ms"),
-        0,
-        0,
-        runtime().config_values.integer("GENERAL_TIME_LIMIT_MAX_MS"),
-    )
-    if time_limit_ms <= 0:
-        return 0
-    if mode == "interactive":
-        pass_limit = coerce_int(run_cfg.get("pass_limit"), 1, 1, 100)
-        if pass_limit > 1:
-            return time_limit_ms + runtime().config_values.integer(
-                "RUN_WALL_TIME_SLACK_PASS_LIMIT_SEC"
-            ) * 1000
-        return time_limit_ms + runtime().config_values.integer(
-            "RUN_WALL_TIME_SLACK_INTERACTIVE_SEC"
-        ) * 1000
-    return time_limit_ms + runtime().config_values.integer(
-        "RUN_WALL_TIME_SLACK_PASS_FAIL_SEC"
-    ) * 1000
 
 
 def _normalized_verification_status(status: str) -> str:
