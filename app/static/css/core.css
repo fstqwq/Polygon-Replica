@@ -320,8 +320,22 @@ body.problem-layout:not(.verification-compact) {
 }
 
 .compact-fact-meta {
+  margin-left: var(--space-2);
   color: var(--muted);
   font-weight: 400;
+}
+
+.compact-fact-meta.warn,
+.compact-fact-meta.danger {
+  font-weight: 700;
+}
+
+.compact-fact-meta.warn {
+  color: var(--warn);
+}
+
+.compact-fact-meta.danger {
+  color: var(--danger);
 }
 
 .revision-pair-value {
@@ -1310,10 +1324,7 @@ textarea.textarea-md {
 .problem-list-table .problem-list-slug-link {
   color: var(--text);
   font-weight: 400;
-  display: inline-grid;
-  grid-template-columns: calc(var(--problem-owner-prefix-ch, 0) * 1ch) minmax(0, 1fr);
-  align-items: baseline;
-  column-gap: 0;
+  display: inline;
   min-width: 0;
   font-variant-numeric: tabular-nums;
 }
@@ -1323,15 +1334,21 @@ textarea.textarea-md {
 }
 
 .problem-list-table .problem-list-slug-owner {
+  display: inline-block;
+  width: calc(var(--problem-owner-prefix-ch, 0) * 1ch);
   color: var(--muted);
   font-weight: 400;
   white-space: nowrap;
 }
 
 .problem-list-table .problem-list-slug-leaf {
+  display: inline-block;
+  max-width: 100%;
   color: inherit;
   font-weight: 400;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  vertical-align: baseline;
 }
 
 .problem-list-table .problem-list-slug-disabled,

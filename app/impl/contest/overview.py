@@ -5,13 +5,10 @@ from fastapi import Request, Depends, HTTPException
 
 from app.impl.auth.session import require_session_user
 from app.impl.auth.shared import template_response
+from app.impl.contest.problem_status import contest_problem_status
 from app.impl.contest.workspace_scope import add_contest_problem_hrefs
 from app.impl.runtime.dependency import runtime
 from app.impl.workspace.context_job import start_export_job
-from app.impl.workspace.context_model import (
-    package_published_revision_pair,
-    workspace_revision_notice,
-)
 from app.service.export.service import NATIVE_PACKAGE_FORMAT
 
 from app.impl.contest.shared import _contest_ctx, _contest_redirect
@@ -35,27 +32,9 @@ def contest_overview_page(request: Request, contest: str, user: Annotated[str, D
     for source_row in source_rows:
         row = dict(source_row)
         readiness = source_row["readiness"]
-        row["revision_pair"] = (
-            package_published_revision_pair(readiness)
-            if readiness is not None
-            else None
+        row["status"] = (
+            contest_problem_status(readiness) if readiness is not None else None
         )
-        row["workspace_revision_notice"] = (
-            workspace_revision_notice(readiness)
-            if readiness is not None
-            else None
-        )
-        if readiness is not None:
-            verification = readiness["verification"]
-            row["verification_display"] = verification["display"]
-            row["verification_tone"] = (
-                "warn"
-                if verification["tone"] == "warning"
-                else "danger" if verification["tone"] == "danger" else ""
-            )
-        else:
-            row["verification_display"] = "unavailable"
-            row["verification_tone"] = "danger"
         rows.append(row)
     owner_prefix_chars = max(
         (len(str(row["slug_owner"])) + 1 for row in rows),

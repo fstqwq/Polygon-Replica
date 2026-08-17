@@ -5,8 +5,7 @@
   href="{{ href }}"
   style="--problem-owner-prefix-ch: {{ owner_prefix_chars }}"
 >
-  <span class="problem-list-slug-owner">{{ slug_owner }}/</span>
-  <span class="problem-list-slug-leaf">{{ slug_leaf }}</span>
+  <span class="problem-list-slug-owner">{{ slug_owner }}/</span><wbr><span class="problem-list-slug-leaf">{{ slug_leaf }}</span>
 </a>
 {% else %}
 <span
@@ -15,8 +14,7 @@
   aria-disabled="true"
   title="No problem access"
 >
-  <span class="problem-list-slug-owner">{{ slug_owner }}/</span>
-  <span class="problem-list-slug-leaf">{{ slug_leaf }}</span>
+  <span class="problem-list-slug-owner">{{ slug_owner }}/</span><wbr><span class="problem-list-slug-leaf">{{ slug_leaf }}</span>
 </span>
 {% endif %}
 {%- endmacro %}

@@ -208,13 +208,6 @@
   }
 }
 
-.problem-list-table.contest-problem-list-table .problem-list-slug-leaf,
-.problem-list-table.contest-management-table .problem-list-slug-leaf,
-.problem-list-table.contest-add-problems-table .problem-list-slug-leaf {
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
-
 .contest-problems-title {
   align-items: baseline;
 }
@@ -257,6 +250,10 @@
 .contest-problem-review-cell .compact-fact-value:not(.warn):not(.danger),
 .contest-problem-review-cell .revision-pair-value > strong:not(.warn):not(.danger) {
   font-weight: 400;
+}
+
+.contest-problem-status .compact-fact-value {
+  white-space: nowrap;
 }
 
 .contest-package-tools {

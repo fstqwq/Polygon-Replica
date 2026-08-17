@@ -1,7 +1,7 @@
 import unittest
 
+from app.impl.contest.problem_status import contest_problem_status
 from app.impl.workspace.context_model import (
-    package_published_revision_pair,
     workspace_published_revision_pair,
     workspace_revision_notice,
 )
@@ -50,7 +50,7 @@ def _readiness(
 
 
 class TestProblemReadinessUnit(unittest.TestCase):
-    def test_package_revision_pair_state_matrix(self) -> None:
+    def test_contest_problem_status_state_matrix(self) -> None:
         cases: tuple[
             tuple[
                 PackageReadinessState,
@@ -59,42 +59,57 @@ class TestProblemReadinessUnit(unittest.TestCase):
                 str,
                 str,
                 str,
-                str,
             ],
             ...,
         ] = (
-            ("ready", 7, 7, "v7", "v7", "current", "normal"),
-            ("stale", 6, 7, "v6", "v7", "stale", "warning"),
-            ("queued", None, 7, "queued", "v7", "queued", "normal"),
-            ("none", None, 7, "none", "v7", "none", "danger"),
-            ("none", None, None, "none", "none", "none", "danger"),
+            ("ready", 7, 7, "v7", "ready", ""),
+            ("stale", 6, 7, "v7", "v6", "stale"),
+            ("queued", None, 7, "v7", "queued", ""),
+            ("none", None, 7, "v7", "none", ""),
+            ("none", None, None, "none", "none", ""),
         )
         for (
             state,
             package_revision,
             published_revision,
-            left_display,
-            right_display,
-            status,
-            tone,
+            published_display,
+            package_display,
+            package_note,
         ) in cases:
             with self.subTest(state=state, published=published_revision):
-                pair = package_published_revision_pair(
+                view = contest_problem_status(
                     _readiness(
                         package_state=state,
                         package_revision=package_revision,
                         published_revision=published_revision,
                     )
                 )
-                self.assertEqual(pair["left_label"], "Package")
-                self.assertEqual(pair["right_label"], "Published")
-                self.assertEqual(pair["left_display"], left_display)
-                self.assertEqual(pair["left_meta"], "")
-                self.assertEqual(pair["right_display"], right_display)
-                self.assertEqual(pair["status"], status)
-                self.assertEqual(pair["left_tone"], tone)
-                self.assertIn("package is", pair["aria_label"])
-                self.assertNotIn("revision v", pair["aria_label"])
+                self.assertEqual(view["items"][0]["label"], "Published")
+                self.assertEqual(view["items"][0]["display"], published_display)
+                self.assertEqual(view["items"][-1]["label"], "Package")
+                self.assertEqual(view["items"][-1]["display"], package_display)
+                self.assertEqual(view["items"][-1]["note"], package_note)
+                self.assertIn("Verification: ok", view["aria_label"])
+                self.assertIn(f"Package: {package_display}", view["aria_label"])
+
+    def test_contest_problem_status_only_shows_actionable_workspace(self) -> None:
+        current = contest_problem_status(_readiness())
+        self.assertEqual(
+            [item["label"] for item in current["items"]],
+            ["Published", "Verification", "Package"],
+        )
+
+        behind = contest_problem_status(
+            _readiness(workspace_revision=6, published_revision=7)
+        )
+        self.assertEqual(
+            [item["label"] for item in behind["items"]],
+            ["Published", "Workspace", "Verification", "Package"],
+        )
+        workspace = behind["items"][1]
+        self.assertEqual(workspace["display"], "v6")
+        self.assertEqual(workspace["note"], "sync required")
+        self.assertEqual(workspace["note_tone"], "danger")
 
     def test_workspace_revision_notice_only_reports_actionable_state(self) -> None:
         self.assertIsNone(workspace_revision_notice(_readiness()))

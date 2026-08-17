@@ -173,6 +173,8 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertIsNotNone(readiness)
         assert readiness is not None
         readiness["package"]["state"] = "ready"
+        readiness["package"]["revision_number"] = 2
+        readiness["package"]["published_revision_number"] = 2
         readiness["workspace"]["local_revision"] = 1
         readiness["workspace"]["upstream_revision"] = 2
         readiness["workspace"]["needs_update"] = True
@@ -198,8 +200,13 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertIn("Packages:", completed_html)
         self.assertIn("1 ready", completed_html)
         self.assertNotIn("Build All Packages", completed_html)
-        self.assertIn('<strong class="">v1</strong>', completed_html)
-        self.assertIn('<strong class="danger">sync required</strong>', completed_html)
+        self.assertIn("Published: v2", completed_html)
+        self.assertIn("Workspace: v1 (sync required)", completed_html)
+        self.assertIn(
+            '<span class="compact-fact-meta danger">sync required</span>',
+            completed_html,
+        )
+        self.assertIn("Package: ready", completed_html)
         management_html = management.body.decode("utf-8", errors="replace")
         self.assertNotIn("Workspace / Published", management_html)
         self.assertIn("revision-pair-values-only", management_html)
@@ -496,7 +503,15 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertNotIn("Verification", html[details_start:revision_start])
         self.assertIn("Verification", html[revision_start:row_end])
         self.assertIn("failed", html[revision_start:row_end])
-        self.assertIn("Package / Published", html[revision_start:row_end])
+        self.assertNotIn("Package / Published", html[revision_start:row_end])
+        self.assertLess(
+            html.index("Published", revision_start, row_end),
+            html.index("Verification", revision_start, row_end),
+        )
+        self.assertLess(
+            html.index("Verification", revision_start, row_end),
+            html.index("Package", revision_start, row_end),
+        )
         self.assertIn("Packages:", html)
 
     def test_contest_details_remain_available_for_repairable_source_warning(self) -> None:

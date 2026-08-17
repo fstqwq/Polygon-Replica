@@ -1,0 +1,12 @@
+{% macro contest_problem_status(view) -%}
+<div class="compact-fact-list contest-problem-status" aria-label="{{ view.aria_label }}">
+  {% for item in view['items'] %}
+  <span class="compact-fact-row">
+    <span class="compact-fact-label">{{ item.label }}</span>
+    <span class="compact-fact-value{% if item.tone == 'warning' %} warn{% elif item.tone == 'danger' %} danger{% endif %}">
+      {{ item.display }}{% if item.note %}<span class="compact-fact-meta{% if item.note_tone == 'warning' %} warn{% elif item.note_tone == 'danger' %} danger{% endif %}">{{ item.note }}</span>{% endif %}
+    </span>
+  </span>
+  {% endfor %}
+</div>
+{%- endmacro %}

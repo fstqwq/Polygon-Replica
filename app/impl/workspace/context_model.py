@@ -185,45 +185,6 @@ def _revision_aria(revision: int | None) -> str:
     return str(revision) if revision is not None else "none"
 
 
-def package_published_revision_pair(
-    readiness: ProblemReadiness,
-) -> RevisionPairView:
-    package = readiness["package"]
-    package_state = package["state"]
-    published_display = _revision_display(package["published_revision_number"])
-    published_aria = _revision_aria(package["published_revision_number"])
-    package_display = _revision_display(package["revision_number"])
-    package_aria = _revision_aria(package["revision_number"])
-    if package_state == "ready":
-        status: RevisionPairStatus = "current"
-        package_tone: RevisionTone = "normal"
-    elif package_state == "stale":
-        status = "stale"
-        package_tone = "warning"
-    elif package_state == "queued":
-        status = "queued"
-        package_display = "queued"
-        package_aria = "queued"
-        package_tone = "normal"
-    else:
-        status = "none"
-        package_display = "none"
-        package_tone = "danger"
-    return {
-        "left_label": "Package",
-        "left_display": package_display,
-        "left_meta": "",
-        "left_tone": package_tone,
-        "right_label": "Published",
-        "right_display": published_display,
-        "status": status,
-        "aria_label": (
-            f"Package revision {package_aria}; published revision "
-            f"{published_aria}; package is {status}"
-        ),
-    }
-
-
 def workspace_published_revision_pair(
     local_revision: int | None,
     published_revision: int | None,

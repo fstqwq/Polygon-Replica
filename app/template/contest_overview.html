@@ -1,6 +1,6 @@
 {% extends "contest_base.html" %}
 {% from "_problem_slug_link.html" import problem_slug_link %}
-{% from "_problem_review.html" import problem_review %}
+{% from "_contest_problem_status.html" import contest_problem_status %}
 {% from "_revision_pair.html" import fact_row %}
 {% block content %}
 <div class="page-title-inline contest-problems-title">
@@ -62,7 +62,13 @@
         <span class="compact-fact-list">{{ fact_row('Status', 'unavailable', 'danger') }}</span>
         {% endif %}
       </td>
-      <td class="contest-problem-review-cell">{{ problem_review(row.revision_pair, row.workspace_revision_notice, row.verification_display, row.verification_tone) }}</td>
+      <td class="contest-problem-review-cell">
+        {% if row.status %}
+        {{ contest_problem_status(row.status) }}
+        {% else %}
+        <span class="compact-fact-list">{{ fact_row('Status', 'unavailable', 'danger') }}</span>
+        {% endif %}
+      </td>
     </tr>
     {% endfor %}
   </table>
