@@ -29,7 +29,7 @@
         {{ problem_slug_link('/problems/' ~ row.slug ~ '/statement', row.slug_owner, row.slug_leaf, owner_prefix_chars) }}
       </td>
       <td>{{ row.role }}</td>
-      <td><span class="compact-fact-list">{{ revision_pair(row.revision_pair) }}</span></td>
+      <td><span class="compact-fact-list">{{ revision_pair(row.revision_pair, false) }}</span></td>
       <td>{{ row.updated_at | local_time if row.updated_at else "-" }}</td>
     </tr>
     {% endfor %}

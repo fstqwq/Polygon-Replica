@@ -330,6 +330,11 @@ body.problem-layout:not(.verification-compact) {
   align-items: baseline;
 }
 
+.revision-pair-values-only .revision-pair-value {
+  grid-column: 1 / -1;
+  margin-left: 0;
+}
+
 .revision-pair-separator {
   color: var(--muted);
   font-weight: 400;

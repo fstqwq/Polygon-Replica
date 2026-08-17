@@ -160,6 +160,14 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             '<button class="linkish-button" type="submit">Build All Packages</button>',
             html,
         )
+        management = contest_problems_page(
+            _app_request(f"/contests/{contest_slug}/problems"),
+            contest_slug,
+            "alice",
+        )
+        management_html = management.body.decode("utf-8", errors="replace")
+        self.assertNotIn("Workspace / Published", management_html)
+        self.assertIn("revision-pair-values-only", management_html)
 
         alice_row = db_fetch_one("SELECT id FROM users WHERE username='alice'")
         self.assertIsNotNone(alice_row)

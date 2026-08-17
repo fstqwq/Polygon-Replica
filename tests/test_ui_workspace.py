@@ -146,6 +146,9 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertEqual(root_page.status_code, 200)
         root_html = root_page.body.decode("utf-8", errors="replace")
         self.assertIn(problem, root_html)
+        self.assertNotIn("Workspace / Published", root_html)
+        self.assertIn("revision-pair-values-only", root_html)
+        self.assertIn("Workspace revision", root_html)
         admin_access = runtime.access_query.problem_context(
             workspace_service.known_problem_id(problem),
             workspace_service.known_user_id("alice"),

@@ -5,10 +5,12 @@
 </span>
 {%- endmacro %}
 
-{% macro revision_pair(view) -%}
+{% macro revision_pair(view, show_labels=true) -%}
 {% set left_tone = 'warn' if view.left_tone == 'warning' else 'danger' if view.left_tone == 'danger' else '' %}
-<span class="compact-fact-row revision-pair-row" aria-label="{{ view.aria_label }}">
+<span class="compact-fact-row revision-pair-row{% if not show_labels %} revision-pair-values-only{% endif %}" aria-label="{{ view.aria_label }}">
+  {% if show_labels %}
   <span class="compact-fact-label">{{ view.left_label }} / {{ view.right_label }}</span>
+  {% endif %}
   <span class="compact-fact-value revision-pair-value" aria-hidden="true">
     <strong class="{{ left_tone }}">{{ view.left_display }}</strong>
     <span class="revision-pair-separator">/</span>
