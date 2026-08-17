@@ -6,6 +6,7 @@ from app.service.execution.model import ExecutionResult
 
 _COMPILE_ERROR_VALUES = {"compile_error", "compile error", "ce"}
 _CANONICAL_DECISION_CODES = frozenset(("AC", "WA", "TL", "RE", "CE"))
+_TRANSIENT_RUN_STATUSES = frozenset(("running", "queued", "pending"))
 _EXPECTED_STATUS_RULES: dict[str, dict[str, tuple[str, ...]]] = {
     "accepted": {"required": ("AC",), "allowed": ("AC",)},
     "wrong_answer": {"required": ("WA",), "allowed": ("AC", "WA")},
@@ -49,25 +50,17 @@ def run_actual_failed_codes(
     run_status: str,
     summary: dict[str, object] | None,
 ) -> list[str]:
-    if run_status == "cancelled" or run_status in {"running", "queued", "pending"}:
+    if run_status == "cancelled" or run_status in _TRANSIENT_RUN_STATUSES:
         return []
-    tests: object = None
-    if summary is not None:
-        error = summary.get("error")
-        if error in _COMPILE_ERROR_VALUES:
-            return ["CE"]
-        tests = summary.get("tests")
-    verdicts: list[str] = []
-    if isinstance(tests, list):
-        for item in tests:
-            if not isinstance(item, dict):
-                continue
-            code = run_verdict_short(str(item.get("verdict") or ""))
-            if code not in {"", "--", "AC", "SK"}:
-                verdicts.append(code)
+    observed_codes = _summary_observed_codes(summary)
+    verdicts = [
+        code for code in observed_codes if code not in {"", "--", "AC", "SK"}
+    ]
     if verdicts:
         priority = {"CE": 0, "TL": 1, "RE": 2, "WA": 3, "FL": 4}
         return sorted(set(verdicts), key=lambda code: (priority.get(code, 99), code))
+    if observed_codes:
+        return []
     return [] if run_status == "ok" else ["FL"]
 
 
@@ -78,7 +71,7 @@ def run_actual_short(
     failed_codes = run_actual_failed_codes(run_status, summary)
     if failed_codes:
         return failed_codes[0]
-    if run_status == "cancelled" or run_status in {"running", "queued", "pending"}:
+    if run_status == "cancelled" or run_status in _TRANSIENT_RUN_STATUSES:
         return "--"
     return "AC"
 
@@ -146,25 +139,59 @@ def _status_codes_allowed_match(
 
 def _status_rule_match(
     expected_behavior: str,
-    run_status: str,
     summary: dict[str, object] | None,
 ) -> tuple[bool, str]:
-    observed_codes = run_actual_failed_codes(run_status, summary)
+    observed_codes = run_actual_failed_codes("ok", summary)
     if not observed_codes:
-        token = run_actual_short(run_status, summary)
+        token = run_actual_short("ok", summary)
         observed_codes = [] if token in {"", "-", "--"} else [token]
     return _status_codes_rule_match(expected_behavior, observed_codes)
+
+
+def _summary_observed_codes(
+    summary: dict[str, object] | None,
+) -> list[str]:
+    if summary is None:
+        return []
+    if summary.get("error") in _COMPILE_ERROR_VALUES:
+        return ["CE"]
+    tests = summary.get("tests")
+    if not isinstance(tests, list):
+        return []
+    observed_codes: list[str] = []
+    for item in tests:
+        if not isinstance(item, dict):
+            observed_codes.append("FL")
+            continue
+        observed_codes.append(run_verdict_short(str(item.get("verdict") or "")))
+    return observed_codes
 
 
 def _run_completed(
     run_status: str,
     summary: dict[str, object] | None,
 ) -> bool:
-    return bool(
-        run_status == "ok"
-        and summary is not None
-        and not summary.get("error")
-        and summary.get("tests")
+    if (
+        run_status == "cancelled"
+        or run_status in _TRANSIENT_RUN_STATUSES
+        or summary is None
+    ):
+        return False
+    if summary.get("error") in _COMPILE_ERROR_VALUES:
+        return True
+    tests = summary.get("tests")
+    if not isinstance(tests, list) or not tests:
+        return False
+    tests_total = summary.get("tests_total")
+    if isinstance(tests_total, int) and not isinstance(tests_total, bool):
+        tests_skipped = summary.get("tests_skipped", 0)
+        if not isinstance(tests_skipped, int) or isinstance(tests_skipped, bool):
+            return False
+        if len(tests) + tests_skipped != tests_total:
+            return False
+    return all(
+        code in _CANONICAL_DECISION_CODES or code == "SK"
+        for code in _summary_observed_codes(summary)
     )
 
 
@@ -178,9 +205,29 @@ def _run_passed(
     if not isinstance(tests, list):
         return False
     return all(
-        isinstance(item, dict) and item.get("verdict") == "OK"
+        isinstance(item, dict)
+        and run_verdict_short(str(item.get("verdict") or "")) in {"AC", "SK"}
         for item in tests
     )
+
+
+def verification_verdict_match(
+    expected_behavior: str,
+    verdict: str,
+) -> tuple[bool, bool, bool, str]:
+    """Match one terminal verdict against the expected behavior's allowed set."""
+
+    observed_code = run_verdict_short(verdict.upper())
+    if observed_code not in _CANONICAL_DECISION_CODES:
+        return (False, False, False, "")
+    observed_pass = observed_code == "AC"
+    matched, reason = _status_codes_allowed_match(
+        expected_behavior,
+        observed_code,
+    )
+    if matched:
+        return (True, True, observed_pass, "")
+    return (False, True, observed_pass, reason or "verification mismatch")
 
 
 def verification_solution_match(
@@ -188,13 +235,13 @@ def verification_solution_match(
     run_status: str,
     summary: dict[str, object] | None,
 ) -> tuple[bool, bool, bool, str]:
-    if run_status in {"running", "queued", "pending"}:
+    if run_status in _TRANSIENT_RUN_STATUSES:
         return (False, False, False, "running")
     completed = _run_completed(run_status, summary)
     observed_pass = _run_passed(run_status, summary)
     if not completed:
         return (False, False, observed_pass, "")
-    matched, reason = _status_rule_match(expected_behavior, run_status, summary)
+    matched, reason = _status_rule_match(expected_behavior, summary)
     if matched:
         return (True, True, observed_pass, "")
     return (False, True, observed_pass, reason or "verification mismatch")
@@ -212,17 +259,10 @@ def verification_case_result_match(
     verdicts are checked only after every testcase for the program is terminal.
     """
 
-    observed_code = run_verdict_short(result.verdict.upper())
-    if observed_code not in _CANONICAL_DECISION_CODES:
-        return (False, False, False, "")
-    observed_pass = observed_code == "AC"
-    matched, reason = _status_codes_allowed_match(
+    return verification_verdict_match(
         expected_behavior,
-        observed_code,
+        result.verdict,
     )
-    if matched:
-        return (True, True, observed_pass, "")
-    return (False, True, observed_pass, reason or "verification mismatch")
 
 
 def verification_program_results_match(

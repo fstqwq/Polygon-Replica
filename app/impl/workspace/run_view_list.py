@@ -7,7 +7,10 @@ from app.service.access.model import VerificationAccessContext
 from app.service.repository.revision import verification_source_display
 from app.service.platform.error_text import bounded_display_text, normalize_display_text
 from app.service.problem.solution_metadata import normalize_expected_behavior
-from app.service.verification.result_match import run_verdict_short, verification_solution_match
+from app.service.verification.result_match import (
+    run_verdict_short,
+    verification_verdict_match,
+)
 
 _TASK_KIND_MAIN_CORRECT = "main-correct"
 _TEST_NAME_NUM_RE = re.compile(r"^(\d+)\.in$")
@@ -68,12 +71,13 @@ def _run_cell_kind(verdict: str, expected_behavior: str) -> str:
         return "ok" if short == "AC" else "fail"
     if normalized == "unknown":
         return "neutral"
-    matched, _completed, _observed_pass, _reason = verification_solution_match(
+    matched, completed, _observed_pass, _reason = verification_verdict_match(
         normalized,
-        "ok",
-        {"tests": [{"verdict": short}]},
+        short,
     )
-    return "expected-nonac" if matched else "neutral"
+    if not completed or not matched:
+        return "fail"
+    return "neutral" if short == "AC" else "expected-nonac"
 
 
 def _run_task_kind_from_summary(summary: dict | None) -> str:

@@ -199,6 +199,9 @@ def _program_rows(
                 limit_bytes=display_limit,
             )
         status = _program_status(program_tasks)
+        tests_skipped = sum(
+            1 for row in program_tasks if row["verdict"].upper() == "SK"
+        )
         first = program_tasks[0]
         summary: dict[str, object] = {
             "mode": mode,
@@ -206,6 +209,7 @@ def _program_rows(
             "task_kind": first["task_kind"],
             "expected_behavior": first["expected_behavior"],
             "tests_total": len(program_tasks),
+            "tests_skipped": tests_skipped,
             "tests": tests,
             "compile_log": compile_log,
             "compile_diagnostics": compile_diagnostics,

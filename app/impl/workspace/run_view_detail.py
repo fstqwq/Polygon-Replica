@@ -228,6 +228,25 @@ def _run_cell_text_tone(verdict: str, expected_behavior: str) -> str:
     return ""
 
 
+def _run_result_kind(
+    expected_behavior: str,
+    *,
+    matched: bool,
+    completed: bool,
+    observed_pass: bool,
+    got_short: str,
+) -> str:
+    if got_short == "FL":
+        return "fail"
+    if expected_behavior == "unknown" or not completed:
+        return "neutral"
+    if not matched:
+        return "fail"
+    if expected_behavior == "accepted":
+        return "ok"
+    return "neutral" if observed_pass else "expected-nonac"
+
+
 def _sanity_checks_list(raw: object) -> list[str]:
     if not isinstance(raw, list):
         return []
@@ -827,7 +846,13 @@ def build_run_detail_context(
         expected_is_ac_only = bool(required_codes == ("AC",) and allowed_codes == ("AC",))
         got_short = run_actual_short(status, summary)
         got_display = run_actual_display(status, summary)
-        result_kind = _run_cell_kind(got_short, expected_behavior) if got_short else "neutral"
+        result_kind = _run_result_kind(
+            expected_behavior,
+            matched=matched,
+            completed=completed,
+            observed_pass=observed_pass,
+            got_short=got_short,
+        )
         result_text_tone = _run_cell_text_tone(got_short, expected_behavior)
         result_tone_class = f"tone-{result_kind}"
         expected_mismatch = bool(expected_behavior != "unknown" and completed and (not matched))

@@ -3427,6 +3427,118 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertIn("002.in", html)
         self.assertIn("running", html)
 
+    def test_run_details_marks_terminal_expected_verdict_mismatches(self) -> None:
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        (ws / "solutions").mkdir(parents=True, exist_ok=True)
+        (ws / "solutions" / "accepted.cpp").write_text(
+            "int main(){return 0;}\n",
+            encoding="utf-8",
+        )
+        source_path = "solutions/expected-wa.cpp"
+        (ws / source_path).write_text(
+            "int main(){return 1;}\n",
+            encoding="utf-8",
+        )
+        ctx = workspace_service.workspace_context(
+            "alice/sample",
+            "alice",
+            include_recent=False,
+        )
+        verification_id = canonical_test_verification_id(
+            f"inv-verif-expected-mismatch-{uuid.uuid4().hex[:8]}"
+        )
+        self._admit_verification_fixture(
+            verification_id=verification_id,
+            problem_id=int(ctx["problem"]["id"]),
+            workspace_id=int(ctx["workspace"]["id"]),
+            detail={"mode": "pass-fail", "pass_limit": 1},
+        )
+        verdicts = ["AC"] * 24 + ["WA"] * 2 + ["TL"] * 2
+        tasks: list[PlannedTask] = []
+        completions: list[TaskCompletion] = []
+        for index, verdict in enumerate(verdicts, start=1):
+            test_name = f"{index:03d}.in"
+            task_id = verification_task_id(
+                verification_id,
+                "solution-0",
+                test_name,
+            )
+            tasks.append(
+                PlannedTask(
+                    task_id=task_id,
+                    predecessor_task_id=None,
+                    task_kind="solution-run",
+                    source_path=source_path,
+                    program_id="solution-0",
+                    test_name=test_name,
+                    expected_behavior="wrong_answer",
+                )
+            )
+            mismatched = verdict == "TL"
+            completions.append(
+                TaskCompletion(
+                    task_id=task_id,
+                    status=(
+                        VerificationTaskStatus.FAILED
+                        if mismatched
+                        else VerificationTaskStatus.DONE
+                    ),
+                    run_id="",
+                    judgehost_task_id="",
+                    result=execution_result(
+                        verdict,
+                        error=(
+                            "allowed=[AC, WA], got=[TL]" if mismatched else ""
+                        ),
+                    ),
+                    fail_reason=(
+                        "allowed=[AC, WA], got=[TL]" if mismatched else ""
+                    ),
+                )
+            )
+        self._activate_verification_fixture(
+            verification_id,
+            tasks=tasks,
+            completions=completions,
+        )
+
+        page = run_details_page(
+            _request(
+                "/problems/alice/sample/run/details",
+                f"verification_id={verification_id}",
+            ),
+            "alice/sample",
+            "alice",
+        )
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+
+        def _test_row(test_name: str) -> str:
+            matching_rows = [
+                row
+                for row in re.findall(r"(?s)<tr>.*?</tr>", html)
+                if f'data-test-name="{test_name}"' in row
+            ]
+            self.assertEqual(len(matching_rows), 1)
+            return matching_rows[0]
+
+        ac_row = _test_row("001.in")
+        wa_row = _test_row("025.in")
+        tl_row = _test_row("027.in")
+        self.assertIn("tone-neutral", ac_row)
+        self.assertNotIn("vcode-unexpected", ac_row)
+        self.assertIn("tone-expected-nonac", wa_row)
+        self.assertNotIn("vcode-unexpected", wa_row)
+        self.assertIn("tone-fail", tl_row)
+        self.assertIn('class="vcode vcode-unexpected">TL</span>', tl_row)
+
+        footer = re.search(r"(?s)<tfoot>.*?</tfoot>", html)
+        self.assertIsNotNone(footer)
+        footer_html = footer.group(0) if footer is not None else ""
+        self.assertIn('class="vcode vcode-unexpected">TL/WA</span>', footer_html)
+        self.assertIn('<th class="verification-detail-unexpected"', html)
+        self.assertIn("got=[TL, WA]", unescape(html))
+
     def test_run_details_task_graph_keeps_cancelled_solution_columns_visible_after_failed_cancel(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         (ws / "solutions").mkdir(parents=True, exist_ok=True)

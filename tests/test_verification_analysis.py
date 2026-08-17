@@ -5,7 +5,11 @@ from pathlib import Path
 from app.service.verification.boundary_coverage import boundary_coverage_from_feedback
 from app.service.verification.runtime_threshold import evaluate_summary_runtime_threshold
 from app.service.verification.plan import VerificationTestPlan
-from app.service.verification.result_match import verification_solution_match
+from app.service.verification.result_match import (
+    run_actual_short,
+    verification_solution_match,
+    verification_verdict_match,
+)
 from app.service.platform.runtime_blob_store import PayloadFile
 
 
@@ -93,7 +97,7 @@ class TestVerificationAnalysis(unittest.TestCase):
                 "ok",
                 {"tests": [{"verdict": "FL"}]},
                 False,
-                True,
+                False,
             ),
             (
                 "unknown does not accept infrastructure failure",
@@ -101,6 +105,48 @@ class TestVerificationAnalysis(unittest.TestCase):
                 "ok",
                 {"tests": [{"verdict": "FL"}]},
                 False,
+                False,
+            ),
+            (
+                "failed lifecycle still exposes complete verdict mismatch",
+                "wrong_answer",
+                "failed",
+                {
+                    "tests_total": 2,
+                    "tests": [{"verdict": "WA"}, {"verdict": "TL"}],
+                    "error": "allowed=[AC, WA], got=[TL]",
+                },
+                False,
+                True,
+            ),
+            (
+                "failed lifecycle can contain a complete expected result",
+                "wrong_answer",
+                "failed",
+                {
+                    "tests_total": 2,
+                    "tests": [{"verdict": "AC"}, {"verdict": "WA"}],
+                },
+                True,
+                True,
+            ),
+            (
+                "partial terminal evidence remains incomplete",
+                "wrong_answer",
+                "failed",
+                {
+                    "tests_total": 2,
+                    "tests": [{"verdict": "WA"}],
+                },
+                False,
+                False,
+            ),
+            (
+                "expected compile error remains a complete decision",
+                "rejected",
+                "failed",
+                {"error": "compile_error", "tests": []},
+                True,
                 True,
             ),
             (
@@ -128,6 +174,39 @@ class TestVerificationAnalysis(unittest.TestCase):
                 )
                 self.assertEqual(matched, expected_match)
                 self.assertEqual(completed, expected_complete)
+
+    def test_single_verdict_match_uses_allowed_set_without_program_requirement(self) -> None:
+        cases = (
+            ("wrong_answer", "AC", True, True),
+            ("wrong_answer", "WA", True, True),
+            ("wrong_answer", "TL", False, True),
+            ("wrong_answer", "RE", False, True),
+            ("wrong_answer", "CE", False, True),
+            ("rejected", "CE", True, True),
+            ("accepted", "CE", False, True),
+            ("rejected", "FL", False, False),
+            ("unknown", "--", False, False),
+        )
+        for expected, verdict, expected_match, expected_complete in cases:
+            with self.subTest(expected=expected, verdict=verdict):
+                matched, completed, _passed, _reason = verification_verdict_match(
+                    expected,
+                    verdict,
+                )
+                self.assertEqual(matched, expected_match)
+                self.assertEqual(completed, expected_complete)
+
+    def test_actual_result_uses_terminal_evidence_instead_of_lifecycle_status(self) -> None:
+        self.assertEqual(
+            run_actual_short(
+                "failed",
+                {
+                    "tests_total": 2,
+                    "tests": [{"verdict": "AC"}, {"verdict": "AC"}],
+                },
+            ),
+            "AC",
+        )
 
     def test_runtime_threshold_marks_answer_correct_points(self) -> None:
         report = evaluate_summary_runtime_threshold(
