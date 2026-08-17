@@ -6071,7 +6071,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
         self.assertIsNotNone(native_package)
         archive = Path(runtime.settings.artifacts_root) / "fixture-native-package.zip"
-        archive.write_bytes(b"polygon replica package")
+        archive.write_bytes(b"native package")
         download = SimpleNamespace(
             native_package=native_package,
             chunks=lambda: iter((archive.read_bytes(),)),
@@ -6089,7 +6089,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             )
         self.assertEqual(response.media_type, "application/zip")
         self.assertIn(
-            "sample-polygon-replica-v4.zip",
+            "sample-native-v4.zip",
             str(response.headers.get("content-disposition") or ""),
         )
 
