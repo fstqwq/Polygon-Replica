@@ -138,6 +138,59 @@ class TestContestBuilds(ContestActionBase):
         self.assertEqual(str(item["materialization_id"]), expected_id)
         self.assertTrue(str(item["archive_sha256"]))
 
+    def test_freeze_orders_by_idx_and_keeps_frozen_ordinals(self) -> None:
+        contest_slug, contest_id, actor_user_id = self.create_contest("idx-freeze")
+        contest_problem_ids: dict[str, int] = {}
+        for idx in ("B", "A", "C"):
+            contest_problem_id, problem_id, _problem_slug = self.add_owned_problem(
+                contest_id,
+                actor_user_id,
+                idx,
+                f"idx-freeze-{idx.lower()}",
+            )
+            contest_problem_ids[idx] = contest_problem_id
+            self._seed_materialization(
+                problem_id=problem_id,
+                source_commit=idx.lower() * 40,
+                revision_number=1,
+            )
+
+        frozen = self._freeze(contest_id, contest_slug)
+
+        self.assertEqual(frozen["outcome"], "created")
+        self.assertEqual(
+            [
+                (int(row["ordinal"]), str(row["idx"]))
+                for row in db_fetch_all(
+                    """SELECT ordinal,idx FROM contest_build_items
+                       WHERE job_id=? ORDER BY ordinal""",
+                    [frozen["job_id"]],
+                )
+            ],
+            [(1, "A"), (2, "B"), (3, "C")],
+        )
+
+        runtime.contest_service.set_problem_indices(
+            contest_id,
+            [
+                (contest_problem_ids["B"], "A"),
+                (contest_problem_ids["A"], "B"),
+                (contest_problem_ids["C"], "C"),
+            ],
+        )
+
+        self.assertEqual(
+            [
+                (int(row["ordinal"]), str(row["idx"]))
+                for row in db_fetch_all(
+                    """SELECT ordinal,idx FROM contest_build_items
+                       WHERE job_id=? ORDER BY ordinal""",
+                    [frozen["job_id"]],
+                )
+            ],
+            [(1, "A"), (2, "B"), (3, "C")],
+        )
+
     def test_freeze_atomically_reuses_active_job(self) -> None:
         contest_slug, contest_id, problem_id, _problem_slug = self._contest_with_problem()
         self._seed_materialization(
@@ -650,6 +703,7 @@ class TestContestBuilds(ContestActionBase):
         with zipfile.ZipFile(archive_path, "r") as archive:
             manifest = json.loads(archive.read("manifest.json"))
             self.assertEqual(manifest["format"], "domjudge")
+            self.assertEqual(manifest["problems"][0]["idx"], "A")
             self.assertEqual(manifest["problems"][0]["problem"], problem_slug)
             self.assertEqual(
                 manifest["problems"][0]["verified_revision_id"],

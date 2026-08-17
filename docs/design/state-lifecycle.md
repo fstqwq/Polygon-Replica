@@ -127,10 +127,11 @@ request fails immediately rather than waiting.
 
 ## Contest build lifecycle
 
-Contest definitions, membership, problem order, labels, statement folders, and
-contest attachments are durable authoring state. A Contest build derives
-delivery products from that state and verified problem revisions that already
-exist.
+Contest definitions, membership, problem indices, statement folders, and
+contest attachments are durable authoring state. A problem's `idx` is both its
+display identity and the sole current-roster order; there is no independent
+position. A Contest build derives delivery products from that state and
+verified problem revisions that already exist.
 
 Build admission freezes the ordered roster and, for each problem, selects its
 highest available verified revision. That revision may trail the current
@@ -146,7 +147,7 @@ revision.
 Statement PDF, DOMjudge bundle, and ICPC 2025-09 bundle are independent output
 choices. Statement compilation reads statement source, samples, and assets
 directly from the verified revision. Package bundles invoke the same pure
-projectors as single-problem export, with the frozen Contest label used as the
+projectors as single-problem export, with the frozen Contest index used as the
 DOMjudge short name. Child archives are temporary Contest-owned members and do
 not enter the problem export cache. Each bundle is all-or-nothing; successful
 outputs remain available when another requested output fails and the job becomes

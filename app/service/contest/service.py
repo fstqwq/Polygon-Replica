@@ -11,6 +11,7 @@ from app.config import ConfigValues
 from app.service.access.policy import access_role, contest_role
 from app.service.access.query import AccessQuery
 from app.service.contest.model import AgentContestRoster, ContestBuildItemRecord
+from app.service.contest.problem_index import normalize_contest_problem_idx
 from app.service.contest.statement_meta import infer_contest_header_fields
 from app.service.disk.contest_store import (
     ContestDiskStore,
@@ -36,7 +37,6 @@ class ContestMembership(TypedDict):
 
 class ContestProblem(TypedDict):
     contest_problem_id: int
-    position: int
     idx: str
     problem_id: int
     statement_folder: str
@@ -187,7 +187,7 @@ class ContestService:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(summary, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 
-    def _contest_idx_label(self, seq: int) -> str:
+    def _contest_idx_from_sequence(self, seq: int) -> str:
         value = max(1, int(seq))
         chars: list[str] = []
         while value > 0:
@@ -446,7 +446,7 @@ class ContestService:
     def add_problem(self, contest_id: int, idx: str, problem_id: int, added_by_user_id: int) -> None:
         self._store.add_problem(
             int(contest_id),
-            idx,
+            normalize_contest_problem_idx(idx),
             int(problem_id),
             int(added_by_user_id),
             now_iso(),
@@ -693,7 +693,6 @@ class ContestService:
             result.append(
                 {
                     "contest_problem_id": int(row["contest_problem_id"]),
-                    "position": int(row["position"]),
                     "idx": str(row["idx"]),
                     "problem_id": row["problem_id"],
                     "statement_folder": str(row["statement_folder"]),
@@ -757,7 +756,7 @@ class ContestService:
         used = set(self._store.used_problem_indices(int(contest_id)))
         seq = 1
         while seq < 100000:
-            token = self._contest_idx_label(seq)
+            token = self._contest_idx_from_sequence(seq)
             if token not in used:
                 return token
             seq += 1
@@ -775,21 +774,12 @@ class ContestService:
             self._store.bump_source_generation(int(contest_id))
         return removed
 
-    def reorder_problem_indices(self, contest_id: int, pairs: list[tuple[int, str]]) -> bool:
-        changed = self._store.reorder_problem_indices(int(contest_id), pairs)
-        if changed:
-            self._store.bump_source_generation(int(contest_id))
-        return changed
-
-    def renumber_problem_indices(
-        self,
-        contest_id: int,
-        ordered_contest_problem_ids: list[int],
-    ) -> bool:
-        changed = self._store.renumber_problem_indices(int(contest_id), ordered_contest_problem_ids)
-        if changed:
-            self._store.bump_source_generation(int(contest_id))
-        return changed
+    def set_problem_indices(self, contest_id: int, pairs: list[tuple[int, str]]) -> bool:
+        canonical_pairs = [
+            (int(contest_problem_id), normalize_contest_problem_idx(idx))
+            for contest_problem_id, idx in pairs
+        ]
+        return self._store.set_problem_indices(int(contest_id), canonical_pairs)
 
     def selected_problems(self, contest_id: int, problem_ids: list[int]) -> list[ContestProblemEntry]:
         result: list[ContestProblemEntry] = []

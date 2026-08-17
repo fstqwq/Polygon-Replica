@@ -237,15 +237,13 @@ CREATE TABLE IF NOT EXISTS contest_members (
 CREATE TABLE IF NOT EXISTS contest_problems (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     contest_id INTEGER NOT NULL,
-    position INTEGER NOT NULL,
-    label TEXT NOT NULL,
+    idx TEXT NOT NULL,
     problem_id INTEGER NOT NULL,
     statement_folder TEXT NOT NULL DEFAULT '',
     added_by_user_id INTEGER NOT NULL,
     created_at TEXT NOT NULL,
     UNIQUE(contest_id, problem_id),
-    UNIQUE(contest_id, position),
-    UNIQUE(contest_id, label),
+    UNIQUE(contest_id, idx),
     FOREIGN KEY(contest_id) REFERENCES contests(id),
     FOREIGN KEY(problem_id) REFERENCES problems(id),
     FOREIGN KEY(added_by_user_id) REFERENCES users(id)
@@ -268,8 +266,8 @@ CREATE TABLE IF NOT EXISTS contest_build_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     job_id TEXT NOT NULL,
     contest_problem_id INTEGER NOT NULL,
-    position INTEGER NOT NULL,
-    label TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    idx TEXT NOT NULL,
     problem_id INTEGER NOT NULL,
     statement_folder TEXT NOT NULL DEFAULT '',
     source_commit TEXT NOT NULL,
@@ -545,7 +543,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_contest_members_single_owner ON contest_me
 CREATE INDEX IF NOT EXISTS idx_contest_problems_problem ON contest_problems(problem_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_contest_jobs_contest_created ON contest_jobs(contest_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_contest_jobs_actor_created ON contest_jobs(actor_user_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_contest_build_items_job_position ON contest_build_items(job_id,position);
+CREATE INDEX IF NOT EXISTS idx_contest_build_items_job_ordinal ON contest_build_items(job_id,ordinal);
 CREATE INDEX IF NOT EXISTS idx_contest_build_items_materialization ON contest_build_items(materialization_id);
 CREATE INDEX IF NOT EXISTS idx_contest_artifacts_contest_created ON contest_artifacts(contest_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_contest_artifacts_job_created ON contest_artifacts(job_id, created_at DESC);
@@ -802,7 +800,7 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
     ),
     "contest_members": ("id", "contest_id", "user_id", "role", "created_at"),
     "contest_problems": (
-        "id", "contest_id", "position", "label", "problem_id", "statement_folder",
+        "id", "contest_id", "idx", "problem_id", "statement_folder",
         "added_by_user_id", "created_at",
     ),
     "contest_jobs": (
@@ -819,8 +817,8 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
         "id",
         "job_id",
         "contest_problem_id",
-        "position",
-        "label",
+        "ordinal",
+        "idx",
         "problem_id",
         "statement_folder",
         "source_commit",

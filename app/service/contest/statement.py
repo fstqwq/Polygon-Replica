@@ -167,7 +167,7 @@ class ContestStatementService:
                     r"\clearpage",
                     r"\graphicspath{{" + import_path + r"}}",
                     r"\def\ProblemIndex{"
-                    + self._latex_escape(entry.get("idx") or entry.get("label") or "")
+                    + self._latex_escape(entry.get("idx") or "")
                     + "}",
                     r"\import{" + import_path + r"}{./problem.tex}",
                     "",
@@ -493,7 +493,7 @@ class ContestStatementService:
     ) -> dict[str, object]:
         problem_slug = str(entry["problem_slug"])
         item: dict[str, object] = {
-            "idx": str(entry["label"]),
+            "idx": str(entry["idx"]),
             "problem_id": int(entry["problem_id"]),
             "problem_slug": problem_slug,
             "source_folder": source_folder,

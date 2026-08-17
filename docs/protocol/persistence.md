@@ -126,11 +126,18 @@ archive. Direct Polygon Replica package downloads create no job or `exports`
 row. Contest child packages are Contest-owned temporary bundle members and do
 not enter `exports` or `export_jobs`.
 
-Contest build admission inserts the job, ordered roster items, selected
-verified-revision identities, and frozen archive checksums in one
-`BEGIN IMMEDIATE` transaction. A roster problem with no available verified
-revision aborts admission without a partial job. Filesystem reads occur after
-that transaction and must match the frozen identities and checksums.
+Contest roster rows persist `idx`, not a separate position. The application
+sorts the complete bounded roster by its shared natural problem-index ordering;
+SQLite collation is not an ordering authority. A complete `id -> idx` edit
+uses temporary non-canonical values to exchange unique indices and increments
+`source_generation` once in the same writer transaction; an unchanged mapping
+performs no write. Contest build admission inserts
+the job, selected verified-revision identities, frozen archive checksums, and a
+consecutive derived `ordinal` in one `BEGIN IMMEDIATE` transaction. The frozen
+build keeps that `idx` and `ordinal` even when the current Contest is edited. A
+roster problem with no available verified revision aborts admission without a
+partial job. Filesystem reads occur after that transaction and must match the
+frozen identities and checksums.
 
 ## Agent authorization rows
 
@@ -179,3 +186,9 @@ compared against the DDL. A schema change updates the DDL, required-object
 manifest, service queries, cleanup policy, offline operator procedure, and this
 document together. An upgrade that introduces required schema objects includes
 its stopped-service procedure with that release.
+
+The `idx`-only Contest roster schema requires the stopped-service
+[Contest problem-index upgrade](../operations/deployment.md#contest-problem-index-upgrade).
+The upgrade preserves current roster identities and copies each historical
+build's former position unchanged into its frozen `ordinal`; it does not resort
+old jobs.

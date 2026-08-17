@@ -67,9 +67,9 @@ class TestAccessService(DBTestBase):
             self.db,
             """
             INSERT INTO contest_problems(
-                contest_id,position,label,problem_id,statement_folder,
+                contest_id,idx,problem_id,statement_folder,
                 added_by_user_id,created_at
-            ) VALUES(?,1,'A',?,'',?,?)
+            ) VALUES(?,'A',?,'',?,?)
             """,
             [contest_id, problem_id, owner_user_id, now_iso()],
         )

@@ -55,11 +55,11 @@ class ContestPackageService:
             results: list[dict[str, object]] = []
             manifest_items: list[dict[str, object]] = []
             for entry in self._contest.build_items(job_id):
-                label = str(entry["label"])
+                idx = str(entry["idx"])
                 problem_slug = str(entry["problem_slug"])
                 materialization_id = str(entry["materialization_id"])
                 item: dict[str, object] = {
-                    "idx": label,
+                    "idx": idx,
                     "problem_id": int(entry["problem_id"]),
                     "problem_slug": problem_slug,
                     "status": "failed",
@@ -79,16 +79,16 @@ class ContestPackageService:
                         reader,
                         target=package_root,
                         canonical_problem_slug=problem_slug,
-                        short_name=label if adapter.accepts_short_name else None,
+                        short_name=idx if adapter.accepts_short_name else None,
                     )
                     token = problem_slug_file_token(problem_slug)
-                    filename = f"{label}-{token}.zip" if label else f"{token}.zip"
+                    filename = f"{idx}-{token}.zip" if idx else f"{token}.zip"
                     target = self._zip_directory(packages_dir / filename, package_root)
                     item["package_file"] = f"packages/{target.name}"
                     item["status"] = "success"
                     manifest_items.append(
                         {
-                            "label": label,
+                            "idx": idx,
                             "problem": problem_slug,
                             "revision": int(entry["revision_number"]),
                             "source_commit": str(entry["source_commit"]),

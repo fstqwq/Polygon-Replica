@@ -120,7 +120,7 @@ def _assert_contest_database(
             cj.job_type,
             cj.status AS job_status,
             cj.finished_at,
-            cp.label,
+            i.idx,
             i.source_commit,
             i.revision_number,
             i.materialization_id,
@@ -144,7 +144,7 @@ def _assert_contest_database(
         or str(row["job_type"]) != "build"
         or str(row["job_status"]) != "ok"
         or not str(row["finished_at"] or "")
-        or str(row["label"]) != "A"
+        or str(row["idx"]) != "A"
         or str(row["source_commit"]) != expected_head
         or int(row["revision_number"]) != 1
         or str(row["materialization_status"]) != "available"

@@ -1,6 +1,7 @@
 {
   "unit": [
     "test_build_config_format.py",
+    "test_contest_problem_index.py",
     "test_execution_result.py",
     "test_icpc_package_import.py",
     "test_judgehost_host_telemetry.py",

@@ -360,6 +360,30 @@ class TestContestWorkspaceScope(ContestActionBase):
             if tag == "a" and attrs.get("href", "").startswith("/problems/"):
                 self.assertNotIn("contest=", attrs["href"])
 
+    def test_scoped_problem_roster_uses_canonical_idx_order(self) -> None:
+        contest_slug, contest_id, actor_user_id = self.create_contest("idx-scope")
+        slugs: dict[str, str] = {}
+        for idx in ("B", "A", "C"):
+            _contest_problem_id, _problem_id, problem_slug = self.add_owned_problem(
+                contest_id,
+                actor_user_id,
+                idx,
+                f"idx-scope-{idx.lower()}",
+            )
+            slugs[idx] = problem_slug
+
+        scope = self._resolve(slugs["B"], contest_slug)
+        problems = scope.context["problems"]
+
+        self.assertEqual(
+            [problem["idx"] for problem in problems],
+            ["A", "B", "C"],
+        )
+        self.assertEqual(
+            [problem["problem_slug"] for problem in problems],
+            [slugs["A"], slugs["B"], slugs["C"]],
+        )
+
     def test_scoped_files_navigation_and_mutation_keep_browser_state(self) -> None:
         contest_slug, contest_id, actor_user_id = self.create_contest("files")
         self._add_default_problem(contest_id, actor_user_id, idx="A")

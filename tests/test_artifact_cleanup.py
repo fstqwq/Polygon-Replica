@@ -338,8 +338,8 @@ class TestArtifactCleanup(unittest.TestCase):
         self._execute(
             """
             INSERT INTO contest_problems(
-                contest_id,position,label,problem_id,statement_folder,added_by_user_id,created_at
-            ) VALUES(?,1,'A',?,'a',?,?)
+                contest_id,idx,problem_id,statement_folder,added_by_user_id,created_at
+            ) VALUES(?,'A',?,'a',?,?)
             """,
             (
                 self.contest_id,
@@ -373,7 +373,7 @@ class TestArtifactCleanup(unittest.TestCase):
         self._execute(
             """
             INSERT INTO contest_build_items(
-                job_id,contest_problem_id,position,label,problem_id,statement_folder,
+                job_id,contest_problem_id,ordinal,idx,problem_id,statement_folder,
                 source_commit,revision_number,materialization_id,archive_sha256
             ) VALUES('contest-job-cleanup',?,1,'A',?,'a',?,1,'pm-cleanup',?)
             """,
@@ -462,7 +462,7 @@ class TestArtifactCleanup(unittest.TestCase):
                 "CREATE INDEX idx_contest_members_contest "
                 "ON contest_members(contest_id,user_id)",
                 "CREATE INDEX idx_contest_problems_contest "
-                "ON contest_problems(contest_id,position)",
+                "ON contest_problems(contest_id,idx)",
                 "CREATE INDEX idx_verification_selected_tests_verification_ordinal "
                 "ON verification_selected_tests(verification_id,ordinal)",
                 "CREATE INDEX idx_verification_source_paths_verification_ordinal "

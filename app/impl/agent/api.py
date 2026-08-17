@@ -179,7 +179,6 @@ async def agent_contest_problems(request: Request, contest_slug: str):
     problems = [
         {
             "contest_problem_id": item["contest_problem_id"],
-            "position": item["position"],
             "idx": item["idx"],
             "problem": item["problem_slug"],
         }

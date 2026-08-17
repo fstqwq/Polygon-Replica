@@ -81,7 +81,7 @@ def _slug_hint_from_url(raw_url: str) -> str:
     return _slugify_problem_token(unquote(path.split("/")[-1]).strip())
 
 
-def _contest_idx_label(seq: int) -> str:
+def _contest_idx_from_sequence(seq: int) -> str:
     value = max(1, seq)
     chars: list[str] = []
     while value > 0:
@@ -181,7 +181,7 @@ class PolygonContestImportService:
         )
         problems: list[ContestProblemRow] = []
         for seq, node in enumerate(root.findall("./problems/problem"), start=1):
-            index = _xml_attr(node, "index") or _contest_idx_label(seq)
+            index = _xml_attr(node, "index") or _contest_idx_from_sequence(seq)
             url = _xml_attr(node, "url")
             short_name = _xml_attr(node, "short-name")
             slug_hint = _slug_hint_from_url(url) or _slugify_problem_token(short_name)

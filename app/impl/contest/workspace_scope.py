@@ -37,7 +37,6 @@ ContestWorkspaceBlockReason = Literal[
 
 class ContestWorkspaceProblem(TypedDict):
     contest_problem_id: int
-    ordinal: int
     idx: str
     problem_id: int
     problem_slug: str
@@ -263,14 +262,13 @@ def contest_workspace_context_for_contest_page(
     problem_ids = [int(row["problem_id"]) for row in contest_problems]
     access_by_problem = runtime().access_query.problem_contexts(problem_ids, user_id)
     problem_rows: list[ContestWorkspaceProblem] = []
-    for ordinal, row in enumerate(contest_problems, start=1):
+    for row in contest_problems:
         problem_id = int(row["problem_id"])
         problem_slug = str(row["problem_slug"])
         can_open = bool(access_by_problem[problem_id]["can_read"])
         problem_rows.append(
             {
                 "contest_problem_id": int(row["contest_problem_id"]),
-                "ordinal": ordinal,
                 "idx": str(row["idx"]),
                 "problem_id": problem_id,
                 "problem_slug": problem_slug,
@@ -369,14 +367,13 @@ def resolve_problem_contest_scope(
     route_path = str(getattr(route, "path", request.url.path))
     section = problem_section_for_route(route_path)
     problem_rows: list[ContestWorkspaceProblem] = []
-    for ordinal, row in enumerate(contest_problems, start=1):
+    for row in contest_problems:
         row_problem_id = int(row["problem_id"])
         row_problem_slug = str(row["problem_slug"])
         can_open = bool(access_by_problem[row_problem_id]["can_read"])
         problem_rows.append(
             {
                 "contest_problem_id": int(row["contest_problem_id"]),
-                "ordinal": ordinal,
                 "idx": str(row["idx"]),
                 "problem_id": row_problem_id,
                 "problem_slug": row_problem_slug,

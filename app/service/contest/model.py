@@ -15,8 +15,7 @@ class ContestBuildFreezeResult(TypedDict):
 
 class ContestBuildItemRecord(TypedDict):
     contest_problem_id: int
-    position: int
-    label: str
+    ordinal: int
     idx: str
     problem_id: int
     problem_slug: str
@@ -29,7 +28,6 @@ class ContestBuildItemRecord(TypedDict):
 
 class AgentContestRosterProblem(TypedDict):
     contest_problem_id: int
-    position: int
     idx: str
     problem_id: int
     problem_slug: str

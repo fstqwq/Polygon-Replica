@@ -187,7 +187,7 @@ The problem Packages page accepts `native`, `domjudge`, `icpc-2025-09`, and
 Separate request attempts keep separate job IDs even when they resolve
 to the same cached projection. Problem-level projection cache identity is the
 verified revision and target format. A standalone DOMjudge package always
-derives its short name from the public slug segment; Contest label projections
+derives its short name from the public slug segment; Contest index projections
 are temporary Contest-owned children and are not stored in this cache.
 
 The Polygon Replica package is downloaded directly from verified-revision
@@ -262,7 +262,7 @@ wrong-answer, time-limit, and runtime-error submissions use their conventional
 directories. Only the three mixed behaviors use a language-appropriate
 `@EXPECTED_RESULTS@` annotation in the copied source. Standalone export uses the
 public slug segment as the short name; Contest projection passes the frozen
-roster label.
+problem index.
 
 ### Nowcoder package
 
@@ -280,12 +280,16 @@ published. The adapter does not compile the checker.
 
 ## Contest builds
 
-Contest builds consume verified revisions that already exist. In one SQLite
-writer transaction, admission checks for an active build, reads the ordered
-roster, selects each problem's highest available verified revision, and inserts
-the job and all frozen build items with their archive checksums. If any problem
-has none, admission returns `not_ready` without creating a job or copying
-Contest source.
+Contest builds consume verified revisions that already exist. The current
+roster has no independent position: normalized `idx` is both its displayed
+identity and its order. Pure-letter indices use Excel-style order (`Z` before
+`AA`); other indices use numeric-aware natural order. In one SQLite writer
+transaction, admission applies that shared order, checks for an active build,
+selects each problem's highest available verified revision, and inserts the job
+and all frozen build items with their archive checksums. Each item receives a
+derived, consecutive `ordinal`; that snapshot remains unchanged if the Contest
+indices are edited later. If any problem has no verified revision, admission
+returns `not_ready` without creating a job or copying Contest source.
 
 Selection is not restricted to current `main`: readiness reports `current`,
 `stale`, or `none`. A worker opens exactly the frozen identities and checksums.
@@ -319,8 +323,9 @@ limits. Review retains the original bounded ZIP draft plus bounded display
 metadata. Confirm reopens that draft and imports one child archive view at a
 time; it does not materialize all child payloads in memory. The configured
 problem count is checked before a Contest row is created. Manual additions use
-the same limit, with count, next position, and insert serialized in one SQLite
-writer transaction. Lowering the limit does not disable an existing over-limit
+the same limit, with count and insertion serialized in one SQLite writer
+transaction. The supplied `idx` is unique within the Contest; no position is
+allocated or stored. Lowering the limit does not disable an existing over-limit
 Contest; it only rejects new roster entries.
 
 ## Cleanup

@@ -21,7 +21,7 @@ def problem_source_folder(
     idx_token = re.sub(
         r"[^A-Za-z0-9._-]+",
         "-",
-        str(entry.get("idx") or entry.get("label") or "").strip().lower(),
+        str(entry.get("idx") or "").strip().lower(),
     ).strip("-")
     slug_token = problem_slug_file_token(str(entry["problem_slug"]))
     return f"{idx_token}-{slug_token}" if idx_token else slug_token

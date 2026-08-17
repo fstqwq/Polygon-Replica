@@ -1,28 +1,23 @@
-import app.main_constant as _K
-from app.impl.auth.session import require_session_user
 from typing import Annotated
-
 from urllib.parse import quote_plus
 
-from fastapi import Form, HTTPException, Request, Depends
+from fastapi import Depends, Form, HTTPException, Request
 
+import app.main_constant as _K
+from app.impl.auth.session import require_session_user
 from app.impl.auth.shared import template_response
-from app.impl.contest.workspace_scope import add_contest_problem_hrefs
-from app.impl.runtime.dependency import runtime
-from app.impl.workspace.context_model import workspace_published_revision_pair
-from app.main_util import form_text
-
-from app.impl.contest.common import (
-    _dedupe_preserve,
-    _normalize_contest_problem_idx_required,
-)
+from app.impl.contest.common import _dedupe_preserve
 from app.impl.contest.shared import (
     _contest_ctx,
     _contest_redirect,
     _problem_general_payload_map,
     _run_problem_general_update,
 )
-
+from app.impl.contest.workspace_scope import add_contest_problem_hrefs
+from app.impl.runtime.dependency import runtime
+from app.impl.workspace.context_model import workspace_published_revision_pair
+from app.main_util import form_text
+from app.service.contest.problem_index import normalize_contest_problem_idx
 
 
 def contest_problems_page(request: Request, contest: str, user: Annotated[str, Depends(require_session_user)], q: str = "", job_id: str = ""):
@@ -201,7 +196,7 @@ def _contest_problem_index_pairs(
     contest_problem_indices: list[str],
 ) -> list[tuple[int, str]]:
     if not contest_problem_ids or len(contest_problem_ids) != len(contest_problem_indices):
-        raise ValueError("invalid problem order payload")
+        raise ValueError("invalid problem index payload")
     pairs: list[tuple[int, str]] = []
     seen_ids: set[int] = set()
     seen_indices: set[str] = set()
@@ -212,7 +207,7 @@ def _contest_problem_index_pairs(
             raise ValueError("invalid contest problem id") from exc
         if contest_problem_id <= 0 or contest_problem_id in seen_ids:
             raise ValueError("invalid contest problem id")
-        index = _normalize_contest_problem_idx_required(raw_index)
+        index = normalize_contest_problem_idx(raw_index)
         if index in seen_indices:
             raise ValueError("duplicate problem index")
         seen_ids.add(contest_problem_id)
@@ -378,14 +373,16 @@ def contest_problems_save(
                 "problems",
                 message=str(exc),
             )
-        if not runtime().contest_service.reorder_problem_indices(
-            int(ctx["contest"]["id"]),
-            pairs,
-        ):
+        try:
+            runtime().contest_service.set_problem_indices(
+                int(ctx["contest"]["id"]),
+                pairs,
+            )
+        except ValueError as exc:
             return _contest_redirect(
                 str(ctx["contest"]["slug"]),
                 "problems",
-                message="problem order must include every contest problem",
+                message=str(exc),
             )
 
     if not can_write:

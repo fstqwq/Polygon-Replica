@@ -2004,23 +2004,14 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         contest_source_root = runtime.contest_service.contest_source_root(target_slug)
         self.assertTrue((contest_source_root / "statements" / "english" / "statements.tex").is_file())
         self.assertTrue((contest_source_root / "statements" / "english" / "olymp.sty").is_file())
-        imported_rows = db_fetch_all(
-            """
-            SELECT cp.label AS idx,cp.statement_folder,p.slug
-            FROM contest_problems cp
-            JOIN problems p ON p.id=cp.problem_id
-            WHERE cp.contest_id=?
-            ORDER BY cp.position ASC
-            """,
-            [contest_id],
-        )
+        imported_rows = runtime.contest_service.contest_problems(contest_id)
         self.assertEqual(len(imported_rows), 4)
         self.assertEqual([str(row["idx"] or "") for row in imported_rows], ["A", "B", "C", "D"])
         statement_folders = [str(row["statement_folder"] or "") for row in imported_rows]
         self.assertTrue(all(statement_folders))
         self.assertEqual(len(set(statement_folders)), 4)
         self.assertEqual(
-            [str(row["slug"] or "").strip() for row in imported_rows],
+            [str(row["problem_slug"] or "").strip() for row in imported_rows],
             [
                 f"alice/{custom_problem_slugs[1]}",
                 f"alice/{custom_problem_slugs[2]}",
@@ -2032,7 +2023,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         for row in imported_rows:
             idx = str(row["idx"] or "").strip().upper()
             if idx == "C":
-                taxi_problem_slug = str(row["slug"] or "").strip()
+                taxi_problem_slug = str(row["problem_slug"] or "").strip()
                 break
         self.assertTrue(taxi_problem_slug)
         ws = Path(workspace_service.ensure_workspace(taxi_problem_slug, "alice"))
@@ -2041,7 +2032,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertNotIn(b"\r\n", manual_files[0].read_bytes())
 
         for row in imported_rows:
-            problem_slug = str(row["slug"] or "").strip()
+            problem_slug = str(row["problem_slug"] or "").strip()
             if not problem_slug:
                 continue
             pws = Path(workspace_service.ensure_workspace(problem_slug, "alice"))

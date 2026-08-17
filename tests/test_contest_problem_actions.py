@@ -84,11 +84,11 @@ class TestContestProblemActions(ContestActionBase):
         update.assert_called_once()
         self.assertEqual(update.call_args.kwargs["problem_id"], second_problem_id)
         rows = db_fetch_all(
-            "SELECT id,label FROM contest_problems WHERE contest_id=?",
+            "SELECT id,idx FROM contest_problems WHERE contest_id=?",
             [contest_id],
         )
         self.assertEqual(
-            {int(row["id"]): str(row["label"]) for row in rows},
+            {int(row["id"]): str(row["idx"]) for row in rows},
             {first_id: "B", second_id: "A"},
         )
 

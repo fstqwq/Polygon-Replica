@@ -125,6 +125,100 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             1,
         )
 
+    def test_contest_problem_indices_are_the_only_roster_order(self) -> None:
+        actor = db_fetch_one("SELECT id FROM users WHERE username='alice'")
+        self.assertIsNotNone(actor)
+        actor_id = int(actor["id"])
+        contest_id = runtime.contest_service.create_contest_with_owner(
+            slug=f"idx-order-{uuid.uuid4().hex[:8]}",
+            title="Index order",
+            owner_user_id=actor_id,
+        )
+        expected_slugs: dict[str, str] = {}
+        contest_problem_ids: dict[str, int] = {}
+        for idx in ("B", "A", "C"):
+            problem_id = self._insert_problem_row(
+                f"idx-{idx.lower()}-{uuid.uuid4().hex[:8]}"
+            )
+            runtime.contest_service.add_problem(
+                contest_id,
+                idx,
+                problem_id,
+                actor_id,
+            )
+            row = db_fetch_one(
+                "SELECT id FROM contest_problems WHERE contest_id=? AND problem_id=?",
+                [contest_id, problem_id],
+            )
+            self.assertIsNotNone(row)
+            expected_slugs[idx] = str(
+                db_fetch_one("SELECT slug FROM problems WHERE id=?", [problem_id])["slug"]
+            )
+            contest_problem_ids[idx] = int(row["id"])
+
+        self.assertEqual(
+            [item["idx"] for item in runtime.contest_service.contest_problems(contest_id)],
+            ["A", "B", "C"],
+        )
+        roster = runtime.contest_service.agent_roster(
+            str(
+                db_fetch_one("SELECT slug FROM contests WHERE id=?", [contest_id])["slug"]
+            )
+        )
+        self.assertIsNotNone(roster)
+        self.assertEqual([item["idx"] for item in roster["problems"]], ["A", "B", "C"])
+        self.assertEqual(
+            [item["problem_slug"] for item in roster["problems"]],
+            [expected_slugs["A"], expected_slugs["B"], expected_slugs["C"]],
+        )
+
+        generation = int(
+            db_fetch_one("SELECT source_generation FROM contests WHERE id=?", [contest_id])[
+                "source_generation"
+            ]
+        )
+        unchanged = runtime.contest_service.set_problem_indices(
+            contest_id,
+            [
+                (contest_problem_ids["B"], "B"),
+                (contest_problem_ids["A"], "A"),
+                (contest_problem_ids["C"], "C"),
+            ],
+        )
+        self.assertFalse(unchanged)
+        self.assertEqual(
+            int(
+                db_fetch_one(
+                    "SELECT source_generation FROM contests WHERE id=?",
+                    [contest_id],
+                )["source_generation"]
+            ),
+            generation,
+        )
+
+        changed = runtime.contest_service.set_problem_indices(
+            contest_id,
+            [
+                (contest_problem_ids["B"], "A"),
+                (contest_problem_ids["A"], "B"),
+                (contest_problem_ids["C"], "C"),
+            ],
+        )
+        self.assertTrue(changed)
+        self.assertEqual(
+            int(
+                db_fetch_one(
+                    "SELECT source_generation FROM contests WHERE id=?",
+                    [contest_id],
+                )["source_generation"]
+            ),
+            generation + 1,
+        )
+        self.assertEqual(
+            [item["idx"] for item in runtime.contest_service.contest_problems(contest_id)],
+            ["A", "B", "C"],
+        )
+
     def test_contest_overview_moves_problem_management_and_hides_completed_build_all(self) -> None:
         contest_slug = f"overview-actions-{uuid.uuid4().hex[:8]}"
         contest_id = self._create_contest(contest_slug)
@@ -428,12 +522,12 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertIn("added 2 problem", add_msgs[0].lower())
 
         rows = db_fetch_all(
-            "SELECT id,problem_id,label FROM contest_problems WHERE contest_id=? ORDER BY position ASC, id ASC",
+            "SELECT id,problem_id,idx FROM contest_problems WHERE contest_id=? ORDER BY idx ASC, id ASC",
             [contest_id],
         )
         self.assertEqual(len(rows), 2)
-        self.assertEqual(str(rows[0]["label"]), "A")
-        self.assertEqual(str(rows[1]["label"]), "B")
+        self.assertEqual(str(rows[0]["idx"]), "A")
+        self.assertEqual(str(rows[1]["idx"]), "B")
 
         remove_resp = contest_problems_remove_selected(
             contest=contest_slug,
@@ -664,7 +758,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertIsNotNone(problem_row)
         pid = int(problem_row["id"])
         contest_problem_row = db_fetch_one(
-            "SELECT id,label FROM contest_problems WHERE contest_id=? AND problem_id=?",
+            "SELECT id,idx FROM contest_problems WHERE contest_id=? AND problem_id=?",
             [contest_id, pid],
         )
         self.assertIsNotNone(contest_problem_row)
@@ -673,7 +767,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             contest=contest_slug,
             user="alice",
             contest_problem_ids=[str(contest_problem_row["id"])],
-            contest_problem_indices=[str(contest_problem_row["label"])],
+            contest_problem_indices=[str(contest_problem_row["idx"])],
             problem_ids=[str(pid)],
             time_limit_ms_values=["3500"],
             memory_limit_mb_values=["512"],
@@ -727,7 +821,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertIsNotNone(problem_row)
         pid = int(problem_row["id"])
         contest_problem_row = db_fetch_one(
-            "SELECT id,label FROM contest_problems WHERE contest_id=? AND problem_id=?",
+            "SELECT id,idx FROM contest_problems WHERE contest_id=? AND problem_id=?",
             [contest_id, pid],
         )
         self.assertIsNotNone(contest_problem_row)
@@ -736,7 +830,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             contest=contest_slug,
             user="alice",
             contest_problem_ids=[str(contest_problem_row["id"])],
-            contest_problem_indices=[str(contest_problem_row["label"])],
+            contest_problem_indices=[str(contest_problem_row["idx"])],
             problem_ids=[str(pid)],
             time_limit_ms_values=["3500"],
             memory_limit_mb_values=["512"],

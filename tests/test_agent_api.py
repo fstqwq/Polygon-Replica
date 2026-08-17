@@ -720,7 +720,7 @@ class TestAgentAPI(E2ETestBase):
             owner_user_id=int(owner_id),
         )
         roster_items: list[tuple[int, str, str]] = []
-        for label in ("A", "B"):
+        for label in ("B", "A", "C"):
             problem_slug = f"alice/{self.random_id(f'agent-contest-{label.lower()}')}"
             workspace_service.ensure_problem(problem_slug)
             problem_id = workspace_service.known_problem_id(problem_slug)
@@ -784,14 +784,20 @@ class TestAgentAPI(E2ETestBase):
             )
             self.assertEqual(roster.status_code, 200, roster.text)
             roster_payload = roster.json()
-            self.assertEqual(roster_payload["problem_count"], 2)
+            self.assertEqual(roster_payload["problem_count"], 3)
             self.assertEqual(
                 [item["idx"] for item in roster_payload["problems"]],
-                ["A", "B"],
+                ["A", "B", "C"],
             )
             self.assertEqual(
                 [item["problem"] for item in roster_payload["problems"]],
-                [item[2] for item in roster_items],
+                [item[2] for item in sorted(roster_items, key=lambda item: item[1])],
+            )
+            self.assertTrue(
+                all(
+                    set(item) == {"contest_problem_id", "idx", "problem"}
+                    for item in roster_payload["problems"]
+                )
             )
             after_roster = db_fetch_one(
                 "SELECT COUNT(*) AS n FROM workspaces WHERE user_id=?",

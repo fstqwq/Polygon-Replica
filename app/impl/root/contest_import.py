@@ -1,5 +1,3 @@
-import app.main_constant as _K
-
 import json
 import os
 import re
@@ -7,9 +5,11 @@ import time
 import uuid
 from pathlib import Path
 
+import app.main_constant as _K
 from app.db import now_iso
 from app.impl.runtime.dependency import runtime
 from app.impl.workspace.context_operation import normalize_contest_slug_required
+from app.service.contest.problem_index import normalize_contest_problem_idx
 
 """
 Boundary:
@@ -75,7 +75,7 @@ def _resolve_import_contest_slug(requested_slug: str, package_name: str) -> str:
     return _next_available_contest_slug(base)
 
 
-def _contest_idx_label(seq: int) -> str:
+def _contest_idx_from_sequence(seq: int) -> str:
     value = max(1, int(seq))
     chars: list[str] = []
     while value > 0:
@@ -86,13 +86,16 @@ def _contest_idx_label(seq: int) -> str:
 
 
 def _normalize_import_contest_idx(raw: object, seq: int, used: set[str]) -> str:
-    token = str(raw or "").strip().upper()
-    if token and len(token) <= 16 and _K.CONTEST_IDENT_RE.fullmatch(token) and token not in used:
+    try:
+        token = normalize_contest_problem_idx(raw)
+    except ValueError:
+        token = ""
+    if token and token not in used:
         used.add(token)
         return token
     candidate_seq = max(1, int(seq))
     while True:
-        candidate = _contest_idx_label(candidate_seq)
+        candidate = _contest_idx_from_sequence(candidate_seq)
         if candidate not in used:
             used.add(candidate)
             return candidate
@@ -219,7 +222,7 @@ def _build_contest_import_problem_draft_rows(owner: str, parsed_rows: list[dict[
         index_obj = row.get("index")
         index = str(index_obj).strip().upper() if index_obj is not None else ""
         if not index:
-            index = _contest_idx_label(seq)
+            index = _contest_idx_from_sequence(seq)
         suggested = _next_available_problem_slug(owner, source_slug, reserved=reserved)
         reserved.add(suggested)
         rows.append(

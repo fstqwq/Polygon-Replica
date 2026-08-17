@@ -9,6 +9,7 @@ from app.service.contest.model import (
     ContestBuildFreezeResult,
     ContestBuildItemRecord,
 )
+from app.service.contest.problem_index import contest_problem_idx_sort_key
 
 
 class ContestContextRecord(TypedDict):
@@ -50,7 +51,6 @@ class ContestMembershipRecord(TypedDict):
 
 class ContestProblemRecord(TypedDict):
     contest_problem_id: int
-    position: int
     idx: str
     problem_id: int
     statement_folder: str
@@ -97,8 +97,7 @@ class ContestAttachmentRecord(TypedDict):
 
 class ContestBuildProblemRecord(TypedDict):
     contest_problem_id: int
-    position: int
-    label: str
+    idx: str
     problem_id: int
     statement_folder: str
     problem_slug: str
@@ -200,8 +199,7 @@ def _contest_build_problem_record(row: dict[str, object]) -> ContestBuildProblem
         "contest_problem_id": _required_int(
             row["contest_problem_id"], "build contest_problem_id"
         ),
-        "position": _required_int(row["position"], "build position"),
-        "label": str(row["label"] or ""),
+        "idx": str(row["idx"]),
         "problem_id": _required_int(row["problem_id"], "build problem_id"),
         "statement_folder": str(row["statement_folder"] or ""),
         "problem_slug": str(row["problem_slug"] or ""),
@@ -340,8 +338,7 @@ class ContestDiskStore:
         def tx(conn: sqlite3.Connection) -> None:
             row = conn.execute(
                 """
-                SELECT COUNT(*) AS problem_count,
-                       COALESCE(MAX(position),0)+1 AS next_position
+                SELECT COUNT(*) AS problem_count
                 FROM contest_problems WHERE contest_id=?
                 """,
                 [int(contest_id)],
@@ -350,14 +347,13 @@ class ContestDiskStore:
                 raise ValueError(
                     f"contest already has the configured maximum of {int(max_problems)} problems"
                 )
-            position = int(row["next_position"])
             conn.execute(
                 """
                 INSERT INTO contest_problems(
-                    contest_id,position,label,problem_id,statement_folder,added_by_user_id,created_at
-                ) VALUES(?,?,?,?,?,?,?)
+                    contest_id,idx,problem_id,statement_folder,added_by_user_id,created_at
+                ) VALUES(?,?,?,?,?,?)
                 """,
-                [int(contest_id), position, idx, int(problem_id), "", int(added_by_user_id), created_at],
+                [int(contest_id), idx, int(problem_id), "", int(added_by_user_id), created_at],
             )
         self.db.write_transaction(tx)
 
@@ -388,12 +384,11 @@ class ContestDiskStore:
                 return None
             rows = connection.execute(
                 """
-                SELECT cp.id AS contest_problem_id,cp.position,
-                       cp.label AS idx,cp.problem_id,p.slug AS problem_slug
+                SELECT cp.id AS contest_problem_id,cp.idx,
+                       cp.problem_id,p.slug AS problem_slug
                 FROM contest_problems cp
                 JOIN problems p ON p.id=cp.problem_id
                 WHERE cp.contest_id=?
-                ORDER BY cp.position,cp.id
                 """,
                 [int(contest["id"])],
             ).fetchall()
@@ -404,18 +399,17 @@ class ContestDiskStore:
                     row["contest_problem_id"],
                     "agent roster contest_problem_id",
                 ),
-                "position": _required_int(
-                    row["position"],
-                    "agent roster position",
-                ),
-                "idx": str(row["idx"] or ""),
+                "idx": str(row["idx"]),
                 "problem_id": _required_int(
                     row["problem_id"],
                     "agent roster problem_id",
                 ),
                 "problem_slug": str(row["problem_slug"] or ""),
             }
-            for row in rows
+            for row in sorted(
+                rows,
+                key=lambda item: contest_problem_idx_sort_key(str(item["idx"])),
+            )
         ]
         return {
             "contest_id": _required_int(contest["id"], "agent roster id"),
@@ -607,23 +601,24 @@ class ContestDiskStore:
     def contest_problem_rows(self, contest_id: int) -> list[ContestProblemRecord]:
         rows = self.db.fetch_all(
             """
-            SELECT cp.id AS contest_problem_id,cp.position,cp.label AS idx,cp.problem_id,
+            SELECT cp.id AS contest_problem_id,cp.idx,cp.problem_id,
                    cp.statement_folder,cp.created_at,p.slug AS problem_slug
             FROM contest_problems cp
             JOIN problems p ON p.id=cp.problem_id
             WHERE cp.contest_id=?
-            ORDER BY cp.position ASC, cp.id ASC
             """,
             [int(contest_id)],
         )
         items: list[ContestProblemRecord] = []
-        for row in rows:
+        for row in sorted(
+            rows,
+            key=lambda item: contest_problem_idx_sort_key(str(item["idx"])),
+        ):
             safe_slug = str(row["problem_slug"] or "")
             items.append(
                 {
                     "contest_problem_id": int(row["contest_problem_id"]),
-                    "position": int(row["position"]),
-                    "idx": str(row["idx"] or ""),
+                    "idx": str(row["idx"]),
                     "problem_id": int(row["problem_id"]),
                     "statement_folder": str(row["statement_folder"] or ""),
                     "created_at": str(row["created_at"] or ""),
@@ -656,8 +651,8 @@ class ContestDiskStore:
         return row is not None
 
     def used_problem_indices(self, contest_id: int) -> list[str]:
-        rows = self.db.fetch_all("SELECT label FROM contest_problems WHERE contest_id=?", [int(contest_id)])
-        return [str(row["label"]) for row in rows if str(row["label"]).strip()]
+        rows = self.db.fetch_all("SELECT idx FROM contest_problems WHERE contest_id=?", [int(contest_id)])
+        return [str(row["idx"]) for row in rows]
 
     def remove_problem(self, contest_id: int, problem_id: int) -> bool:
         return self.remove_problems(int(contest_id), [int(problem_id)]) > 0
@@ -681,79 +676,44 @@ class ContestDiskStore:
             return len(rows)
         return int(self.db.write_transaction(tx))
 
-    def reorder_problem_indices(self, contest_id: int, pairs: list[tuple[int, str]]) -> bool:
-        safe_pairs = [(int(contest_problem_id), idx) for contest_problem_id, idx in pairs if idx]
+    def set_problem_indices(self, contest_id: int, pairs: list[tuple[int, str]]) -> bool:
+        safe_pairs = [(int(contest_problem_id), idx) for contest_problem_id, idx in pairs]
         if not safe_pairs:
-            return False
+            raise ValueError("problem indices must include every contest problem")
         def tx(conn: sqlite3.Connection) -> int:
             contest_problem_ids = [contest_problem_id for contest_problem_id, _ in safe_pairs]
             if len(set(contest_problem_ids)) != len(contest_problem_ids):
-                return 0
+                raise ValueError("duplicate contest problem id")
             if len({idx for _, idx in safe_pairs}) != len(safe_pairs):
-                return 0
+                raise ValueError("duplicate problem index")
             rows = conn.execute(
-                "SELECT id FROM contest_problems WHERE contest_id=?",
+                "SELECT id,idx FROM contest_problems WHERE contest_id=?",
                 [int(contest_id)],
             ).fetchall()
             found_ids = {int(row["id"]) for row in rows}
             if found_ids != set(contest_problem_ids):
+                raise ValueError("problem indices must include every contest problem")
+            current = {int(row["id"]): str(row["idx"]) for row in rows}
+            requested = dict(safe_pairs)
+            if current == requested:
                 return 0
 
-            for pos, (contest_problem_id, _) in enumerate(safe_pairs, start=1):
+            for contest_problem_id, _ in safe_pairs:
                 conn.execute(
-                    "UPDATE contest_problems SET position=?,label=? WHERE contest_id=? AND id=?",
-                    [-pos, f"~tmp-reorder-{contest_problem_id}~", int(contest_id), contest_problem_id],
+                    "UPDATE contest_problems SET idx=? WHERE contest_id=? AND id=?",
+                    [f"~TMP-{contest_problem_id}~", int(contest_id), contest_problem_id],
                 )
-            for pos, (contest_problem_id, idx) in enumerate(safe_pairs, start=1):
+            for contest_problem_id, idx in safe_pairs:
                 conn.execute(
-                    "UPDATE contest_problems SET position=?,label=? WHERE contest_id=? AND id=?",
-                    [pos, idx, int(contest_id), contest_problem_id],
+                    "UPDATE contest_problems SET idx=? WHERE contest_id=? AND id=?",
+                    [idx, int(contest_id), contest_problem_id],
                 )
+            conn.execute(
+                "UPDATE contests SET source_generation=source_generation+1 WHERE id=?",
+                [int(contest_id)],
+            )
             return len(safe_pairs)
         return int(self.db.write_transaction(tx)) > 0
-
-    def renumber_problem_indices(
-        self,
-        contest_id: int,
-        ordered_contest_problem_ids: list[int],
-    ) -> bool:
-        safe_ids = [int(contest_problem_id) for contest_problem_id in ordered_contest_problem_ids]
-        if not safe_ids or len(set(safe_ids)) != len(safe_ids):
-            return False
-
-        def idx_label(seq: int) -> str:
-            value = max(1, int(seq))
-            chars: list[str] = []
-            while value > 0:
-                value -= 1
-                chars.append(chr(ord("A") + (value % 26)))
-                value //= 26
-            return "".join(reversed(chars))
-
-        def tx(conn: sqlite3.Connection) -> int:
-            rows = conn.execute(
-                "SELECT id FROM contest_problems WHERE contest_id=?",
-                [int(contest_id)],
-            ).fetchall()
-            if {int(row["id"]) for row in rows} != set(safe_ids):
-                return 0
-            for pos, contest_problem_id in enumerate(safe_ids, start=1):
-                conn.execute(
-                    "UPDATE contest_problems SET position=?,label=? WHERE contest_id=? AND id=?",
-                    [
-                        -pos,
-                        f"~tmp-renumber-{int(contest_id)}-{contest_problem_id}-{pos}~",
-                        int(contest_id),
-                        contest_problem_id,
-                    ],
-                )
-            for pos, contest_problem_id in enumerate(safe_ids, start=1):
-                conn.execute(
-                    "UPDATE contest_problems SET position=?,label=? WHERE contest_id=? AND id=?",
-                    [pos, idx_label(pos), int(contest_id), contest_problem_id],
-                )
-            return len(safe_ids)
-        return int(self.db.write_transaction(tx)) == len(safe_ids)
 
     def delete_contest(self, contest_id: int) -> None:
         def tx(conn: sqlite3.Connection) -> None:
@@ -778,16 +738,18 @@ class ContestDiskStore:
         placeholders = ",".join(("?" for _ in safe_problem_ids))
         rows = self.db.fetch_all(
             f"""
-            SELECT cp.problem_id,cp.label AS idx,p.slug AS problem_slug
+            SELECT cp.problem_id,cp.idx,p.slug AS problem_slug
             FROM contest_problems cp
             JOIN problems p ON p.id=cp.problem_id
             WHERE cp.contest_id=? AND cp.problem_id IN ({placeholders})
-            ORDER BY cp.position ASC, cp.id ASC
             """,
             [int(contest_id), *safe_problem_ids],
         )
         items: list[ContestSelectedProblemRecord] = []
-        for row in rows:
+        for row in sorted(
+            rows,
+            key=lambda item: contest_problem_idx_sort_key(str(item["idx"])),
+        ):
             safe_slug = str(row["problem_slug"] or "")
             items.append(
                 {
@@ -853,12 +815,11 @@ class ContestDiskStore:
                     "blocked_problems": [],
                 }
             rows = connection.execute(
-                """SELECT cp.id AS contest_problem_id,cp.position,cp.label,
+                """SELECT cp.id AS contest_problem_id,cp.idx,
                        cp.problem_id,cp.statement_folder,p.slug AS problem_slug
                    FROM contest_problems cp
                    JOIN problems p ON p.id=cp.problem_id
-                   WHERE cp.contest_id=?
-                   ORDER BY cp.position,cp.id""",
+                   WHERE cp.contest_id=?""",
                 [int(contest_id)],
             ).fetchall()
             if not rows:
@@ -872,22 +833,35 @@ class ContestDiskStore:
             frozen_rows: list[
                 tuple[ContestBuildProblemRecord, ContestBuildMaterializationRecord]
             ] = []
-            for row in rows:
-                materialization = connection.execute(
-                    """SELECT id,source_commit,revision_number,archive_sha256
-                       FROM problem_package_materializations
-                       WHERE problem_id=? AND status='available'
-                       ORDER BY revision_number DESC,created_at DESC,id DESC
-                       LIMIT 1""",
-                    [int(row["problem_id"])],
-                ).fetchone()
+            ordered_rows = sorted(
+                rows,
+                key=lambda item: contest_problem_idx_sort_key(str(item["idx"])),
+            )
+            problem_ids = [int(row["problem_id"]) for row in ordered_rows]
+            placeholders = ",".join("?" for _ in problem_ids)
+            materialization_rows = connection.execute(
+                f"""SELECT id,problem_id,source_commit,revision_number,archive_sha256
+                    FROM problem_package_materializations
+                    WHERE problem_id IN ({placeholders}) AND status='available'
+                    ORDER BY problem_id,revision_number DESC,created_at DESC,id DESC""",
+                problem_ids,
+            ).fetchall()
+            latest_materializations: dict[int, ContestBuildMaterializationRecord] = {}
+            for materialization_row in materialization_rows:
+                materialization_problem_id = int(materialization_row["problem_id"])
+                latest_materializations.setdefault(
+                    materialization_problem_id,
+                    _contest_build_materialization_record(dict(materialization_row)),
+                )
+            for row in ordered_rows:
+                materialization = latest_materializations.get(int(row["problem_id"]))
                 if materialization is None:
                     blocked.append(str(row["problem_slug"]))
                     continue
                 frozen_rows.append(
                     (
                         _contest_build_problem_record(dict(row)),
-                        _contest_build_materialization_record(dict(materialization)),
+                        materialization,
                     )
                 )
             if blocked:
@@ -913,18 +887,18 @@ class ContestDiskStore:
                     None,
                 ],
             )
-            for row, materialization in frozen_rows:
+            for ordinal, (row, materialization) in enumerate(frozen_rows, start=1):
                 connection.execute(
                     """INSERT INTO contest_build_items(
-                           job_id,contest_problem_id,position,label,problem_id,
+                           job_id,contest_problem_id,ordinal,idx,problem_id,
                            statement_folder,source_commit,revision_number,
                            materialization_id,archive_sha256
                        ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
                     [
                         job_id,
                         int(row["contest_problem_id"]),
-                        int(row["position"]),
-                        str(row["label"]),
+                        ordinal,
+                        str(row["idx"]),
                         int(row["problem_id"]),
                         str(row["statement_folder"]),
                         str(materialization["source_commit"]),
@@ -1061,15 +1035,14 @@ class ContestDiskStore:
         rows = self.db.fetch_all(
             """SELECT i.*,p.slug AS problem_slug
                FROM contest_build_items i JOIN problems p ON p.id=i.problem_id
-               WHERE i.job_id=? ORDER BY i.position,i.id""",
+               WHERE i.job_id=? ORDER BY i.ordinal,i.id""",
             [job_id],
         )
         return [
             {
                 "contest_problem_id": int(row["contest_problem_id"]),
-                "position": int(row["position"]),
-                "label": str(row["label"]),
-                "idx": str(row["label"]),
+                "ordinal": int(row["ordinal"]),
+                "idx": str(row["idx"]),
                 "problem_id": int(row["problem_id"]),
                 "problem_slug": str(row["problem_slug"]),
                 "statement_folder": str(row["statement_folder"]),
