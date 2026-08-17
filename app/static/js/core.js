@@ -239,6 +239,11 @@ function initPopupDialogs() {
       if (!overlay || !overlay.classList.contains("ui-popup-overlay")) return;
       document.body.classList.add("popup-open");
       openModal(overlay, opener, () => close(overlay));
+      document.dispatchEvent(
+        new CustomEvent("polygonlike:popup-opened", {
+          detail: { overlay },
+        })
+      );
     });
   });
   overlays.forEach((overlay) => {

@@ -30,7 +30,7 @@
       <th>#</th>
       <th class="problem-list-head">Title</th>
       <th>Details</th>
-      <th>Revision</th>
+      <th>Status</th>
     </tr>
     {% for row in problem_rows %}
     <tr class="{% if row.dirty %}table-row-dirty{% endif %}">
@@ -42,29 +42,23 @@
         {% if row.details_available %}
         {% set content = row.content_review %}
         {% set metadata = row.metadata %}
-        <span class="contest-problem-detail">
-          {{ metadata.mode }}{% if metadata.pass_limit > 1 %} &middot; {{ metadata.pass_limit }} passes{% endif %}
-          &middot; <span class="{{ 'warn' if metadata.time_limit_warn else '' }}">{{ metadata.time_limit_display }}</span>
-          / <span class="{{ 'warn' if metadata.memory_limit_warn else '' }}">{{ metadata.memory_limit_display }}</span>
-        </span>
-        <span class="contest-problem-detail contest-problem-detail-summary">
-          <span class="{{ 'danger' if content.tests.tone == 'danger' else '' }}">{{ content.tests.display }}</span>
-          &middot; <span class="{{ 'danger' if content.solutions.tone == 'danger' else '' }}">{{ content.solutions.display }}</span>
-        </span>
         <span class="compact-fact-list contest-problem-facts">
+          {{ fact_row('Mode', metadata.mode ~ (' · ' ~ metadata.pass_limit ~ ' passes' if metadata.pass_limit > 1 else '')) }}
+          {{ fact_row('Limits', metadata.time_limit_display ~ ' / ' ~ metadata.memory_limit_display, 'warn' if metadata.time_limit_warn or metadata.memory_limit_warn else '') }}
+          {{ fact_row('Tests', content.tests.display, 'danger' if content.tests.tone == 'danger' else '') }}
+          {{ fact_row('Solutions', content.solutions.display, 'danger' if content.solutions.tone == 'danger' else '') }}
           {{ fact_row(content.output_component.label, content.output_component.display, 'danger' if content.output_component.tone == 'danger' else '') }}
           {{ fact_row(content.validator.label, content.validator.display, 'danger' if content.validator.tone == 'danger' else '') }}
           {{ fact_row(content.languages.label, content.languages.display, 'danger' if content.languages.tone == 'danger' else '') }}
-          {{ fact_row('Verification', row.verification_display, row.verification_tone) }}
+          {% for warning in content.warnings if warning.code == 'source' %}
+          {{ fact_row('Source', warning.display, 'danger' if warning.tone == 'danger' else 'warn') }}
+          {% endfor %}
         </span>
-        {% for warning in content.warnings if warning.code == 'source' %}
-        <span class="contest-problem-detail contest-problem-detail-summary {{ 'danger' if warning.tone == 'danger' else 'warn' }}">{{ warning.display }}</span>
-        {% endfor %}
         {% else %}
-        <span class="contest-problem-detail contest-problem-detail-summary danger">unavailable</span>
+        <span class="compact-fact-list">{{ fact_row('Status', 'unavailable', 'danger') }}</span>
         {% endif %}
       </td>
-      <td class="contest-problem-review-cell">{{ problem_review(row.revision_pair, row.workspace_revision_notice) }}</td>
+      <td class="contest-problem-review-cell">{{ problem_review(row.revision_pair, row.workspace_revision_notice, row.verification_display, row.verification_tone) }}</td>
     </tr>
     {% endfor %}
   </table>

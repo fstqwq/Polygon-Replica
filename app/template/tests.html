@@ -11,13 +11,39 @@
           <option value="legacy" {{ "selected" if paired and not structured else "" }}>Input / output</option>
           <option value="json" {{ "selected" if structured else "" }}>Structured JSON</option>
         </select>
-        <div class="form-stack tests-sample-fields" data-sample-legacy="1" {{ "hidden" if structured or not paired else "" }}>
-          <label for="{{ prefix }}-sample-input">Sample Input (optional)</label>
-          <textarea id="{{ prefix }}-sample-input" class="textarea-sm" name="sample_input" placeholder="Leave blank for generated input">{{ row.sample_input if row else "" }}</textarea>
-          <label for="{{ prefix }}-sample-output">Sample Output (optional)</label>
-          <textarea id="{{ prefix }}-sample-output" class="textarea-sm" name="sample_output" placeholder="Leave blank for generated output">{{ row.sample_output if row else "" }}</textarea>
+        <div class="tests-sample-fields" data-sample-legacy="1" {{ "hidden" if structured or not paired else "" }}>
+          <div class="tests-sample-pair-grid">
+            <div class="tests-sample-editor">
+              <label for="{{ prefix }}-sample-input">Sample Input (optional)</label>
+              <textarea
+                id="{{ prefix }}-sample-input"
+                class="textarea-sm"
+                name="sample_input"
+                placeholder="Leave blank for generated input"
+                data-code-editor="1"
+                data-code-editor-lazy="1"
+                data-code-path="sample-input.txt"
+                data-code-height="180"
+                data-code-wrap="1"
+              >{{ row.sample_input if row else "" }}</textarea>
+            </div>
+            <div class="tests-sample-editor">
+              <label for="{{ prefix }}-sample-output">Sample Output (optional)</label>
+              <textarea
+                id="{{ prefix }}-sample-output"
+                class="textarea-sm"
+                name="sample_output"
+                placeholder="Leave blank for generated output"
+                data-code-editor="1"
+                data-code-editor-lazy="1"
+                data-code-path="sample-output.txt"
+                data-code-height="180"
+                data-code-wrap="1"
+              >{{ row.sample_output if row else "" }}</textarea>
+            </div>
+          </div>
           <input type="hidden" name="sample_output_validate" value="0" />
-          <label data-sample-output-validate-group="1" {{ "hidden" if not row or not row.sample else "" }}><input type="checkbox" name="sample_output_validate" value="1" {{ "checked" if not row or row.sample_output_validate else "" }} {{ "disabled" if row and not row.sample else "" }} /> Validate custom output</label>
+          <label class="tests-sample-validation" data-sample-output-validate-group="1" {{ "hidden" if not row or not row.sample else "" }}><input type="checkbox" name="sample_output_validate" value="1" {{ "checked" if not row or row.sample_output_validate else "" }} {{ "disabled" if row and not row.sample else "" }} /> Validate custom output</label>
         </div>
         <div class="form-stack tests-sample-fields" data-sample-json-group="1" {{ "hidden" if not structured else "" }}>
           <div class="tests-sample-json-heading">
@@ -147,7 +173,16 @@
         <input type="hidden" name="payload" value="" />
         {% else %}
         <label for="edit-test-payload-{{ row.index }}">Data (<code>{{ row.payload_path }}</code>)</label>
-        <textarea id="edit-test-payload-{{ row.index }}" class="textarea-sm" name="payload">{{ row.payload }}</textarea>
+        <textarea
+          id="edit-test-payload-{{ row.index }}"
+          class="textarea-sm"
+          name="payload"
+          data-code-editor="1"
+          data-code-editor-lazy="1"
+          data-code-path="{{ row.payload_path }}"
+          data-code-height="220"
+          data-code-wrap="1"
+        >{{ row.payload }}</textarea>
         {% endif %}
         <button class="btn" type="submit">Save Test</button>
       </form>
@@ -171,7 +206,17 @@
         <label><input type="checkbox" name="sample" value="1" data-sample-toggle="1" /> sample</label>
         {{ sample_fields('add-manual') }}
         <label for="add-manual-input-popup">Data (<code>manual input</code>)</label>
-        <textarea id="add-manual-input-popup" class="textarea-md" name="manual_input" placeholder="3&#10;1 2 3"></textarea>
+        <textarea
+          id="add-manual-input-popup"
+          class="textarea-md"
+          name="manual_input"
+          placeholder="3&#10;1 2 3"
+          data-code-editor="1"
+          data-code-editor-lazy="1"
+          data-code-path="tests/manual/input.txt"
+          data-code-height="260"
+          data-code-wrap="1"
+        ></textarea>
         <p class="muted">One plain-text submission input per file.</p>
         <button class="btn" type="submit">Add Manual</button>
       </form>

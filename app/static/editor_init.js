@@ -112,38 +112,62 @@
     window.requestAnimationFrame(resize);
   }
 
+  function initEditor(textarea) {
+    if (!textarea || textarea.dataset.editorReady === "1") return;
+    var config = editorConfig(textarea.getAttribute("data-code-path"));
+    var autoSizeEnabled = textarea.getAttribute("data-code-autosize") === "1";
+    var editor = window.CodeMirror.fromTextArea(textarea, {
+      mode: config.mode,
+      lineNumbers: true,
+      lineWrapping: textarea.getAttribute("data-code-wrap") === "1",
+      tabSize: 4,
+      indentUnit: 4,
+      matchBrackets: true,
+      autoCloseBrackets: true,
+      readOnly: textarea.hasAttribute("readonly"),
+      viewportMargin: autoSizeEnabled ? Infinity : 10,
+    });
+    textarea.__polygonCodeMirror = editor;
+    textarea.dataset.editorReady = "1";
+    if (autoSizeEnabled) {
+      enableAutoSize(editor);
+    } else {
+      var height = Number(textarea.getAttribute("data-code-height") || 0);
+      if (Number.isFinite(height) && height > 0) {
+        editor.setSize(null, Math.floor(height));
+      }
+    }
+    document.dispatchEvent(
+      new CustomEvent(EDITOR_READY_EVENT, {
+        detail: { textarea: textarea },
+      })
+    );
+  }
+
+  function requestEditors(root) {
+    var scope = root && typeof root.querySelectorAll === "function" ? root : document;
+    Array.prototype.slice.call(scope.querySelectorAll(TARGET_SELECTOR)).forEach(function (textarea) {
+      if (textarea.offsetParent === null) return;
+      initEditor(textarea);
+      if (textarea.__polygonCodeMirror) textarea.__polygonCodeMirror.refresh();
+    });
+  }
+
   function initEditors() {
     targets.forEach(function (textarea) {
-      if (textarea.dataset.editorReady === "1") return;
-      var config = editorConfig(textarea.getAttribute("data-code-path"));
-      var autoSizeEnabled = textarea.getAttribute("data-code-autosize") === "1";
-      var editor = window.CodeMirror.fromTextArea(textarea, {
-        mode: config.mode,
-        lineNumbers: true,
-        lineWrapping: textarea.getAttribute("data-code-wrap") === "1",
-        tabSize: 4,
-        indentUnit: 4,
-        matchBrackets: true,
-        autoCloseBrackets: true,
-        readOnly: textarea.hasAttribute("readonly"),
-        viewportMargin: autoSizeEnabled ? Infinity : 10,
-      });
-      textarea.__polygonCodeMirror = editor;
-      textarea.dataset.editorReady = "1";
-      if (autoSizeEnabled) {
-        enableAutoSize(editor);
-      } else {
-        var height = Number(textarea.getAttribute("data-code-height") || 0);
-        if (Number.isFinite(height) && height > 0) {
-          editor.setSize(null, Math.floor(height));
-        }
-      }
-      document.dispatchEvent(
-        new CustomEvent(EDITOR_READY_EVENT, {
-          detail: { textarea: textarea },
-        })
-      );
+      if (textarea.getAttribute("data-code-editor-lazy") !== "1") initEditor(textarea);
     });
+    document.addEventListener("polygonlike:code-editor-request", function (event) {
+      window.requestAnimationFrame(function () {
+        requestEditors(event.detail && event.detail.root);
+      });
+    });
+    document.addEventListener("polygonlike:popup-opened", function (event) {
+      window.requestAnimationFrame(function () {
+        requestEditors(event.detail && event.detail.overlay);
+      });
+    });
+    requestEditors(document);
   }
 
   Promise.all([

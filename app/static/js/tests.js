@@ -1,4 +1,7 @@
-const { onReady } = window.PolygonUI;
+const {
+  onReady,
+  syncCodeEditorsInForm,
+} = window.PolygonUI;
 
 function initSampleForms() {
   const utf8 = new TextEncoder();
@@ -163,6 +166,13 @@ function initSampleForms() {
       if (structured && !result.error && result.value) renderPreview(preview, result.value);
     }
     textarea.setCustomValidity(result.error);
+    if (legacySelected) {
+      document.dispatchEvent(
+        new CustomEvent("polygonlike:code-editor-request", {
+          detail: { root: legacy },
+        })
+      );
+    }
   };
   document.querySelectorAll("form[data-sample-form='1']").forEach((form) => {
     form.querySelectorAll("[data-sample-json-example]").forEach((button) => {
@@ -180,6 +190,7 @@ function initSampleForms() {
       if (event.target) sync(form);
     });
     form.addEventListener("input", () => sync(form));
+    form.addEventListener("submit", () => syncCodeEditorsInForm(form));
   });
 }
 

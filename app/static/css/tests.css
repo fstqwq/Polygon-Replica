@@ -137,6 +137,27 @@
   margin-top: var(--space-2);
 }
 
+.tests-sample-pair-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.tests-sample-editor {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.tests-sample-editor .CodeMirror {
+  width: 100%;
+}
+
+.tests-sample-validation {
+  display: block;
+  margin-top: var(--space-3);
+}
+
 .tests-sample-json-heading {
   display: flex;
   align-items: baseline;
@@ -267,6 +288,7 @@
 }
 
 @container problem-content (max-width: 640px) {
+  .tests-sample-pair-grid,
   .tests-sample-preview-grid {
     grid-template-columns: 1fr;
   }

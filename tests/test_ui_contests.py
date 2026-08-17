@@ -409,9 +409,9 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             details_start,
         )
         row_end = html.index("</tr>", revision_start)
-        self.assertIn("Verification", html[details_start:revision_start])
-        self.assertIn("failed", html[details_start:revision_start])
-        self.assertNotIn("Verification", html[revision_start:row_end])
+        self.assertNotIn("Verification", html[details_start:revision_start])
+        self.assertIn("Verification", html[revision_start:row_end])
+        self.assertIn("failed", html[revision_start:row_end])
         self.assertIn("Package / Published", html[revision_start:row_end])
         self.assertIn("Packages:", html)
 
@@ -443,10 +443,6 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertEqual(overview.status_code, 200)
         html = overview.body.decode("utf-8", errors="replace")
         self.assertIn("contains obsolete fields", html)
-        self.assertNotIn(
-            'contest-problem-detail contest-problem-detail-summary danger">unavailable',
-            html,
-        )
 
     def test_pass_fail_extra_interactor_is_a_warning_not_missing_components(
         self,
@@ -502,10 +498,6 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             html,
         )
         self.assertNotIn("no main correct", html)
-        self.assertNotIn(
-            'contest-problem-detail contest-problem-detail-summary danger">unavailable',
-            html,
-        )
 
     def test_change_names_tl_ml_creates_per_problem_commit(self) -> None:
         problem_slug = f"alice/ui-bulk-{uuid.uuid4().hex[:8]}"

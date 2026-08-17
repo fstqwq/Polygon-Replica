@@ -1,10 +1,11 @@
 {% from "_revision_pair.html" import fact_row, revision_pair, workspace_notice %}
 
-{% macro problem_review(revision, workspace) -%}
+{% macro problem_review(revision, workspace, verification_display='', verification_tone='') -%}
 <div class="compact-fact-list">
   {% if revision %}
   {{ revision_pair(revision) }}
   {{ workspace_notice(workspace) }}
+  {% if verification_display %}{{ fact_row('Verification', verification_display, verification_tone) }}{% endif %}
   {% else %}
   {{ fact_row('Status', 'unavailable', 'danger') }}
   {% endif %}
