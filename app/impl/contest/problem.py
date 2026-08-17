@@ -139,11 +139,19 @@ def contest_problems_add(contest: str, user: Annotated[str, Depends(require_sess
     msg = f"added {added} problem(s)"
     if failed:
         msg += f"; failed {len(failed)}"
-    query_parts: list[str] = []
+    if added:
+        return _contest_redirect(
+            str(ctx["contest"]["slug"]),
+            "overview",
+            message=msg,
+        )
     safe_query = q.strip()
-    if safe_query:
-        query_parts.append(f"q={quote_plus(safe_query)}")
-    return _contest_redirect(str(ctx["contest"]["slug"]), "problems", query="&".join(query_parts), message=msg)
+    return _contest_redirect(
+        str(ctx["contest"]["slug"]),
+        "problems",
+        query=f"q={quote_plus(safe_query)}" if safe_query else "",
+        message=msg,
+    )
 
 
 def contest_problems_remove(contest: str, user: Annotated[str, Depends(require_session_user)], problem_id: str = Form("")):
@@ -159,7 +167,11 @@ def contest_problems_remove(contest: str, user: Annotated[str, Depends(require_s
         msg = "invalid problem id"
     else:
         runtime().contest_service.remove_problem(int(ctx["contest"]["id"]), pid)
-    return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message=msg)
+    return _contest_redirect(
+        str(ctx["contest"]["slug"]),
+        "overview" if pid > 0 else "problems",
+        message=msg,
+    )
 
 
 def contest_problems_remove_selected(contest: str, user: Annotated[str, Depends(require_session_user)], selected_problem_ids: list[str] = Form([])):
@@ -177,7 +189,11 @@ def contest_problems_remove_selected(contest: str, user: Annotated[str, Depends(
     if not ids:
         return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message="select at least one problem to remove")
     removed = runtime().contest_service.remove_problems(int(ctx["contest"]["id"]), ids)
-    return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message=f"removed {removed} problem(s)")
+    return _contest_redirect(
+        str(ctx["contest"]["slug"]),
+        "overview",
+        message=f"removed {removed} problem(s)",
+    )
 
 
 def _contest_problem_index_pairs(
@@ -310,11 +326,16 @@ def _apply_general_changes(
         },
     }
     job_status = "ok" if failed_count == 0 else "failed"
-    job_id = runtime().contest_service.create_job(contest_id, actor_user_id, "change-general", job_status, summary)
+    runtime().contest_service.create_job(
+        contest_id,
+        actor_user_id,
+        "change-general",
+        job_status,
+        summary,
+    )
     return _contest_redirect(
         str(contest_ctx["slug"]),
-        "problems",
-        query=f"job_id={quote_plus(job_id)}",
+        "overview",
         message=(
             f"{message_prefix}; " if message_prefix else ""
         ) + (
@@ -370,7 +391,7 @@ def contest_problems_save(
     if not can_write:
         return _contest_redirect(
             str(ctx["contest"]["slug"]),
-            "problems",
+            "overview",
             message="contest problems saved",
         )
 
@@ -392,7 +413,7 @@ def contest_problems_save(
     if not requested_ids:
         return _contest_redirect(
             str(ctx["contest"]["slug"]),
-            "problems",
+            "overview",
             message="contest problems saved",
         )
     problem_access = runtime().access_query.problem_contexts(
@@ -407,7 +428,7 @@ def contest_problems_save(
     if not writable_ids:
         return _contest_redirect(
             str(ctx["contest"]["slug"]),
-            "problems",
+            "overview",
             message="contest problems saved",
         )
     return _apply_general_changes(

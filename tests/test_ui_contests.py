@@ -308,6 +308,15 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             f'href="/problems/alice/sample/statement?contest={contest_slug}"',
             html,
         )
+        self.assertIn(
+            '<div class="workspace-card-head">',
+            html,
+        )
+        self.assertIn(
+            f'<a class="workspace-side-link" href="/contests/{contest_slug}/access">Manage access</a>',
+            html,
+        )
+        self.assertNotIn('aria-label="Contest management"', html)
 
         packages = contest_packages_page(
             _app_request(f"/contests/{contest_slug}/packages"),
@@ -409,6 +418,11 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             q="",
         )
         self.assertEqual(add_resp.status_code, 303)
+        self.assertTrue(
+            add_resp.headers["location"].startswith(
+                f"/contests/{contest_slug}/overview"
+            )
+        )
         add_msgs = _flash_messages_from_response(add_resp)
         self.assertTrue(add_msgs)
         self.assertIn("added 2 problem", add_msgs[0].lower())
@@ -427,8 +441,35 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             selected_problem_ids=[str(rows[1]["problem_id"])],
         )
         self.assertEqual(remove_resp.status_code, 303)
+        self.assertTrue(
+            remove_resp.headers["location"].startswith(
+                f"/contests/{contest_slug}/overview"
+            )
+        )
         after_remove = db_fetch_all("SELECT problem_id FROM contest_problems WHERE contest_id=?", [contest_id])
         self.assertEqual(len(after_remove), 1)
+
+        empty_add = contest_problems_add(
+            contest=contest_slug,
+            user="alice",
+            problem_slugs=[],
+            q="missing problem",
+        )
+        self.assertTrue(
+            empty_add.headers["location"].startswith(
+                f"/contests/{contest_slug}/problems?q=missing+problem"
+            )
+        )
+        empty_remove = contest_problems_remove_selected(
+            contest=contest_slug,
+            user="alice",
+            selected_problem_ids=[],
+        )
+        self.assertTrue(
+            empty_remove.headers["location"].startswith(
+                f"/contests/{contest_slug}/problems"
+            )
+        )
 
     def test_contest_review_hides_verification_failure_reason(self) -> None:
         contest_slug = f"review-reason-{uuid.uuid4().hex[:8]}"
@@ -640,7 +681,11 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             original_memory_limit_mb_values=["1024"],
         )
         self.assertEqual(update_resp.status_code, 303)
-        self.assertIn(f"/contests/{contest_slug}/problems", update_resp.headers.get("location", ""))
+        self.assertTrue(
+            update_resp.headers["location"].startswith(
+                f"/contests/{contest_slug}/overview"
+            )
+        )
 
         job_row = db_fetch_one(
             "SELECT id,status FROM contest_jobs WHERE contest_id=? ORDER BY created_at DESC LIMIT 1",

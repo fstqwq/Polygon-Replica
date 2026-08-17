@@ -37,18 +37,6 @@ def _contest_nav(contest_slug: str, active: str) -> list[dict[str, str | bool]]:
     ]
 
 
-def _contest_manage_nav(contest_slug: str, active: str) -> list[dict[str, str | bool]]:
-    base = f"/contests/{contest_slug}"
-    return [
-        {
-            "key": "access",
-            "label": "Access",
-            "href": f"{base}/access",
-            "active": active == "access",
-        },
-    ]
-
-
 def _contest_ctx(
     contest_slug: str,
     user: str,
@@ -88,10 +76,8 @@ def _contest_ctx(
         "access": access,
         "active_main": "contests",
         "contest_nav": _contest_nav(str(contest_row["slug"]), active_page),
-        "contest_manage_nav": _contest_manage_nav(
-            str(contest_row["slug"]),
-            active_page,
-        ),
+        "contest_access_href": f"/contests/{contest_row['slug']}/access",
+        "contest_access_active": active_page == "access",
     }
     if request is not None:
         context["contest_workspace"] = contest_workspace_context_for_contest_page(

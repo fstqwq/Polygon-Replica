@@ -1,34 +1,4 @@
 /* Contest workbench and management. */
-.contest-manage-nav {
-  display: grid;
-  gap: 0;
-  margin: 0;
-}
-
-.contest-manage-link {
-  display: block;
-  padding: 6px 0;
-  border-bottom: 1px solid var(--line);
-  color: var(--text-secondary);
-  text-decoration: none;
-  white-space: normal;
-}
-
-.contest-manage-link:last-child {
-  border-bottom: 0;
-}
-
-.contest-manage-link:hover {
-  color: var(--link);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.contest-manage-link.active {
-  color: var(--accent);
-  font-weight: 700;
-}
-
 .contest-manage-section {
   display: grid;
   gap: var(--space-3);
