@@ -12,7 +12,7 @@
     {% if current_package.package_state == 'none' %}
     <form class="package-verify-form" method="post" action="{{ current_package.create_href }}">
       <input type="hidden" name="format" value="native" />
-      <span aria-hidden="true">(</span><button class="linkish-button" type="submit" {% if not ctx.access.can_create_packages %}disabled title="{{ ctx.access.package_create_block_reason }}"{% endif %}>Create package</button><span aria-hidden="true">)</span>
+      <span aria-hidden="true">(</span><button class="linkish-button" type="submit" {% if not ctx.access.can_create_packages %}disabled title="{{ ctx.access.package_create_block_reason }}"{% endif %}>Create</button><span aria-hidden="true">)</span>
     </form>
     {% endif %}
   </div>

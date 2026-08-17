@@ -242,6 +242,12 @@
   line-height: 1.4;
 }
 
+.contest-problem-details-cell .compact-fact-value:not(.warn):not(.danger),
+.contest-problem-review-cell .compact-fact-value:not(.warn):not(.danger),
+.contest-problem-review-cell .revision-pair-value > strong:not(.warn):not(.danger) {
+  font-weight: 400;
+}
+
 .contest-package-tools {
   display: flex;
   align-items: center;

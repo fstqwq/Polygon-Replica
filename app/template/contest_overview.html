@@ -43,7 +43,8 @@
         {% set content = row.content_review %}
         {% set metadata = row.metadata %}
         <span class="compact-fact-list contest-problem-facts">
-          {{ fact_row('Mode', metadata.mode ~ (' · ' ~ metadata.pass_limit ~ ' passes' if metadata.pass_limit > 1 else '')) }}
+          {% if metadata.mode != 'pass-fail' %}{{ fact_row('Mode', metadata.mode) }}{% endif %}
+          {% if metadata.pass_limit > 1 %}{{ fact_row('Passes', metadata.pass_limit) }}{% endif %}
           {{ fact_row('Limits', metadata.time_limit_display ~ ' / ' ~ metadata.memory_limit_display, 'warn' if metadata.time_limit_warn or metadata.memory_limit_warn else '') }}
           {{ fact_row('Tests', content.tests.display, 'danger' if content.tests.tone == 'danger' else '') }}
           {{ fact_row('Solutions', content.solutions.display, 'danger' if content.solutions.tone == 'danger' else '') }}

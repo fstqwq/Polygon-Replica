@@ -156,11 +156,6 @@
         {% set export_download = export_nav.download %}
         {% if export_download %}
         <a class="problem-section-tab-action-control" href="{{ problem_href('export_file', export_id=export_download.export_id, filename=export_download.filename) }}">Download</a>
-        {% else %}
-        <form class="problem-section-tab-action-form" method="post" action="{{ problem_href('export_create') }}">
-          <input type="hidden" name="format" value="domjudge" />
-          <button class="problem-section-tab-action-control" type="submit" {% if not ctx.access.can_create_packages or not ctx.workspace.head_commit %}disabled title="{{ ctx.access.package_create_block_reason if not ctx.access.can_create_packages else 'Commit changes before building a package' }}"{% endif %}>Build</button>
-        </form>
         {% endif %}
         <span class="problem-section-tab-status {{ 'section-tab-status-danger' if export_nav.tone == 'danger' else 'section-tab-status-warn' if export_nav.tone == 'warning' else '' }}">{{ export_nav.text }}</span>
       </div>

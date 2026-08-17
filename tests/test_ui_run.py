@@ -5926,7 +5926,8 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertIn("<strong>v5</strong>", html)
         self.assertIn("Published:", html)
         self.assertIn("Package:</", html)
-        self.assertIn("Create package</button>", html)
+        self.assertIn('class="package-verify-form"', html)
+        self.assertIn('>Create</button><span aria-hidden="true">)</span>', html)
         self.assertIn("External format", html)
         self.assertIn("<th>Published</th><th>Package</th><th>External packages</th>", html)
         self.assertNotIn("Current revision:", html)
@@ -6056,7 +6057,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 html = page.body.decode("utf-8", errors="replace")
                 self.assertIn("Published:", html)
                 self.assertIn(f">{expected}</strong>", html)
-                self.assertNotIn("Create package</button>", html)
+                self.assertNotIn('class="package-verify-form"', html)
 
     def test_package_create_reuses_existing_current_package(self) -> None:
         context = workspace_service.workspace_context(
