@@ -16,7 +16,8 @@ fallbacks.
 
 Git remains authoritative for committed source. This package does not own Git
 publication, execution, or derived outputs. Readiness combines read-only Git,
-verification, and package projections without collapsing their states. The
+Verification, Native Package, and external-package status without collapsing
+their states. The
 authored shapes and fallbacks are owned by the
 [problem-source protocol](../../../../protocol/problem-source.md).
 

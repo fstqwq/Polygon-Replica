@@ -6,11 +6,11 @@ from pathlib import Path
 from app.service.contest.naming import problem_slug_file_token
 from app.service.contest.service import ContestService
 from app.service.export.adapters import PackageAdapterRegistry, PackageFormat
-from app.service.problem_package.service import VerifiedRevisionReader
+from app.service.problem_package.service import NativePackageReader
 
 
 class ContestPackageService:
-    """Project frozen verified revisions into one atomic Contest bundle."""
+    """Project frozen Native Packages into one atomic Contest bundle."""
 
     def __init__(
         self,
@@ -38,7 +38,7 @@ class ContestPackageService:
         contest_slug: str,
         job_id: str,
         package_format: PackageFormat,
-        readers: dict[str, VerifiedRevisionReader],
+        readers: dict[str, NativePackageReader],
     ) -> dict[str, object]:
         adapter = self._package_adapters.require(package_format)
         job_root = self._contest.job_root(contest_slug, job_id)
@@ -65,7 +65,7 @@ class ContestPackageService:
                     "status": "failed",
                     "source_commit": str(entry["source_commit"]),
                     "revision_number": int(entry["revision_number"]),
-                    "verified_revision_id": materialization_id,
+                    "native_package_id": materialization_id,
                     "archive_sha256": str(entry["archive_sha256"]),
                     "package_file": "",
                     "warning": "",
@@ -92,7 +92,7 @@ class ContestPackageService:
                             "problem": problem_slug,
                             "revision": int(entry["revision_number"]),
                             "source_commit": str(entry["source_commit"]),
-                            "verified_revision_id": materialization_id,
+                            "native_package_id": materialization_id,
                             "archive_sha256": str(entry["archive_sha256"]),
                             "package": f"packages/{target.name}",
                         }

@@ -116,6 +116,8 @@ class TestPublicContracts(unittest.TestCase):
         )
         self.assertNotIn("Verified revision", template_source)
         self.assertNotIn("Verified revisions", template_source)
+        self.assertNotIn("Native Package", template_source)
+        self.assertNotIn("Native Packages", template_source)
         self.assertNotIn("Upstream", template_source)
         self.assertIn("Package", template_source)
         self.assertIn("Published", template_source)

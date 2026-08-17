@@ -17,7 +17,7 @@ from app.impl.workspace.context_ui import page_ctx
 from app.service.access import ProblemAccessContext
 from app.service.export.service import NATIVE_PACKAGE_FORMAT
 from app.service.problem_package.service import (
-    VerifiedRevision,
+    NativePackage,
 )
 from app.service.problem.readiness import PackageReadiness
 
@@ -57,15 +57,15 @@ def _available_packages_by_revision(
     request: Request,
     problem: str,
     problem_id: int,
-    verified_revision_ids: list[str],
+    native_package_ids: list[str],
 ) -> dict[str, dict[str, AvailablePackage]]:
     href = problem_href_builder(request, problem)
     packages: dict[str, dict[str, AvailablePackage]] = {
-        verified_revision_id: {} for verified_revision_id in verified_revision_ids
+        native_package_id: {} for native_package_id in native_package_ids
     }
     for row in runtime().export_service.materialization_packages(
         problem_id,
-        verified_revision_ids,
+        native_package_ids,
     ):
         package_format = row["export_type"]
         packages[row["materialization_id"]][package_format] = {
@@ -81,42 +81,42 @@ def _available_packages_by_revision(
     return packages
 
 
-def _current_verified_revision(
-    verified_revision_id: str | None,
-) -> VerifiedRevision | None:
-    if not verified_revision_id:
+def _current_native_package(
+    native_package_id: str | None,
+) -> NativePackage | None:
+    if not native_package_id:
         return None
-    verified_revision = runtime().problem_package_service.verified_revision(
-        verified_revision_id
+    native_package = runtime().problem_package_service.native_package(
+        native_package_id
     )
-    if verified_revision is None or verified_revision["status"] != "available":
+    if native_package is None or native_package["status"] != "available":
         return None
-    return verified_revision
+    return native_package
 
 
 def _revision_rows(
     request: Request,
     problem: str,
     published_commit: str,
-    verified_revisions: list[VerifiedRevision],
+    native_packages: list[NativePackage],
     packages_by_revision: dict[str, dict[str, AvailablePackage]],
 ) -> list[PackageRevisionRow]:
     href = problem_href_builder(request, problem)
     rows: list[PackageRevisionRow] = []
-    for verified_revision in verified_revisions:
+    for native_package in native_packages:
         external_packages: list[AvailablePackage] = []
-        stored_packages = packages_by_revision[verified_revision["id"]]
+        stored_packages = packages_by_revision[native_package["id"]]
         for adapter in runtime().export_service.package_adapters.adapters:
             package = stored_packages.get(adapter.format)
             if package is not None:
                 external_packages.append(package)
         rows.append(
             {
-                "revision_number": verified_revision["revision_number"],
-                "current": verified_revision["source_commit"] == published_commit,
+                "revision_number": native_package["revision_number"],
+                "current": native_package["source_commit"] == published_commit,
                 "package_download_href": href(
-                    "verified_revision_file",
-                    verified_revision_id=verified_revision["id"],
+                    "native_package_file",
+                    native_package_id=native_package["id"],
                 ),
                 "external_packages": external_packages,
             }
@@ -202,26 +202,26 @@ def export_page(
     )
     problem_id = int(ctx["problem"]["id"])
     package_readiness = ctx["shell"]["readiness"]["package"]
-    current_verified_revision = _current_verified_revision(
-        package_readiness["verified_revision_id"]
+    current_native_package = _current_native_package(
+        package_readiness["native_package_id"]
     )
-    verified_revisions = (
-        runtime().problem_package_service.available_verified_revision_history(
+    native_packages = (
+        runtime().problem_package_service.available_native_package_history(
             problem_id,
             limit=40,
         )
     )
-    verified_revision_ids = [row["id"] for row in verified_revisions]
+    native_package_ids = [row["id"] for row in native_packages]
     if (
-        current_verified_revision is not None
-        and current_verified_revision["id"] not in verified_revision_ids
+        current_native_package is not None
+        and current_native_package["id"] not in native_package_ids
     ):
-        verified_revision_ids.append(current_verified_revision["id"])
+        native_package_ids.append(current_native_package["id"])
     packages_by_revision = _available_packages_by_revision(
         request,
         problem,
         problem_id,
-        verified_revision_ids,
+        native_package_ids,
     )
     actor_user_id = int(ctx["user"]["id"])
     access: ProblemAccessContext = ctx["access"]
@@ -234,7 +234,7 @@ def export_page(
         request,
         problem,
         package_readiness["published_commit"],
-        verified_revisions,
+        native_packages,
         packages_by_revision,
     )
     activity_rows = _package_attempt_rows(
@@ -262,24 +262,24 @@ def _existing_current_package_href(
     package_format: str,
 ) -> str:
     readiness = runtime().problem_package_service.published_readiness(problem_id)
-    verified_revision = _current_verified_revision(
+    native_package = _current_native_package(
         (
-            readiness["verified_revision_id"]
+            readiness["native_package_id"]
             if readiness["status"] == "ready"
             else None
         )
     )
-    if verified_revision is None:
+    if native_package is None:
         return ""
     href = problem_href_builder(request, problem)
     if package_format == NATIVE_PACKAGE_FORMAT:
         return href(
-            "verified_revision_file",
-            verified_revision_id=verified_revision["id"],
+            "native_package_file",
+            native_package_id=native_package["id"],
         )
     packages = runtime().export_service.materialization_packages(
         problem_id,
-        [verified_revision["id"]],
+        [native_package["id"]],
     )
     for package in packages:
         if (

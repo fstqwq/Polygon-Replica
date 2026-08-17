@@ -47,6 +47,11 @@ class PublicJudgehostStatusTests(unittest.TestCase):
             raw,
             [
                 {
+                    "language_id": "c",
+                    "command": "/usr/bin/gcc",
+                    "arguments": ["-std=gnu11"],
+                },
+                {
                     "language_id": "cpp",
                     "command": "/opt/toolchains/g++",
                     "arguments": ["-O2", "/private/include"],
@@ -66,6 +71,10 @@ class PublicJudgehostStatusTests(unittest.TestCase):
         self.assertNotIn("/private/include", rendered)
         self.assertNotIn("completed", projected)
         self.assertNotIn("failed", projected)
+        self.assertEqual(
+            [spec["language_id"] for spec in projected["compile_specs"]],
+            ["cpp"],
+        )
 
     def test_footer_summary_states(self) -> None:
         cases = (

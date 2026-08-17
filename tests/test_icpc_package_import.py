@@ -459,6 +459,58 @@ limits:
         self.assertEqual(str(build_cfg.get("interactor_source") or ""), "interactors/interactor.cpp")
         self.assertFalse(bool(str(build_cfg.get("checker_source") or "").strip()))
 
+    def test_import_rejects_c_only_validator_source(self) -> None:
+        payload = io.BytesIO()
+        with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(
+                "c-validator/problem.yaml",
+                "name: C Validator\nvalidation: custom\n",
+            )
+            zf.writestr("c-validator/data/secret/001.in", "1\n")
+            zf.writestr(
+                "c-validator/input_validators/validator.c",
+                "int main(void){return 0;}\n",
+            )
+            zf.writestr(
+                "c-validator/output_validator/checker.cpp",
+                "int main(){return 0;}\n",
+            )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            r"C validator source is unsupported: validators/validator\.c",
+        ):
+            import_problem_package(
+                ICPCPackageImportService(),
+                self.workspace,
+                "c-validator.zip",
+                payload.getvalue(),
+            )
+
+    def test_import_rejects_c_only_interactor_source(self) -> None:
+        payload = io.BytesIO()
+        with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(
+                "c-interactor/problem.yaml",
+                "name: C Interactor\nvalidation: custom interactive\n",
+            )
+            zf.writestr("c-interactor/data/secret/001.in", "1\n")
+            zf.writestr(
+                "c-interactor/output_validator/interactor.c",
+                "int main(void){return 0;}\n",
+            )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            r"C interactor source is unsupported: interactors/interactor\.c",
+        ):
+            import_problem_package(
+                ICPCPackageImportService(),
+                self.workspace,
+                "c-interactor.zip",
+                payload.getvalue(),
+            )
+
     def test_import_icpc_package_without_accepted_submission_does_not_create_fallback_solution(self) -> None:
         ws = self._workspace_path()
         payload = io.BytesIO()

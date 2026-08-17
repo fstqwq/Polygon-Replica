@@ -28,7 +28,7 @@ from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.judgehost_adapter import VerificationJudgehostAdapter
 from app.service.export.service import ExportService
 from app.service.problem_package.service import ProblemPackageService
-from app.service.problem_package.workflow import VerifiedRevisionWorkflow
+from app.service.problem_package.workflow import NativePackageWorkflow
 from app.service.problem.readiness import ProblemReadinessService
 from app.service.problem.query import ProblemSourceQueryService
 from app.service.repository.git import GitService
@@ -109,7 +109,7 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
     judgehost_task_service: Judgehost = field(init=False)
     export_service: ExportService = field(init=False)
     problem_package_service: ProblemPackageService = field(init=False)
-    verified_revision_workflow: VerifiedRevisionWorkflow = field(init=False)
+    native_package_workflow: NativePackageWorkflow = field(init=False)
     problem_readiness_service: ProblemReadinessService = field(init=False)
     problem_source_query_service: ProblemSourceQueryService = field(init=False)
     worker_queue_service: WorkerQueueService = field(init=False)
@@ -324,7 +324,7 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
             verification_id_allocator=self.verification_service.allocate_verification_id,
             statement_examples_producer=self.statement_examples_producer,
         )
-        self.verified_revision_workflow = VerifiedRevisionWorkflow(
+        self.native_package_workflow = NativePackageWorkflow(
             self.problem_package_service,
             self.verification_service,
             self.verification_workflow,

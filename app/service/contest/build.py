@@ -9,7 +9,7 @@ from app.service.contest.statement import ContestStatementService
 from app.service.platform.worker_queue import WorkerQueueService
 from app.service.problem_package.service import (
     ProblemPackageService,
-    VerifiedRevisionReader,
+    NativePackageReader,
 )
 
 
@@ -234,7 +234,7 @@ class ContestBuildService:
             output_results: dict[str, dict[str, object]] = {}
             try:
                 with ExitStack() as readers_stack:
-                    readers: dict[str, VerifiedRevisionReader] = {}
+                    readers: dict[str, NativePackageReader] = {}
                     for entry in items:
                         materialization_id = str(entry["materialization_id"])
                         readers[materialization_id] = readers_stack.enter_context(
@@ -295,12 +295,12 @@ class ContestBuildService:
                 status = "failed"
             final_summary: dict[str, object] = {
                 **initial_summary,
-                "verified_revisions": [
+                "native_packages": [
                     {
                         "problem_slug": str(entry["problem_slug"]),
                         "revision_number": int(entry["revision_number"]),
                         "source_commit": str(entry["source_commit"]),
-                        "verified_revision_id": str(entry["materialization_id"]),
+                        "native_package_id": str(entry["materialization_id"]),
                         "archive_sha256": str(entry["archive_sha256"]),
                     }
                     for entry in items

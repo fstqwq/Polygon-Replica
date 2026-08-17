@@ -1,6 +1,6 @@
-"""Prepare statement samples in an ephemeral verified revision reader.
+"""Prepare statement samples in an ephemeral Native Package reader.
 
-The verified revision keeps authored sources and verified judge payloads
+The Native Package keeps authored sources and captured judge payloads
 separate.  Statement consumers call this helper after extraction so generated
 samples are rendered from the exact input and answer recorded by verification.
 The persisted archive is never modified.
@@ -11,39 +11,43 @@ from app.service.problem.test_spec import (
     load_tests_spec,
     read_statement_sample_text,
 )
-from app.service.problem_package.service import VerifiedRevisionReader
+from app.service.problem_package.service import NativePackageReader
 
 
-def hydrate_verified_statement_samples(
-    revision: VerifiedRevisionReader,
+def hydrate_native_package_statement_samples(
+    native_package: NativePackageReader,
     *,
     tests_spec_max_bytes: int,
     statement_sample_max_bytes: int,
 ) -> None:
-    """Fill missing display samples from the verified judge payloads."""
+    """Fill missing display samples from captured judge payloads."""
 
     if statement_sample_max_bytes <= 0:
         raise ValueError("statement sample display byte limit must be positive")
 
-    spec_path = revision.root / "tests" / "spec.json"
+    spec_path = native_package.root / "tests" / "spec.json"
     rows = load_tests_spec(
         spec_path,
         document_max_bytes=tests_spec_max_bytes,
         sample_max_bytes=statement_sample_max_bytes,
     )
-    manifest_by_id = {row["id"]: row for row in revision.manifest["tests"]}
+    manifest_by_id = {row["id"]: row for row in native_package.manifest["tests"]}
     changed = False
     for row in rows:
         if not row["sample"]:
             continue
         materialized = manifest_by_id.get(str(row["id"]))
         if materialized is None:
-            raise ValueError(f"verified revision is missing test: {row['id']}")
-        input_path = revision.payload(materialized, "sample_input") or revision.payload(
+            raise ValueError(f"Native Package is missing test: {row['id']}")
+        input_path = native_package.payload(
+            materialized, "sample_input"
+        ) or native_package.payload(
             materialized,
             "input",
         )
-        output_path = revision.payload(materialized, "sample_output") or revision.payload(
+        output_path = native_package.payload(
+            materialized, "sample_output"
+        ) or native_package.payload(
             materialized,
             "answer",
         )

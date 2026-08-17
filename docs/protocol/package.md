@@ -9,10 +9,9 @@ published source -> Native Package -> external packages
 A Native Package is not another source revision. It is the cleanup-safe result
 of fully verifying one immutable published Git commit and retaining the
 committed source, generated testcase inputs, and official answers needed by
-delivery consumers. The implementation persists this object as a verified
-revision/materialization and exposes it to adapters through
-`VerifiedRevisionReader`; those internal names do not define a second package
-kind.
+delivery consumers. The implementation stores its metadata as a package
+materialization and exposes its validated archive through
+`NativePackageReader`.
 
 ## Import boundary
 
@@ -79,7 +78,7 @@ workspace tree before comparison or replacement.
 ## Native Package identity and contents
 
 At most one Native Package materialization exists for a
-`(problem_id, source_commit)` pair. Its internal verified-revision record keeps
+`(problem_id, source_commit)` pair. Its internal native-package record keeps
 the published revision number, source digest, Verification provenance, archive
 locator, archive size and SHA-256, timestamps, and current availability.
 Rebuilding the same Git revision reuses that identity.
@@ -187,7 +186,7 @@ For the frozen commit, the worker:
 The problem Packages page accepts `native`, `domjudge`, `icpc-2025-09`, `qoj`,
 and `nowcoder`.
 `native` prepares the Native Package when necessary and creates no row in
-`exports`; the Agent Package Export API exposes the four derived formats.
+`exports`; the Agent Package Export API exposes the four external formats.
 Separate request attempts keep separate job IDs even when they resolve
 to the same cached external package. Problem-level external-package cache
 identity is the Native Package materialization and target format. A standalone
@@ -205,7 +204,7 @@ does not accept a historical revision selector.
 
 A package adapter accepts only:
 
-- an already validated `VerifiedRevisionReader` for a Native Package;
+- an already validated `NativePackageReader` for a Native Package;
 - the target external format;
 - canonical naming options; and
 - a caller-owned empty staging directory.
@@ -257,11 +256,12 @@ claiming strict ICPC 2025-09 conformance. It contains:
 - `problem_statement/problem.pdf`;
 - testcase data, validators, verdict directories, and attachments.
 
-C and C++ validators and interactors in both external packages include executable
+C++ validators and interactors in both external packages include executable
 `build` and `run` files. The build file compiles the copied source with
-`DOMJUDGE` defined and produces the executable used by `run`. This keeps the
-program contract explicit in both layouts instead of relying on an importer's
-language inference.
+`DOMJUDGE` defined and produces the executable used by `run`. C component
+sources are unsupported and are not renamed or translated to C++. This keeps
+the program contract explicit in both layouts instead of relying on an
+importer's language inference.
 
 It excludes `statement/` and `submissions/submissions.yaml`. Standard accepted,
 wrong-answer, time-limit, and runtime-error submissions use their conventional

@@ -1622,9 +1622,9 @@ def _export_wait_debug(job_id: str) -> dict[str, object]:
                 [int(job["problem_id"]), str(job["source_commit"] or "")],
             ).fetchone()
             if build is None:
-                debug["verified_revision_build"] = "missing"
+                debug["native_package_build"] = "missing"
                 return debug
-            debug["verified_revision_build"] = dict(build)
+            debug["native_package_build"] = dict(build)
             verification_id = str(build["verification_id"] or "")
             verification = connection.execute(
                 "SELECT * FROM verifications WHERE id=?",

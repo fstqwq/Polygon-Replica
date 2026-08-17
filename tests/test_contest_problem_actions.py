@@ -24,10 +24,10 @@ class TestContestProblemActions(ContestActionBase):
                 "problem_id": problem_id,
                 "published_commit": "a" * 40,
                 "published_revision_number": 1,
-                "verified_revision_number": None,
-                "verified_revision_id": "",
+                "native_package_revision_number": None,
+                "native_package_id": "",
                 "status": "none",
-                "missing_reason": "No verified revision",
+                "missing_reason": "No Native Package",
             }
             for problem_id in (first_problem_id, second_problem_id)
         }

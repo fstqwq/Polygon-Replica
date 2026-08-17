@@ -26,8 +26,8 @@ from app.service.export.adapters.icpc_2025 import (
     render_submissions_yaml,
 )
 from app.service.export.adapters import PackageAdapterRegistry
-from app.service.problem_package.manifest import VerifiedRevisionManifest, describe_file
-from app.service.problem_package.service import VerifiedRevisionReader
+from app.service.problem_package.manifest import NativePackageManifest, describe_file
+from app.service.problem_package.service import NativePackageReader
 from app.service.problem_package.store import MaterializationRow
 
 
@@ -244,31 +244,19 @@ class TestICPCExportPackage(unittest.TestCase):
         result = subprocess.run([str(validator_dir / "run")], cwd=validator_dir, check=False)
         self.assertEqual(result.returncode, 42)
 
-    def test_c_validator_build_script_defines_domjudge(self) -> None:
-        self.assertIsNotNone(shutil.which("cc"), "Linux test host must provide cc")
+    def test_c_validator_source_is_rejected(self) -> None:
         validator = self.snapshot / "validator.c"
-        validator.write_text(
-            "#ifndef DOMJUDGE\n"
-            "#error DOMJUDGE must be defined by the package build file\n"
-            "#endif\n"
-            "int main(void) { return 0; }\n",
-            encoding="utf-8",
-        )
-        write_output_validator(
-            snapshot=self.snapshot,
-            package_root=self.package,
-            source=validator,
-        )
-        validator_dir = self.package / "output_validator"
-        build = validator_dir / "build"
-        self.assertIn("-DDOMJUDGE", build.read_text(encoding="utf-8"))
-        subprocess.run([str(build)], cwd=validator_dir, check=True)
-        result = subprocess.run(
-            [str(validator_dir / "run")],
-            cwd=validator_dir,
-            check=False,
-        )
-        self.assertEqual(result.returncode, 42)
+        validator.write_text("int main(void) { return 0; }\n", encoding="utf-8")
+        with self.assertRaisesRegex(
+            ValueError,
+            r"unsupported ICPC validator language: \.c",
+        ):
+            write_output_validator(
+                snapshot=self.snapshot,
+                package_root=self.package,
+                source=validator,
+            )
+        self.assertFalse((self.package / "output_validator" / "validator.c").exists())
 
     def test_missing_input_validator_gets_explicit_accept_all_program(self) -> None:
         write_input_validator(snapshot=self.snapshot, package_root=self.package, source=None)
@@ -404,7 +392,7 @@ class TestICPCExportPackage(unittest.TestCase):
         *,
         mode: str,
         pass_limit: int,
-    ) -> VerifiedRevisionReader:
+    ) -> NativePackageReader:
         package_root = self.root / "verified"
         (package_root / "config").mkdir(parents=True)
         (package_root / "tests").mkdir()
@@ -497,7 +485,7 @@ class TestICPCExportPackage(unittest.TestCase):
             "checked_at": "2026-01-01T00:00:00Z",
             "unavailable_reason": "",
         }
-        manifest: VerifiedRevisionManifest = {
+        manifest: NativePackageManifest = {
             "source_commit": materialization["source_commit"],
             "revision_number": 3,
             "source_digest": materialization["source_digest"],
@@ -525,8 +513,8 @@ class TestICPCExportPackage(unittest.TestCase):
                 }
             ],
         }
-        return VerifiedRevisionReader(
-            verified_revision=materialization,
+        return NativePackageReader(
+            native_package=materialization,
             root=package_root,
             manifest=manifest,
         )

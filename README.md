@@ -21,12 +21,12 @@ per-user workspace ---- verify and review
       |
       | publish
       v
-official problem version ---- full verification ---- verified revision
+official problem version ---- full verification ---- Native Package
                                                         |
                          +------------------------------+-------------------+
                          |                 |                    |           |
                          v                 v                    v           v
-             Polygon Replica package  DOMjudge package  ICPC 2025-09  Contest builds
+                direct download     package adapters     Contest PDFs  Contest packages
 ```
 
 A workspace is a private working copy belonging to one user. Publishing saves
@@ -35,16 +35,16 @@ each version is a Git commit on the problem's `main` branch, so the exact source
 used for a package can always be identified. Generated inputs, answers, logs,
 PDFs, and archives can be cleaned and rebuilt without deleting that history.
 
-After a full verification succeeds, that official version becomes a
-**verified revision**. It retains the exact published source together with the
-generated test inputs and official answers used by the run. Its Polygon Replica
-package is the system's own downloadable serialization. DOMjudge and ICPC
-2025-09 packages are projections of the same verified revision, not separate
+After a full verification succeeds, the system produces a **Native Package**
+for that official version. It retains the exact published source together with the
+generated test inputs and official answers used by the run. It is directly
+downloadable. DOMjudge, ICPC 2025-09, QOJ, and Nowcoder packages are external
+packages produced by adapters from the same Native Package, not separate
 verification results.
 
-Contest builds consume only verified revisions that already exist. They never
+Contest builds consume only Native Packages that already exist. They never
 start a problem verification implicitly. A Contest can therefore use the
-latest verified revision even when it trails the newest published version, and
+latest Native Package even when it trails the newest published version, and
 its readiness page makes that distinction visible.
 
 ## Installation

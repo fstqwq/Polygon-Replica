@@ -10,9 +10,9 @@ from app.service.contest.naming import problem_source_folder
 from app.service.contest.model import ContestBuildItemRecord
 from app.service.contest.service import ContestService
 from app.service.problem.runtime_config import problem_config_limits
-from app.service.problem_package.service import VerifiedRevisionReader
+from app.service.problem_package.service import NativePackageReader
 from app.service.problem_package.statement_samples import (
-    hydrate_verified_statement_samples,
+    hydrate_native_package_statement_samples,
 )
 from app.service.sandbox.base import ExecResult
 from app.service.statement.constant import DEFAULT_OLYMP_STY
@@ -59,7 +59,7 @@ _COLOR_DEFINITION_LINE_RE = re.compile(
 
 
 class ContestStatementService:
-    """Build Contest PDFs from frozen verified revisions and durable sources."""
+    """Build Contest PDFs from frozen Native Packages and durable sources."""
 
     def __init__(
         self,
@@ -489,7 +489,7 @@ class ContestStatementService:
         entry: ContestBuildItemRecord,
         source_folder: str,
         language: str,
-        reader: VerifiedRevisionReader,
+        reader: NativePackageReader,
     ) -> dict[str, object]:
         problem_slug = str(entry["problem_slug"])
         item: dict[str, object] = {
@@ -505,7 +505,7 @@ class ContestStatementService:
             item["error"] = f"contest source folder missing for {problem_slug}"
             return item
         try:
-            hydrate_verified_statement_samples(
+            hydrate_native_package_statement_samples(
                 reader,
                 tests_spec_max_bytes=self._config.integer("TEXTAREA_MAX_BYTES"),
                 statement_sample_max_bytes=self._config.integer(
@@ -534,7 +534,7 @@ class ContestStatementService:
             item["preamble_lines"] = self._extract_color_definitions(
                 reader.root / "statement" / "olymp.sty"
             )
-            item["verified_revision_id"] = str(entry["materialization_id"])
+            item["native_package_id"] = str(entry["materialization_id"])
             item["status"] = "success"
         except Exception as exc:  # Each problem is represented in the build report.
             item["error"] = str(exc)
@@ -561,7 +561,7 @@ class ContestStatementService:
         job_id: str,
         language: str,
         insert_blank_pages: bool,
-        readers: dict[str, VerifiedRevisionReader],
+        readers: dict[str, NativePackageReader],
     ) -> dict[str, object]:
         job_root = self._contest.job_root(contest_slug, job_id)
         compile_root = (job_root / "contest-pdf-src").resolve()

@@ -18,8 +18,8 @@ from app.service.problem.runtime_config import (
 )
 from app.service.problem.standard_checker import detect_standard_checker
 from app.service.problem_package.layout import STATEMENT_BUILD_DIR
-from app.service.problem_package.manifest import VerifiedTestEntry
-from app.service.problem_package.service import VerifiedRevisionReader
+from app.service.problem_package.manifest import NativePackageTestEntry
+from app.service.problem_package.service import NativePackageReader
 from app.service.statement.context import statement_languages
 
 
@@ -30,7 +30,6 @@ _QOJ_BUILTIN_CHECKERS = {
     "wcmp.cpp": "wcmp",
 }
 _QOJ_SOLUTION_SUFFIXES = {
-    ".c": ".c",
     ".c++": ".cpp",
     ".cc": ".cpp",
     ".cpp": ".cpp",
@@ -119,7 +118,7 @@ class QOJPackageAdapter(PackageAdapterSupport):
     display_name = "QOJ"
     accepts_short_name = False
 
-    def plan(self, reader: VerifiedRevisionReader) -> PackageAdapterPlan:
+    def plan(self, reader: NativePackageReader) -> PackageAdapterPlan:
         """Validate QOJ support and report advisory source omissions."""
 
         self._problem_config(reader)
@@ -142,7 +141,7 @@ class QOJPackageAdapter(PackageAdapterSupport):
 
     def build(
         self,
-        reader: VerifiedRevisionReader,
+        reader: NativePackageReader,
         *,
         target: Path,
         canonical_problem_slug: str,
@@ -187,7 +186,7 @@ class QOJPackageAdapter(PackageAdapterSupport):
         )
         return adapter_plan.warning
 
-    def _problem_config(self, reader: VerifiedRevisionReader) -> ProblemConfig:
+    def _problem_config(self, reader: NativePackageReader) -> ProblemConfig:
         tests = reader.manifest["tests"]
         if not tests:
             raise ValueError("QOJ package requires at least one test")
@@ -210,7 +209,7 @@ class QOJPackageAdapter(PackageAdapterSupport):
 
     def _copy_programs(
         self,
-        reader: VerifiedRevisionReader,
+        reader: NativePackageReader,
         target: Path,
         *,
         build_config: BuildConfig,
@@ -279,8 +278,8 @@ class QOJPackageAdapter(PackageAdapterSupport):
         shutil.copy2(source, destination)
 
     @staticmethod
-    def _copy_tests(reader: VerifiedRevisionReader, target: Path) -> None:
-        samples: list[VerifiedTestEntry] = []
+    def _copy_tests(reader: NativePackageReader, target: Path) -> None:
+        samples: list[NativePackageTestEntry] = []
         for number, test in enumerate(reader.manifest["tests"], start=1):
             QOJPackageAdapter._copy_test_pair(
                 reader,
@@ -302,8 +301,8 @@ class QOJPackageAdapter(PackageAdapterSupport):
 
     @staticmethod
     def _copy_test_pair(
-        reader: VerifiedRevisionReader,
-        test: VerifiedTestEntry,
+        reader: NativePackageReader,
+        test: NativePackageTestEntry,
         *,
         input_target: Path,
         answer_target: Path,
@@ -320,7 +319,7 @@ class QOJPackageAdapter(PackageAdapterSupport):
         if input_source is None:
             input_source = QOJPackageAdapter._payload(reader, test, "input")
         if input_source is None:
-            raise ValueError(f"verified test input is missing: {test_id}")
+            raise ValueError(f"Native Package test input is missing: {test_id}")
         shutil.copy2(input_source, input_target)
         answer_source = None
         if use_sample_payload:
@@ -333,15 +332,15 @@ class QOJPackageAdapter(PackageAdapterSupport):
             answer_source = QOJPackageAdapter._payload(reader, test, "answer")
         if answer_source is None:
             if reader.manifest["mode"] != "interactive":
-                raise ValueError(f"verified test answer is missing: {test_id}")
+                raise ValueError(f"Native Package test answer is missing: {test_id}")
             answer_target.write_bytes(b"")
             return
         shutil.copy2(answer_source, answer_target)
 
     @staticmethod
     def _payload(
-        reader: VerifiedRevisionReader,
-        test: VerifiedTestEntry,
+        reader: NativePackageReader,
+        test: NativePackageTestEntry,
         key: Literal["input", "answer", "sample_input", "sample_output"],
     ) -> Path | None:
         source = reader.payload(test, key)
@@ -353,11 +352,11 @@ class QOJPackageAdapter(PackageAdapterSupport):
             resolved.relative_to(root)
         except ValueError as exc:
             raise ValueError(
-                f"verified test {key} escapes the package: {test['id']}"
+                f"Native Package test {key} escapes the package: {test['id']}"
             ) from exc
         if source.is_symlink() or not source.is_file():
             raise ValueError(
-                f"verified test {key} artifact is missing: {test['id']}"
+                f"Native Package test {key} artifact is missing: {test['id']}"
             )
         return source
 
@@ -405,7 +404,7 @@ class QOJPackageAdapter(PackageAdapterSupport):
 
     def _write_statement_pdf(
         self,
-        reader: VerifiedRevisionReader,
+        reader: NativePackageReader,
         destination: Path,
     ) -> None:
         languages = statement_languages(reader.root)

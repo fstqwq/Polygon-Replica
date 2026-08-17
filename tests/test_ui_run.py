@@ -355,8 +355,8 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             "problem_id": problem_id,
             "published_commit": workspace_row["head_commit"],
             "published_revision_number": workspace_row["revision_upstream"],
-            "verified_revision_number": None,
-            "verified_revision_id": "",
+            "native_package_revision_number": None,
+            "native_package_id": "",
             "status": "none",
             "missing_reason": "Package not built",
         }
@@ -5898,8 +5898,8 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             "problem_id": 1,
             "published_commit": head_commit,
             "published_revision_number": 1,
-            "verified_revision_number": 1,
-            "verified_revision_id": "mat-current",
+            "native_package_revision_number": 1,
+            "native_package_id": "mat-current",
             "status": "ready",
             "missing_reason": "",
         }
@@ -5922,7 +5922,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
     def test_packages_page_lists_only_available_revision_packages_for_readers(
         self,
     ) -> None:
-        from app.impl.run_export.artifact import verified_revision_file
+        from app.impl.run_export.artifact import native_package_file
 
         workspace_service.ensure_user("bob")
         workspace_service.grant_repo_access("alice/sample", "bob", "read")
@@ -5961,7 +5961,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                     f"{revision:x}" * 64,
                     (
                         f"materializations/{problem_id}/{source_commits[revision]}"
-                        "/verified-revision.zip"
+                        "/native-package.zip"
                     ),
                     f"{revision + 4:x}" * 64,
                     100 + revision,
@@ -6020,9 +6020,9 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                     "status": "none",
                     "published_revision_number": 5,
                     "published_commit": source_commits[5],
-                    "verified_revision_number": None,
-                    "verified_revision_id": "",
-                    "missing_reason": "not verified",
+                    "native_package_revision_number": None,
+                    "native_package_id": "",
+                    "missing_reason": "Package unavailable",
                 },
             ),
         ):
@@ -6051,8 +6051,8 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertNotIn("Verify this version", html)
         for revision in (2, 3, 4):
             self.assertIn(
-                f"/problems/alice/sample/verified-revisions/"
-                f"{revision_ids[revision]}/package",
+                f"/problems/alice/sample/native-packages/"
+                f"{revision_ids[revision]}/download",
                 html,
             )
         self.assertNotIn(revision_ids[1], html)
@@ -6066,23 +6066,23 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         for verification_id in verification_ids.values():
             self.assertNotIn(verification_id, html)
         self.assertNotIn("package failed for alice", html)
-        verified_revision = runtime.problem_package_service.verified_revision(
+        native_package = runtime.problem_package_service.native_package(
             revision_ids[4]
         )
-        self.assertIsNotNone(verified_revision)
-        archive = Path(runtime.settings.artifacts_root) / "fixture-verified-revision.zip"
+        self.assertIsNotNone(native_package)
+        archive = Path(runtime.settings.artifacts_root) / "fixture-native-package.zip"
         archive.write_bytes(b"polygon replica package")
         download = SimpleNamespace(
-            verified_revision=verified_revision,
+            native_package=native_package,
             chunks=lambda: iter((archive.read_bytes(),)),
             close=lambda: None,
         )
         with patch.object(
             runtime.problem_package_service,
-            "open_verified_revision_download",
+            "open_native_package_download",
             return_value=download,
         ):
-            response = verified_revision_file(
+            response = native_package_file(
                 "alice/sample",
                 "bob",
                 revision_ids[4],
@@ -6104,9 +6104,9 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         problem_id = int(context["problem"]["id"])
         source_commit = str(context["workspace"]["head_commit"] or "")
         published_revision = 1
-        verified_revision_id = f"vr-package-page-{uuid.uuid4().hex[:8]}"
-        verified_revision = {
-            "id": verified_revision_id,
+        native_package_id = f"pm-package-page-{uuid.uuid4().hex[:8]}"
+        native_package = {
+            "id": native_package_id,
             "problem_id": problem_id,
             "source_commit": source_commit,
             "revision_number": published_revision,
@@ -6125,11 +6125,11 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 "problem_id": problem_id,
                 "published_commit": source_commit,
                 "published_revision_number": published_revision,
-                "verified_revision_number": (
+                "native_package_revision_number": (
                     published_revision if status == "ready" else None
                 ),
-                "verified_revision_id": (
-                    verified_revision_id if status == "ready" else ""
+                "native_package_id": (
+                    native_package_id if status == "ready" else ""
                 ),
                 "status": status,
                 "missing_reason": "",
@@ -6143,16 +6143,16 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                     ),
                     patch.object(
                         runtime.problem_package_service,
-                        "verified_revision",
+                        "native_package",
                         return_value=(
-                            verified_revision if status == "ready" else None
+                            native_package if status == "ready" else None
                         ),
                     ),
                     patch.object(
                         runtime.problem_package_service,
-                        "available_verified_revision_history",
+                        "available_native_package_history",
                         return_value=(
-                            [verified_revision] if status == "ready" else []
+                            [native_package] if status == "ready" else []
                         ),
                     ),
                     patch.object(
@@ -6183,18 +6183,18 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             include_recent=False,
         )
         problem_id = int(context["problem"]["id"])
-        verified_revision_id = "pm-current-package"
+        native_package_id = "pm-current-package"
         readiness = {
             "problem_id": problem_id,
             "published_commit": "a" * 40,
             "published_revision_number": 3,
-            "verified_revision_number": 3,
-            "verified_revision_id": verified_revision_id,
+            "native_package_revision_number": 3,
+            "native_package_id": native_package_id,
             "status": "ready",
             "missing_reason": "",
         }
-        verified_revision = {
-            "id": verified_revision_id,
+        native_package = {
+            "id": native_package_id,
             "problem_id": problem_id,
             "source_commit": "a" * 40,
             "revision_number": 3,
@@ -6216,8 +6216,8 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             ),
             patch.object(
                 runtime.problem_package_service,
-                "verified_revision",
-                return_value=verified_revision,
+                "native_package",
+                return_value=native_package,
             ),
             patch.object(
                 runtime.export_service,
@@ -6225,7 +6225,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 return_value=[
                     {
                         "export_id": "e-current",
-                        "materialization_id": verified_revision_id,
+                        "materialization_id": native_package_id,
                         "export_type": "domjudge",
                         "filename": "sample-domjudge-v3.zip",
                     }

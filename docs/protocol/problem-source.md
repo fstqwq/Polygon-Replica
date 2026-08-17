@@ -12,8 +12,8 @@ Authored entries are limited to `attachments/`, `checkers/`, `config/`,
 `statement-assets/`, `statement-sections/`, `tests/`, `third_party/`, and
 `validators/`. They are regular files and directories; symbolic links,
 special files, hidden paths, and materialized answer paths are invalid. The
-workspace's `.git` metadata is outside the authored tree. A Polygon Replica
-package's `test-data/` and `statement-build/` trees are never authored source.
+workspace's `.git` metadata is outside the authored tree. A Native Package's
+`test-data/` and `statement-build/` trees are never authored source.
 
 ## Problem configuration
 
@@ -30,7 +30,7 @@ consumers never supply a missing field, clamp an authored value, or replace a
 missing or malformed file. Authoring pages are different: they show the
 configuration error under Review and Publish and use the defaults only to keep
 the editor operable. Saving the General form writes one complete canonical
-object. Verification, Package Export, Contest builds, and verified-revision
+object. Verification, Package Export, Contest builds, and Native Package
 construction still reject the invalid source at their entrance.
 Execution dispatches the accepted values without another memory floor.
 
@@ -116,7 +116,7 @@ source selected by `generator_sources`, and the remaining tokens are its
 arguments. A missing payload, unselected or missing generator, or ambiguous
 generator token invalidates the source tree. Files merely present below
 `generators/` are not executable inputs until selected. An empty `tests` array
-has no implicit discovery behavior; verification and verified-revision
+has no implicit discovery behavior; Verification and Native Package
 construction require at least one explicit test.
 
 The runtime generator input payload is the generator executable invocation plus
@@ -136,6 +136,7 @@ canonical writer emits `expected: <behavior>` and zero or more `note: <text>`
 lines. It omits a descriptor for `unknown` with no note. Current behavior values
 are `accepted`, `wrong_answer`, `tle_or_correct`, `tle_or_re`,
 `time_limit_exceeded`, `run_time_error`, `rejected`, and `unknown`.
+The system does not accept or dispatch `.c` solution sources.
 
 A missing descriptor means `unknown`. When a descriptor exists, `expected`
 occurs exactly once; each non-empty line is either `expected: ...` or
@@ -147,9 +148,9 @@ inference is performed at runtime. Polygon and ICPC importers may infer external
 intent and materialize descriptors for other behaviors before returning the
 imported workspace.
 
-## Polygon Replica package import and preflight
+## Native Package import and preflight
 
-A Polygon Replica package contains the committed source tree at its root plus a
+A Native Package contains the committed source tree at its root plus a
 complete `test-data/manifest.json`, its declared verified test payloads, and a
 derived `statement-build/<language>/` offline TeX tree.
 Import identifies native source by `config/problem.json` and selects only the
@@ -157,7 +158,7 @@ canonical authored roots. It treats both derived trees exactly like any other
 unknown package members: they are not opened, parsed, checksummed, or persisted.
 Generated answers never enter the destination workspace or Git history, and the
 imported problem does not inherit the source problem's verification provenance
-or verified-revision identity.
+or Native Package materialization identity.
 
 Operators can inspect all published `main` revisions without mutating Git:
 
@@ -217,7 +218,7 @@ render-resource boundary.
 Statement languages are ordered as English, Chinese, then alphabetically. The
 producer obtains sample order and explicit display overrides from
 `tests/spec.json`. Browser Preview may run a sample-only Verification and a
-Verified Revision uses its full Verification; both consume the same
+Native Package creation uses its full Verification; both consume the same
 main-correct per-pass artifacts without modifying the source snapshot.
 
 The canonical examples template preserves Polygon compatibility by rendering

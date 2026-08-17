@@ -91,7 +91,7 @@ class TestContestBuilds(ContestActionBase):
             summary={"job_type": "build", "contest_slug": contest_slug},
         )
 
-    def test_missing_verified_revision_returns_409_without_creating_job(self) -> None:
+    def test_missing_native_package_returns_409_without_creating_job(self) -> None:
         contest_slug, contest_id, _problem_id, _problem_slug = self._contest_with_problem()
 
         with self.assertRaises(HTTPException) as raised:
@@ -635,7 +635,7 @@ class TestContestBuilds(ContestActionBase):
 
     def test_bundle_projects_directly_and_stages_frozen_identity(self) -> None:
         contest_slug, contest_id, problem_id, problem_slug = self._contest_with_problem()
-        verified_revision_id = self._seed_materialization(
+        native_package_id = self._seed_materialization(
             problem_id=problem_id,
             source_commit="4" * 40,
             revision_number=6,
@@ -676,7 +676,7 @@ class TestContestBuilds(ContestActionBase):
             job_id=str(frozen["job_id"]),
             package_format="domjudge",
             readers={
-                verified_revision_id: SimpleNamespace(root=Path("."), manifest={})
+                native_package_id: SimpleNamespace(root=Path("."), manifest={})
             },
         )
 
@@ -706,8 +706,8 @@ class TestContestBuilds(ContestActionBase):
             self.assertEqual(manifest["problems"][0]["idx"], "A")
             self.assertEqual(manifest["problems"][0]["problem"], problem_slug)
             self.assertEqual(
-                manifest["problems"][0]["verified_revision_id"],
-                verified_revision_id,
+                manifest["problems"][0]["native_package_id"],
+                native_package_id,
             )
             self.assertTrue(manifest["problems"][0]["archive_sha256"])
             child_name = manifest["problems"][0]["package"]

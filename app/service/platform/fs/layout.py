@@ -200,7 +200,7 @@ class StorageLayout:
             field_name="snapshot_download_id",
         )
 
-    def materialization_revision_archive(
+    def materialization_archive(
         self,
         problem_id: int,
         source_commit: str,
@@ -210,7 +210,7 @@ class StorageLayout:
         commit = self._normalize_token(source_commit, field_name="source_commit")
         return self._safe_relative(
             self.materialization_root,
-            f"{problem_id}/{commit}/verified-revision.zip",
+            f"{problem_id}/{commit}/native-package.zip",
             field_name="materialization",
         )
 

@@ -20,6 +20,7 @@ from app.impl.runtime.dependency import runtime
 from app.impl.workspace.access import require_system_admin
 from app.impl.workspace.context import GlobalUserPageContext, global_user_ctx
 from app.main_util import form_text
+from app.service.judgehost.languages import JUDGEHOST_LANGUAGE_BY_ID
 from app.service.platform.source_backup import SOURCE_BACKUP_DOWNLOAD_NAME
 from app.service.verification.runtime import coerce_int
 
@@ -234,18 +235,20 @@ def _version_summary(output: str) -> str:
 def _toolchain_views(raw_toolchains: object) -> list[JudgehostToolchainView]:
     if not isinstance(raw_toolchains, list):
         return []
-    language_labels = {"c": "C", "cpp": "C++", "java": "Java", "py": "Python"}
     out: list[JudgehostToolchainView] = []
     for raw in raw_toolchains:
         if not isinstance(raw, dict):
             continue
         language_id = str(raw.get("language_id") or "")
+        language = JUDGEHOST_LANGUAGE_BY_ID.get(language_id)
+        if language is None:
+            continue
         compiler = str(raw.get("compiler") or "")
         runner = str(raw.get("runner") or "")
         out.append(
             {
                 "language_id": language_id,
-                "language_label": language_labels.get(language_id, language_id or "Unknown"),
+                "language_label": language.label,
                 "compiler": compiler,
                 "compiler_summary": _version_summary(compiler),
                 "runner": runner,

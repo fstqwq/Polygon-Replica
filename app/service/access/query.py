@@ -420,17 +420,17 @@ class AccessQuery:
             "download_block_reason": ("" if can_download else "export artifact is not available"),
         }
 
-    def verified_revision_context(
+    def native_package_context(
         self,
         *,
         actor_user_id: int,
         expected_problem_id: int,
-        verified_revision: Mapping[str, object] | None,
+        native_package: Mapping[str, object] | None,
         problem_access: ProblemAccessContext | None = None,
     ) -> PackageJobAccessContext:
         matches_problem = (
-            verified_revision is not None
-            and _database_int(verified_revision["problem_id"], field="problem_id")
+            native_package is not None
+            and _database_int(native_package["problem_id"], field="problem_id")
             == expected_problem_id
         )
         access = (

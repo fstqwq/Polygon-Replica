@@ -27,8 +27,8 @@ from app.service.problem.build_config import (
 )
 from app.service.problem_package.manifest import load_manifest, validate_manifest_files
 from app.service.problem_package.service import (
-    FrozenVerifiedRevisionMismatch,
-    VerifiedRevisionOperationBusy,
+    FrozenNativePackageMismatch,
+    NativePackageOperationBusy,
 )
 from app.service.verification.lifecycle import PlannedTask, verification_task_id
 from app.service.verification.task_completion import TaskCompletion
@@ -45,7 +45,7 @@ from tests.execution_result_helpers import execution_result
 
 
 class TestPublishedRevisionExport(E2ETestBase):
-    def test_verified_revision_reserves_the_configured_main_solution(self) -> None:
+    def test_native_package_reserves_the_configured_main_solution(self) -> None:
         from app.service.problem_package.workflow import build_full_verification_targets
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -141,7 +141,7 @@ class TestPublishedRevisionExport(E2ETestBase):
         )
         commit = runtime.git_service.commit(
             workspace,
-            "publish verified revision fixture",
+            "publish Native Package fixture",
             self.user,
             f"{self.user}@polygonlike.local",
         )
@@ -176,12 +176,12 @@ class TestPublishedRevisionExport(E2ETestBase):
                 str(build_row["status"]),
                 str(build_row["phase"]),
             ) != ("running", "verification"):
-                raise AssertionError("verified revision build phase is not verification")
+                raise AssertionError("Native Package build phase is not verification")
             admission = admit_test_verification(
                 verification_id=verification_id,
                 problem_id=problem_id,
                 workspace_id=None,
-                signature="verified-revision-test",
+                signature="native-package-test",
                 source_commit=commit,
                 kind="all",
             )
@@ -313,11 +313,11 @@ class TestPublishedRevisionExport(E2ETestBase):
 
         return build
 
-    def _verified_revision(self):
+    def _native_package(self):
         _workspace, problem_id, commit = self._publish_problem()
         revision = runtime.problem_package_service.published_revision(problem_id)
         self.assertEqual(revision.source_commit, commit)
-        verified = runtime.problem_package_service.ensure_verified_revision(
+        verified = runtime.problem_package_service.ensure_native_package(
             revision,
             self._verification_builder(problem_id),
         )
@@ -384,8 +384,8 @@ class TestPublishedRevisionExport(E2ETestBase):
                 runtime.export_inflight.discard(key)
                 runtime.export_workers.discard(worker)
 
-    def test_native_package_job_finishes_with_the_verified_revision(self) -> None:
-        problem_id, commit, verified_revision = self._verified_revision()
+    def test_native_package_job_finishes_with_the_native_package(self) -> None:
+        problem_id, commit, native_package = self._native_package()
         actor = db_fetch_one("SELECT id FROM users WHERE username=?", [self.user])
         self.assertIsNotNone(actor)
 
@@ -401,9 +401,9 @@ class TestPublishedRevisionExport(E2ETestBase):
         with (
             patch.object(runtime.worker_queue_service, "submit", side_effect=submit),
             patch.object(
-                runtime.verified_revision_workflow,
+                runtime.native_package_workflow,
                 "ensure",
-                return_value=verified_revision,
+                return_value=native_package,
             ),
             patch.object(runtime.export_service, "create_export") as create_export,
         ):
@@ -414,19 +414,19 @@ class TestPublishedRevisionExport(E2ETestBase):
                 actor_user_id=int(actor["id"]),
                 problem_id=problem_id,
                 requested_format="native",
-                export_job_id="export-native-verified-revision",
+                export_job_id="export-native-native-package",
             )
 
         self.assertTrue(started)
         row = db_fetch_one(
             """SELECT status,source_commit,materialization_id,export_id
                FROM export_jobs WHERE id=?""",
-            ["export-native-verified-revision"],
+            ["export-native-native-package"],
         )
         self.assertIsNotNone(row)
         self.assertEqual(str(row["status"]), "succeeded")
         self.assertEqual(str(row["source_commit"]), commit)
-        self.assertEqual(str(row["materialization_id"]), verified_revision["id"])
+        self.assertEqual(str(row["materialization_id"]), native_package["id"])
         self.assertIsNone(row["export_id"])
         create_export.assert_not_called()
 
@@ -479,10 +479,10 @@ class TestPublishedRevisionExport(E2ETestBase):
                 runtime.export_inflight.discard(key)
                 runtime.export_workers.discard(worker)
 
-    def test_verified_revision_contains_source_payloads_and_statement_build(self) -> None:
+    def test_native_package_contains_source_payloads_and_statement_build(self) -> None:
         workspace, problem_id, commit = self._publish_problem()
         revision = runtime.problem_package_service.published_revision(problem_id)
-        verified = runtime.problem_package_service.ensure_verified_revision(
+        verified = runtime.problem_package_service.ensure_native_package(
             revision,
             self._verification_builder(problem_id),
         )
@@ -491,7 +491,7 @@ class TestPublishedRevisionExport(E2ETestBase):
             encoding="utf-8",
         )
 
-        stored, archive = runtime.problem_package_service.verified_revision_archive(
+        stored, archive = runtime.problem_package_service.native_package_archive(
             verified["id"]
         )
         self.assertEqual(stored["source_commit"], commit)
@@ -546,7 +546,7 @@ class TestPublishedRevisionExport(E2ETestBase):
             "produce",
             wraps=producer.produce,
         ) as produce:
-            verified = runtime.problem_package_service.ensure_verified_revision(
+            verified = runtime.problem_package_service.ensure_native_package(
                 revision,
                 self._verification_builder(problem_id),
             )
@@ -562,14 +562,14 @@ class TestPublishedRevisionExport(E2ETestBase):
             )
         self.assertEqual(english_input, chinese_input)
 
-    def test_valid_verified_revision_is_reused_without_verification(self) -> None:
-        problem_id, _commit, first = self._verified_revision()
+    def test_valid_native_package_is_reused_without_verification(self) -> None:
+        problem_id, _commit, first = self._native_package()
         revision = runtime.problem_package_service.published_revision(problem_id)
 
         def unexpected_verification(*_args, **_kwargs):
-            raise AssertionError("a valid verified revision must be reused")
+            raise AssertionError("a valid Native Package must be reused")
 
-        second = runtime.problem_package_service.ensure_verified_revision(
+        second = runtime.problem_package_service.ensure_native_package(
             revision,
             unexpected_verification,
         )
@@ -577,8 +577,8 @@ class TestPublishedRevisionExport(E2ETestBase):
         self.assertEqual(second["id"], first["id"])
         self.assertEqual(second["archive_sha256"], first["archive_sha256"])
 
-    def test_corrupt_verified_revision_is_reverified_in_the_same_export_job(self) -> None:
-        problem_id, commit, first = self._verified_revision()
+    def test_corrupt_native_package_is_reverified_in_the_same_export_job(self) -> None:
+        problem_id, commit, first = self._native_package()
         actor = db_fetch_one("SELECT id FROM users WHERE username=?", [self.user])
         self.assertIsNotNone(actor)
         with patch.object(
@@ -586,18 +586,18 @@ class TestPublishedRevisionExport(E2ETestBase):
             "compile_pdf",
             side_effect=self._compile_statement,
         ):
-            old_export_id, old_projection, _warning = runtime.export_service.create_export(
+            old_export_id, old_external_package, _warning = runtime.export_service.create_export(
                 self.problem,
                 "domjudge",
-                verified_revision_id=first["id"],
+                native_package_id=first["id"],
             )
-        _stored, verified_archive = (
-            runtime.problem_package_service.verified_revision_archive(first["id"])
+        _stored, native_archive = (
+            runtime.problem_package_service.native_package_archive(first["id"])
         )
-        verified_archive.write_bytes(b"corrupt verified revision")
+        native_archive.write_bytes(b"corrupt Native Package")
 
         def ensure(*, revision, **_kwargs):
-            return runtime.problem_package_service.ensure_verified_revision(
+            return runtime.problem_package_service.ensure_native_package(
                 revision,
                 self._verification_builder(problem_id, answer_bytes=b"changed\n"),
             )
@@ -612,7 +612,7 @@ class TestPublishedRevisionExport(E2ETestBase):
 
         with (
             patch.object(runtime.worker_queue_service, "submit", side_effect=submit),
-            patch.object(runtime.verified_revision_workflow, "ensure", side_effect=ensure),
+            patch.object(runtime.native_package_workflow, "ensure", side_effect=ensure),
             patch.object(
                 runtime.tex_compile_service,
                 "compile_pdf",
@@ -640,16 +640,16 @@ class TestPublishedRevisionExport(E2ETestBase):
         self.assertEqual(str(job["source_commit"]), commit)
         self.assertEqual(str(job["materialization_id"]), first["id"])
         self.assertTrue(str(job["export_id"]))
-        rebuilt = runtime.problem_package_service.verified_revision(first["id"])
+        rebuilt = runtime.problem_package_service.native_package(first["id"])
         self.assertIsNotNone(rebuilt)
         self.assertEqual(rebuilt["status"], "available")
         self.assertNotEqual(rebuilt["verification_id"], first["verification_id"])
         self.assertNotEqual(rebuilt["archive_sha256"], first["archive_sha256"])
         self.assertIsNone(db_fetch_one("SELECT id FROM exports WHERE id=?", [old_export_id]))
-        self.assertFalse(old_projection.exists())
+        self.assertFalse(old_external_package.exists())
 
-    def test_domjudge_and_icpc_2025_are_independent_projections(self) -> None:
-        _problem_id, commit, verified = self._verified_revision()
+    def test_domjudge_and_icpc_2025_are_independent_external_packages(self) -> None:
+        _problem_id, commit, verified = self._native_package()
         with patch.object(
             runtime.tex_compile_service,
             "compile_pdf",
@@ -658,12 +658,12 @@ class TestPublishedRevisionExport(E2ETestBase):
             domjudge_id, domjudge_archive, domjudge_warning = runtime.export_service.create_export(
                 self.problem,
                 "domjudge",
-                verified_revision_id=verified["id"],
+                native_package_id=verified["id"],
             )
             icpc_id, icpc_archive, icpc_warning = runtime.export_service.create_export(
                 self.problem,
                 "icpc-2025-09",
-                verified_revision_id=verified["id"],
+                native_package_id=verified["id"],
             )
 
         self.assertNotEqual(domjudge_id, icpc_id)
@@ -692,7 +692,7 @@ class TestPublishedRevisionExport(E2ETestBase):
         repeated_id, repeated_archive, repeated_warning = runtime.export_service.create_export(
             self.problem,
             "domjudge",
-            verified_revision_id=verified["id"],
+            native_package_id=verified["id"],
         )
         self.assertEqual((repeated_id, repeated_archive), (domjudge_id, domjudge_archive))
         self.assertEqual(repeated_warning, domjudge_warning)
@@ -704,7 +704,7 @@ class TestPublishedRevisionExport(E2ETestBase):
         self.assertEqual(int(rows["c"]), 2)
 
     def test_qoj_adapter_publishes_a_root_test_data_archive(self) -> None:
-        _problem_id, _commit, verified = self._verified_revision()
+        _problem_id, _commit, verified = self._native_package()
         with patch.object(
             runtime.tex_compile_service,
             "compile_pdf",
@@ -714,7 +714,7 @@ class TestPublishedRevisionExport(E2ETestBase):
                 runtime.export_service.create_export(
                     self.problem,
                     "qoj",
-                    verified_revision_id=verified["id"],
+                    native_package_id=verified["id"],
                 )
             )
 
@@ -748,7 +748,7 @@ class TestPublishedRevisionExport(E2ETestBase):
             extra_solutions={"rejected.cpp": "rejected"},
         )
         revision = runtime.problem_package_service.published_revision(problem_id)
-        verified = runtime.problem_package_service.ensure_verified_revision(
+        verified = runtime.problem_package_service.ensure_native_package(
             revision,
             self._verification_builder(
                 problem_id,
@@ -766,14 +766,14 @@ class TestPublishedRevisionExport(E2ETestBase):
                 runtime.export_service.create_export(
                     self.problem,
                     "icpc-2025-09",
-                    verified_revision_id=verified["id"],
+                    native_package_id=verified["id"],
                 )
             )
         second_id, second_archive, second_warning = (
             runtime.export_service.create_export(
                 self.problem,
                 "icpc-2025-09",
-                verified_revision_id=verified["id"],
+                native_package_id=verified["id"],
             )
         )
 
@@ -785,7 +785,7 @@ class TestPublishedRevisionExport(E2ETestBase):
                 any(name.endswith("/rejected.cpp") for name in package.namelist())
             )
 
-    def test_incomplete_solution_verdict_prevents_verified_revision(self) -> None:
+    def test_incomplete_solution_verdict_prevents_native_package(self) -> None:
         _workspace, problem_id, _commit = self._publish_problem(
             extra_solutions={"broken.cpp": "rejected"},
         )
@@ -795,7 +795,7 @@ class TestPublishedRevisionExport(E2ETestBase):
             ValueError,
             "verification solution result is not a complete verdict",
         ):
-            runtime.problem_package_service.ensure_verified_revision(
+            runtime.problem_package_service.ensure_native_package(
                 revision,
                 self._verification_builder(
                     problem_id,
@@ -805,15 +805,15 @@ class TestPublishedRevisionExport(E2ETestBase):
                 ),
             )
 
-    def test_export_publication_holds_verified_revision_operation(self) -> None:
-        _problem_id, _commit, verified = self._verified_revision()
+    def test_export_publication_holds_native_package_operation(self) -> None:
+        _problem_id, _commit, verified = self._native_package()
         original_insert = runtime.export_service._store.insert_export_record
         competing_errors: list[Exception] = []
 
         def insert_while_rebuild_competes(**kwargs) -> None:
             def acquire_rebuild_operation() -> None:
                 try:
-                    with runtime.problem_package_service.verified_revision_operation(
+                    with runtime.problem_package_service.native_package_operation(
                         verified["id"]
                     ):
                         pass
@@ -830,7 +830,7 @@ class TestPublishedRevisionExport(E2ETestBase):
             self.assertEqual(len(competing_errors), 1)
             self.assertIsInstance(
                 competing_errors[0],
-                VerifiedRevisionOperationBusy,
+                NativePackageOperationBusy,
             )
             original_insert(**kwargs)
 
@@ -849,7 +849,7 @@ class TestPublishedRevisionExport(E2ETestBase):
             export_id, archive, _warning = runtime.export_service.create_export(
                 self.problem,
                 "domjudge",
-                verified_revision_id=verified["id"],
+                native_package_id=verified["id"],
             )
 
         self.assertTrue(archive.is_file())
@@ -857,12 +857,12 @@ class TestPublishedRevisionExport(E2ETestBase):
             db_fetch_one("SELECT id FROM exports WHERE id=?", [export_id])
         )
 
-    def test_distinct_commits_with_the_same_tree_have_distinct_verified_revisions(
+    def test_distinct_commits_with_the_same_tree_have_distinct_native_packages(
         self,
     ) -> None:
         workspace, problem_id, first_commit = self._publish_problem()
         first_revision = runtime.problem_package_service.published_revision(problem_id)
-        first = runtime.problem_package_service.ensure_verified_revision(
+        first = runtime.problem_package_service.ensure_native_package(
             first_revision,
             self._verification_builder(problem_id),
         )
@@ -883,7 +883,7 @@ class TestPublishedRevisionExport(E2ETestBase):
 
         second_revision = runtime.problem_package_service.published_revision(problem_id)
         self.assertNotEqual(second_revision.source_commit, first_commit)
-        second = runtime.problem_package_service.ensure_verified_revision(
+        second = runtime.problem_package_service.ensure_native_package(
             second_revision,
             self._verification_builder(problem_id),
         )
@@ -892,8 +892,8 @@ class TestPublishedRevisionExport(E2ETestBase):
         self.assertEqual(second["revision_number"], first["revision_number"] + 1)
 
     def test_polygon_replica_package_imports_only_authored_source(self) -> None:
-        _problem_id, _commit, verified = self._verified_revision()
-        _stored, archive = runtime.problem_package_service.verified_revision_archive(
+        _problem_id, _commit, verified = self._native_package()
+        _stored, archive = runtime.problem_package_service.native_package_archive(
             verified["id"]
         )
         with tempfile.TemporaryDirectory(prefix="polygon-replica-import-") as temp:
@@ -911,8 +911,8 @@ class TestPublishedRevisionExport(E2ETestBase):
             self.assertFalse((workspace / "statement-build").exists())
             self.assertFalse((workspace / "tests" / "answers").exists())
 
-    def test_verified_revision_reader_detects_extracted_payload_tampering(self) -> None:
-        _problem_id, _commit, verified = self._verified_revision()
+    def test_native_package_reader_detects_extracted_payload_tampering(self) -> None:
+        _problem_id, _commit, verified = self._native_package()
         with runtime.problem_package_service.open_reader(verified["id"]) as reader:
             manifest = load_manifest(reader.root / "test-data" / "manifest.json")
             payload = reader.root / "test-data" / "tests" / "001" / "input"
@@ -926,19 +926,19 @@ class TestPublishedRevisionExport(E2ETestBase):
                         runtime.config_values.STATEMENT_SAMPLE_MAX_BYTES
                     ),
                 )
-        stored = runtime.problem_package_service.verified_revision(verified["id"])
+        stored = runtime.problem_package_service.native_package(verified["id"])
         self.assertIsNotNone(stored)
         self.assertEqual(stored["status"], "available")
 
-    def test_verified_revision_reader_detects_archive_change_during_read(self) -> None:
-        _problem_id, _commit, verified = self._verified_revision()
-        _stored, archive = runtime.problem_package_service.verified_revision_archive(
+    def test_native_package_reader_detects_archive_change_during_read(self) -> None:
+        _problem_id, _commit, verified = self._native_package()
+        _stored, archive = runtime.problem_package_service.native_package_archive(
             verified["id"]
         )
         original = archive.read_bytes()
         try:
             with self.assertRaisesRegex(
-                FrozenVerifiedRevisionMismatch,
+                FrozenNativePackageMismatch,
                 "archive changed while it was being read",
             ):
                 with runtime.problem_package_service.open_reader(verified["id"]):

@@ -193,6 +193,10 @@ typed executable downloads accept `compile`, `run`, or `compare`.
 Judgehost executable entries live in the per-key JudgeFS cache. They are runtime
 scoped and startup-cleared, not verification-scoped.
 
+The Judgehost language catalog advertises C++, Java, and Python. C is not a
+separate submission language: `.c` sources are rejected at the canonical
+problem-source boundary and are not assigned a Judgehost compile specification.
+
 Compiler and runner version reports are accepted only for the current lease
 owner and stored as process-local, per-host/language telemetry. Missing,
 malformed, inactive-task, and non-owner reports are ignored. The server neither

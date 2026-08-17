@@ -180,7 +180,7 @@ covers AC, WA, TL, RE, CE, AC/TL, AC/RE, and AC/WA solution verdict patterns,
 the accepted answer, and public derived-output downloads. The journey asserts
 the resulting sample/ok, all/failed, all/cancelled, all/failed, and all/ok
 history before it continues through commit, DOMjudge and ICPC
-2025-09 Package Exports, direct Polygon Replica package download, Contest
+2025-09 Package Exports, direct Native Package download, Contest
 creation and statement/package builds, role-aware page walk, concurrent
 Alice/Bob conflict resolution, maintenance cleanup, backup, and restart.
 

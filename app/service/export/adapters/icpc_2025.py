@@ -16,7 +16,7 @@ from app.service.problem.runtime_config import (
     load_problem_config,
     problem_config_limits,
 )
-from app.service.problem_package.service import VerifiedRevisionReader
+from app.service.problem_package.service import NativePackageReader
 from app.service.statement.render import statement_title_from_snapshot
 from app.service.statement.tex_compile import TexCompileService
 
@@ -108,7 +108,7 @@ class ICPC2025PackageAdapter(PackageAdapterSupport):
         super().__init__(config_values, tex_compile_service)
 
     @staticmethod
-    def plan(reader: VerifiedRevisionReader) -> PackageAdapterPlan:
+    def plan(reader: NativePackageReader) -> PackageAdapterPlan:
         solutions = tuple(reader.manifest["solutions"])
         omitted = tuple(
             solution["source_path"]
@@ -130,7 +130,7 @@ class ICPC2025PackageAdapter(PackageAdapterSupport):
 
     def build(
         self,
-        reader: VerifiedRevisionReader,
+        reader: NativePackageReader,
         *,
         target: Path,
         canonical_problem_slug: str,
@@ -173,7 +173,7 @@ class ICPC2025PackageAdapter(PackageAdapterSupport):
         (target / "problem.yaml").write_text(
             render_problem_yaml(
                 problem_slug=canonical_problem_slug,
-                source_commit=reader.verified_revision["source_commit"],
+                source_commit=reader.native_package["source_commit"],
                 names=statement_names,
                 mode=mode,
                 pass_limit=pass_limit,

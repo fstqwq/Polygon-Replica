@@ -696,13 +696,26 @@ class ICPCPackageImportService:
             copied.append(target_rel.as_posix())
         return copied
 
-    def _select_source_file(self, rel_paths: list[str], preferred_stems: list[str]) -> str:
+    def _select_source_file(
+        self,
+        rel_paths: list[str],
+        preferred_stems: list[str],
+        *,
+        role: str,
+    ) -> str:
         source_candidates: list[str] = []
         for rel in rel_paths:
             suffix = Path(rel).suffix.lower()
             if suffix in CPP_SOURCE_EXTENSIONS:
                 source_candidates.append(rel)
         if not source_candidates:
+            c_sources = sorted(
+                rel for rel in rel_paths if Path(rel).suffix.lower() == ".c"
+            )
+            if c_sources:
+                raise ValueError(
+                    f"ICPC package C {role} source is unsupported: {c_sources[0]}"
+                )
             return ""
         lower_map = {rel.lower(): rel for rel in source_candidates}
         for stem in preferred_stems:
@@ -727,7 +740,11 @@ class ICPCPackageImportService:
             (workspace / folder).mkdir(parents=True, exist_ok=True)
 
         validators = self._copy_component_tree(zf, entries, "input_validators", workspace, "validators")
-        validator_source = self._select_source_file(validators, ["validator", "validate"])
+        validator_source = self._select_source_file(
+            validators,
+            ["validator", "validate"],
+            role="validator",
+        )
 
         mode = meta["mode"]
         checker_source = ""
@@ -749,9 +766,17 @@ class ICPCPackageImportService:
             )
         )
         if mode == "interactive":
-            interactor_source = self._select_source_file(output_files, ["interactor", "checker"])
+            interactor_source = self._select_source_file(
+                output_files,
+                ["interactor", "checker"],
+                role="interactor",
+            )
         else:
-            checker_source = self._select_source_file(output_files, ["checker", "interactor"])
+            checker_source = self._select_source_file(
+                output_files,
+                ["checker", "interactor"],
+                role="checker",
+            )
 
         return {
             "validator_files": len(validators),

@@ -2,7 +2,7 @@
 
 Format policy belongs in the individual adapter modules. This module only
 contains operations that have identical meaning for every supported package:
-reading verified test payloads, compiling statements, copying source files,
+reading Native Package test payloads, compiling statements, copying source files,
 and preparing a safe caller-owned target directory.
 """
 
@@ -18,10 +18,10 @@ from app.config import ConfigValues
 from app.service.problem.build_config import BuildConfig
 from app.service.problem.runtime_config import problem_config_limits
 from app.service.problem.source_file import resolve_source
-from app.service.problem_package.manifest import VerifiedSolutionEntry
-from app.service.problem_package.service import VerifiedRevisionReader
+from app.service.problem_package.manifest import NativePackageSolutionEntry
+from app.service.problem_package.service import NativePackageReader
 from app.service.problem_package.statement_samples import (
-    hydrate_verified_statement_samples,
+    hydrate_native_package_statement_samples,
 )
 from app.service.statement.context import statement_languages
 from app.service.statement.render import (
@@ -37,7 +37,7 @@ type PackageFormat = str
 @dataclass(frozen=True)
 class PackageAdapterPlan:
     package_format: PackageFormat
-    solutions: tuple[VerifiedSolutionEntry, ...]
+    solutions: tuple[NativePackageSolutionEntry, ...]
     warning: str
 
 
@@ -48,11 +48,11 @@ class PackageAdapter(Protocol):
     display_name: str
     accepts_short_name: bool
 
-    def plan(self, reader: VerifiedRevisionReader) -> PackageAdapterPlan: ...
+    def plan(self, reader: NativePackageReader) -> PackageAdapterPlan: ...
 
     def build(
         self,
-        reader: VerifiedRevisionReader,
+        reader: NativePackageReader,
         *,
         target: Path,
         canonical_problem_slug: str,
@@ -74,7 +74,6 @@ _LANGUAGE_CODES = {
 }
 
 _SOURCE_LANGUAGE = {
-    ".c": "c",
     ".cc": "cpp",
     ".cpp": "cpp",
     ".cxx": "cpp",
@@ -211,6 +210,10 @@ def _program_command(
     target_dir: Path,
 ) -> tuple[str, str]:
     suffix = source.suffix.lower()
+    if suffix not in {".cc", ".cpp", ".cxx", ".c++", ".py"}:
+        raise ValueError(
+            f"unsupported ICPC validator language: {suffix or source.name}"
+        )
     shutil.copy2(source, target_dir / source.name)
     quoted_name = shlex.quote(f"./{source.name}")
     if suffix in {".cc", ".cpp", ".cxx", ".c++"}:
@@ -219,16 +222,9 @@ def _program_command(
             f"c++ -Wall -DDOMJUDGE -O2 -std=gnu++20 -o program.bin {quoted_name}\n",
             '"$program_dir/program.bin"',
         )
-    if suffix == ".c":
-        return (
-            f"cc -Wall -DDOMJUDGE -O2 -o program.bin {quoted_name}\n",
-            '"$program_dir/program.bin"',
-        )
     if suffix == ".py":
         return ("", f'python3 "$program_dir"/{shlex.quote(source.name)}')
-    raise ValueError(
-        f"unsupported ICPC validator language: {suffix or source.name}"
-    )
+    raise AssertionError("validated ICPC validator language was not handled")
 
 
 def write_input_validator(
@@ -330,8 +326,8 @@ class PackageAdapterSupport:
             return
         target.mkdir(parents=True)
 
-    def hydrate_statement_samples(self, reader: VerifiedRevisionReader) -> None:
-        hydrate_verified_statement_samples(
+    def hydrate_statement_samples(self, reader: NativePackageReader) -> None:
+        hydrate_native_package_statement_samples(
             reader,
             tests_spec_max_bytes=self._config_values.integer("TEXTAREA_MAX_BYTES"),
             statement_sample_max_bytes=self._config_values.integer(
@@ -417,7 +413,7 @@ class PackageAdapterSupport:
 
     @staticmethod
     def copy_test_data(
-        reader: VerifiedRevisionReader,
+        reader: NativePackageReader,
         package_root: Path,
         *,
         samples_as_secret: bool,
@@ -437,7 +433,7 @@ class PackageAdapterSupport:
             if destination == sample_dir:
                 input_source = reader.payload(row, "sample_input") or input_source
             if input_source is None:
-                raise ValueError(f"verified test input is missing: {test_id}")
+                raise ValueError(f"Native Package test input is missing: {test_id}")
             shutil.copy2(input_source, destination / f"{test_id}.in")
             answer_source = reader.payload(row, "answer")
             if destination == sample_dir:
@@ -448,7 +444,7 @@ class PackageAdapterSupport:
             if answer_source is None:
                 if reader.manifest["mode"] != "interactive":
                     raise ValueError(
-                        f"verified test answer is missing: {test_id}"
+                        f"Native Package test answer is missing: {test_id}"
                     )
                 answer_target.write_bytes(b"")
             else:
@@ -516,7 +512,7 @@ class PackageAdapterSupport:
         snapshot: Path,
         package_root: Path,
         *,
-        solutions: tuple[VerifiedSolutionEntry, ...],
+        solutions: tuple[NativePackageSolutionEntry, ...],
         collect_metadata: bool,
         annotate_mixed: bool,
     ) -> dict[str, dict[str, object]]:

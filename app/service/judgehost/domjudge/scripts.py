@@ -5,18 +5,17 @@ from pathlib import Path
 from app.service.judgehost.configuration import JudgehostSettings
 from app.service.judgehost.domjudge.codec import decode_basename, decode_text
 from app.service.judgehost.domjudge.compile_spec import compile_spec
+from app.service.judgehost.languages import (
+    JUDGEHOST_LANGUAGES,
+    judgehost_language_for_source,
+)
 from app.service.platform.hashing import compile_command_digest
 
 
 def language_extensions(source_name: str) -> tuple[str, tuple[str, ...]]:
     name = decode_text(lower=True, raw=source_name)
-    if name.endswith(".java"):
-        return ("java", ("java",))
-    if name.endswith(".py"):
-        return ("py", ("py",))
-    if name.endswith(".c"):
-        return ("c", ("c",))
-    return ("cpp", ("cpp", "cc", "cxx", "c++"))
+    language = judgehost_language_for_source(name)
+    return (language.language_id, language.extensions)
 
 
 class DomjudgeScriptCatalog:
@@ -42,8 +41,8 @@ class DomjudgeScriptCatalog:
         self, settings: JudgehostSettings
     ) -> list[dict[str, object]]:
         specs = (
-            compile_spec(settings.values, language)
-            for language in ("c", "cpp", "java", "py")
+            compile_spec(settings.values, language.language_id)
+            for language in JUDGEHOST_LANGUAGES
         )
         return [
             {

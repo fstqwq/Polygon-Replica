@@ -12,6 +12,7 @@ from app.service.judgehost.configuration import (
     JudgehostConfiguration,
     JudgehostSettings,
 )
+from app.service.judgehost.domjudge.codec import languages_payload
 from app.service.judgehost.domjudge.scripts import DomjudgeScriptCatalog
 from app.service.platform.hashing import compile_command_digest
 
@@ -413,16 +414,11 @@ class TestJudgehostScripts(unittest.TestCase):
         config.config_values.replace(patched)
 
         settings = self._settings()
-        c_script = service.scripts.compile(settings, "submission.c").decode("utf-8")
         cpp_script = service.scripts.compile(settings, "submission.cpp").decode("utf-8")
         java_script = service.scripts.compile(settings, "submission.java").decode(
             "utf-8"
         )
         py_script = service.scripts.compile(settings, "submission.py").decode("utf-8")
-        self.assertIn(
-            'exec gcc -O2 -std=gnu11 -pipe -I. "$MAIN" -o "$DEST" -lm',
-            c_script,
-        )
         self.assertIn(
             'exec clang++ -O3 -std=gnu++20 -DNDEBUG -I. "$MAIN" -o "$DEST"',
             cpp_script,
@@ -435,36 +431,43 @@ class TestJudgehostScripts(unittest.TestCase):
             spec["language_id"]: spec
             for spec in service.scripts.public_compile_specs(settings)
         }
-        self.assertEqual(public_specs["c"]["command"], "gcc")
-        self.assertEqual(
-            public_specs["c"]["arguments"],
-            [
-                "-O2",
-                "-std=gnu11",
-                "-pipe",
-                "-I.",
-                "<source>",
-                "-o",
-                "<executable>",
-                "-lm",
-            ],
-        )
+        self.assertEqual(set(public_specs), {"cpp", "java", "py"})
         self.assertEqual(public_specs["cpp"]["command"], "clang++")
+        self.assertEqual(
+            [language["id"] for language in languages_payload()],
+            ["cpp", "java", "py"],
+        )
 
     def test_domjudge_compile_digest_uses_the_canonical_compile_spec(self) -> None:
         toolkit = config.judgehost_task_service.scripts
 
         self.assertEqual(
-            toolkit.toolchain_cmd_digest(self._settings(), "submission.c"),
+            toolkit.toolchain_cmd_digest(self._settings(), "submission.cpp"),
             compile_command_digest(
-                "gcc",
-                ["-O2", "-std=gnu11", "-pipe", "-I.", "-lm"],
+                "g++",
+                [
+                    "-x",
+                    "c++",
+                    "-Wall",
+                    "-O2",
+                    "-std=gnu++20",
+                    "-static",
+                    "-pipe",
+                    "-DDOMJUDGE",
+                    "-I.",
+                ],
             ),
         )
-        self.assertNotEqual(
-            toolkit.toolchain_cmd_digest(self._settings(), "submission.c"),
-            toolkit.toolchain_cmd_digest(self._settings(), "submission.cpp"),
-        )
+        with self.assertRaisesRegex(
+            ValueError,
+            r"unsupported judgehost source extension: \.c",
+        ):
+            toolkit.toolchain_cmd_digest(self._settings(), "submission.c")
+        with self.assertRaisesRegex(
+            ValueError,
+            r"unsupported judgehost source extension: \.c",
+        ):
+            toolkit.compile(self._settings(), "submission.c")
 
     def test_domjudge_java_compile_script_uses_detect_main_contract(self) -> None:
         service = config.judgehost_task_service

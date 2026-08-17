@@ -13,7 +13,7 @@ Titles do not have an independent service or lifecycle.
 
 Authored inputs remain Git source. SQLite stores preview metadata, while preview
 PDFs and logs are cache payloads. Preview compilation runs synchronously and
-may run sample-only verification. `StatementExamplesProducer` projects the
+may run sample-only verification. `StatementExamplesProducer` derives the
 canonical per-pass execution evidence into an in-memory render bundle; it does
 not hydrate or rewrite the snapshot's test files or `tests/spec.json`.
 
@@ -28,8 +28,8 @@ opts in, deletes it when the override is disabled, and deletes it when the core
 templates are reset to defaults.
 
 The default examples consumer prefers structured `problem.examples.samples`
-data and otherwise projects existing `problem.sampleTests` for source-only
-callers. Browser preview and verified-revision statement builds both use the
+data and otherwise derives existing `problem.sampleTests` for source-only
+callers. Browser Preview and Native Package statement builds both use the
 same `StatementExamplesProducer`, verification detail read model, pass artifact
 resolver, override priority, and strict failure rules. Authored `sample_json`
 may define multi-pass pairs or interaction events inline; the producer converts

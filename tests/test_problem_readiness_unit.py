@@ -42,7 +42,7 @@ def _readiness(
             "revision_number": package_revision,
             "tone": "normal",
             "reason": "",
-            "verified_revision_id": "vr-presentation" if package_revision else None,
+            "native_package_id": "pm-presentation" if package_revision else None,
             "published_commit": "a" * 40 if published_revision is not None else "",
             "published_revision_number": published_revision,
         },

@@ -1,4 +1,4 @@
-"""Prepare one reusable verified published revision."""
+"""Prepare one reusable Native Package from a published revision."""
 
 import os
 from pathlib import Path
@@ -9,7 +9,7 @@ from app.service.problem.solution_metadata import load_solution_desc
 from app.service.problem_package.service import (
     ProblemPackageService,
     PublishedRevision,
-    VerifiedRevision,
+    NativePackage,
 )
 from app.service.verification.lifecycle import VerificationAdmission
 from app.service.verification.service import VerificationService
@@ -77,7 +77,7 @@ def build_full_verification_targets(
     return targets, accepted_source
 
 
-class VerifiedRevisionWorkflow:
+class NativePackageWorkflow:
     """Run the one full verification that prepares a published revision."""
 
     def __init__(
@@ -96,7 +96,7 @@ class VerifiedRevisionWorkflow:
         revision: PublishedRevision,
         actor_user_id: int,
         actor_username: str,
-    ) -> VerifiedRevision:
+    ) -> NativePackage:
         problem_slug = revision.problem["slug"]
         problem_id = int(revision.problem["id"])
 
@@ -120,7 +120,7 @@ class VerifiedRevisionWorkflow:
                 )
             )
             if admission.outcome != "admitted":
-                raise RuntimeError("verified revision verification id already exists")
+                raise RuntimeError("Native Package verification id already exists")
             self.verification_workflow.run(
                 problem_slug,
                 actor_username,
@@ -144,7 +144,7 @@ class VerifiedRevisionWorkflow:
                     if record is None
                     else record["fail_reason"] or "full verification failed"
                 )
-                raise ValueError(f"verified revision verification failed: {error}")
+                raise ValueError(f"Native Package verification failed: {error}")
             return verification_id
 
-        return self.package_service.ensure_verified_revision(revision, verify)
+        return self.package_service.ensure_native_package(revision, verify)

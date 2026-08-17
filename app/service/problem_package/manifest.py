@@ -1,4 +1,4 @@
-"""Verified revision manifest creation and validation."""
+"""Native Package manifest creation and validation."""
 
 import hashlib
 import json
@@ -25,24 +25,24 @@ from app.service.problem_package.layout import (
 from app.service.verification.identity import canonical_verification_id
 
 
-class VerifiedFileEntry(TypedDict):
+class NativePackageFileEntry(TypedDict):
     path: str
     sha256: str
     size: int
 
 
-class VerifiedTestEntry(TypedDict):
+class NativePackageTestEntry(TypedDict):
     id: str
     kind: str
     sample: bool
-    input: VerifiedFileEntry
-    answer: NotRequired[VerifiedFileEntry]
-    sample_input: NotRequired[VerifiedFileEntry]
-    sample_output: NotRequired[VerifiedFileEntry]
+    input: NativePackageFileEntry
+    answer: NotRequired[NativePackageFileEntry]
+    sample_input: NotRequired[NativePackageFileEntry]
+    sample_output: NotRequired[NativePackageFileEntry]
 
 
-VerifiedSolutionVerdict = Literal["AC", "WA", "TLE", "RTE", "CE"]
-VERIFIED_SOLUTION_VERDICT_ORDER: tuple[VerifiedSolutionVerdict, ...] = (
+NativePackageSolutionVerdict = Literal["AC", "WA", "TLE", "RTE", "CE"]
+NATIVE_PACKAGE_SOLUTION_VERDICT_ORDER: tuple[NativePackageSolutionVerdict, ...] = (
     "AC",
     "WA",
     "TLE",
@@ -51,45 +51,45 @@ VERIFIED_SOLUTION_VERDICT_ORDER: tuple[VerifiedSolutionVerdict, ...] = (
 )
 
 
-class VerifiedSolutionEntry(TypedDict):
+class NativePackageSolutionEntry(TypedDict):
     source_path: str
     expected_behavior: str
-    verdicts: list[VerifiedSolutionVerdict]
+    verdicts: list[NativePackageSolutionVerdict]
 
 
-class VerifiedRevisionManifest(TypedDict):
+class NativePackageManifest(TypedDict):
     source_commit: str
     revision_number: int
     source_digest: str
     mode: ProblemMode
     pass_limit: int
     verification: dict[str, str]
-    solutions: list[VerifiedSolutionEntry]
-    tests: list[VerifiedTestEntry]
+    solutions: list[NativePackageSolutionEntry]
+    tests: list[NativePackageTestEntry]
 
 
 def canonical_rel_path(raw: str) -> str:
     """Return a safe canonical package-relative POSIX path."""
 
     if "\\" in raw:
-        raise ValueError(f"invalid verified revision path: {raw}")
+        raise ValueError(f"invalid Native Package path: {raw}")
     path = PurePosixPath(raw)
     if path.is_absolute() or not path.parts:
-        raise ValueError(f"invalid verified revision path: {raw}")
+        raise ValueError(f"invalid Native Package path: {raw}")
     if any(part in {"", ".", ".."} for part in path.parts):
-        raise ValueError(f"invalid verified revision path: {raw}")
+        raise ValueError(f"invalid Native Package path: {raw}")
     if path.as_posix() != raw:
-        raise ValueError(f"non-canonical verified revision path: {raw}")
+        raise ValueError(f"non-canonical Native Package path: {raw}")
     return path.as_posix()
 
 
-def describe_file(path: Path, *, root: Path) -> VerifiedFileEntry:
+def describe_file(path: Path, *, root: Path) -> NativePackageFileEntry:
     resolved_root = root.resolve()
     if path.is_symlink() or not path.is_file():
-        raise ValueError(f"verified payload is not a regular file: {path}")
+        raise ValueError(f"Native Package payload is not a regular file: {path}")
     resolved = path.resolve()
     if resolved_root not in resolved.parents:
-        raise ValueError(f"verified payload escapes package root: {path}")
+        raise ValueError(f"Native Package payload escapes package root: {path}")
     return {
         "path": resolved.relative_to(resolved_root).as_posix(),
         "sha256": sha256_file(resolved),
@@ -136,11 +136,11 @@ def source_digest(source_root: Path) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def dumps_manifest(manifest: VerifiedRevisionManifest) -> str:
+def dumps_manifest(manifest: NativePackageManifest) -> str:
     return json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
 
-def load_manifest(path: Path) -> VerifiedRevisionManifest:
+def load_manifest(path: Path) -> NativePackageManifest:
     if path.is_symlink() or not path.is_file():
         raise ValueError("Polygon Replica package test-data/manifest.json is missing")
     try:
@@ -202,12 +202,12 @@ def load_manifest(path: Path) -> VerifiedRevisionManifest:
     tests = raw["tests"]
     if not isinstance(tests, list) or not tests:
         raise ValueError("Polygon Replica package must contain tests")
-    return cast(VerifiedRevisionManifest, raw)
+    return cast(NativePackageManifest, raw)
 
 
 def validate_manifest_files(
     package_root: Path,
-    manifest: VerifiedRevisionManifest,
+    manifest: NativePackageManifest,
     *,
     tests_spec_max_bytes: int,
     statement_sample_max_bytes: int,
@@ -233,10 +233,10 @@ def validate_manifest_files(
             "expected_behavior",
             "verdicts",
         }:
-            raise ValueError("verified revision solution entry has an unsupported shape")
+            raise ValueError("Native Package solution entry has an unsupported shape")
         source_path = solution["source_path"]
         if not isinstance(source_path, str):
-            raise ValueError("verified revision solution path is invalid")
+            raise ValueError("Native Package solution path is invalid")
         canonical_rel_path(source_path)
         manifest_solution_paths.append(source_path)
         expected_behavior = solution["expected_behavior"]
@@ -244,37 +244,37 @@ def validate_manifest_files(
             normalized_behavior = normalize_expected_behavior(expected_behavior)
         except ValueError as exc:
             raise ValueError(
-                f"verified revision solution behavior is invalid: {source_path}"
+                f"Native Package solution behavior is invalid: {source_path}"
             ) from exc
         if expected_behaviors.get(source_path) != normalized_behavior:
             raise ValueError(
-                f"verified revision solution behavior does not match source: {source_path}"
+                f"Native Package solution behavior does not match source: {source_path}"
             )
         verdicts = solution["verdicts"]
         if not isinstance(verdicts, list) or not verdicts:
             raise ValueError(
-                f"verified revision solution verdicts are incomplete: {source_path}"
+                f"Native Package solution verdicts are incomplete: {source_path}"
             )
         if any(
             not isinstance(verdict, str)
-            or verdict not in VERIFIED_SOLUTION_VERDICT_ORDER
+            or verdict not in NATIVE_PACKAGE_SOLUTION_VERDICT_ORDER
             for verdict in verdicts
         ):
             raise ValueError(
-                f"verified revision solution verdict is invalid: {source_path}"
+                f"Native Package solution verdict is invalid: {source_path}"
             )
         canonical_verdicts = [
             verdict
-            for verdict in VERIFIED_SOLUTION_VERDICT_ORDER
+            for verdict in NATIVE_PACKAGE_SOLUTION_VERDICT_ORDER
             if verdict in verdicts
         ]
         if verdicts != canonical_verdicts:
             raise ValueError(
-                f"verified revision solution verdicts are not canonical: {source_path}"
+                f"Native Package solution verdicts are not canonical: {source_path}"
             )
     if manifest_solution_paths != committed_solution_paths:
         raise ValueError(
-            "verified revision solutions do not match committed solution sources"
+            "Native Package solutions do not match committed solution sources"
         )
     test_ids: set[str] = set()
     spec = load_tests_spec(
@@ -294,18 +294,18 @@ def validate_manifest_files(
     }
     for test in manifest["tests"]:
         if not isinstance(test, dict):
-            raise ValueError("verified revision test entry must be an object")
+            raise ValueError("Native Package test entry must be an object")
         if not {"id", "kind", "sample", "input"}.issubset(test) or not set(
             test
         ).issubset(allowed_test_keys):
-            raise ValueError("verified revision test entry has an unsupported shape")
+            raise ValueError("Native Package test entry has an unsupported shape")
         if not isinstance(test["id"], str) or not isinstance(test["kind"], str):
-            raise ValueError("verified revision test identity is invalid")
+            raise ValueError("Native Package test identity is invalid")
         if not isinstance(test["sample"], bool):
-            raise ValueError("verified revision test sample flag is invalid")
+            raise ValueError("Native Package test sample flag is invalid")
         test_id = test["id"]
         if not test_id or test_id in test_ids:
-            raise ValueError("verified revision test IDs must be non-empty and unique")
+            raise ValueError("Native Package test IDs must be non-empty and unique")
         test_ids.add(test_id)
         manifest_shape.append((test_id, test["kind"], test["sample"]))
     spec_shape = [
@@ -313,11 +313,11 @@ def validate_manifest_files(
         for test in spec
     ]
     if manifest_shape != spec_shape:
-        raise ValueError("verified revision tests do not match tests/spec.json order")
+        raise ValueError("Native Package tests do not match tests/spec.json order")
     for test in manifest["tests"]:
         test_id = test["id"]
         if manifest["mode"] != "interactive" and "answer" not in test:
-            raise ValueError(f"verified answer is required: {test_id}")
+            raise ValueError(f"Native Package answer is required: {test_id}")
         for key in ("input", "answer", "sample_input", "sample_output"):
             descriptor = test.get(key)
             if descriptor is None:
@@ -327,19 +327,19 @@ def validate_manifest_files(
                 "sha256",
                 "size",
             }:
-                raise ValueError(f"verified payload descriptor is invalid: {test_id}/{key}")
+                raise ValueError(f"Native Package payload descriptor is invalid: {test_id}/{key}")
             if not isinstance(descriptor["path"], str):
-                raise ValueError(f"verified payload path is invalid: {test_id}/{key}")
+                raise ValueError(f"Native Package payload path is invalid: {test_id}/{key}")
             if not isinstance(descriptor["sha256"], str) or not re.fullmatch(
                 r"[0-9a-f]{64}", descriptor["sha256"]
             ):
-                raise ValueError(f"verified payload checksum is invalid: {test_id}/{key}")
+                raise ValueError(f"Native Package payload checksum is invalid: {test_id}/{key}")
             if (
                 not isinstance(descriptor["size"], int)
                 or isinstance(descriptor["size"], bool)
                 or descriptor["size"] < 0
             ):
-                raise ValueError(f"verified payload size is invalid: {test_id}/{key}")
+                raise ValueError(f"Native Package payload size is invalid: {test_id}/{key}")
             rel = canonical_rel_path(descriptor["path"])
             file_name = {
                 "input": "input",
@@ -349,9 +349,9 @@ def validate_manifest_files(
             }[key]
             expected_rel = f"{TEST_DATA_DIR.name}/tests/{test_id}/{file_name}"
             if rel != expected_rel:
-                raise ValueError(f"verified payload path is not canonical: {rel}")
+                raise ValueError(f"Native Package payload path is not canonical: {rel}")
             if rel in declared:
-                raise ValueError(f"verified revision declares a payload twice: {rel}")
+                raise ValueError(f"Native Package declares a payload twice: {rel}")
             declared.add(rel)
             target = package_root / Path(*PurePosixPath(rel).parts)
             actual = describe_file(target, root=package_root)
@@ -359,7 +359,7 @@ def validate_manifest_files(
                 actual["sha256"] != descriptor["sha256"]
                 or actual["size"] != descriptor["size"]
             ):
-                raise ValueError(f"verified payload integrity check failed: {rel}")
+                raise ValueError(f"Native Package payload integrity check failed: {rel}")
         display_pairs: tuple[
             tuple[
                 Literal["sample_input", "sample_output"],
@@ -372,7 +372,7 @@ def validate_manifest_files(
             judge = test.get(judge_key)
             if display is not None and judge is not None and display["sha256"] == judge["sha256"]:
                 raise ValueError(
-                    "verified revision stores a redundant display override: "
+                    "Native Package stores a redundant display override: "
                     f"{test_id}/{display_key}"
                 )
     data_root = package_root / TEST_DATA_DIR

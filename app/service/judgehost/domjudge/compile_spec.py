@@ -58,15 +58,6 @@ def _config_text(values: Mapping[str, object], key: str) -> str:
 def compile_spec(
     values: Mapping[str, object], language_id: str
 ) -> JudgehostCompileSpec:
-    if language_id == "c":
-        return JudgehostCompileSpec(
-            language_id="c",
-            family="native",
-            command="gcc",
-            command_arguments=("-O2", "-std=gnu11", "-pipe"),
-            fixed_arguments=("-I.",),
-            trailing_arguments=("-lm",),
-        )
     if language_id == "cpp":
         return JudgehostCompileSpec(
             language_id="cpp",

@@ -6,12 +6,12 @@ from pathlib import Path
 from app.service.disk.export_store import ExportJobRow
 from app.service.export.service import ExportService
 from app.service.problem_package.manifest import (
-    VerifiedRevisionManifest,
+    NativePackageManifest,
     describe_file,
 )
-from app.service.problem_package.service import VerifiedRevisionReader
+from app.service.problem_package.service import NativePackageReader
 from app.service.problem_package.statement_samples import (
-    hydrate_verified_statement_samples,
+    hydrate_native_package_statement_samples,
 )
 from app.service.problem_package.store import MaterializationRow
 
@@ -40,7 +40,7 @@ class TestExportService(unittest.TestCase):
 
     def test_statement_sample_hydration_limits_each_input_output_pair(self) -> None:
         with tempfile.TemporaryDirectory(prefix="statement-sample-budget-") as temp:
-            package_root = Path(temp) / "verified-revision"
+            package_root = Path(temp) / "native-package"
             spec_path = package_root / "tests" / "spec.json"
             spec_path.parent.mkdir(parents=True)
             spec_payload = {
@@ -79,7 +79,7 @@ class TestExportService(unittest.TestCase):
                 "checked_at": "2026-01-01T00:00:00Z",
                 "unavailable_reason": "",
             }
-            manifest: VerifiedRevisionManifest = {
+            manifest: NativePackageManifest = {
                 "source_commit": materialization["source_commit"],
                 "revision_number": materialization["revision_number"],
                 "source_digest": materialization["source_digest"],
@@ -106,8 +106,8 @@ class TestExportService(unittest.TestCase):
                     }
                 ],
             }
-            revision = VerifiedRevisionReader(
-                verified_revision=materialization,
+            revision = NativePackageReader(
+                native_package=materialization,
                 root=package_root,
                 manifest=manifest,
             )
@@ -116,7 +116,7 @@ class TestExportService(unittest.TestCase):
                 ValueError,
                 "statement sample exceeds byte limit",
             ):
-                hydrate_verified_statement_samples(
+                hydrate_native_package_statement_samples(
                     revision,
                     tests_spec_max_bytes=document_limit,
                     statement_sample_max_bytes=sample_limit,
@@ -128,7 +128,7 @@ class TestExportService(unittest.TestCase):
             manifest_test = manifest["tests"][0]
             manifest_test["input"] = describe_file(input_path, root=package_root)
             manifest_test["answer"] = describe_file(answer_path, root=package_root)
-            hydrate_verified_statement_samples(
+            hydrate_native_package_statement_samples(
                 revision,
                 tests_spec_max_bytes=document_limit,
                 statement_sample_max_bytes=sample_limit,

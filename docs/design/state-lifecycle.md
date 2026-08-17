@@ -115,7 +115,7 @@ reads a user's changing workspace. For that version:
 The Native Package is downloaded directly. A request that must first prepare it
 has a Package Export attempt, but it creates no `exports` row or second archive.
 Downloading an existing Native Package creates no job. An adapter consumes only
-an integrity-checked `VerifiedRevisionReader` and caller-owned staging; it
+an integrity-checked `NativePackageReader` and caller-owned staging; it
 cannot read Git, workspaces, Verification tables, runtime cache, or another
 adapter's output, and cannot start Verification.
 

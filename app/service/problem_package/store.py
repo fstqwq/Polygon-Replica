@@ -1,4 +1,4 @@
-"""SQLite persistence for verified revision archives and their builds."""
+"""SQLite persistence for Native Package archives and their builds."""
 
 from typing import TypedDict
 
@@ -43,7 +43,7 @@ class MaterializationExportRow(TypedDict):
     archive_rel_path: str
 
 
-class VerifiedSolutionResultRow(TypedDict):
+class NativePackageSolutionResultRow(TypedDict):
     task_kind: str
     source_path: str
     test_name: str
@@ -117,7 +117,7 @@ class ProblemPackageStore:
         )
         return None if row is None else _materialization(row)
 
-    def available_verified_revision_history(
+    def available_native_package_history(
         self,
         problem_id: int,
         *,
@@ -431,10 +431,10 @@ class ProblemPackageStore:
             )
         return "" if row is None else str(row["artifact_ref"] or "")
 
-    def verified_solution_result_rows(
+    def solution_result_rows(
         self,
         verification_id: str,
-    ) -> list[VerifiedSolutionResultRow]:
+    ) -> list[NativePackageSolutionResultRow]:
         rows = self.db.fetch_all(
             """
             SELECT task_kind,source_path,test_name,expected_behavior,

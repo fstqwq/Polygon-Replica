@@ -6,11 +6,12 @@ domain records, locators, and execution results consumed by `app/impl`. They may
 use SQLite, Git, filesystem, sandbox, and process mechanisms through the current
 composition, but do not depend on templates or route registration.
 
-Package delivery follows the service boundary `published source -> verified
-revision -> projections`. `problem_package` owns the verified-revision reader,
-`export` owns pure external-format projection and Package Export orchestration,
-and `contest` consumes frozen readers without starting verification or routing
-through problem-level exports.
+Package delivery follows the service boundary `published source -> Native
+Package -> external packages`. `problem_package` owns Native Package
+materialization and the internal `NativePackageReader`; `export` owns the
+external-package adapters and Package Export orchestration; and `contest`
+consumes frozen readers without starting Verification or routing through
+problem-level exports.
 
 Current packages:
 

@@ -1,4 +1,4 @@
-"""Package export jobs and adapters for verified revisions."""
+"""Package export jobs and adapters for Native Packages."""
 
 import os
 import re
@@ -35,7 +35,7 @@ NATIVE_PACKAGE_FORMAT = "native"
 
 
 class PackageBuildBusy(RuntimeError):
-    """The same verified revision package build is already running."""
+    """An external package build for this Native Package is already running."""
 
 
 class ExportService:
@@ -83,10 +83,10 @@ class ExportService:
 
     def _package_lock(
         self,
-        verified_revision_id: str,
+        native_package_id: str,
         package_format: PackageFormat,
     ) -> threading.Lock:
-        key = (verified_revision_id, package_format)
+        key = (native_package_id, package_format)
         with self._package_locks_guard:
             return self._package_locks.setdefault(key, threading.Lock())
 
@@ -179,24 +179,24 @@ class ExportService:
         self,
         job_id: str,
         *,
-        verified_revision_id: str,
+        native_package_id: str,
     ) -> None:
         self._store.mark_export_job_packaging(
             job_id,
-            materialization_id=verified_revision_id,
+            materialization_id=native_package_id,
         )
 
     def mark_export_job_succeeded(
         self,
         job_id: str,
         *,
-        verified_revision_id: str,
+        native_package_id: str,
         export_id: str | None,
         warning: str,
     ) -> None:
         self._store.mark_export_job_succeeded(
             job_id,
-            materialization_id=verified_revision_id,
+            materialization_id=native_package_id,
             export_id=export_id,
             warning=warning,
         )
@@ -295,19 +295,19 @@ class ExportService:
         problem: str,
         package_format: str,
         *,
-        verified_revision_id: str,
+        native_package_id: str,
         expected_archive_sha256: str | None = None,
     ) -> tuple[str, Path, str]:
         adapter = self.package_adapters.require(package_format)
         resolved_format = adapter.format
-        lock = self._package_lock(verified_revision_id, resolved_format)
+        lock = self._package_lock(native_package_id, resolved_format)
         if not lock.acquire(blocking=False):
             raise PackageBuildBusy("package build already running")
         try:
             return self._create_export(
                 problem,
                 adapter,
-                verified_revision_id=verified_revision_id,
+                native_package_id=native_package_id,
                 expected_archive_sha256=expected_archive_sha256,
             )
         finally:
@@ -318,26 +318,26 @@ class ExportService:
         problem: str,
         adapter: PackageAdapter,
         *,
-        verified_revision_id: str,
+        native_package_id: str,
         expected_archive_sha256: str | None,
     ) -> tuple[str, Path, str]:
         package_format = adapter.format
         problem_row = self._store.problem_export_row(problem)
         if problem_row is None:
             raise ValueError(f"unknown problem: {problem}")
-        verified_revision = self.problem_package_service.verified_revision(
-            verified_revision_id
+        native_package = self.problem_package_service.native_package(
+            native_package_id
         )
         if (
-            verified_revision is None
-            or verified_revision["problem_id"] != problem_row["id"]
+            native_package is None
+            or native_package["problem_id"] != problem_row["id"]
         ):
-            raise ValueError("verified revision does not belong to the problem")
+            raise ValueError("Native Package does not belong to the problem")
         export_id = f"e-{uuid.uuid4().hex[:10]}"
         public_slug = self._public_problem_slug(problem_row["slug"])
         filename = (
             f"{public_slug}-{package_format}-v"
-            f"{verified_revision['revision_number']}.zip"
+            f"{native_package['revision_number']}.zip"
         )
         staging = self.storage_layout.staging_directory(
             f"export-{export_id}-{uuid.uuid4().hex}"
@@ -348,13 +348,13 @@ class ExportService:
         published = False
         try:
             with self.problem_package_service.open_reader(
-                verified_revision_id,
+                native_package_id,
                 expected_archive_sha256=expected_archive_sha256,
             ) as reader:
                 adapter_plan = adapter.plan(reader)
                 cached = self._cached_export_path(
                     problem_id=problem_row["id"],
-                    materialization_id=verified_revision_id,
+                    materialization_id=native_package_id,
                     package_format=package_format,
                 )
                 if cached is not None:
@@ -375,7 +375,7 @@ class ExportService:
                 self._store.insert_export_record(
                     export_id=export_id,
                     problem_id=problem_row["id"],
-                    materialization_id=verified_revision_id,
+                    materialization_id=native_package_id,
                     export_type=package_format,
                     filename=filename,
                     archive_rel_path=output.relative_to(
@@ -383,7 +383,7 @@ class ExportService:
                     ).as_posix(),
                     sha256=sha256_file(output),
                     size_bytes=int(output.stat().st_size),
-                    source_commit=verified_revision["source_commit"],
+                    source_commit=native_package["source_commit"],
                 )
                 published = True
             if output is None:

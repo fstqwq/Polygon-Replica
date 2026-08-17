@@ -13,6 +13,7 @@ from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
 from app.service.judgehost.configuration import JudgehostConfiguration
 from app.service.judgehost.host.model import HostToolchainTelemetry
 from app.service.judgehost.host.registry import JudgehostHostRegistry
+from app.service.judgehost.languages import JUDGEHOST_LANGUAGE_BY_ID
 from app.service.platform.hashing import compile_command_digest
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,7 @@ class ToolchainVersionCollector:
     MAX_VERSION_OUTPUT_BYTES = 8 * 1024
     _MAX_ENCODED_OUTPUT_BYTES = 4 * ((MAX_VERSION_OUTPUT_BYTES + 2) // 3)
     _SKIP_COMPILE_DIGEST = compile_command_digest("skip.compile", [])
-    _LANGUAGE_IDS = frozenset({"c", "cpp", "java", "py"})
+    _LANGUAGE_IDS = frozenset(JUDGEHOST_LANGUAGE_BY_ID)
 
     def __init__(
         self,
@@ -123,7 +124,7 @@ class ToolchainVersionCollector:
         if context is None:
             return {}
         settings = self._configuration.snapshot()
-        if context.language_id in {"c", "cpp"}:
+        if context.language_id == "cpp":
             compiler = settings.values["TOOLCHAIN_CPP_COMPILER"]
             if not isinstance(compiler, str):
                 raise RuntimeError(

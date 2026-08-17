@@ -5,7 +5,9 @@ import time
 from pathlib import PurePosixPath
 from typing import Callable, TypedDict
 
-_LANGUAGE_LABELS = {"c": "C", "cpp": "C++", "java": "Java", "py": "Python"}
+from app.service.judgehost.languages import JUDGEHOST_LANGUAGE_BY_ID
+
+
 _PRIVATE_PATH_RE = re.compile(r"(?<![A-Za-z0-9])(?:[A-Za-z]:[\\/]|/)[^\s]+")
 
 
@@ -103,7 +105,7 @@ def _reported_toolchains(raw_toolchains: object) -> dict[str, tuple[str, str]]:
             if not isinstance(raw, dict):
                 continue
             language_id = str(raw.get("language_id") or "")
-            if language_id not in _LANGUAGE_LABELS:
+            if language_id not in JUDGEHOST_LANGUAGE_BY_ID:
                 continue
             _compiler_display, compiler_key = _safe_version_lines(raw.get("compiler"))
             _runner_display, runner_key = _safe_version_lines(raw.get("runner"))
@@ -121,7 +123,7 @@ def _toolchain_summaries(
             language_counts = version_counts.setdefault(language_id, {})
             language_counts[version] = language_counts.get(version, 0) + 1
     summaries: list[PublicToolchainSummary] = []
-    for language_id, language_label in _LANGUAGE_LABELS.items():
+    for language_id, language in JUDGEHOST_LANGUAGE_BY_ID.items():
         counts_for_language = version_counts.get(language_id)
         if not counts_for_language:
             continue
@@ -137,7 +139,7 @@ def _toolchain_summaries(
         summaries.append(
             {
                 "language_id": language_id,
-                "language_label": language_label,
+                "language_label": language.label,
                 "versions": versions,
                 "agrees": len(versions) == 1,
             }
@@ -191,6 +193,9 @@ def _compile_specs(
     specs: list[PublicCompileSpec] = []
     for raw in raw_compile_specs:
         language_id = str(raw.get("language_id") or "")
+        language = JUDGEHOST_LANGUAGE_BY_ID.get(language_id)
+        if language is None:
+            continue
         arguments_raw = raw.get("arguments")
         arguments = (
             [_safe_argument(value) for value in arguments_raw]
@@ -200,7 +205,7 @@ def _compile_specs(
         specs.append(
             {
                 "language_id": language_id,
-                "language_label": _LANGUAGE_LABELS.get(language_id, language_id or "Unknown"),
+                "language_label": language.label,
                 "command": _safe_command(str(raw.get("command") or "")),
                 "arguments": arguments,
             }

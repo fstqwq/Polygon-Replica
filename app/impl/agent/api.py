@@ -795,7 +795,7 @@ async def agent_export_status(request: Request, job_id: str):
         "format": str(job.get("export_type") or ""),
         "phase": runtime().export_service.job_phase(job),
         "source_commit": str(job.get("source_commit") or ""),
-        "verified_revision_id": str(job.get("materialization_id") or ""),
+        "native_package_id": str(job.get("materialization_id") or ""),
         "error": str(job.get("error") or ""),
     }
     if status == "succeeded" and str(job.get("export_id") or "") and str(job.get("filename") or ""):

@@ -220,7 +220,7 @@ def _run_export_create_worker(
         )
         if not effective_source_commit:
             raise ValueError('no committed revision; commit changes first')
-        verified_revision = application_runtime.verified_revision_workflow.ensure(
+        native_package = application_runtime.native_package_workflow.ensure(
             revision=revision,
             actor_user_id=actor_user_id,
             actor_username=user,
@@ -228,23 +228,23 @@ def _run_export_create_worker(
         if package_format == NATIVE_PACKAGE_FORMAT:
             application_runtime.export_service.mark_export_job_succeeded(
                 export_job_id,
-                verified_revision_id=verified_revision["id"],
+                native_package_id=native_package["id"],
                 export_id=None,
                 warning="",
             )
             return
         application_runtime.export_service.mark_export_job_packaging(
             export_job_id,
-            verified_revision_id=verified_revision["id"],
+            native_package_id=native_package["id"],
         )
         export_id, _out, warning = application_runtime.export_service.create_export(
             problem,
             package_format,
-            verified_revision_id=verified_revision["id"],
+            native_package_id=native_package["id"],
         )
         application_runtime.export_service.mark_export_job_succeeded(
             export_job_id,
-            verified_revision_id=verified_revision["id"],
+            native_package_id=native_package["id"],
             export_id=export_id,
             warning=warning,
         )

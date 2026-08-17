@@ -11,11 +11,11 @@ from app.service.export.adapters import PackageAdapterRegistry
 from app.service.export.adapters.qoj import QOJPackageAdapter
 from app.service.problem.runtime_config import ProblemMode
 from app.service.problem_package.manifest import (
-    VerifiedRevisionManifest,
-    VerifiedTestEntry,
+    NativePackageManifest,
+    NativePackageTestEntry,
     describe_file,
 )
-from app.service.problem_package.service import VerifiedRevisionReader
+from app.service.problem_package.service import NativePackageReader
 from app.service.problem_package.store import MaterializationRow
 
 
@@ -260,8 +260,15 @@ class TestQOJExportPackage(unittest.TestCase):
 
     def test_accepted_solution_preserves_supported_source_extension(self) -> None:
         adapter = QOJPackageAdapter(self.values, self.tex_compile)
-        for suffix in (".c", ".cpp", ".java", ".py"):
-            with self.subTest(suffix=suffix):
+        for suffix, qoj_suffix in (
+            (".c++", ".cpp"),
+            (".cc", ".cpp"),
+            (".cpp", ".cpp"),
+            (".cxx", ".cpp"),
+            (".java", ".java"),
+            (".py", ".py"),
+        ):
+            with self.subTest(suffix=suffix, qoj_suffix=qoj_suffix):
                 reader = self._reader(
                     name=f"accepted-{suffix[1:]}",
                     mode="pass-fail",
@@ -277,7 +284,7 @@ class TestQOJExportPackage(unittest.TestCase):
                 )
 
                 self.assertEqual(
-                    (target / f"std{suffix}").read_text(encoding="utf-8"),
+                    (target / f"std{qoj_suffix}").read_text(encoding="utf-8"),
                     "accepted source\n",
                 )
 
@@ -338,7 +345,7 @@ class TestQOJExportPackage(unittest.TestCase):
                 canonical_problem_slug="owner/problem",
             )
 
-    def test_rejects_missing_and_escaping_verified_test_payloads(self) -> None:
+    def test_rejects_missing_and_escaping_native_test_payloads(self) -> None:
         adapter = QOJPackageAdapter(self.values, self.tex_compile)
         missing = self._reader(
             name="missing-input",
@@ -399,7 +406,7 @@ class TestQOJExportPackage(unittest.TestCase):
         include_statement: bool = True,
         memory_limit_mb: int = 512,
         accepted_suffix: str = ".cpp",
-    ) -> VerifiedRevisionReader:
+    ) -> NativePackageReader:
         package_root = self.root / name
         (package_root / "config").mkdir(parents=True)
         (package_root / "tests").mkdir()
@@ -485,7 +492,7 @@ class TestQOJExportPackage(unittest.TestCase):
                     encoding="utf-8",
                 )
 
-        tests: list[VerifiedTestEntry] = []
+        tests: list[NativePackageTestEntry] = []
         test_payloads = (
             (
                 "001",
@@ -516,7 +523,7 @@ class TestQOJExportPackage(unittest.TestCase):
             test_root.mkdir(parents=True)
             input_path = test_root / "input"
             input_path.write_bytes(input_bytes)
-            entry: VerifiedTestEntry = {
+            entry: NativePackageTestEntry = {
                 "id": test_id,
                 "kind": "manual",
                 "sample": sample,
@@ -557,7 +564,7 @@ class TestQOJExportPackage(unittest.TestCase):
             "checked_at": "2026-01-01T00:00:00Z",
             "unavailable_reason": "",
         }
-        manifest: VerifiedRevisionManifest = {
+        manifest: NativePackageManifest = {
             "source_commit": materialization["source_commit"],
             "revision_number": materialization["revision_number"],
             "source_digest": materialization["source_digest"],
@@ -570,8 +577,8 @@ class TestQOJExportPackage(unittest.TestCase):
             "solutions": [],
             "tests": tests,
         }
-        return VerifiedRevisionReader(
-            verified_revision=materialization,
+        return NativePackageReader(
+            native_package=materialization,
             root=package_root,
             manifest=manifest,
         )

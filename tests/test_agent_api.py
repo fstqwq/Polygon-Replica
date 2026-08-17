@@ -430,7 +430,7 @@ class TestAgentAPI(E2ETestBase):
             return verification_id
 
         revision = runtime.problem_package_service.published_revision(problem_id)
-        verified_revision = runtime.problem_package_service.ensure_verified_revision(
+        native_package = runtime.problem_package_service.ensure_native_package(
             revision,
             materialize,
         )
@@ -444,7 +444,7 @@ class TestAgentAPI(E2ETestBase):
             [
                 export_id,
                 problem_id,
-                verified_revision["id"],
+                native_package["id"],
                 "domjudge",
                 filename,
                 archive.relative_to(runtime.settings.artifacts_root).as_posix(),
@@ -467,7 +467,7 @@ class TestAgentAPI(E2ETestBase):
         )
         runtime.export_service.mark_export_job_succeeded(
             job_id,
-            verified_revision_id=verified_revision["id"],
+            native_package_id=native_package["id"],
             export_id=export_id,
             warning="compile-error submission omitted",
         )
@@ -516,8 +516,8 @@ class TestAgentAPI(E2ETestBase):
             )
             self.assertEqual(str(payload.get("source_commit") or ""), source_commit)
             self.assertEqual(
-                str(payload.get("verified_revision_id") or ""),
-                str(verified_revision["id"]),
+                str(payload.get("native_package_id") or ""),
+                str(native_package["id"]),
             )
             self.assertEqual(
                 str(payload.get("download_path") or ""),

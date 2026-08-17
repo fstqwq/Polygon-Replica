@@ -9,7 +9,7 @@ from app.service.problem.readiness import (
 )
 from app.service.problem_package.service import (
     ProblemPackageService,
-    VerifiedRevisionReadiness,
+    NativePackageReadiness,
 )
 from app.service.verification.service import VerificationService
 from app.service.verification.task_store import VerificationTaskStore
@@ -37,13 +37,13 @@ def _verification_row(
     }
 
 
-def _missing_package(problem_id: int) -> VerifiedRevisionReadiness:
+def _missing_package(problem_id: int) -> NativePackageReadiness:
     return {
         "problem_id": problem_id,
         "published_commit": "a" * 40,
         "published_revision_number": 1,
-        "verified_revision_number": None,
-        "verified_revision_id": "",
+        "native_package_revision_number": None,
+        "native_package_id": "",
         "status": "none",
         "missing_reason": "Package not built",
     }
@@ -83,16 +83,16 @@ class _VerificationRows:
 
 
 class _PackageRows:
-    def __init__(self, rows: dict[int, VerifiedRevisionReadiness]) -> None:
+    def __init__(self, rows: dict[int, NativePackageReadiness]) -> None:
         self.rows = rows
 
-    def published_readiness(self, problem_id: int) -> VerifiedRevisionReadiness:
+    def published_readiness(self, problem_id: int) -> NativePackageReadiness:
         return self.rows[problem_id]
 
     def published_readiness_many(
         self,
         problem_ids: list[int],
-    ) -> dict[int, VerifiedRevisionReadiness]:
+    ) -> dict[int, NativePackageReadiness]:
         return {problem_id: self.rows[problem_id] for problem_id in problem_ids}
 
 
@@ -116,7 +116,7 @@ class TestProblemReadinessService(unittest.TestCase):
         self,
         rows: list[WorkspaceVerificationRow],
         *,
-        package: VerifiedRevisionReadiness | None = None,
+        package: NativePackageReadiness | None = None,
     ) -> tuple[ProblemReadinessService, _VerificationRows]:
         verification = _VerificationRows(
             {(self.subject["problem_id"], self.subject["workspace_id"]): rows}
@@ -135,15 +135,15 @@ class TestProblemReadinessService(unittest.TestCase):
             verification,
         )
 
-    def test_active_verified_revision_build_projects_as_queued(self) -> None:
+    def test_active_native_package_build_projects_as_queued(self) -> None:
         service, _verification = self._service(
             [],
             package={
                 "problem_id": self.subject["problem_id"],
                 "published_commit": self.subject["head_commit"],
                 "published_revision_number": 2,
-                "verified_revision_number": None,
-                "verified_revision_id": "",
+                "native_package_revision_number": None,
+                "native_package_id": "",
                 "status": "queued",
                 "missing_reason": "",
             },

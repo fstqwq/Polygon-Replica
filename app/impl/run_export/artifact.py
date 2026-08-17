@@ -82,45 +82,42 @@ def export_file(problem: str, user: Annotated[str, Depends(require_session_user)
     return FileResponse(file_path, filename=download_name)
 
 
-def verified_revision_file(
+def native_package_file(
     problem: str,
     user: Annotated[str, Depends(require_session_user)],
-    verified_revision_id: str,
+    native_package_id: str,
 ):
     user_ctx = global_user_ctx(user)
     problem_row = runtime().contest_service.problem_by_slug(problem)
     if problem_row is None:
         raise HTTPException(status_code=404, detail="problem not found")
     problem_id = int(problem_row["id"])
-    verified_revision = runtime().problem_package_service.verified_revision(
-        verified_revision_id
+    native_package = runtime().problem_package_service.native_package(
+        native_package_id
     )
-    revision_access = runtime().access_query.verified_revision_context(
+    package_access = runtime().access_query.native_package_context(
         actor_user_id=int(user_ctx["user"]["id"]),
         expected_problem_id=problem_id,
-        verified_revision=verified_revision,
+        native_package=native_package,
     )
-    if not revision_access["can_download"]:
+    if not package_access["can_download"]:
         raise HTTPException(status_code=404, detail="package not found")
     try:
-        download = runtime().problem_package_service.open_verified_revision_download(
-            verified_revision_id
+        download = runtime().problem_package_service.open_native_package_download(
+            native_package_id
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="package unavailable") from exc
     slug = Path(str(problem_row["slug"])).name or "problem"
-    filename = (
-        f"{slug}-polygon-replica-v"
-        f"{download.verified_revision['revision_number']}.zip"
-    )
+    filename = f"{slug}-native-v{download.native_package['revision_number']}.zip"
     return StreamingResponse(
         download.chunks(),
         media_type="application/zip",
         headers={
             "Content-Disposition": f"attachment; filename*=utf-8''{quote(filename)}",
-            "Content-Length": str(download.verified_revision["archive_size_bytes"]),
+            "Content-Length": str(download.native_package["archive_size_bytes"]),
         },
         background=BackgroundTask(download.close),
     )

@@ -4,7 +4,7 @@ from typing import Literal, TypedDict
 from app.service.platform.error_text import bounded_display_text, normalize_display_text
 from app.service.problem_package.service import (
     ProblemPackageService,
-    VerifiedRevisionReadiness,
+    NativePackageReadiness,
 )
 from app.service.repository.revision import parse_verification_source
 from app.service.verification.failure_display import verification_task_failure_hint
@@ -76,7 +76,7 @@ class PackageReadiness(TypedDict):
     revision_number: int | None
     tone: ReadinessTone
     reason: str
-    verified_revision_id: str | None
+    native_package_id: str | None
     published_commit: str
     published_revision_number: int | None
 
@@ -153,7 +153,7 @@ class ProblemReadinessService:
                 "revision_number": None,
                 "tone": "danger",
                 "reason": "readiness unavailable",
-                "verified_revision_id": None,
+                "native_package_id": None,
                 "published_commit": "",
                 "published_revision_number": None,
             },
@@ -172,25 +172,25 @@ class ProblemReadinessService:
         }
 
     @staticmethod
-    def _package(readiness: VerifiedRevisionReadiness) -> PackageReadiness:
+    def _package(readiness: NativePackageReadiness) -> PackageReadiness:
         status = readiness["status"]
         if status == "ready":
             return {
                 "state": "ready",
-                "revision_number": readiness["verified_revision_number"],
+                "revision_number": readiness["native_package_revision_number"],
                 "tone": "normal",
                 "reason": "",
-                "verified_revision_id": readiness["verified_revision_id"],
+                "native_package_id": readiness["native_package_id"],
                 "published_commit": readiness["published_commit"],
                 "published_revision_number": readiness["published_revision_number"],
             }
         if status == "stale":
             return {
                 "state": "stale",
-                "revision_number": readiness["verified_revision_number"],
+                "revision_number": readiness["native_package_revision_number"],
                 "tone": "warning",
                 "reason": readiness["missing_reason"],
-                "verified_revision_id": readiness["verified_revision_id"],
+                "native_package_id": readiness["native_package_id"],
                 "published_commit": readiness["published_commit"],
                 "published_revision_number": readiness["published_revision_number"],
             }
@@ -200,7 +200,7 @@ class ProblemReadinessService:
                 "revision_number": None,
                 "tone": "normal",
                 "reason": "",
-                "verified_revision_id": None,
+                "native_package_id": None,
                 "published_commit": readiness["published_commit"],
                 "published_revision_number": readiness["published_revision_number"],
             }
@@ -209,7 +209,7 @@ class ProblemReadinessService:
             "revision_number": None,
             "tone": "danger",
             "reason": readiness["missing_reason"],
-            "verified_revision_id": None,
+            "native_package_id": None,
             "published_commit": readiness["published_commit"],
             "published_revision_number": readiness["published_revision_number"],
         }
@@ -347,7 +347,7 @@ class ProblemReadinessService:
         self,
         subject: WorkspaceReadinessSubject,
         rows: list[WorkspaceVerificationRow],
-        package: VerifiedRevisionReadiness,
+        package: NativePackageReadiness,
         *,
         explain_verification: bool,
     ) -> ProblemReadiness:

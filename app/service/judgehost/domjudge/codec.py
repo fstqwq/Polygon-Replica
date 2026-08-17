@@ -9,6 +9,7 @@ from app.service.judgehost.domjudge.limits import (
     config_int,
     upload_max_bytes,
 )
+from app.service.judgehost.languages import JUDGEHOST_LANGUAGES
 
 _CONTEST_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
@@ -93,8 +94,9 @@ def config_payload(values: Mapping[str, object]) -> dict[str, object]:
 
 def languages_payload() -> list[dict[str, object]]:
     return [
-        {"id": "c", "extensions": ["c"]},
-        {"id": "cpp", "extensions": ["cpp", "cc", "cxx", "c++"]},
-        {"id": "java", "extensions": ["java"]},
-        {"id": "py", "extensions": ["py"]},
+        {
+            "id": language.language_id,
+            "extensions": list(language.extensions),
+        }
+        for language in JUDGEHOST_LANGUAGES
     ]

@@ -7,9 +7,6 @@ from app.service.platform.error_text import bounded_display_text, normalize_disp
 from app.service.platform.testlib_source import workspace_testlib_header
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 
-_CPP_EXTENSIONS = {".cpp", ".cc", ".cxx", ".c++", ".c"}
-
-
 def _bounded_text(value: str, *, limit_bytes: int) -> str:
     return bounded_display_text(
         value,
@@ -120,7 +117,7 @@ def _testlib_extra_sources(
     workspace: Path,
     source_path: str,
 ) -> dict[str, object] | None:
-    if Path(source_path).suffix.lower() not in _CPP_EXTENSIONS:
+    if Path(source_path).suffix.lower() not in _K.CPP_SOURCE_EXTENSIONS:
         return None
     testlib_header = workspace_testlib_header(workspace)
     if testlib_header is not None:

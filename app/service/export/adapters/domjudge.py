@@ -17,7 +17,7 @@ from app.service.problem.runtime_config import (
     load_problem_config,
     problem_config_limits,
 )
-from app.service.problem_package.service import VerifiedRevisionReader
+from app.service.problem_package.service import NativePackageReader
 from app.service.statement.render import statement_title_from_snapshot
 from app.service.statement.tex_compile import TexCompileService
 
@@ -109,7 +109,7 @@ class DOMjudgePackageAdapter(PackageAdapterSupport):
         super().__init__(config_values, tex_compile_service)
 
     @staticmethod
-    def plan(reader: VerifiedRevisionReader) -> PackageAdapterPlan:
+    def plan(reader: NativePackageReader) -> PackageAdapterPlan:
         return PackageAdapterPlan(
             "domjudge",
             tuple(reader.manifest["solutions"]),
@@ -118,7 +118,7 @@ class DOMjudgePackageAdapter(PackageAdapterSupport):
 
     def build(
         self,
-        reader: VerifiedRevisionReader,
+        reader: NativePackageReader,
         *,
         target: Path,
         canonical_problem_slug: str,

@@ -5,11 +5,11 @@ from pathlib import Path
 
 from app.service.export.adapters.nowcoder import NowcoderPackageAdapter
 from app.service.problem_package.manifest import (
-    VerifiedRevisionManifest,
-    VerifiedTestEntry,
+    NativePackageManifest,
+    NativePackageTestEntry,
     describe_file,
 )
-from app.service.problem_package.service import VerifiedRevisionReader
+from app.service.problem_package.service import NativePackageReader
 from app.service.problem_package.store import MaterializationRow
 
 
@@ -113,7 +113,7 @@ class TestNowcoderExportPackage(unittest.TestCase):
         pass_limit: int,
         checker_source: str | None,
         directory_name: str = "verified",
-    ) -> VerifiedRevisionReader:
+    ) -> NativePackageReader:
         package_root = self.root / directory_name
         (package_root / "config").mkdir(parents=True)
         build_config: dict[str, object] = {"generator_sources": []}
@@ -127,7 +127,7 @@ class TestNowcoderExportPackage(unittest.TestCase):
             encoding="utf-8",
         )
 
-        tests: list[VerifiedTestEntry] = []
+        tests: list[NativePackageTestEntry] = []
         for test_id, input_payload, answer_payload in (
             ("001", b"first input\n", b"first answer\n"),
             ("custom", b"second input\n", b"second answer\n"),
@@ -163,7 +163,7 @@ class TestNowcoderExportPackage(unittest.TestCase):
             "checked_at": "2026-01-01T00:00:00Z",
             "unavailable_reason": "",
         }
-        manifest: VerifiedRevisionManifest = {
+        manifest: NativePackageManifest = {
             "source_commit": materialization["source_commit"],
             "revision_number": materialization["revision_number"],
             "source_digest": materialization["source_digest"],
@@ -176,8 +176,8 @@ class TestNowcoderExportPackage(unittest.TestCase):
             "solutions": [],
             "tests": tests,
         }
-        return VerifiedRevisionReader(
-            verified_revision=materialization,
+        return NativePackageReader(
+            native_package=materialization,
             root=package_root,
             manifest=manifest,
         )

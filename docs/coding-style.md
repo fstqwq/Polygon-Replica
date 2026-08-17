@@ -23,7 +23,7 @@ Handle the condition once at the boundary that owns it:
   field and does not infer user intent;
 - ambiguous data stays unchanged and is shown as a warning under Review and
   Publish;
-- Verification, Package Export, verified-revision construction, and Contest
+- Verification, Package Export, Native Package construction, and Contest
   builds validate the complete canonical source before doing work, then pass
   only that canonical shape internally;
 - a consumer may reject, explicitly upgrade, or use a defined fallback at its
