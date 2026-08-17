@@ -9,7 +9,6 @@
     "test_judgehost_scheduler.py",
     "test_judgehost_simulation.py",
     "test_merge_diff.py",
-    "test_nowcoder_export_package.py",
     "test_polygon_package_import.py",
     "test_polygon_package_rules.py",
     "test_preview_unit.py",
@@ -49,6 +48,7 @@
     "test_import_policy.py",
     "test_install_host_contract.py",
     "test_judgehost_scripts.py",
+    "test_nowcoder_export_package.py",
     "test_tex_sandbox.py"
   ],
   "e2e": [
