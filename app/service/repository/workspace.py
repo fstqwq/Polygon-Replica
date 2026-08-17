@@ -30,7 +30,9 @@ from app.service.disk.workspace_store import (
     WorkspaceDiskStore,
     WorkspaceRecentVerificationRow,
 )
+from app.service.platform.fs.layout import StorageLayout
 from app.service.platform.fs.op import copytree, ensure_dir, extract_git_archive, remove_symlinks
+from app.service.platform.git_process import run_git
 from app.service.platform.testlib_source import maintained_testlib_header
 from app.service.platform.workspace_path import is_hidden_workspace_path
 from app.service.problem.build_config import BuildConfig, dumps_build_config
@@ -39,6 +41,10 @@ from app.service.problem.runtime_config import (
     dumps_problem_config,
     problem_config_limits,
 )
+from app.service.problem.test_spec import dumps_default_tests_spec
+from app.service.repository.revision import workspace_revision_info
+from app.service.verification.task_store import VerificationTaskStore
+from app.service.workspace.state import WorkspaceState
 
 
 class GlobalUserContext(TypedDict):
@@ -52,12 +58,7 @@ class WorkspaceContext(TypedDict):
     user: UserRow
     workspace: WorkspaceState
     latest_artifact_verification: WorkspaceRecentVerificationRow | None
-from app.service.problem.test_spec import dumps_default_tests_spec
-from app.service.platform.fs.layout import StorageLayout
-from app.service.platform.git_process import run_git
-from app.service.repository.revision import workspace_revision_info
-from app.service.verification.task_store import VerificationTaskStore
-from app.service.workspace.state import WorkspaceState
+
 
 def _workspace_transaction_path(workspace: Path) -> Path:
     return workspace.parent / f".{workspace.name}.merge-transaction.json"
