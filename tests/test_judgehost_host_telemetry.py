@@ -97,9 +97,6 @@ class TestToolchainVersionCollector(unittest.TestCase):
         self.assertIn("command -v '/opt/tool chains/clang++'", cpp_script)
         self.assertIn("exec '/opt/tool chains/clang++' --version 2>&1", cpp_script)
 
-        self._lease("c")
-        self.assertEqual(self.collector.version_commands(101), cpp)
-
         self._lease("java")
         java = self.collector.version_commands(101)
         self.assertIn(
@@ -117,6 +114,15 @@ class TestToolchainVersionCollector(unittest.TestCase):
         self.assertLess(
             compiler_script.index("python3"), compiler_script.index("python;")
         )
+
+    def test_version_commands_reject_removed_c_toolchain(self) -> None:
+        self._lease("c")
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "unsupported judgehost toolchain language: c",
+        ):
+            self.collector.version_commands(101)
 
     def test_version_commands_require_an_active_non_skip_lease(self) -> None:
         self.scheduler.case = None
