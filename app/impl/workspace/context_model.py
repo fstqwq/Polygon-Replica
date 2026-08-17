@@ -7,9 +7,10 @@ of whether the consumer is the Problem navigation, Workspace review, or a
 page-specific template.
 """
 
-from typing import Literal, NotRequired, TypedDict
+from __future__ import annotations
 
-from app.impl.contest.workspace_scope import ContestWorkspaceContext
+from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
+
 from app.service.access.model import ProblemAccessContext, WorkspaceAccessContext
 from app.service.problem.content_review import ProblemContentReview
 from app.service.problem.context import (
@@ -23,6 +24,9 @@ from app.service.problem.readiness import ProblemReadiness
 from app.service.problem.query import SolutionSourceRow
 from app.service.repository.git import StatusChangeSummary
 from app.service.repository.workspace import WorkspaceContext
+
+if TYPE_CHECKING:
+    from app.impl.contest.workspace_scope import ContestWorkspaceContext
 
 
 class PackageDownloadContext(TypedDict):
