@@ -12,9 +12,19 @@
   <span class="compact-fact-label">{{ view.left_label }} / {{ view.right_label }}</span>
   {% endif %}
   <span class="compact-fact-value revision-pair-value" aria-hidden="true">
+    {% if not show_labels and view.left_meta %}
+    <strong class="revision-pair-alert">{{ view.left_display }} ({{ view.left_meta }})</strong>
+    {% elif not show_labels %}
+    <span>{{ view.left_display }}</span>
+    {% else %}
     <strong class="{{ left_tone }}">{{ view.left_display }}</strong>
+    {% endif %}
     <span class="revision-pair-separator">/</span>
+    {% if show_labels %}
     <strong>{{ view.right_display }}</strong>
+    {% else %}
+    <span>{{ view.right_display }}</span>
+    {% endif %}
   </span>
 </span>
 {%- endmacro %}

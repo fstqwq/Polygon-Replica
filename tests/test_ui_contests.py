@@ -160,15 +160,6 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             '<button class="linkish-button" type="submit">Build All Packages</button>',
             html,
         )
-        management = contest_problems_page(
-            _app_request(f"/contests/{contest_slug}/problems"),
-            contest_slug,
-            "alice",
-        )
-        management_html = management.body.decode("utf-8", errors="replace")
-        self.assertNotIn("Workspace / Published", management_html)
-        self.assertIn("revision-pair-values-only", management_html)
-
         alice_row = db_fetch_one("SELECT id FROM users WHERE username='alice'")
         self.assertIsNotNone(alice_row)
         source_rows = runtime.contest_problem_query_service.problem_rows(
@@ -185,6 +176,9 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         readiness["workspace"]["local_revision"] = 1
         readiness["workspace"]["upstream_revision"] = 2
         readiness["workspace"]["needs_update"] = True
+        source_rows[0]["workspace_revision_local"] = 1
+        source_rows[0]["workspace_revision_upstream"] = 2
+        source_rows[0]["workspace_revision_warn"] = True
         with patch.object(
             runtime.contest_problem_query_service,
             "problem_rows",
@@ -195,12 +189,24 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
                 contest_slug,
                 "alice",
             )
+            management = contest_problems_page(
+                _app_request(f"/contests/{contest_slug}/problems"),
+                contest_slug,
+                "alice",
+            )
         completed_html = completed.body.decode("utf-8", errors="replace")
         self.assertIn("Packages:", completed_html)
         self.assertIn("1 ready", completed_html)
         self.assertNotIn("Build All Packages", completed_html)
         self.assertIn('<strong class="">v1</strong>', completed_html)
         self.assertIn('<strong class="danger">sync required</strong>', completed_html)
+        management_html = management.body.decode("utf-8", errors="replace")
+        self.assertNotIn("Workspace / Published", management_html)
+        self.assertIn("revision-pair-values-only", management_html)
+        self.assertIn(
+            '<strong class="revision-pair-alert">v1 (sync required)</strong>',
+            management_html,
+        )
 
     def test_existing_over_limit_contest_remains_mutable_except_for_addition(self) -> None:
         previous = dict(runtime.config_values.snapshot())

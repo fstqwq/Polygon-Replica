@@ -89,6 +89,7 @@ class TestProblemReadinessUnit(unittest.TestCase):
                 self.assertEqual(pair["left_label"], "Package")
                 self.assertEqual(pair["right_label"], "Published")
                 self.assertEqual(pair["left_display"], left_display)
+                self.assertEqual(pair["left_meta"], "")
                 self.assertEqual(pair["right_display"], right_display)
                 self.assertEqual(pair["status"], status)
                 self.assertEqual(pair["left_tone"], tone)
@@ -118,12 +119,14 @@ class TestProblemReadinessUnit(unittest.TestCase):
         self.assertEqual(pair["left_label"], "Workspace")
         self.assertEqual(pair["right_label"], "Published")
         self.assertEqual(pair["left_display"], "v6")
+        self.assertEqual(pair["left_meta"], "sync required")
         self.assertEqual(pair["right_display"], "v7")
         self.assertEqual(pair["status"], "stale")
         self.assertEqual(pair["left_tone"], "danger")
 
         dirty_pair = workspace_published_revision_pair(0, 0, dirty=True)
         self.assertEqual(dirty_pair["status"], "current")
+        self.assertEqual(dirty_pair["left_meta"], "")
         self.assertEqual(dirty_pair["left_tone"], "normal")
         self.assertIn("workspace has local changes", dirty_pair["aria_label"])
 

@@ -335,6 +335,11 @@ body.problem-layout:not(.verification-compact) {
   margin-left: 0;
 }
 
+.revision-pair-alert {
+  color: var(--danger);
+  font-weight: 700;
+}
+
 .revision-pair-separator {
   color: var(--muted);
   font-weight: 400;

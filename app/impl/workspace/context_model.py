@@ -41,6 +41,7 @@ RevisionPairStatus = Literal["current", "stale", "queued", "none"]
 class RevisionPairView(TypedDict):
     left_label: str
     left_display: str
+    left_meta: str
     left_tone: RevisionTone
     right_label: str
     right_display: str
@@ -211,6 +212,7 @@ def package_published_revision_pair(
     return {
         "left_label": "Package",
         "left_display": package_display,
+        "left_meta": "",
         "left_tone": package_tone,
         "right_label": "Published",
         "right_display": published_display,
@@ -244,10 +246,20 @@ def workspace_published_revision_pair(
     else:
         status = "current"
         tone = "normal"
+    sync_required = bool(
+        needs_update
+        or (
+            local_revision is not None
+            and published_revision is not None
+            and local_revision < published_revision
+        )
+    )
     dirty_aria = "; workspace has local changes" if dirty else ""
+    sync_aria = "; sync required" if sync_required else ""
     return {
         "left_label": "Workspace",
         "left_display": local_display,
+        "left_meta": "sync required" if sync_required else "",
         "left_tone": tone,
         "right_label": "Published",
         "right_display": published_display,
@@ -255,7 +267,7 @@ def workspace_published_revision_pair(
         "aria_label": (
             f"Workspace revision {_revision_aria(local_revision)}; "
             f"published revision {_revision_aria(published_revision)}; "
-            f"workspace is {status}{dirty_aria}"
+            f"workspace is {status}{sync_aria}{dirty_aria}"
         ),
     }
 
