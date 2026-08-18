@@ -42,11 +42,15 @@ jobs:
       with:
         python-version: "3.14"
         cache: pip
-    - name: Install sandbox dependency
+    - name: Install sandbox and renderer dependencies
       if: matrix.group == 'service' || matrix.group == 'executor' || matrix.group == 'e2e'
       run: |
         sudo apt-get update
-        sudo apt-get install -y bubblewrap
+        packages=(bubblewrap)
+        if [ "${{ matrix.group }}" = "e2e" ]; then
+          packages+=(pandoc poppler-utils)
+        fi
+        sudo apt-get install -y "${packages[@]}"
         sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
         if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0

@@ -3,32 +3,19 @@
 from __future__ import annotations
 
 import json
-import sqlite3
-from typing import Literal, TypedDict, cast
+from typing import Protocol, cast
 
 from app.db import DB, now_iso
+from app.service.statement.preview_state import (
+    StatementPreviewOutput,
+    StatementPreviewRow,
+    StatementPreviewSource,
+    StatementPreviewSubject,
+)
 
 
-StatementPreviewSubject = Literal["problem", "contest"]
-StatementPreviewSource = Literal["workspace", "native_package"]
-StatementPreviewOutput = Literal["html", "pdf"]
-
-
-class StatementPreviewRow(TypedDict):
-    id: str
-    actor_user_id: int
-    subject_kind: StatementPreviewSubject
-    problem_id: int | None
-    contest_id: int | None
-    source_kind: StatementPreviewSource
-    output_kind: StatementPreviewOutput
-    language: str
-    input_identity: str
-    options: dict[str, object]
-    status: str
-    summary: dict[str, object]
-    created_at: str
-    finished_at: str
+class _Row(Protocol):
+    def __getitem__(self, key: str, /) -> str | int | float | bytes | None: ...
 
 
 class StatementPreviewStore:
@@ -198,13 +185,13 @@ class StatementPreviewStore:
         return self._project(row) if row is not None else None
 
     @classmethod
-    def _project(cls, row: sqlite3.Row) -> StatementPreviewRow:
+    def _project(cls, row: _Row) -> StatementPreviewRow:
         return {
             "id": str(row["id"]),
-            "actor_user_id": int(row["actor_user_id"]),
+            "actor_user_id": cls._required_int(row["actor_user_id"]),
             "subject_kind": cast(StatementPreviewSubject, str(row["subject_kind"])),
-            "problem_id": int(row["problem_id"]) if row["problem_id"] is not None else None,
-            "contest_id": int(row["contest_id"]) if row["contest_id"] is not None else None,
+            "problem_id": cls._optional_int(row["problem_id"]),
+            "contest_id": cls._optional_int(row["contest_id"]),
             "source_kind": cast(StatementPreviewSource, str(row["source_kind"])),
             "output_kind": cast(StatementPreviewOutput, str(row["output_kind"])),
             "language": str(row["language"]),
@@ -227,3 +214,13 @@ class StatementPreviewStore:
         except json.JSONDecodeError:
             return {}
         return value if isinstance(value, dict) else {}
+
+    @staticmethod
+    def _required_int(raw: str | int | float | bytes | None) -> int:
+        if raw is None:
+            raise ValueError("required statement preview integer is null")
+        return int(raw)
+
+    @staticmethod
+    def _optional_int(raw: str | int | float | bytes | None) -> int | None:
+        return None if raw is None else int(raw)

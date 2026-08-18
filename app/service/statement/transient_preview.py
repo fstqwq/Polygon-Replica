@@ -12,11 +12,11 @@ from pathlib import Path
 
 from app.db import DB
 from app.main_util import problem_slug_leaf
-from app.service.disk.statement_preview_store import (
+from app.service.statement.preview_state import (
     StatementPreviewOutput,
+    StatementPreviewRepository,
     StatementPreviewRow,
     StatementPreviewSource,
-    StatementPreviewStore,
 )
 from app.service.platform.fs.layout import StorageLayout
 from app.service.platform.hashing import sha256_hex_json
@@ -61,9 +61,10 @@ class StatementPreviewService:
         verification_workflow: VerificationWorkflow,
         html_renderer: StatementHtmlRenderer,
         pdf_compiler: TexCompileService,
+        preview_repository: StatementPreviewRepository,
     ) -> None:
         self._db = db
-        self._store = StatementPreviewStore(db)
+        self._store = preview_repository
         self._storage = storage_layout
         self._workspaces = workspace_service
         self._packages = package_service

@@ -12,9 +12,9 @@ from app.impl.auth.session import require_session_user
 from app.impl.auth.shared import redirect_response, template_response
 from app.impl.contest.shared import _contest_ctx
 from app.impl.runtime.dependency import runtime
-from app.service.disk.statement_preview_store import StatementPreviewSource
 from app.service.statement.context import normalize_statement_language
 from app.service.statement.html_render import RESOURCE_PLACEHOLDER
+from app.service.statement.preview_state import StatementPreviewSource
 
 
 def _source(value: str) -> StatementPreviewSource:

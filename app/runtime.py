@@ -335,6 +335,7 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
             self.tex_sandbox_backend,
             self.config_values,
         )
+        statement_preview_store = StatementPreviewStore(self.db)
         self.statement_preview_service = StatementPreviewService(
             self.db,
             self.storage_layout,
@@ -344,6 +345,7 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
             self.verification_workflow,
             self.statement_html_renderer,
             self.tex_compile_service,
+            statement_preview_store,
         )
         self.native_package_workflow = NativePackageWorkflow(
             self.problem_package_service,
@@ -399,7 +401,7 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
             package_service=self.problem_package_service,
             problem_preview_service=self.statement_preview_service,
             storage_layout=self.storage_layout,
-            preview_store=StatementPreviewStore(self.db),
+            preview_store=statement_preview_store,
             statement_service=self.contest_statement_service,
             snapshot_service=self.contest_snapshot_service,
         )

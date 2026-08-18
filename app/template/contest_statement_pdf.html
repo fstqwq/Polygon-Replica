@@ -4,7 +4,7 @@
   <h1 class="page-title">Statement PDF Preview</h1>
   <a href="/contests/{{ ctx.contest.slug }}/packages">Back to Statements &amp; Builds</a>
 </div>
-<p class="muted">{{ language }} · {{ 'Workspace' if source == 'workspace' else 'Packages' }}</p>
+<p class="muted">{{ language }} &middot; {{ 'Workspace' if source == 'workspace' else 'Packages' }}</p>
 {% if ctx.access.can_build %}
 <form class="form-stack" method="post" action="/contests/{{ ctx.contest.slug }}/statements/pdf?source={{ source }}&language={{ language }}">
   <label><input type="checkbox" name="insert_blank_pages" value="true" /> Insert blank pages after odd statements</label>

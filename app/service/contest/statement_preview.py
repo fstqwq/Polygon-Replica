@@ -13,10 +13,10 @@ from app.service.access.query import AccessQuery
 from app.service.contest.service import ContestProblem, ContestService
 from app.service.contest.snapshot import ContestSourceSnapshotService
 from app.service.contest.statement import ContestStatementService
-from app.service.disk.statement_preview_store import (
+from app.service.statement.preview_state import (
+    StatementPreviewRepository,
     StatementPreviewRow,
     StatementPreviewSource,
-    StatementPreviewStore,
 )
 from app.service.platform.fs.layout import StorageLayout
 from app.service.platform.hashing import sha256_hex_json
@@ -56,7 +56,7 @@ class ContestStatementPreviewService:
         package_service: ProblemPackageService,
         problem_preview_service: StatementPreviewService,
         storage_layout: StorageLayout,
-        preview_store: StatementPreviewStore,
+        preview_store: StatementPreviewRepository,
         statement_service: ContestStatementService,
         snapshot_service: ContestSourceSnapshotService,
     ) -> None:

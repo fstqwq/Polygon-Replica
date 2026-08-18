@@ -7,7 +7,7 @@
   <a href="/problems/{{ problem.slug }}/statement?language={{ language }}">Back to Statements</a>
 </div>
 <div class="page-title-inline">
-  <p class="muted"><code>{{ problem.slug }}</code> · {{ language }} · {{ 'Workspace' if source == 'workspace' else 'Native Package' }}</p>
+  <p class="muted"><code>{{ problem.slug }}</code> &middot; {{ language }} &middot; {{ 'Workspace' if source == 'workspace' else 'Package' }}</p>
   {% if can_build %}
   <form class="inline-action" method="post" action="/problems/{{ problem.slug }}/statement/html?source={{ source }}&language={{ language }}">
     <button class="btn primary-action" type="submit">{{ 'Rebuild HTML' if preview else 'Generate HTML' }}</button>
