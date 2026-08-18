@@ -4,6 +4,22 @@ This directory contains the canonical statement templates and LaTeX style used
 by Qiulygon. The style is not an official ICPC asset; it is derived from the
 Polygon-compatible `olymp.sty` ecosystem.
 
+## Hard-fork status
+
+This directory is a project-owned **hard fork**, not a synchronized vendor
+snapshot or a Git submodule. Its upstream lineage is
+[`GassaFM/olymp.sty`](https://github.com/GassaFM/olymp.sty), followed by
+[`fstqwq/Polygon-WF-Styles`](https://github.com/fstqwq/Polygon-WF-Styles), and
+then the copy maintained inside Polygon Replica.
+
+Polygon Replica deliberately preserves selected Polygon-facing commands while
+independently evolving the FreeMarker split, XeLaTeX support, sample resource
+pipeline, structured multipass and interaction presentation, blank-page
+behavior, and banner contract. New interfaces and behavior documented here
+must not be assumed to exist in either upstream repository. Conversely,
+upstream changes must be reviewed and ported intentionally; replacing this
+directory wholesale with an upstream checkout is unsupported.
+
 ## Template files
 
 - `statements.ftl` is the outer document template.
@@ -125,12 +141,19 @@ The canonical `examples.tex` recognizes this optional render-context shape:
 }
 ```
 
-The current renderer continues to produce `problem.sampleTests`; it does not
-synthesize `problem.examples`. The structured branch is the consumer contract
-for a future producer or another compatible rendering caller. Authors may also
-replace `statement/examples.tex` with arbitrary FreeMarker and TeX immediately.
-Every referenced `inputFile`, `outputFile`, and `textFile` must be materialized
-as a UTF-8 text file relative to the rendered problem's compile directory.
+Polygon Replica's current `StatementExamplesProducer` synthesizes
+`problem.examples.samples` for browser previews and verified-revision statement
+builds. It projects authored inline `sample_json`, explicit display overrides,
+or canonical main-correct pass evidence into the structured context and writes
+each referenced payload as a controlled UTF-8 render resource. The producer
+also supplies `problem.sampleTests` as a compatibility projection for custom
+templates that still consume the Polygon shape.
+
+The generated `inputFile`, `outputFile`, and `textFile` paths are relative to
+the rendered problem's compile directory and exist before FreeMarker output is
+compiled by TeX. Another compatible rendering caller may provide the same
+context and resources directly. Authors may also replace
+`statement/examples.tex` with arbitrary FreeMarker and TeX.
 
 ## Blank pages and banners
 
