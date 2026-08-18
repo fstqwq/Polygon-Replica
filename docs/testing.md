@@ -215,11 +215,14 @@ of the DOMserver journey. All Docker test definitions live in
 `tests/docker_e2e/`. The mock, deployed product, and DOMserver journeys run as
 independent jobs in the `Docker E2E` workflow with a 15-minute outer limit.
 That workflow runs on a push unless every changed path is in its explicit
-presentation-only allowlist. The allowlist contains static assets, templates,
-pure presentation projections, and documentation; an unknown path or a push
-that mixes presentation and non-presentation changes runs all three jobs. A
-manual `workflow_dispatch` always runs the workflow. There is no scheduled
-Docker E2E run.
+non-Docker-input allowlist. The allowlist contains static assets, templates,
+pure presentation projections, documentation, ordinary Python tests and their
+Fast CI-only resource and harness files. Changes below `tests/docker_e2e/` or
+to `tests/scripts/docker-e2e.sh`, `tests/scripts/e2e-real.sh`, and
+`tests/scripts/e2e-domserver-900.sh` still run all three Docker jobs. An
+unknown path or a push that mixes ignored and non-ignored changes also runs all
+three jobs. A manual `workflow_dispatch` always runs the workflow. There is no
+scheduled Docker E2E run.
 
 The separate `Fast CI` workflow runs static checks and the unit, service,
 executor, and ordinary E2E resource groups on every push. Both workflows cancel
