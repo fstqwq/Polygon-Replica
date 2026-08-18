@@ -664,9 +664,9 @@ TOOLCHAIN_DEFINITIONS = (
     ),
     _int(
         "PREVIEW_HTML_MEMORY_MB",
-        512,
+        1024,
         "UI",
-        "Pandoc statement conversion memory limit in MB.",
+        "Pandoc statement conversion address-space limit in MB.",
         _bounds(64, 8192),
     ),
     _int(
