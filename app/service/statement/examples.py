@@ -537,6 +537,7 @@ class StatementExamplesProducer:
         workspace: Path,
         *,
         verification_id: str = "",
+        execution_test_name_by_source_id: dict[str, str] | None = None,
         tests_spec_max_bytes: int,
         statement_sample_max_bytes: int,
         problem_limits: ProblemConfigLimits,
@@ -577,7 +578,17 @@ class StatementExamplesProducer:
                         f"sample {row['id']} is missing from verification evidence"
                     )
                 test_name = test_identity[1]
-                task = tasks.get(test_name)
+                execution_test_name = test_name
+                if execution_test_name_by_source_id is not None:
+                    execution_test_name = execution_test_name_by_source_id.get(
+                        row["id"],
+                        "",
+                    )
+                    if not execution_test_name:
+                        raise RuntimeError(
+                            f"sample {row['id']} execution owner is missing"
+                        )
+                task = tasks.get(execution_test_name)
                 if task is None:
                     raise RuntimeError(
                         f"sample {row['id']} main-correct evidence is missing"

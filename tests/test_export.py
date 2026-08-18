@@ -11,7 +11,7 @@ import yaml
 
 from app.main import runtime
 import app.impl.workspace.context_job as workspace_context_job
-from app.service.importing.polygon_replica import PolygonReplicaPackageImportService
+from app.service.execution.codec import execution_result_json
 from app.service.execution.model import (
     CAPTURE_COMPLETE,
     ExecutionPassResult,
@@ -19,6 +19,7 @@ from app.service.execution.model import (
     PassArtifacts,
 )
 from app.service.execution.policy import normalize_execution_result
+from app.service.importing.polygon_replica import PolygonReplicaPackageImportService
 from app.service.platform.git_process import run_git
 from app.service.problem.build_config import (
     BuildConfig,
@@ -34,7 +35,7 @@ from app.service.verification.lifecycle import PlannedTask, verification_task_id
 from app.service.verification.task_completion import TaskCompletion
 from app.service.verification.types import VerificationTaskStatus
 from tests.archive_support import import_problem_package
-from tests.common import E2ETestBase
+from tests.common import E2ETestBase, configure_interactive_workspace
 from tests.db_helpers import (
     activate_test_verification,
     admit_test_verification,
@@ -97,25 +98,39 @@ class TestPublishedRevisionExport(E2ETestBase):
         self,
         *,
         test_id: str = "001",
+        test_ids: tuple[str, ...] | None = None,
         extra_solutions: dict[str, str] | None = None,
+        mode: str = "pass-fail",
     ) -> tuple[Path, int, str]:
+        selected_test_ids = (test_id,) if test_ids is None else test_ids
         workspace = Path(self._workspace_path())
+        if mode == "interactive":
+            configure_interactive_workspace(
+                workspace,
+                time_limit_ms=2000,
+                memory_limit_mb=1024,
+                pass_limit=1,
+            )
+        elif mode != "pass-fail":
+            raise AssertionError(f"unsupported fixture mode: {mode}")
         (workspace / "tests" / "manual").mkdir(parents=True, exist_ok=True)
-        (workspace / "tests" / "manual" / f"{test_id}.in").write_text(
-            "1\n",
-            encoding="utf-8",
-        )
+        for selected_test_id in selected_test_ids:
+            (workspace / "tests" / "manual" / f"{selected_test_id}.in").write_text(
+                "1\n",
+                encoding="utf-8",
+            )
         (workspace / "tests" / "spec.json").write_text(
             json.dumps(
                 {
                     "tests": [
                         {
-                            "id": test_id,
+                            "id": selected_test_id,
                             "kind": "manual",
                             "sample": True,
                             "sample_input": "display input\n",
                             "sample_output": "display output\n",
                         }
+                        for selected_test_id in selected_test_ids
                     ]
                 },
                 indent=2,
@@ -158,8 +173,11 @@ class TestPublishedRevisionExport(E2ETestBase):
         problem_id: int,
         *,
         input_bytes: bytes = b"1\n",
-        answer_bytes: bytes = b"2\n",
+        answer_bytes: bytes | None = b"2\n",
+        test_ids: tuple[str, ...] = ("001",),
         solution_verdicts: dict[str, tuple[str, str]] | None = None,
+        mode: str = "pass-fail",
+        pre_skipped_ordinals: frozenset[int] = frozenset(),
     ):
         def build(
             _snapshot: Path,
@@ -187,98 +205,139 @@ class TestPublishedRevisionExport(E2ETestBase):
             )
             if admission.outcome != "admitted":
                 raise AssertionError(f"unexpected admission outcome: {admission.outcome}")
-            input_ref = runtime.verification_service.store_verification_blob(
-                verification_id=verification_id,
-                test_name="001.in",
-                role="input",
-                file_name="001.in",
-                payload=input_bytes,
-            )
-            answer_ref = runtime.verification_service.store_verification_blob(
-                verification_id=verification_id,
-                test_name="001.in",
-                role="answer",
-                file_name="001.ans",
-                payload=answer_bytes,
-            )
-            task_id = verification_task_id(verification_id, "accepted", "001.in")
-            tasks = [
-                PlannedTask(
-                    task_id=task_id,
-                    predecessor_task_id=None,
-                    task_kind="main-correct",
-                    source_path="solutions/accepted.cpp",
-                    program_id="accepted",
-                    test_name="001.in",
-                    expected_behavior="accepted",
+            tasks: list[PlannedTask] = []
+            generator_completions: list[TaskCompletion] = []
+            run_completions: list[TaskCompletion] = []
+            for ordinal, test_id in enumerate(test_ids, start=1):
+                test_name = f"{ordinal:03d}.in"
+                input_ref = runtime.verification_service.store_verification_blob(
+                    verification_id=verification_id,
+                    test_name=test_name,
+                    role="input",
+                    file_name=test_name,
+                    payload=input_bytes,
                 )
-            ]
-            completions = [
-                TaskCompletion(
-                    task_id=task_id,
-                    status=VerificationTaskStatus.DONE,
-                    run_id="",
-                    judgehost_task_id="",
-                    result=normalize_execution_result(
-                        passes=(
-                            ExecutionPassResult(
-                                number=1,
-                                capture_status=CAPTURE_COMPLETE,
-                                runresult="correct",
-                                verdict="OK",
-                                score_text="",
-                                answer_correct=True,
-                                usage=ExecutionUsage(),
-                                feedback="",
-                                artifacts=PassArtifacts(
-                                    input_ref=input_ref,
-                                    output_ref=answer_ref,
-                                    stderr_ref=answer_ref,
-                                    system_ref=answer_ref,
-                                    judge_message_ref=answer_ref,
-                                    team_message_ref=answer_ref,
-                                    metadata_ref=answer_ref,
-                                    compare_metadata_ref=answer_ref,
-                                ),
-                            ),
-                        ),
-                        verdict="OK",
-                        answer_correct=True,
-                    ),
-                    input_ref=input_ref,
-                    answer_ref=answer_ref,
-                )
-            ]
-            for index, (
-                source_path,
-                (expected_behavior, verdict),
-            ) in enumerate((solution_verdicts or {}).items(), start=1):
-                program_id = f"solution-{index}"
-                solution_task_id = verification_task_id(
+                answer_ref = ""
+                if answer_bytes is not None:
+                    answer_ref = runtime.verification_service.store_verification_blob(
+                        verification_id=verification_id,
+                        test_name=test_name,
+                        role="answer",
+                        file_name=f"{ordinal:03d}.ans",
+                        payload=answer_bytes,
+                    )
+                generator_id = verification_task_id(
                     verification_id,
-                    program_id,
-                    "001.in",
+                    f"generator-{ordinal}",
+                    test_name,
                 )
                 tasks.append(
                     PlannedTask(
-                        task_id=solution_task_id,
-                        predecessor_task_id=task_id,
-                        task_kind="solution-run",
-                        source_path=source_path,
-                        program_id=program_id,
-                        test_name="001.in",
-                        expected_behavior=expected_behavior,
+                        task_id=generator_id,
+                        predecessor_task_id=None,
+                        task_kind="generate-input",
+                        source_path=f"tests/manual/{test_id}.in",
+                        program_id=f"generator-{ordinal}",
+                        test_name=test_name,
+                        expected_behavior="accepted",
                     )
                 )
-                completions.append(
+                generator_completions.append(
                     TaskCompletion(
-                        task_id=solution_task_id,
+                        task_id=generator_id,
                         status=VerificationTaskStatus.DONE,
                         run_id="",
                         judgehost_task_id="",
-                        result=execution_result(verdict),
+                        result=execution_result(
+                            "SK" if ordinal in pre_skipped_ordinals else "OK",
+                            output_ref=input_ref,
+                        ),
+                        input_ref=input_ref,
                     )
                 )
+
+                accepted_id = verification_task_id(
+                    verification_id,
+                    "accepted",
+                    test_name,
+                )
+                captured_ref = answer_ref or input_ref
+                tasks.append(
+                    PlannedTask(
+                        task_id=accepted_id,
+                        predecessor_task_id=generator_id,
+                        task_kind="main-correct",
+                        source_path="solutions/accepted.cpp",
+                        program_id="accepted",
+                        test_name=test_name,
+                        expected_behavior="accepted",
+                    )
+                )
+                run_completions.append(
+                    TaskCompletion(
+                        task_id=accepted_id,
+                        status=VerificationTaskStatus.DONE,
+                        run_id="",
+                        judgehost_task_id="",
+                        result=normalize_execution_result(
+                            passes=(
+                                ExecutionPassResult(
+                                    number=1,
+                                    capture_status=CAPTURE_COMPLETE,
+                                    runresult="correct",
+                                    verdict="OK",
+                                    score_text="",
+                                    answer_correct=True,
+                                    usage=ExecutionUsage(),
+                                    feedback="",
+                                    artifacts=PassArtifacts(
+                                        input_ref=input_ref,
+                                        output_ref=captured_ref,
+                                        stderr_ref=captured_ref,
+                                        system_ref=captured_ref,
+                                        judge_message_ref=captured_ref,
+                                        team_message_ref=captured_ref,
+                                        metadata_ref=captured_ref,
+                                        compare_metadata_ref=captured_ref,
+                                    ),
+                                ),
+                            ),
+                            verdict="OK",
+                            answer_correct=True,
+                        ),
+                        answer_ref=answer_ref,
+                    )
+                )
+                for index, (
+                    source_path,
+                    (expected_behavior, verdict),
+                ) in enumerate((solution_verdicts or {}).items(), start=1):
+                    program_id = f"solution-{index}"
+                    solution_task_id = verification_task_id(
+                        verification_id,
+                        program_id,
+                        test_name,
+                    )
+                    tasks.append(
+                        PlannedTask(
+                            task_id=solution_task_id,
+                            predecessor_task_id=accepted_id,
+                            task_kind="solution-run",
+                            source_path=source_path,
+                            program_id=program_id,
+                            test_name=test_name,
+                            expected_behavior=expected_behavior,
+                        )
+                    )
+                    run_completions.append(
+                        TaskCompletion(
+                            task_id=solution_task_id,
+                            status=VerificationTaskStatus.DONE,
+                            run_id="",
+                            judgehost_task_id="",
+                            result=execution_result(verdict),
+                        )
+                    )
             activation = activate_test_verification(
                 verification_id,
                 programs=verification_programs_for_tasks(tasks),
@@ -286,24 +345,38 @@ class TestPublishedRevisionExport(E2ETestBase):
                 detail={
                     "verification_id": verification_id,
                     "task_graph": True,
-                    "mode": "pass-fail",
+                    "mode": mode,
                     "pass_limit": 1,
                     "tests_meta_rows": [
                         {
-                            "index": 1,
-                            "test_name": "001.in",
+                            "index": ordinal,
+                            "test_name": f"{ordinal:03d}.in",
                             "kind": "manual",
-                            "id": "001",
+                            "id": test_id,
                             "sample": True,
                         }
+                        for ordinal, test_id in enumerate(test_ids, start=1)
                     ],
                 },
             )
             if activation.outcome != "activated":
                 raise AssertionError(f"unexpected activation outcome: {activation.outcome}")
-            completion = runtime.verification_task_store.commit_task_completions(
-                completions
+            runtime.verification_task_store.commit_task_completions(
+                generator_completions
             )
+            remaining: list[TaskCompletion] = []
+            for task_completion in run_completions:
+                task_row = db_fetch_one(
+                    "SELECT final_status FROM verification_tasks WHERE id=?",
+                    [task_completion.task_id],
+                )
+                if task_row is None:
+                    raise AssertionError(
+                        f"verification task disappeared: {task_completion.task_id}"
+                    )
+                if not str(task_row["final_status"]):
+                    remaining.append(task_completion)
+            completion = runtime.verification_task_store.commit_task_completions(remaining)
             if completion.parent_transition != "ok":
                 raise AssertionError(
                     "unexpected verification transition: "
@@ -804,6 +877,267 @@ class TestPublishedRevisionExport(E2ETestBase):
                     },
                 ),
             )
+
+    def test_duplicate_generated_input_copies_owner_into_native_package(self) -> None:
+        _workspace, problem_id, _commit = self._publish_problem(
+            test_ids=("001", "021"),
+            extra_solutions={"wrong.cpp": "wrong_answer"},
+        )
+        revision = runtime.problem_package_service.published_revision(problem_id)
+        verified = runtime.problem_package_service.ensure_native_package(
+            revision,
+            self._verification_builder(
+                problem_id,
+                test_ids=("001", "021"),
+                solution_verdicts={
+                    "solutions/wrong.cpp": ("wrong_answer", "WA"),
+                },
+            ),
+        )
+
+        with runtime.problem_package_service.open_reader(verified["id"]) as reader:
+            tests = {test["id"]: test for test in reader.manifest["tests"]}
+            self.assertEqual(set(tests), {"001", "021"})
+            for key in ("input", "answer"):
+                owner = reader.payload(tests["001"], key)
+                duplicate = reader.payload(tests["021"], key)
+                self.assertIsNotNone(owner)
+                self.assertIsNotNone(duplicate)
+                self.assertEqual(duplicate.read_bytes(), owner.read_bytes())
+            solutions = {
+                solution["source_path"]: solution
+                for solution in reader.manifest["solutions"]
+            }
+            self.assertEqual(
+                solutions["solutions/wrong.cpp"]["verdicts"],
+                ["WA"],
+            )
+            self.assertNotIn(
+                '"SK"',
+                (reader.root / "test-data" / "manifest.json").read_text(
+                    encoding="utf-8"
+                ),
+            )
+
+    def test_pre_skipped_duplicate_interactive_input_uses_actual_owner(self) -> None:
+        _workspace, problem_id, _commit = self._publish_problem(
+            test_ids=("101", "102"),
+            extra_solutions={"wrong.cpp": "wrong_answer"},
+            mode="interactive",
+        )
+        revision = runtime.problem_package_service.published_revision(problem_id)
+        verified = runtime.problem_package_service.ensure_native_package(
+            revision,
+            self._verification_builder(
+                problem_id,
+                answer_bytes=None,
+                test_ids=("101", "102"),
+                solution_verdicts={
+                    "solutions/wrong.cpp": ("wrong_answer", "WA"),
+                },
+                mode="interactive",
+                pre_skipped_ordinals=frozenset((2,)),
+            ),
+        )
+
+        with runtime.problem_package_service.open_reader(verified["id"]) as reader:
+            tests = {test["id"]: test for test in reader.manifest["tests"]}
+            self.assertEqual(set(tests), {"101", "102"})
+            self.assertNotIn("answer", tests["101"])
+            self.assertNotIn("answer", tests["102"])
+            owner_input = reader.payload(tests["101"], "input")
+            duplicate_input = reader.payload(tests["102"], "input")
+            self.assertIsNotNone(owner_input)
+            self.assertIsNotNone(duplicate_input)
+            self.assertEqual(duplicate_input.read_bytes(), owner_input.read_bytes())
+            solutions = {
+                solution["source_path"]: solution
+                for solution in reader.manifest["solutions"]
+            }
+            self.assertEqual(
+                solutions["solutions/wrong.cpp"]["verdicts"],
+                ["WA"],
+            )
+
+    def test_native_package_duplicate_input_requires_one_actual_owner(self) -> None:
+        source_tree = SimpleNamespace(tests=({"id": "001"}, {"id": "002"}))
+        result_json = execution_result_json(execution_result("OK"))
+        skipped_json = execution_result_json(execution_result("SK"))
+        failed_json = execution_result_json(execution_result("FL"))
+        service = runtime.problem_package_service
+
+        cases = (
+            (
+                "owner is missing",
+                [
+                    {
+                        "source_id": "001",
+                        "test_name": "001.in",
+                        "ordinal": 1,
+                        "final_status": "done",
+                        "result_json": skipped_json,
+                        "input_ref": "blob://duplicate",
+                    },
+                    {
+                        "source_id": "002",
+                        "test_name": "002.in",
+                        "ordinal": 2,
+                        "final_status": "done",
+                        "result_json": skipped_json,
+                        "input_ref": "blob://duplicate",
+                    },
+                ],
+            ),
+            (
+                "multiple owners",
+                [
+                    {
+                        "source_id": "001",
+                        "test_name": "001.in",
+                        "ordinal": 1,
+                        "final_status": "done",
+                        "result_json": result_json,
+                        "input_ref": "blob://duplicate",
+                    },
+                    {
+                        "source_id": "002",
+                        "test_name": "002.in",
+                        "ordinal": 2,
+                        "final_status": "done",
+                        "result_json": result_json,
+                        "input_ref": "blob://duplicate",
+                    },
+                ],
+            ),
+            (
+                "generated test result is incomplete",
+                [
+                    {
+                        "source_id": "001",
+                        "test_name": "001.in",
+                        "ordinal": 1,
+                        "final_status": "running",
+                        "result_json": result_json,
+                        "input_ref": "blob://duplicate",
+                    },
+                    {
+                        "source_id": "002",
+                        "test_name": "002.in",
+                        "ordinal": 2,
+                        "final_status": "done",
+                        "result_json": skipped_json,
+                        "input_ref": "blob://duplicate",
+                    },
+                ],
+            ),
+            (
+                "generated test result is incomplete",
+                [
+                    {
+                        "source_id": "001",
+                        "test_name": "001.in",
+                        "ordinal": 1,
+                        "final_status": "done",
+                        "result_json": failed_json,
+                        "input_ref": "blob://duplicate",
+                    },
+                    {
+                        "source_id": "002",
+                        "test_name": "002.in",
+                        "ordinal": 2,
+                        "final_status": "done",
+                        "result_json": skipped_json,
+                        "input_ref": "blob://duplicate",
+                    },
+                ],
+            ),
+        )
+        for message, rows in cases:
+            with self.subTest(message=message), patch.object(
+                service.store,
+                "test_execution_rows",
+                return_value=rows,
+            ), self.assertRaisesRegex(ValueError, message):
+                service._verification_test_owners("ver-test", source_tree)
+
+    def test_duplicate_input_requires_complete_owner_solution_result(self) -> None:
+        source_tree = SimpleNamespace(
+            tests=({"id": "001"}, {"id": "002"}),
+            solution_behaviors={"solutions/wrong.cpp": "wrong_answer"},
+        )
+        service = runtime.problem_package_service
+        with patch.object(
+            service.store,
+            "test_execution_rows",
+            return_value=[
+                {
+                    "source_id": "001",
+                    "test_name": "001.in",
+                    "ordinal": 1,
+                    "final_status": "done",
+                    "result_json": execution_result_json(execution_result("OK")),
+                    "input_ref": "blob://duplicate",
+                },
+                {
+                    "source_id": "002",
+                    "test_name": "002.in",
+                    "ordinal": 2,
+                    "final_status": "done",
+                    "result_json": execution_result_json(execution_result("SK")),
+                    "input_ref": "blob://duplicate",
+                },
+            ],
+        ):
+            test_owners = service._verification_test_owners(
+                "ver-test",
+                source_tree,
+            )
+
+        owner = {
+            "task_kind": "solution-run",
+            "source_path": "solutions/wrong.cpp",
+            "test_name": "001.in",
+            "expected_behavior": "wrong_answer",
+            "final_status": "done",
+            "result_json": execution_result_json(execution_result("WA")),
+        }
+        duplicate = {
+            "task_kind": "solution-run",
+            "source_path": "solutions/wrong.cpp",
+            "test_name": "002.in",
+            "expected_behavior": "wrong_answer",
+            "final_status": "done",
+            "result_json": execution_result_json(execution_result("SK")),
+        }
+        cases = (
+            ("results are incomplete", [duplicate]),
+            ("results are incomplete", [{**owner, "final_status": "running"}, duplicate]),
+            (
+                "not a complete verdict",
+                [
+                    {
+                        **owner,
+                        "result_json": execution_result_json(execution_result("FL")),
+                    },
+                    duplicate,
+                ],
+            ),
+            (
+                "results are incomplete",
+                [{**owner, "expected_behavior": "accepted"}, duplicate],
+            ),
+        )
+        for message, rows in cases:
+            with self.subTest(message=message), patch.object(
+                service.store,
+                "solution_result_rows",
+                return_value=rows,
+            ), self.assertRaisesRegex(ValueError, message):
+                service._materialize_solutions(
+                    verification_id="ver-test",
+                    source_tree=source_tree,
+                    test_owners=test_owners,
+                )
 
     def test_export_publication_holds_native_package_operation(self) -> None:
         _problem_id, _commit, verified = self._native_package()

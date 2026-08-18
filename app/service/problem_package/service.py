@@ -49,9 +49,10 @@ from app.service.problem_package.layout import (
 )
 from app.service.problem_package.store import (
     MaterializationRow,
+    NativePackageSolutionResultRow,
+    NativePackageTestExecutionRow,
     ProblemPackageStore,
     PublishedProblem,
-    NativePackageSolutionResultRow,
 )
 from app.service.statement.context import statement_languages
 from app.service.statement.examples import StatementExamplesProducer
@@ -93,6 +94,19 @@ class PublishedRevision:
     source_commit: str
     revision_number: int
     bare_repo: Path
+
+
+@dataclass(frozen=True)
+class VerificationTestOwner:
+    source_id: str
+    test_name: str
+    input_ref: str
+
+
+@dataclass(frozen=True)
+class VerificationTestOwners:
+    by_source_id: dict[str, VerificationTestOwner]
+    by_test_name: dict[str, VerificationTestOwner]
 
 
 @dataclass(frozen=True)
@@ -476,6 +490,68 @@ class ProblemPackageService:
         ref = self.store.artifact_ref(verification_id, test_id, key)
         return None if not ref else self._artifact_file_resolver(ref)
 
+    def _verification_test_owners(
+        self,
+        verification_id: str,
+        source_tree: ProblemSourceTree,
+    ) -> VerificationTestOwners:
+        rows = self.store.test_execution_rows(verification_id)
+        expected = [
+            (str(test["id"]), f"{ordinal:03d}.in", ordinal)
+            for ordinal, test in enumerate(source_tree.tests, start=1)
+        ]
+        actual = [
+            (row["source_id"], row["test_name"], row["ordinal"])
+            for row in rows
+        ]
+        if actual != expected:
+            raise ValueError("verification generated test results are incomplete")
+
+        owner_by_input_ref: dict[str, NativePackageTestExecutionRow] = {}
+        for row in rows:
+            if row["final_status"] != "done" or not row["input_ref"]:
+                raise ValueError(
+                    "verification generated test result is incomplete: "
+                    f"{row['test_name']}"
+                )
+            verdict = run_verdict_short(
+                execution_result_from_json(row["result_json"]).verdict.upper()
+            )
+            if verdict == "SK":
+                continue
+            if verdict != "AC":
+                raise ValueError(
+                    "verification generated test result is incomplete: "
+                    f"{row['test_name']}"
+                )
+            if row["input_ref"] in owner_by_input_ref:
+                raise ValueError(
+                    "verification generated input has multiple owners: "
+                    f"{row['test_name']}"
+                )
+            owner_by_input_ref[row["input_ref"]] = row
+
+        by_source_id: dict[str, VerificationTestOwner] = {}
+        by_test_name: dict[str, VerificationTestOwner] = {}
+        for row in rows:
+            owner_row = owner_by_input_ref.get(row["input_ref"])
+            if owner_row is None:
+                raise ValueError(
+                    "verification generated input owner is missing: "
+                    f"{row['test_name']}"
+                )
+            owner = VerificationTestOwner(
+                source_id=owner_row["source_id"],
+                test_name=owner_row["test_name"],
+                input_ref=owner_row["input_ref"],
+            )
+            by_source_id[row["source_id"]] = owner
+            by_test_name[row["test_name"]] = owner
+        return VerificationTestOwners(
+            by_source_id=by_source_id,
+            by_test_name=by_test_name,
+        )
+
     @staticmethod
     def _write_payload(source: Path, target: Path) -> None:
         if source.is_symlink() or not source.is_file():
@@ -495,6 +571,7 @@ class ProblemPackageService:
         verification_id: str,
         mode: str,
         source_tree: ProblemSourceTree,
+        test_owners: VerificationTestOwners,
     ) -> list[NativePackageTestEntry]:
         tests = source_tree.tests
         if not tests:
@@ -504,9 +581,12 @@ class ProblemPackageService:
             test_id = str(row["id"])
             if Path(test_id).name != test_id or test_id in {"", ".", ".."}:
                 raise ValueError(f"test ID is not package-safe: {test_id}")
+            owner = test_owners.by_source_id.get(test_id)
+            if owner is None:
+                raise ValueError(f"verification test owner is missing: {test_id}")
             test_root = package_root / TEST_DATA_DIR / "tests" / test_id
             input_path = test_root / "input"
-            payload = self._verification_payload(verification_id, test_id, "input_ref")
+            payload = self._artifact_file_resolver(owner.input_ref)
             if payload is None:
                 raise ValueError(f"verification input is missing: {test_id}")
             self._write_payload(payload.path, input_path)
@@ -517,7 +597,11 @@ class ProblemPackageService:
                 "input": describe_file(input_path, root=package_root),
             }
             answer_path: Path | None = None
-            answer_payload = self._verification_payload(verification_id, test_id, "answer_ref")
+            answer_payload = self._verification_payload(
+                verification_id,
+                owner.source_id,
+                "answer_ref",
+            )
             if answer_payload is not None:
                 answer_path = test_root / "answer"
                 self._write_payload(answer_payload.path, answer_path)
@@ -542,6 +626,7 @@ class ProblemPackageService:
         *,
         verification_id: str,
         source_tree: ProblemSourceTree,
+        test_owners: VerificationTestOwners,
     ) -> list[NativePackageSolutionEntry]:
         rows_by_source: dict[str, list[NativePackageSolutionResultRow]] = {}
         for row in self.store.solution_result_rows(verification_id):
@@ -562,6 +647,11 @@ class ProblemPackageService:
                     f"verification solution results are incomplete: {source_path}"
                 )
             observed: set[str] = set()
+            row_by_test_name = {row["test_name"]: row for row in rows}
+            if len(row_by_test_name) != len(rows):
+                raise ValueError(
+                    f"verification solution results are incomplete: {source_path}"
+                )
             for row in rows:
                 if (
                     row["final_status"] != "done"
@@ -570,9 +660,34 @@ class ProblemPackageService:
                     raise ValueError(
                         f"verification solution results are incomplete: {source_path}"
                     )
+                resolved_row = row
                 verdict = run_verdict_short(
-                    execution_result_from_json(row["result_json"]).verdict.upper()
+                    execution_result_from_json(
+                        resolved_row["result_json"]
+                    ).verdict.upper()
                 )
+                if verdict == "SK":
+                    owner = test_owners.by_test_name.get(row["test_name"])
+                    if owner is None:
+                        raise ValueError(
+                            "verification generated input owner is missing: "
+                            f"{row['test_name']}"
+                        )
+                    owner_row = row_by_test_name.get(owner.test_name)
+                    if owner_row is None or (
+                        owner_row["final_status"] != "done"
+                        or owner_row["expected_behavior"] != expected_behavior
+                    ):
+                        raise ValueError(
+                            "verification solution owner result is incomplete: "
+                            f"{source_path} / {row['test_name']}"
+                        )
+                    resolved_row = owner_row
+                    verdict = run_verdict_short(
+                        execution_result_from_json(
+                            resolved_row["result_json"]
+                        ).verdict.upper()
+                    )
                 manifest_verdict = {"TL": "TLE", "RE": "RTE"}.get(
                     verdict,
                     verdict,
@@ -606,6 +721,7 @@ class ProblemPackageService:
         package_root: Path,
         problem_title: str,
         verification_id: str,
+        test_owners: VerificationTestOwners,
         tests_spec_max_bytes: int,
         statement_sample_max_bytes: int,
     ) -> None:
@@ -613,6 +729,10 @@ class ProblemPackageService:
         examples_bundle = self._statement_examples_producer.produce(
             render_source,
             verification_id=verification_id,
+            execution_test_name_by_source_id={
+                source_id: owner.test_name
+                for source_id, owner in test_owners.by_source_id.items()
+            },
             tests_spec_max_bytes=tests_spec_max_bytes,
             statement_sample_max_bytes=statement_sample_max_bytes,
             problem_limits=problem_config_limits(self.db.config_values),
@@ -684,16 +804,22 @@ class ProblemPackageService:
             self._copy_source_tree(snapshot, package_root)
             mode = source_tree.problem["mode"]
             pass_limit = source_tree.problem["pass_limit"]
+            test_owners = self._verification_test_owners(
+                verification_id,
+                source_tree,
+            )
             tests = self._materialize_tests(
                 snapshot=snapshot,
                 package_root=package_root,
                 verification_id=verification_id,
                 mode=mode,
                 source_tree=source_tree,
+                test_owners=test_owners,
             )
             solutions = self._materialize_solutions(
                 verification_id=verification_id,
                 source_tree=source_tree,
+                test_owners=test_owners,
             )
             manifest: NativePackageManifest = {
                 "source_commit": revision.source_commit,
@@ -714,6 +840,7 @@ class ProblemPackageService:
                 package_root=package_root,
                 problem_title=problem_slug_leaf(revision.problem["slug"]),
                 verification_id=verification_id,
+                test_owners=test_owners,
                 tests_spec_max_bytes=tests_spec_max_bytes,
                 statement_sample_max_bytes=statement_sample_max_bytes,
             )

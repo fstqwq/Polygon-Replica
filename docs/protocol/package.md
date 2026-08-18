@@ -146,6 +146,14 @@ available payloads. A descriptor contains a canonical path, SHA-256, and size.
 This is the current complete shape; it does not carry a speculative
 project-owned format or materializer version.
 
+When Verification skips a testcase because its generated-input artifact is
+identical to another testcase's artifact, materialization resolves the unique
+actually executed testcase with that artifact. The skipped testcase remains a
+separate ordered package testcase: its input and any available answer are
+copied from that owner, while each solution uses the owner's completed verdict.
+Statement-only sample overrides remain those of the skipped testcase. `SK` is
+never stored as a Native Package solution verdict.
+
 Opening a Native Package checks the stored archive size and SHA, safe ZIP
 member paths and types, manifest identity, every declared payload, absence of
 undeclared testcase payloads, canonical source shape, and committed-source

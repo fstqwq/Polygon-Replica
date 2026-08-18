@@ -52,6 +52,15 @@ class NativePackageSolutionResultRow(TypedDict):
     result_json: str
 
 
+class NativePackageTestExecutionRow(TypedDict):
+    source_id: str
+    test_name: str
+    ordinal: int
+    final_status: str
+    result_json: str
+    input_ref: str
+
+
 def _materialization(row) -> MaterializationRow:
     return {
         "id": str(row["id"]),
@@ -430,6 +439,42 @@ class ProblemPackageStore:
                 [verification_id, f"{test_id}.in", role],
             )
         return "" if row is None else str(row["artifact_ref"] or "")
+
+    def test_execution_rows(
+        self,
+        verification_id: str,
+    ) -> list[NativePackageTestExecutionRow]:
+        rows = self.db.fetch_all(
+            """
+            SELECT metadata.source_id,metadata.test_name,metadata.ordinal,
+                   task.final_status,task.result_json,
+                   COALESCE(artifact.artifact_ref,'') AS input_ref
+            FROM verification_tests_meta metadata
+            JOIN verification_tasks task
+              ON task.verification_id=metadata.verification_id
+             AND task.test_name=metadata.test_name
+             AND task.task_kind='generate-input'
+            LEFT JOIN verification_task_artifacts artifact
+              ON artifact.verification_id=task.verification_id
+             AND artifact.task_id=task.id
+             AND artifact.pass_number=0
+             AND artifact.role='generated-input'
+            WHERE metadata.verification_id=?
+            ORDER BY metadata.ordinal,task.id
+            """,
+            [verification_id],
+        )
+        return [
+            {
+                "source_id": str(row["source_id"]),
+                "test_name": str(row["test_name"]),
+                "ordinal": int(row["ordinal"]),
+                "final_status": str(row["final_status"]),
+                "result_json": str(row["result_json"]),
+                "input_ref": str(row["input_ref"]),
+            }
+            for row in rows
+        ]
 
     def solution_result_rows(
         self,
