@@ -11,7 +11,7 @@ from app.service.sandbox.tex_backend import TexSandboxBackend
 
 @unittest.skipUnless(shutil.which("bwrap") and shutil.which("pdflatex"), "bwrap and pdflatex are required")
 class TestTexSandbox(unittest.TestCase):
-    def test_preexec_for_spec_applies_all_requested_limits(self) -> None:
+    def test_preexec_for_spec_applies_non_process_limits(self) -> None:
         backend = object.__new__(TexSandboxBackend)
         spec = ExecSpec(
             command=["true"],
@@ -32,10 +32,24 @@ class TestTexSandbox(unittest.TestCase):
                 call(resource.RLIMIT_CORE, (0, 0)),
                 call(resource.RLIMIT_CPU, (20, 21)),
                 call(resource.RLIMIT_AS, (1024 * 1024 * 1024, 1024 * 1024 * 1024)),
-                call(resource.RLIMIT_NPROC, (64, 64)),
                 call(resource.RLIMIT_FSIZE, (131072 * 1024, 131072 * 1024)),
             ],
         )
+
+    def test_process_limit_is_applied_after_bwrap_enters_user_namespace(self) -> None:
+        backend = TexSandboxBackend()
+        command, _ = backend._prepared_command(
+            ExecSpec(command=["true"], process_limit=64)
+        )
+        separator = command.index("--")
+        self.assertEqual(
+            command[separator + 1 :],
+            [backend._process_limit_tool, "--nproc=64:64", "--", "true"],
+        )
+
+        result = backend.run(ExecSpec(command=["true"], process_limit=1))
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(result.returncode, 0)
 
     def test_tex_sandbox_compiles_in_root_switched_workspace(self) -> None:
         with tempfile.TemporaryDirectory(prefix="polygon-replica-tex-sandbox-") as tmp:

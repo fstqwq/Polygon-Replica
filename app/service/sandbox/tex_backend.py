@@ -23,7 +23,9 @@ class TexSandboxBackend(SandboxBackend):
     def __init__(self, *, root_switch_tool: str = "bwrap") -> None:
         self._configured_root_switch_tool = str(root_switch_tool or "").strip()
         self._root_switch_tool = ""
+        self._process_limit_tool = ""
         self._configure_root_switch()
+        self._configure_process_limit_tool()
 
     def _resolve_root_switch_tool(self) -> str:
         raw = str(self._configured_root_switch_tool or "").strip()
@@ -41,6 +43,7 @@ class TexSandboxBackend(SandboxBackend):
             str(tool),
             "--die-with-parent",
             "--new-session",
+            "--unshare-user",
             "--ro-bind",
             "/",
             "/",
@@ -76,6 +79,12 @@ class TexSandboxBackend(SandboxBackend):
         if not ok:
             raise RuntimeError(f"tex sandbox root switch probe failed: {detail}")
         self._root_switch_tool = tool
+
+    def _configure_process_limit_tool(self) -> None:
+        tool = str(shutil.which("prlimit") or "")
+        if not tool:
+            raise RuntimeError("tex sandbox requires prlimit in PATH")
+        self._process_limit_tool = tool
 
     def _normalize_absolute_path(self, path: Path) -> Path:
         candidate = Path(path)
@@ -210,6 +219,7 @@ class TexSandboxBackend(SandboxBackend):
             self._root_switch_tool,
             "--die-with-parent",
             "--new-session",
+            "--unshare-user",
             "--proc",
             "/proc",
             "--dev",
@@ -221,15 +231,25 @@ class TexSandboxBackend(SandboxBackend):
         for mount_path, writable in mounts:
             command.extend(["--bind" if writable else "--ro-bind", mount_path, mount_path])
         command.extend(["--chdir", str(working_dir), "--"])
+        if spec.process_limit is not None:
+            # RLIMIT_NPROC is accounted against the real UID. Apply it only
+            # after bwrap has entered its user namespace so unrelated host
+            # processes with the same numeric UID cannot exhaust this call's
+            # process budget before the namespace is created.
+            nproc = max(1, int(spec.process_limit))
+            command.extend(
+                [
+                    self._process_limit_tool,
+                    f"--nproc={nproc}:{nproc}",
+                    "--",
+                ]
+            )
         command.extend(str(token) for token in spec.command)
         return command, working_dir
 
     def _preexec_for_spec(self, spec: ExecSpec):
         timeout_sec = max(1, int(spec.timeout_sec))
         memory_mb = int(spec.memory_mb) if spec.memory_mb is not None else None
-        process_limit = (
-            int(spec.process_limit) if spec.process_limit is not None else None
-        )
         output_kb = int(spec.output_kb) if spec.output_kb is not None else None
 
         def _apply_limits() -> None:
@@ -239,9 +259,6 @@ class TexSandboxBackend(SandboxBackend):
             if memory_mb is not None:
                 as_limit = max(16, memory_mb) * 1024 * 1024
                 resource.setrlimit(resource.RLIMIT_AS, (as_limit, as_limit))
-            if process_limit is not None and hasattr(resource, "RLIMIT_NPROC"):
-                nproc = max(1, process_limit)
-                resource.setrlimit(resource.RLIMIT_NPROC, (nproc, nproc))
             if output_kb is not None:
                 fsize = max(64, output_kb) * 1024
                 resource.setrlimit(resource.RLIMIT_FSIZE, (fsize, fsize))
