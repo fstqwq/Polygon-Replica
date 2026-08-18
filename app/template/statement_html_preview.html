@@ -4,24 +4,21 @@
 {% block content %}
 <div class="page-title-inline">
   <h1 class="page-title">Statement Preview</h1>
-  <a href="/problems/{{ problem.slug }}/statement?language={{ language }}">Back to Statements</a>
+  <a href="{{ statement_href }}">Back to Statements</a>
 </div>
-<div class="page-title-inline">
-  <p class="muted"><code>{{ problem.slug }}</code> &middot; {{ language }} &middot; {{ 'Workspace' if source == 'workspace' else 'Package' }}</p>
-  {% if can_build %}
-  <form class="inline-action" method="post" action="/problems/{{ problem.slug }}/statement/html?source={{ source }}&language={{ language }}">
-    <button class="btn primary-action" type="submit">{{ 'Rebuild HTML' if preview else 'Generate HTML' }}</button>
-  </form>
-  {% endif %}
-</div>
+<p class="muted"><code>{{ problem.slug }}</code> &middot; {{ language }} &middot; {{ 'Workspace' if source == 'workspace' else 'Package' }}</p>
 {% if preview and preview.status == 'failed' %}
 <p class="flash">{{ preview.summary.error or 'Statement HTML generation failed.' }}</p>
+{% if pandoc_log %}
+<h2>pandoc.log</h2>
+<pre class="preview-log">{{ pandoc_log }}</pre>
+{% endif %}
 {% elif preview and preview.status == 'ok' and statement_fragment %}
   {% for warning in preview.summary.warnings or [] %}<p class="flash warning statement-preview-warning">{{ warning }}</p>{% endfor %}
   <div class="statement-preview-document">
     <article class="statement-content" aria-label="{{ problem.slug }} statement">{{ statement_fragment | safe }}</article>
   </div>
 {% else %}
-<p class="muted">No HTML preview has been generated for this source and language.</p>
+<p class="muted">Statement HTML generation did not produce a result.</p>
 {% endif %}
 {% endblock %}

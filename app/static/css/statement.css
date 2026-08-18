@@ -1,53 +1,67 @@
 /* Statement editor, preview, attachments, and local drafts. */
 .statement-page-title-inline {
   display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.statement-output-links {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  min-width: 0;
+  margin-left: auto;
+  white-space: nowrap;
+  font-size: var(--font-size-ui);
+}
+
+.statement-output-links .linkish,
+.statement-language-add-link {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.statement-editor-toolbar {
+  display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
-  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
 }
 
 .statement-page-title-tools {
   display: inline-flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: var(--space-3);
   min-width: 0;
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
+}
+
+.statement-template-reset {
+  flex: 0 0 auto;
   margin-left: auto;
-  flex-wrap: wrap;
+  white-space: nowrap;
 }
 
 .statement-language-switch-form {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-3);
   flex-wrap: wrap;
 }
 
 .statement-language-switch-form > label {
   margin: 0;
-  color: var(--muted);
   white-space: nowrap;
 }
 
 .statement-language-switch-form > select {
   min-width: 120px;
-}
-
-.statement-preview-toolbar {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-  margin-bottom: var(--space-4);
-}
-
-.statement-preview-status {
-  margin-left: var(--space-1);
-}
-
-.statement-preview-message {
-  margin-bottom: var(--space-4);
 }
 
 .statement-editor-main {
@@ -80,10 +94,6 @@
   align-items: center;
   gap: var(--space-2);
   white-space: nowrap;
-}
-
-.statement-preview-diagnostics {
-  margin-top: var(--space-5);
 }
 
 .statement-assets-grid {
@@ -122,7 +132,11 @@
   min-width: 0;
 }
 
-@container problem-content (max-width: 900px) {
+@container problem-content (max-width: 720px) {
+  .statement-page-title-tools {
+    flex-wrap: wrap;
+  }
+
   .statement-assets-grid {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -143,10 +157,6 @@
 }
 
 @media (max-width: 720px) {
-  .statement-page-title-tools {
-    justify-content: flex-start;
-  }
-
   .statement-assets-grid {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -269,4 +279,3 @@
   align-items: center;
   gap: var(--space-3);
 }
-

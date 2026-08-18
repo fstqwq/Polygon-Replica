@@ -53,6 +53,14 @@ class StatementHtmlRenderResult:
     log_text: str
 
 
+class StatementHtmlRenderError(RuntimeError):
+    """A renderer failure whose complete tool output can be shown to the user."""
+
+    def __init__(self, message: str, *, log_text: str = "") -> None:
+        super().__init__(message)
+        self.log_text = log_text
+
+
 class StatementHtmlRenderer:
     """Convert one self-contained statement render tree without network access."""
 
@@ -74,11 +82,8 @@ class StatementHtmlRenderer:
         source_root = render_root.resolve()
         output = output_root.resolve()
         problem_tex = source_root / "problem.tex"
-        examples_tex = source_root / "examples.tex"
         if not self._safe_file(source_root, problem_tex):
             raise RuntimeError("rendered problem.tex is missing")
-        if not self._safe_file(source_root, examples_tex):
-            raise RuntimeError("rendered examples.tex is missing")
         output.mkdir(parents=True, exist_ok=True)
         resources_root = output / "resources"
         resources_root.mkdir(parents=True, exist_ok=True)
@@ -107,7 +112,10 @@ class StatementHtmlRenderer:
             env=env,
         )
         if parse_result.returncode != 0 or parse_result.timed_out:
-            raise RuntimeError(self._failure("Pandoc statement parsing failed", parse_result.stderr))
+            raise StatementHtmlRenderError(
+                self._failure("Pandoc statement parsing failed", parse_result.stderr),
+                log_text=parse_result.stderr,
+            )
         self._check_output_file(ast_path, label="Pandoc statement AST")
         try:
             document = json.loads(ast_path.read_text(encoding="utf-8"))
@@ -138,7 +146,17 @@ class StatementHtmlRenderer:
             env=env,
         )
         if html_result.returncode != 0 or html_result.timed_out:
-            raise RuntimeError(self._failure("Pandoc HTML rendering failed", html_result.stderr))
+            raise StatementHtmlRenderError(
+                self._failure("Pandoc HTML rendering failed", html_result.stderr),
+                log_text="\n".join(
+                    part
+                    for part in (
+                        parse_result.stderr.strip(),
+                        html_result.stderr.strip(),
+                    )
+                    if part
+                ),
+            )
         self._check_output_file(html_path, label="Pandoc statement HTML")
         try:
             raw_html = html_path.read_text(encoding="utf-8")
@@ -281,7 +299,13 @@ class StatementHtmlRenderer:
                 env=self._tool_env(),
             )
             if result.returncode != 0 or not (resources_root / name).is_file():
-                raise RuntimeError(self._failure(f"PDF image conversion failed: {source}", result.stderr))
+                raise StatementHtmlRenderError(
+                    self._failure(
+                        f"PDF image conversion failed: {source}",
+                        result.stderr,
+                    ),
+                    log_text=result.stderr,
+                )
             return name
         if suffix == ".svg":
             name = f"{serial}-{stem}.png"
@@ -293,7 +317,13 @@ class StatementHtmlRenderer:
                 env=self._tool_env(),
             )
             if result.returncode != 0 or not (resources_root / name).is_file():
-                raise RuntimeError(self._failure(f"SVG image conversion failed: {source}", result.stderr))
+                raise StatementHtmlRenderError(
+                    self._failure(
+                        f"SVG image conversion failed: {source}",
+                        result.stderr,
+                    ),
+                    log_text=result.stderr,
+                )
             return name
         raise RuntimeError(f"unsupported statement image format: {source_path.suffix or '(none)'}")
 

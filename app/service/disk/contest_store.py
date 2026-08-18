@@ -22,6 +22,7 @@ class ContestContextRecord(TypedDict):
     location: str
     date_text: str
     statement_default_language: str
+    statement_insert_blank_pages: bool
     created_at: str
 
 
@@ -130,6 +131,12 @@ def _contest_context_record(row: dict[str, object]) -> ContestContextRecord:
         "date_text": str(row["date_text"] or ""),
         "statement_default_language": str(
             row["statement_default_language"] or ""
+        ),
+        "statement_insert_blank_pages": bool(
+            _required_int(
+                row["statement_insert_blank_pages"],
+                "statement_insert_blank_pages",
+            )
         ),
         "created_at": str(row["created_at"] or ""),
     }
@@ -361,7 +368,7 @@ class ContestDiskStore:
         row = self.db.fetch_one(
             """
             SELECT id,slug,title,owner_user_id,status,source_generation,location,date_text,
-                   statement_default_language,created_at
+                   statement_default_language,statement_insert_blank_pages,created_at
             FROM contests WHERE slug=?
             """,
             [contest_slug],
@@ -426,7 +433,7 @@ class ContestDiskStore:
         row = self.db.fetch_one(
             """
             SELECT id,slug,title,owner_user_id,status,source_generation,location,date_text,
-                   statement_default_language,created_at
+                   statement_default_language,statement_insert_blank_pages,created_at
             FROM contests WHERE id=?
             """,
             [int(contest_id)],
@@ -513,11 +520,12 @@ class ContestDiskStore:
     def update_title(self, contest_id: int, title: str) -> None:
         self.db.execute("UPDATE contests SET title=? WHERE id=?", [title, int(contest_id)])
 
-    def update_metadata_field(self, contest_id: int, column: str, value: str) -> None:
+    def update_metadata_field(self, contest_id: int, column: str, value: object) -> None:
         columns = {
             "location": "location",
             "date": "date_text",
             "statement_default_language": "statement_default_language",
+            "statement_insert_blank_pages": "statement_insert_blank_pages",
         }
         target = columns[column]
         self.db.execute(

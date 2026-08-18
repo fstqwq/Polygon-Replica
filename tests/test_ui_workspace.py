@@ -39,7 +39,10 @@ from app.service.statement.constant import (
     DEFAULT_STATEMENT_PROBLEM_TEMPLATE,
     DEFAULT_STATEMENT_TEMPLATE,
 )
-from app.service.statement.render import ensure_statement_language_sources
+from app.service.statement.render import (
+    ensure_statement_language_sources,
+    statement_templates_are_default,
+)
 from app.impl.problem.merge_op import merge_apply, merge_compare, merge_page
 from app.impl.root.contests import import_package_as_new_problem
 from tests.package_builders import polygon_contest_package, polygon_problem_package
@@ -1573,6 +1576,29 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertEqual(disabled.status_code, 303)
         self.assertFalse(examples_path.exists())
 
+    def test_fresh_problem_does_not_offer_template_restore(self) -> None:
+        problem = f"alice/stmtfresh-{uuid.uuid4().hex[:8]}"
+        workspace_service.ensure_problem(problem)
+        workspace_service.grant_repo_access(problem, "alice", "owner")
+        workspace_service.ensure_workspace(problem, "alice")
+
+        page = preview_page(
+            _request(f"/problems/{problem}/statement"),
+            problem,
+            "alice",
+        )
+
+        self.assertEqual(page.status_code, 200)
+        html = page.body.decode("utf-8", errors="replace")
+        self.assertNotIn("Restore default templates", html)
+        self.assertIn('id="statement-language-select"', html)
+        self.assertIn('aria-label="Statement language" disabled', html)
+        self.assertNotIn("<strong>Language</strong>: missing", html)
+        self.assertLess(
+            html.index('class="statement-editor-toolbar"'),
+            html.index('class="content-section statement-editor-main"'),
+        )
+
     def test_statement_templates_reset_restores_defaults_and_disables_examples_override(self) -> None:
         problem = f"alice/stmtreset-{uuid.uuid4().hex[:8]}"
         workspace_service.ensure_problem(problem)
@@ -1592,6 +1618,14 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         html = page.body.decode("utf-8", errors="replace")
         self.assertIn("Restore default templates", html)
         self.assertIn(f"/problems/{problem}/statement/templates/reset", html)
+        self.assertIn("<strong>Preview:</strong>", html)
+        self.assertIn('class="linkish statement-language-add-link"', html)
+        self.assertIn('class="inline-action statement-template-reset"', html)
+        for label in ("PDF", "HTML", "LaTeX"):
+            self.assertRegex(html, rf'<a class="linkish"[^>]*>{label}</a>')
+        self.assertIn(">Delete current</a>", html)
+        self.assertNotIn("Delete current language</a>", html)
+        self.assertLess(html.index(">Delete current</a>"), html.index(">Add language</a>"))
 
         resp = statement_templates_reset(problem=problem, user="alice", page="statement", language="english")
 
@@ -1604,6 +1638,8 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertEqual((ws / "statement" / "olymp.sty").read_text(encoding="utf-8"), DEFAULT_OLYMP_STY)
         self.assertFalse(examples_path.exists())
         self.assertEqual(legend_path.read_text(encoding="utf-8"), "custom legend section\n")
+
+        self.assertTrue(statement_templates_are_default(ws))
 
     def test_problems_page_shows_only_participating_problems(self) -> None:
         owner_problem = f"alice/ui-owner-{uuid.uuid4().hex[:8]}"

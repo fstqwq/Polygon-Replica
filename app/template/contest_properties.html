@@ -28,6 +28,15 @@
         required
       />
     </div>
+    <label class="checkbox-row">
+      <input
+        type="checkbox"
+        name="insert_blank_pages"
+        value="true"
+        {% if insert_blank_pages %}checked{% endif %}
+      />
+      Insert blank pages after odd statements
+    </label>
     <div class="contest-properties-actions">
       <button class="btn primary-action" type="submit">Save properties</button>
     </div>

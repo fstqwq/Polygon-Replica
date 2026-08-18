@@ -12,18 +12,9 @@ ${problem.output}
 \Interaction
 ${problem.interaction}
 </#if>
-\par
 \input{examples.tex}
 <#if problem.notes?? && (problem.notes?length > 0)>
-\ifdefined\Note
-  \ifx\Note\empty
-    \subsection*{Notes}
-  \else
-    \Note
-  \fi
-\else
-  \subsection*{Notes}
-\fi
+\Note
 ${problem.notes}
 </#if>
 \end{problem}

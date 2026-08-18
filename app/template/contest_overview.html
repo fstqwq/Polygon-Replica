@@ -40,15 +40,27 @@
       <td><code>{{ row.idx }}</code></td>
       <td class="problem-list-cell">
         {{ problem_slug_link(row.href, row.slug_owner, row.slug_leaf, owner_prefix_chars) }}
+        {% if row.details_available %}
+        {% set metadata = row.metadata %}
+        <span class="contest-problem-title-meta">
+          <span{% if metadata.time_limit_warn %} class="warn"{% endif %}>{{ metadata.time_limit_display }}</span>
+          <span aria-hidden="true">&middot;</span>
+          <span{% if metadata.memory_limit_warn %} class="warn"{% endif %}>{{ metadata.memory_limit_display }}</span>
+          {% if metadata.mode != 'pass-fail' %}
+          <span aria-hidden="true">&middot;</span>
+          <span>{{ metadata.mode }}</span>
+          {% endif %}
+          {% if metadata.pass_limit > 1 %}
+          <span aria-hidden="true">&middot;</span>
+          <span>{{ metadata.pass_limit }} passes</span>
+          {% endif %}
+        </span>
+        {% endif %}
       </td>
       <td class="contest-problem-details-cell">
         {% if row.details_available %}
         {% set content = row.content_review %}
-        {% set metadata = row.metadata %}
         <span class="compact-fact-list contest-problem-facts">
-          {% if metadata.mode != 'pass-fail' %}{{ fact_row('Mode', metadata.mode) }}{% endif %}
-          {% if metadata.pass_limit > 1 %}{{ fact_row('Passes', metadata.pass_limit) }}{% endif %}
-          {{ fact_row('Limits', metadata.time_limit_display ~ ' / ' ~ metadata.memory_limit_display, 'warn' if metadata.time_limit_warn or metadata.memory_limit_warn else '') }}
           {{ fact_row('Tests', content.tests.display, 'danger' if content.tests.tone == 'danger' else '') }}
           {{ fact_row('Solutions', content.solutions.display, 'danger' if content.solutions.tone == 'danger' else '') }}
           {{ fact_row(content.output_component.label, content.output_component.display, 'danger' if content.output_component.tone == 'danger' else '') }}

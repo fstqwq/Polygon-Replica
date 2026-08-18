@@ -3,15 +3,7 @@
 {% block content %}
 <div class="page-title-inline">
   <h1 class="page-title">Statement Review</h1>
-  <a href="/contests/{{ ctx.contest.slug }}/packages">Back to Statements &amp; Builds</a>
-</div>
-<div class="page-title-inline">
-  <p class="muted">{{ language }} &middot; {{ 'Workspace' if source == 'workspace' else 'Packages' }}</p>
-  {% if ctx.access.can_build %}
-  <form class="inline-action" method="post" action="/contests/{{ ctx.contest.slug }}/statements/review?source={{ source }}&language={{ language }}">
-    <button class="btn primary-action" type="submit">{{ 'Rebuild Review' if preview else 'Generate Review' }}</button>
-  </form>
-  {% endif %}
+  <a href="/contests/{{ ctx.contest.slug }}/overview">Back to Problems</a>
 </div>
 {% if preview and review_items %}
 <div class="statement-preview-document contest-statement-review">
@@ -23,12 +15,14 @@
       <section class="statement-preview-failure">
         <h2>{{ item.idx }} &mdash; {{ item.problem_slug }}</h2>
         <p class="danger">{{ item.error or 'Statement preview failed.' }}</p>
+        {% if item.pandoc_log %}
+        <h3>pandoc.log</h3>
+        <pre class="preview-log">{{ item.pandoc_log }}</pre>
+        {% endif %}
       </section>
     {% endif %}
   </article>
   {% endfor %}
 </div>
-{% else %}
-<p class="muted">No statement review has been generated for this source and language.</p>
 {% endif %}
 {% endblock %}

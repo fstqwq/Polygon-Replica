@@ -245,6 +245,23 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertEqual(overview.status_code, 200)
         html = overview.body.decode("utf-8", errors="replace")
         self.assertEqual(html.count(">Manage problems</a>"), 1)
+        title_start = html.index('<td class="problem-list-cell">')
+        details_start = html.index(
+            '<td class="contest-problem-details-cell">',
+            title_start,
+        )
+        title_html = html[title_start:details_start]
+        details_end = html.index(
+            '<td class="contest-problem-review-cell">',
+            details_start,
+        )
+        details_html = html[details_start:details_end]
+        self.assertIn('class="contest-problem-title-meta"', title_html)
+        self.assertIn("2s", title_html)
+        self.assertIn("1G", title_html)
+        self.assertNotIn('class="compact-fact-label">Limits</span>', details_html)
+        self.assertNotIn('class="compact-fact-label">Mode</span>', details_html)
+        self.assertNotIn('class="compact-fact-label">Passes</span>', details_html)
         self.assertLess(
             html.index(">Manage problems</a>"),
             html.index("Packages:"),
@@ -406,6 +423,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             '<div class="workspace-card-head">',
             html,
         )
+        self.assertIn("<h3>Workspace</h3>", html)
         self.assertIn(
             f'<a class="workspace-side-link" href="/contests/{contest_slug}/access">Manage access</a>',
             html,
@@ -936,12 +954,16 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             location="San Francisco",
             date_text="2026-03-01",
             statement_language="chinese",
+            insert_blank_pages=True,
         )
         self.assertEqual(save_props.status_code, 303)
         alice_row = db_fetch_one("SELECT id FROM users WHERE username='alice'")
         self.assertIsNotNone(alice_row)
         contest_row = db_fetch_one(
-            "SELECT title,statement_default_language FROM contests WHERE id=?",
+            """
+            SELECT title,statement_default_language,statement_insert_blank_pages
+            FROM contests WHERE id=?
+            """,
             [contest_id],
         )
         self.assertIsNotNone(contest_row)
@@ -950,6 +972,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             str(contest_row["statement_default_language"]),
             "chinese",
         )
+        self.assertEqual(int(contest_row["statement_insert_blank_pages"]), 1)
 
         grant = contest_access_grant(contest=contest_slug, user="alice", target_user="bob", role="write")
         self.assertEqual(grant.status_code, 303)

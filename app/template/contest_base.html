@@ -52,28 +52,40 @@
       {% endfor %}
     </nav>
 
-    <div class="page-grid contest-page-grid">
+    <div class="page-grid{% if ctx.page_single_column %} single-column{% else %} contest-page-grid{% endif %}">
       <main class="content-shell">
         <div class="container">{% block content %}{% endblock %}</div>
       </main>
+      {% if not ctx.page_single_column %}
       <aside class="side-panel contest-side-panel">
         {% include "_contest_workspace_card.html" %}
         <section class="action-card">
           <div class="workspace-card-head">
-            <h3>Contest</h3>
+            <h3>Workspace</h3>
             <a class="workspace-side-link" href="{{ ctx.contest_access_href }}"{% if ctx.contest_access_active %} aria-current="page"{% endif %}>Manage access</a>
           </div>
-          {% for group in ctx.statement_review_link_groups %}
+          {% for group in ctx.statement_review_link_groups if group.source == 'workspace' %}
           <div class="contest-review-link-group">
-            <strong>{{ group.label }}</strong>
             {% for link in group.links %}
-            <a href="{{ link.href }}">{{ link.label }}</a>
-            <a href="{{ link.pdf_href }}">Preview PDF ({{ link.language.title() }})</a>
+            <a href="{{ link.href }}">{{ link.html_label }}</a>
+            <a href="{{ link.pdf_href }}">{{ link.pdf_label }}</a>
             {% endfor %}
           </div>
           {% endfor %}
         </section>
+        {% for group in ctx.statement_review_link_groups if group.source != 'workspace' %}
+        <section class="action-card">
+          <h3>{{ group.label }}</h3>
+          <div class="contest-review-link-group">
+            {% for link in group.links %}
+            <a href="{{ link.href }}">{{ link.html_label }}</a>
+            <a href="{{ link.pdf_href }}">{{ link.pdf_label }}</a>
+            {% endfor %}
+          </div>
+        </section>
+        {% endfor %}
       </aside>
+      {% endif %}
     </div>
   </div>
   {% include "_page_profile.html" %}

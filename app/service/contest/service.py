@@ -69,6 +69,7 @@ class ContestContext(TypedDict):
     location: str
     date: str
     statement_default_language: str
+    statement_insert_blank_pages: bool
     created_at: str
 
 
@@ -130,6 +131,7 @@ class ContestStatementAttachment(TypedDict):
 
 class ContestService:
     _STATEMENT_DEFAULT_LANGUAGE_KEY = "statement_default_language"
+    _STATEMENT_INSERT_BLANK_PAGES_KEY = "statement_insert_blank_pages"
     _LOCATION_KEY = "location"
     _DATE_KEY = "date"
     _TEXT_SOURCE_SUFFIXES = {
@@ -468,6 +470,9 @@ class ContestService:
             "location": str(row["location"]),
             "date": str(row["date_text"]),
             "statement_default_language": str(row["statement_default_language"]),
+            "statement_insert_blank_pages": bool(
+                row["statement_insert_blank_pages"]
+            ),
             "created_at": str(row["created_at"]),
         }
 
@@ -642,6 +647,24 @@ class ContestService:
             self._STATEMENT_DEFAULT_LANGUAGE_KEY,
             str(language).strip().lower(),
         )
+
+    def statement_insert_blank_pages(self, contest_id: int) -> bool:
+        row = self._store.contest_context_by_id(int(contest_id))
+        return bool(row and row["statement_insert_blank_pages"])
+
+    def set_statement_insert_blank_pages(
+        self,
+        contest_id: int,
+        actor_user_id: int,
+        enabled: bool,
+    ) -> None:
+        del actor_user_id
+        self._store.update_metadata_field(
+            int(contest_id),
+            self._STATEMENT_INSERT_BLANK_PAGES_KEY,
+            1 if enabled else 0,
+        )
+        self._store.bump_source_generation(int(contest_id))
 
     def _infer_statement_header_fields_for_contest(self, contest_id: int, contest_slug: str) -> dict[str, str]:
         default_language = self.statement_default_language(int(contest_id))

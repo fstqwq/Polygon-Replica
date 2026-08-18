@@ -22,27 +22,42 @@ def aux_display_text_limit_bytes(
 
 
 def sanitize_log_text_for_ui(
-    raw: str, *, path_prefixes: list[tuple[str, str]] | None = None
+    raw: str,
+    *,
+    path_prefixes: list[tuple[str, str]] | None = None,
+    normalize_path_separators: bool = True,
 ) -> str:
     text = str(raw or "").replace("\r\n", "\n").replace("\r", "\n")
     text = _LOG_ANSI_ESCAPE_RE.sub("", text)
     text = _LOG_CONTROL_CHAR_RE.sub("", text)
     text = _LOG_BIDI_CONTROL_RE.sub("", text)
-    normalized = text.replace("\\", "/")
+    normalized = text.replace("\\", "/") if normalize_path_separators else text
     normalized = _DOMJUDGE_INTERNAL_BUILD_PREFIX_RE.sub("", normalized)
     pairs: list[tuple[str, str]] = []
     fallback_marker_index = 0
     for prefix_raw, marker_raw in path_prefixes or []:
-        prefix = str(prefix_raw or "").strip().replace("\\", "/")
+        prefix = str(prefix_raw or "").strip()
         if not prefix:
             continue
-        marker = str(marker_raw or "").strip().replace("\\", "/")
+        marker = str(marker_raw or "").strip()
+        if normalize_path_separators:
+            prefix = prefix.replace("\\", "/")
+            marker = marker.replace("\\", "/")
         if not marker:
             fallback_marker_index += 1
             marker = f"__redacted_path_{fallback_marker_index}__"
-        prefix_token = prefix.rstrip("/") + "/"
-        marker_token = marker.rstrip("/") + "/"
-        pairs.append((prefix_token, marker_token))
+        marker_token = marker.rstrip("/\\") + "/"
+        if normalize_path_separators:
+            pairs.append((prefix.rstrip("/") + "/", marker_token))
+            continue
+        prefix_bases = {
+            prefix.rstrip("/\\"),
+            prefix.replace("\\", "/").rstrip("/\\"),
+            prefix.replace("/", "\\").rstrip("/\\"),
+        }
+        for prefix_base in prefix_bases:
+            pairs.append((prefix_base + "/", marker_token))
+            pairs.append((prefix_base + "\\", marker_token))
     pairs.sort(key=lambda item: len(item[0]), reverse=True)
     for prefix_token, marker_token in pairs:
         normalized = normalized.replace(prefix_token, marker_token)

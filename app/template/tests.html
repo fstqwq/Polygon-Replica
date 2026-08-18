@@ -5,61 +5,64 @@
 {% macro sample_fields(prefix, row=None) -%}
         {% set structured = row and row.custom_sample_json %}
         {% set paired = row and (row.custom_sample_input or row.custom_sample_output) %}
-        <label for="{{ prefix }}-sample-format">Sample content in statements</label>
-        <select id="{{ prefix }}-sample-format" name="sample_format" data-sample-format="1">
-          <option value="default" {{ "selected" if not structured and not paired else "" }}>Default</option>
-          <option value="legacy" {{ "selected" if paired and not structured else "" }}>Input / output</option>
-          <option value="json" {{ "selected" if structured else "" }}>Structured JSON</option>
-        </select>
-        <div class="tests-sample-fields" data-sample-legacy="1" {{ "hidden" if structured or not paired else "" }}>
-          <div class="tests-sample-pair-grid">
-            <div class="tests-sample-editor">
-              <label for="{{ prefix }}-sample-input">Sample Input (optional)</label>
-              <textarea
-                id="{{ prefix }}-sample-input"
-                class="textarea-sm"
-                name="sample_input"
-                placeholder="Leave blank for generated input"
-                data-code-editor="1"
-                data-code-editor-lazy="1"
-                data-code-path="sample-input.txt"
-                data-code-height="180"
-                data-code-wrap="1"
-              >{{ row.sample_input if row else "" }}</textarea>
+        {% set sample_enabled = row and row.sample %}
+        <div class="form-stack" data-sample-content-group="1" {{ "hidden" if not sample_enabled else "" }}>
+          <label for="{{ prefix }}-sample-format">Sample content in statements</label>
+          <select id="{{ prefix }}-sample-format" name="sample_format" data-sample-format="1" {{ "disabled" if not sample_enabled else "" }}>
+            <option value="default" {{ "selected" if not structured and not paired else "" }}>Default</option>
+            <option value="legacy" {{ "selected" if paired and not structured else "" }}>Input / output</option>
+            <option value="json" {{ "selected" if structured else "" }}>Structured JSON</option>
+          </select>
+          <div class="tests-sample-fields" data-sample-legacy="1" {{ "hidden" if structured or not paired else "" }}>
+            <div class="tests-sample-pair-grid">
+              <div class="tests-sample-editor">
+                <label for="{{ prefix }}-sample-input">Sample Input (optional)</label>
+                <textarea
+                  id="{{ prefix }}-sample-input"
+                  class="textarea-sm"
+                  name="sample_input"
+                  placeholder="Leave blank for generated input"
+                  data-code-editor="1"
+                  data-code-editor-lazy="1"
+                  data-code-path="sample-input.txt"
+                  data-code-height="180"
+                  data-code-wrap="1"
+                >{{ row.sample_input if row else "" }}</textarea>
+              </div>
+              <div class="tests-sample-editor">
+                <label for="{{ prefix }}-sample-output">Sample Output (optional)</label>
+                <textarea
+                  id="{{ prefix }}-sample-output"
+                  class="textarea-sm"
+                  name="sample_output"
+                  placeholder="Leave blank for generated output"
+                  data-code-editor="1"
+                  data-code-editor-lazy="1"
+                  data-code-path="sample-output.txt"
+                  data-code-height="180"
+                  data-code-wrap="1"
+                >{{ row.sample_output if row else "" }}</textarea>
+              </div>
             </div>
-            <div class="tests-sample-editor">
-              <label for="{{ prefix }}-sample-output">Sample Output (optional)</label>
-              <textarea
-                id="{{ prefix }}-sample-output"
-                class="textarea-sm"
-                name="sample_output"
-                placeholder="Leave blank for generated output"
-                data-code-editor="1"
-                data-code-editor-lazy="1"
-                data-code-path="sample-output.txt"
-                data-code-height="180"
-                data-code-wrap="1"
-              >{{ row.sample_output if row else "" }}</textarea>
-            </div>
+            <input type="hidden" name="sample_output_validate" value="0" />
+            <label class="tests-sample-validation" data-sample-output-validate-group="1" {{ "hidden" if not sample_enabled else "" }}><input type="checkbox" name="sample_output_validate" value="1" {{ "checked" if not row or row.sample_output_validate else "" }} {{ "disabled" if not sample_enabled else "" }} /> Validate custom output</label>
           </div>
-          <input type="hidden" name="sample_output_validate" value="0" />
-          <label class="tests-sample-validation" data-sample-output-validate-group="1" {{ "hidden" if not row or not row.sample else "" }}><input type="checkbox" name="sample_output_validate" value="1" {{ "checked" if not row or row.sample_output_validate else "" }} {{ "disabled" if row and not row.sample else "" }} /> Validate custom output</label>
-        </div>
-        <div class="form-stack tests-sample-fields" data-sample-json-group="1" {{ "hidden" if not structured else "" }}>
-          <div class="tests-sample-json-heading">
-            <label for="{{ prefix }}-sample-json">Sample JSON</label>
-            <div class="tests-sample-example-actions" aria-label="Replace with an example">
-              <button class="linkish" type="button" data-sample-json-example="multipass">Multi-pass example</button>
-              <button class="linkish" type="button" data-sample-json-example="interactive">Interactive example</button>
-              <button class="linkish" type="button" data-sample-json-example="multipass-interactive">Multi-pass interactive example</button>
+          <div class="form-stack tests-sample-fields" data-sample-json-group="1" {{ "hidden" if not structured else "" }}>
+            <div class="tests-sample-json-heading">
+              <label for="{{ prefix }}-sample-json">Sample JSON</label>
+              <div class="tests-sample-example-actions" aria-label="Replace with an example">
+                <button class="linkish" type="button" data-sample-json-example="multipass">Multi-pass example</button>
+                <button class="linkish" type="button" data-sample-json-example="interactive">Interactive example</button>
+                <button class="linkish" type="button" data-sample-json-example="multipass-interactive">Multi-pass interactive example</button>
+              </div>
             </div>
+            <textarea id="{{ prefix }}-sample-json" class="textarea-md code-textarea" name="sample_json" data-sample-json="1" data-max-bytes="{{ statement_sample_max_bytes }}" spellcheck="false" placeholder='{"presentation":"pair","passes":[{"number":1,"input":"1\n","output":"2\n"}]}'>{% if row %}{{ row.sample_json_text }}{% endif %}</textarea>
+            <p class="muted tests-sample-json-status" data-sample-json-status="1" aria-live="polite"></p>
+            <section class="tests-sample-preview" data-sample-json-preview="1" hidden>
+              <h4>Statement preview</h4>
+              <div data-sample-json-preview-body="1"></div>
+            </section>
           </div>
-          <textarea id="{{ prefix }}-sample-json" class="textarea-md code-textarea" name="sample_json" data-sample-json="1" data-max-bytes="{{ statement_sample_max_bytes }}" spellcheck="false" placeholder='{"presentation":"pair","passes":[{"number":1,"input":"1\n","output":"2\n"}]}'>{% if row %}{{ row.sample_json_text }}{% endif %}</textarea>
-          <p class="muted tests-sample-json-status" data-sample-json-status="1" aria-live="polite"></p>
-          <section class="tests-sample-preview" data-sample-json-preview="1" hidden>
-            <h4>Statement preview</h4>
-            <div data-sample-json-preview-body="1"></div>
-          </section>
         </div>
 {%- endmacro %}
 {% block content %}
@@ -217,7 +220,6 @@
           data-code-height="260"
           data-code-wrap="1"
         ></textarea>
-        <p class="muted">One plain-text submission input per file.</p>
         <button class="btn" type="submit">Add Manual</button>
       </form>
 {% endcall %}

@@ -43,6 +43,7 @@ from app.service.problem.runtime_config import (
 )
 from app.service.problem.test_spec import dumps_default_tests_spec
 from app.service.repository.revision import workspace_revision_info
+from app.service.statement.constant import STATEMENT_DEFAULT_FILES
 from app.service.verification.task_store import VerificationTaskStore
 from app.service.workspace.state import WorkspaceState
 
@@ -663,6 +664,10 @@ class WorkspaceService:
                 BuildConfig(generator_sources=[])
             ),
             workspace / "tests/spec.json": dumps_default_tests_spec(),
+            **{
+                workspace / rel: content
+                for rel, content in STATEMENT_DEFAULT_FILES.items()
+            },
         }
         for path, content in canonical_sources.items():
             if not path.exists():

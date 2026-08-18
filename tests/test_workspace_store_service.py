@@ -8,12 +8,35 @@ from app.service.problem.preflight import (
 )
 from app.service.problem.runtime_config import problem_config_limits
 from app.service.repository.git import GitService
+from app.service.statement.constant import STATEMENT_DEFAULT_FILES
+from app.service.statement.render import statement_templates_are_default
 
 from tests.db_fixture import DBTestBase
 from tests.isolated_db_helpers import isolated_db_fetch_one
 
 
 class TestWorkspaceStoreService(DBTestBase):
+    def test_new_workspace_seeds_default_statement_templates(self) -> None:
+        self.workspace_service.ensure_problem(self.problem)
+        self.workspace_service.ensure_user(self.user)
+        self.workspace_service.grant_repo_access(
+            self.problem,
+            self.user,
+            "owner",
+        )
+
+        workspace = Path(
+            self.workspace_service.ensure_workspace(self.problem, self.user)
+        )
+
+        for rel, expected in STATEMENT_DEFAULT_FILES.items():
+            with self.subTest(path=rel):
+                self.assertEqual(
+                    (workspace / rel).read_text(encoding="utf-8"),
+                    expected,
+                )
+        self.assertTrue(statement_templates_are_default(workspace))
+
     def test_published_source_preflight_reports_without_mutating_git(self) -> None:
         self.workspace_service.ensure_problem(self.problem)
         self.workspace_service.ensure_user(self.user)

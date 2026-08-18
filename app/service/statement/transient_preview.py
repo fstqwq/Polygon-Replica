@@ -12,12 +12,7 @@ from pathlib import Path
 
 from app.db import DB
 from app.main_util import problem_slug_leaf
-from app.service.statement.preview_state import (
-    StatementPreviewOutput,
-    StatementPreviewRepository,
-    StatementPreviewRow,
-    StatementPreviewSource,
-)
+from app.service.platform.error_text import sanitize_log_text_for_ui
 from app.service.platform.fs.layout import StorageLayout
 from app.service.platform.hashing import sha256_hex_json
 from app.service.problem.runtime_config import problem_config_limits
@@ -28,7 +23,20 @@ from app.service.statement.examples import (
     StatementExamplesProducer,
     statement_examples_require_verification,
 )
-from app.service.statement.html_render import StatementHtmlRenderer
+from app.service.statement.html_render import (
+    StatementHtmlRenderError,
+    StatementHtmlRenderer,
+)
+from app.service.statement.latex_error import (
+    latex_error_excerpt,
+    latex_log_for_display,
+)
+from app.service.statement.preview_state import (
+    StatementPreviewOutput,
+    StatementPreviewRepository,
+    StatementPreviewRow,
+    StatementPreviewSource,
+)
 from app.service.statement.render import (
     render_statement_offline_tree,
     statement_title_for_language,
@@ -233,6 +241,26 @@ class StatementPreviewService:
         path = root / "pdf" / "statement.pdf"
         return path if self._safe_file(root, path) else None
 
+    def latex_log(self, preview_id: str, *, actor_user_id: int) -> str:
+        row = self._store.row(preview_id, actor_user_id=actor_user_id)
+        if row is None or row["output_kind"] != "pdf":
+            return ""
+        root = self._preview_root(preview_id)
+        path = root / "logs" / "latex.log"
+        if not self._safe_file(root, path):
+            return ""
+        return path.read_text(encoding="utf-8", errors="replace")
+
+    def pandoc_log(self, preview_id: str, *, actor_user_id: int) -> str:
+        row = self._store.row(preview_id, actor_user_id=actor_user_id)
+        if row is None or row["output_kind"] != "html":
+            return ""
+        root = self._preview_root(preview_id)
+        path = root / "logs" / "pandoc.log"
+        if not self._safe_file(root, path):
+            return ""
+        return path.read_text(encoding="utf-8", errors="replace")
+
     @contextmanager
     def _prepare_workspace_render_tree(
         self,
@@ -374,11 +402,25 @@ class StatementPreviewService:
             summary["sample_count"] = sample_count
         if output_kind == "html":
             html_root = preview_root / "html"
-            html_result = self._html.render(
-                render_root,
-                html_root,
-                subject_token=subject_token,
-            )
+            try:
+                html_result = self._html.render(
+                    render_root,
+                    html_root,
+                    subject_token=subject_token,
+                )
+            except StatementHtmlRenderError as exc:
+                if exc.log_text:
+                    logs = preview_root / "logs"
+                    logs.mkdir(parents=True, exist_ok=True)
+                    (logs / "pandoc.log").write_text(
+                        sanitize_log_text_for_ui(
+                            exc.log_text,
+                            path_prefixes=[(str(render_root), ".")],
+                            normalize_path_separators=False,
+                        ),
+                        encoding="utf-8",
+                    )
+                raise
             summary.update(
                 {
                     "content": "html/content.html",
@@ -395,21 +437,47 @@ class StatementPreviewService:
                 )
         else:
             pdf_result = self._pdf.compile_pdf(render_root / "statements.tex")
+            logs = preview_root / "logs"
+            logs.mkdir(parents=True, exist_ok=True)
+            display_log = latex_log_for_display(
+                pdf_result.log_text,
+                path_prefixes=[(str(render_root), ".")],
+            )
+            (logs / "latex.log").write_text(
+                display_log,
+                encoding="utf-8",
+            )
             if (
                 pdf_result.proc.timed_out
                 or pdf_result.proc.returncode != 0
                 or not pdf_result.pdf_path.is_file()
             ):
-                raise RuntimeError("statement PDF compile failed")
+                error = latex_error_excerpt(
+                    pdf_result.log_text,
+                    max_bytes=self._db.config_values.integer(
+                        "AUX_DISPLAY_TEXT_LIMIT_BYTES"
+                    ),
+                    path_prefixes=[(str(render_root), ".")],
+                )
+                if pdf_result.proc.timed_out:
+                    fallback = "LaTeX compilation timed out."
+                elif (
+                    not pdf_result.pdf_path.is_file()
+                    and pdf_result.proc.returncode == 0
+                ):
+                    fallback = "LaTeX completed without producing statement.pdf."
+                else:
+                    fallback = "LaTeX compilation failed."
+                summary["error"] = error or fallback
+                summary["returncode"] = pdf_result.proc.returncode
+                self._store.finish(preview_id, status="failed", summary=summary)
+                row = self._store.row(preview_id)
+                if row is None:
+                    raise RuntimeError("statement preview result disappeared")
+                return row
             target = preview_root / "pdf" / "statement.pdf"
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(pdf_result.pdf_path, target)
-            logs = preview_root / "logs"
-            logs.mkdir(parents=True, exist_ok=True)
-            (logs / "latex.log").write_text(
-                pdf_result.log_text,
-                encoding="utf-8",
-            )
             summary["pdf"] = "pdf/statement.pdf"
         self._store.finish(preview_id, status="ok", summary=summary)
         row = self._store.row(preview_id)

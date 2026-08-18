@@ -9,6 +9,10 @@ from app.service.contest.service import ContestProblem, ContestService
 from app.service.sandbox.base import ExecResult
 from app.service.statement.constant import DEFAULT_OLYMP_STY
 from app.service.statement.context import normalize_statement_language
+from app.service.statement.latex_error import (
+    latex_error_excerpt,
+    latex_log_for_display,
+)
 from app.service.statement.tex_compile import TexCompileService
 
 
@@ -53,9 +57,12 @@ class ContestStatementService:
         self,
         contest_service: ContestService,
         tex_compile_service: TexCompileService,
+        *,
+        error_text_limit_bytes: int,
     ) -> None:
         self._contest = contest_service
         self._tex = tex_compile_service
+        self._error_text_limit_bytes = max(1, error_text_limit_bytes)
 
     def languages(self, contest_id: int) -> list[str]:
         languages: list[str] = []
@@ -315,37 +322,14 @@ class ContestStatementService:
         self._insert_preamble_lines(statements_tex, lines)
 
     @staticmethod
-    def _log_tail(statements_root: Path) -> str:
+    def _latex_log_text(statements_root: Path) -> str:
         log_path = statements_root / f"{_LATEX_JOB_NAME}.log"
         try:
             if log_path.is_symlink() or not log_path.is_file():
                 return ""
-            return log_path.read_text(encoding="utf-8", errors="replace")[-20000:]
+            return log_path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             return ""
-
-    @staticmethod
-    def _compile_error(output: str, returncode: int | None) -> str:
-        lowered = output.lower()
-        for format_name in ("xelatex.fmt", "latex.fmt", "mpost.fmt"):
-            if "can't find the format file" in lowered and format_name in lowered:
-                return f"missing LaTeX format {format_name}"
-        if "dvipdfmx:fatal" in lowered:
-            return "dvipdfmx failed"
-        missing = re.search("File `([^`]+\\.sty)' not found", output)
-        if missing is not None:
-            return f"missing LaTeX package {missing.group(1).strip()}"
-        package_error = re.search(
-            r"^!\s*(?:Package\s+)?([^:\n]+?)\s+Error:\s*(.+)$",
-            output,
-            flags=re.MULTILINE,
-        )
-        if package_error is not None:
-            return f"{package_error.group(1).strip()} Error: {package_error.group(2).strip()}"
-        bang_error = re.search(r"^!\s*(.+)$", output, flags=re.MULTILINE)
-        if bang_error is not None:
-            return bang_error.group(1).strip()
-        return "latex compile failed" if int(returncode or 0) != 0 else ""
 
     @staticmethod
     def _append_log(log_path: Path, *, title: str, result: ExecResult) -> None:
@@ -623,20 +607,37 @@ class ContestStatementService:
                 writable_mounts=mounts,
                 env=env,
             )
-            output = "\n".join(
+            latex_log = self._latex_log_text(statements_root)
+            command_output = "\n".join(
                 part
                 for part in (
                     result.stdout,
                     result.stderr,
-                    self._log_tail(statements_root),
                 )
                 if part
             ).strip()
+            error_source = latex_log or command_output
+            display_log = latex_log_for_display(
+                error_source,
+                path_prefixes=[(str(compile_root), ".")],
+            )
+            latex_log_path = output_root / "logs" / "latex.log"
+            latex_log_path.parent.mkdir(parents=True, exist_ok=True)
+            latex_log_path.write_text(display_log, encoding="utf-8")
+            summary["latex_log"] = "logs/latex.log"
             if result.timed_out:
-                summary["error"] = f"{title} timeout"
+                summary["error"] = latex_error_excerpt(
+                    error_source,
+                    max_bytes=self._error_text_limit_bytes,
+                    path_prefixes=[(str(compile_root), ".")],
+                ) or f"{title} timeout"
                 return summary
             if int(result.returncode or 0) != 0:
-                summary["error"] = self._compile_error(output, result.returncode)
+                summary["error"] = latex_error_excerpt(
+                    error_source,
+                    max_bytes=self._error_text_limit_bytes,
+                    path_prefixes=[(str(compile_root), ".")],
+                ) or "LaTeX compilation failed."
                 return summary
         generated_pdf = statements_root / "statements.pdf"
         if generated_pdf.is_symlink() or not generated_pdf.is_file():

@@ -4,21 +4,21 @@
 {% block page_scripts %}{% include "_editor_assets.html" %}<script type="module" src="{{ static_asset_url('js/statement.js') }}"></script>{% endblock %}
 {% block content %}
 {% set statement_return_href = problem_href('preview_page') if return_page == 'preview' else problem_href('problem_statement') %}
-{% set ns = namespace(latest=None) %}
-{% set preview_is_missing = preview_artifacts_missing %}
-{% if preview_id %}
-  {% for p in previews %}
-    {% if p.id == preview_id %}
-      {% set ns.latest = p %}
-    {% endif %}
-  {% endfor %}
-{% endif %}
-{% if ns.latest is none and previews %}
-  {% set ns.latest = previews[0] %}
-{% endif %}
 <div class="page-title-inline statement-page-title-inline">
   <h1 class="page-title">Statements</h1>
-  <div class="statement-page-title-tools">
+  {% if current_language %}
+  <nav class="statement-output-links" aria-label="Statement previews">
+    <strong>Preview:</strong>
+    <a class="linkish" href="{{ problem_href('problem_statement_pdf_page', query={'source': 'workspace', 'language': current_language}) }}" target="_blank" rel="noopener">PDF</a>
+    <a class="linkish" href="{{ problem_href('problem_statement_html_page', query={'source': 'workspace', 'language': current_language}) }}" target="_blank" rel="noopener">HTML</a>
+    <a class="linkish" href="{{ problem_href('statement_tex_source', query={'language': current_language}) }}" target="_blank" rel="noopener">LaTeX</a>
+  </nav>
+  {% endif %}
+</div>
+{% include "_flash_message.html" %}
+
+<div class="statement-editor-toolbar">
+    <div class="statement-page-title-tools">
     {% if available_languages %}
     <form
       class="inline-form statement-language-switch-form"
@@ -42,20 +42,13 @@
       </select>
     </form>
     {% else %}
-    <span class="muted"><strong>Language</strong>: missing</span>
+    <div class="statement-language-switch-form">
+      <label for="statement-language-select">Language</label>
+      <select id="statement-language-select" aria-label="Statement language" disabled>
+        <option selected>missing</option>
+      </select>
+    </div>
     {% endif %}
-    <a class="linkish" href="#statement-language-popup" data-popup-open="statement-language-popup">Add language</a>
-    {% if current_language %}
-    <a class="linkish" href="/problems/{{ ctx.problem.slug }}/statement/html?source=workspace&language={{ current_language }}{% if ctx.contest_workspace %}&contest={{ ctx.contest_workspace.contest_slug }}{% endif %}">Preview HTML</a>
-    {% endif %}
-    <form class="inline-action" method="post" action="{{ problem_href('statement_templates_reset') }}" data-confirm-message="Restore statement/statements.ftl, statement/problem.tex, and statement/olymp.sty to Qiulygon defaults? This also removes the optional statement/examples.tex file, but keeps statement sections and attachments.">
-      <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
-      <input type="hidden" name="language" value="{{ current_language }}" />
-      {% if preview_id %}
-      <input type="hidden" name="preview_id" value="{{ preview_id }}" />
-      {% endif %}
-      <a href="#" class="linkish danger-link" data-submit-form="1">Restore default templates</a>
-    </form>
     {% if current_language %}
     <form class="inline-action" method="post" action="{{ problem_href('statement_language_delete') }}" data-confirm-message="Delete statement language {{ current_language }}? This removes all statement section files for that language.">
       <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
@@ -63,55 +56,29 @@
       {% if preview_id %}
       <input type="hidden" name="preview_id" value="{{ preview_id }}" />
       {% endif %}
-      <a href="#" class="linkish danger-link" data-submit-form="1">Delete current language</a>
+      <a href="#" class="linkish danger-link" data-submit-form="1">Delete current</a>
     </form>
     {% endif %}
-  </div>
+    <a class="linkish statement-language-add-link" href="#statement-language-popup" data-popup-open="statement-language-popup">Add language</a>
+    </div>
+    {% if statement_templates_customized %}
+    <form class="inline-action statement-template-reset" method="post" action="{{ problem_href('statement_templates_reset') }}" data-confirm-message="Restore statement/statements.ftl, statement/problem.tex, and statement/olymp.sty to Qiulygon defaults? This also removes the optional statement/examples.tex file, but keeps statement sections and attachments.">
+      <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
+      <input type="hidden" name="language" value="{{ current_language }}" />
+      {% if preview_id %}
+      <input type="hidden" name="preview_id" value="{{ preview_id }}" />
+      {% endif %}
+      <a href="#" class="linkish danger-link" data-submit-form="1">Restore default templates</a>
+    </form>
+    {% endif %}
 </div>
-{% include "_flash_message.html" %}
 
+<section class="content-section statement-editor-main">
 {% if statement_language_missing %}
 <div class="flash">
   Add a language to start.
 </div>
 {% else %}
-<div class="statement-preview-toolbar">
-  <form
-    class="inline-form"
-    method="post"
-    action="{{ problem_href('preview_run') }}"
-    data-preview-compile-form="1"
-  >
-    <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
-    <input type="hidden" name="language" value="{{ current_language }}" />
-    <button class="btn primary-action" type="submit" data-preview-compile-button="1">{{ "Recompile Statement" if preview_id else "Compile Statement" }}</button>
-  </form>
-  <a class="btn" href="{{ problem_href('statement_tex_source', query={'language': current_language}) }}" target="_blank" rel="noopener">Open TeX</a>
-  {% if preview_id and pdf_exists %}
-  <a class="btn" href="{{ problem_href('artifact_file', verification_id=preview_id, rel_path='statement_preview/statement.pdf') }}" target="_blank" rel="noopener">Open PDF</a>
-  {% endif %}
-  {% if latex_log_available %}
-  <a class="btn" href="{{ problem_href('artifact_file', verification_id=preview_id, rel_path='logs/latex.log') }}" target="_blank" rel="noopener">Open latex.log</a>
-  {% endif %}
-  {% if preview_id and pdf_exists %}
-  <span class="{{ 'warn' if preview_is_stale else 'muted' }} statement-preview-status">{{ "PDF is stale; recompile after source changes." if preview_is_stale else "PDF is ready." }}</span>
-  {% endif %}
-</div>
-{% if preview_compile_failed %}
-<div class="flash statement-preview-message">
-  <strong>{{ preview_failure_title }}</strong>
-  {% if preview_failure_detail %}
-  <pre class="preview-log">{{ preview_failure_detail }}</pre>
-  {% endif %}
-</div>
-{% endif %}
-{% if preview_is_missing %}
-<p class="muted statement-preview-message">Recompile to restore the preview.</p>
-{% endif %}
-{% if preview_id and (not pdf_exists) and (not preview_is_missing) and (not preview_compile_failed) %}
-<p class="muted statement-preview-message">No PDF output.</p>
-{% endif %}
-<section class="content-section statement-editor-main">
   <form
     method="post"
     action="{{ problem_href('preview_save') }}"
@@ -177,7 +144,10 @@
       <button class="btn primary-action" type="submit">Save Statement</button>
     </div>
   </form>
+{% endif %}
 </section>
+
+{% if not statement_language_missing %}
 <section class="content-section statement-examples-template">
   <div class="statement-examples-template-head">
     <div>
@@ -234,32 +204,6 @@
   </form>
   {% endif %}
 </section>
-{% if log_refs or log %}
-<section class="content-section statement-preview-diagnostics">
-  {% if log_refs %}
-  <details {% if not pdf_exists or (ns.latest and ns.latest.status != "ok") %}open{% endif %}>
-    <summary>Log References ({{ log_refs_total }})</summary>
-    {% if log_refs_truncated %}
-    <p><em>Showing first {{ log_refs_limit }} references ({{ log_refs_total }} total).</em></p>
-    {% endif %}
-    <ul>
-      {% for r in log_refs %}
-      <li><a href="{{ problem_href('problem_files', query={'path': r.file, 'line': r.line}) }}">{{ r.file }}:{{ r.line }}</a> {{ r.context }}</li>
-      {% endfor %}
-    </ul>
-  </details>
-  {% endif %}
-  {% if log %}
-  <details {% if not pdf_exists or (ns.latest and ns.latest.status != "ok") %}open{% endif %}>
-    <summary>latex.log</summary>
-    {% if log_truncated %}
-    <p><em>Showing first {{ log_char_limit }} characters.</em></p>
-    {% endif %}
-    <pre class="preview-log">{{ log }}</pre>
-  </details>
-  {% endif %}
-</section>
-{% endif %}
 {% endif %}
 
 {% call ui_popup('statement-draft-popup', 'Draft History', overlay_class='statement-draft-popup') %}

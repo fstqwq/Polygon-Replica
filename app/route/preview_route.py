@@ -17,8 +17,8 @@ from app.impl.preview.preview import (
     statement_templates_reset,
 )
 from app.impl.preview.html import (
-    problem_statement_html_build,
     problem_statement_html_page,
+    problem_statement_pdf_page,
     problem_statement_html_resource,
 )
 from app.route.problem_scoped_router import ProblemScopedRouter
@@ -37,9 +37,9 @@ router.add_api_route(
     response_class=HTMLResponse,
 )
 router.add_api_route(
-    "/problems/{problem:path}/statement/html",
-    problem_statement_html_build,
-    methods=["POST"],
+    "/problems/{problem:path}/statement/pdf",
+    problem_statement_pdf_page,
+    methods=["GET"],
 )
 
 router.add_api_route(

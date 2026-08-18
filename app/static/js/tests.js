@@ -140,19 +140,23 @@ function initSampleForms() {
 
   const sync = (form) => {
     const toggle = form.querySelector("[data-sample-toggle='1']");
-    const group = form.querySelector("[data-sample-output-validate-group='1']");
+    const contentGroup = form.querySelector("[data-sample-content-group='1']");
+    const validationGroup = form.querySelector("[data-sample-output-validate-group='1']");
     const format = form.querySelector("[data-sample-format='1']");
     const legacy = form.querySelector("[data-sample-legacy='1']");
     const jsonGroup = form.querySelector("[data-sample-json-group='1']");
     const textarea = form.querySelector("[data-sample-json='1']");
-    if (!toggle || !group || !format || !legacy || !jsonGroup || !textarea) return;
-    const legacySelected = toggle.checked && format.value === "legacy";
-    const structured = toggle.checked && format.value === "json";
+    if (!toggle || !contentGroup || !validationGroup || !format || !legacy || !jsonGroup || !textarea) return;
+    const sampleEnabled = toggle.checked;
+    const legacySelected = sampleEnabled && format.value === "legacy";
+    const structured = sampleEnabled && format.value === "json";
+    contentGroup.hidden = !sampleEnabled;
+    format.disabled = !sampleEnabled;
     legacy.hidden = !legacySelected;
     jsonGroup.hidden = !structured;
     legacy.querySelectorAll("input, textarea, select").forEach((control) => { control.disabled = !legacySelected; });
     jsonGroup.querySelectorAll("input, textarea, select").forEach((control) => { control.disabled = !structured; });
-    group.hidden = !legacySelected;
+    validationGroup.hidden = !legacySelected;
     const result = structured ? validateJson(textarea) : { error: "", value: null };
     const status = form.querySelector("[data-sample-json-status='1']");
     const preview = form.querySelector("[data-sample-json-preview='1']");

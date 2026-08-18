@@ -219,6 +219,7 @@ CREATE TABLE IF NOT EXISTS contests (
     location TEXT NOT NULL DEFAULT '',
     date_text TEXT NOT NULL DEFAULT '',
     statement_default_language TEXT NOT NULL DEFAULT 'english',
+    statement_insert_blank_pages INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     FOREIGN KEY(owner_user_id) REFERENCES users(id)
 );
@@ -824,7 +825,8 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
     ),
     "contests": (
         "id", "slug", "title", "owner_user_id", "status", "source_generation",
-        "location", "date_text", "statement_default_language", "created_at",
+        "location", "date_text", "statement_default_language",
+        "statement_insert_blank_pages", "created_at",
     ),
     "contest_members": ("id", "contest_id", "user_id", "role", "created_at"),
     "contest_problems": (

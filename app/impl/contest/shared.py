@@ -72,6 +72,9 @@ def _contest_ctx(
             "location": str(contest_row["location"]),
             "date": str(contest_row["date"]),
             "statement_default_language": str(contest_row["statement_default_language"]),
+            "statement_insert_blank_pages": bool(
+                contest_row["statement_insert_blank_pages"]
+            ),
             "created_at": contest_row["created_at"],
         },
         "access": access,
@@ -99,7 +102,12 @@ def _contest_ctx(
                 **group,
                 "links": [
                     {
-                        "label": f"Review Statements ({language.title()})",
+                        "html_label": (
+                            f"Statements (HTML, {language.title()})"
+                        ),
+                        "pdf_label": (
+                            f"Statements (PDF, {language.title()})"
+                        ),
                         "language": language,
                         "href": (
                             f"/contests/{contest_row['slug']}/statements/review"

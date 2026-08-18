@@ -18,6 +18,7 @@ from app.service.statement.constant import (
     DEFAULT_STATEMENT_TEMPLATE,
     STATEMENT_ASSETS_DIR,
     STATEMENT_CANONICAL_SECTION_FILES,
+    STATEMENT_DEFAULT_FILES,
     STATEMENT_DIR,
     STATEMENT_EXAMPLES_REL,
     STATEMENT_MAIN_REL,
@@ -55,6 +56,25 @@ def normalize_problem_title(raw: object, *, fallback_title: str) -> str:
 
 def default_olymp_sty_text() -> str:
     return DEFAULT_OLYMP_STY
+
+
+def statement_templates_are_default(workspace: Path) -> bool:
+    """Return whether the Workspace uses the canonical Statement templates."""
+
+    for rel, expected in STATEMENT_DEFAULT_FILES.items():
+        path = workspace / rel
+        try:
+            if path.is_symlink() or not path.is_file():
+                return False
+            if path.read_text(encoding="utf-8") != expected:
+                return False
+        except OSError:
+            return False
+    examples_path = workspace / STATEMENT_EXAMPLES_REL
+    try:
+        return not examples_path.exists()
+    except OSError:
+        return False
 
 
 def _safe_read_text(path: Path, fallback: str) -> str:

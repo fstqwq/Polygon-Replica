@@ -1,17 +1,12 @@
 .statement-preview-document {
   box-sizing: border-box;
+  width: 100%;
   max-width: 52rem;
   margin-inline: auto;
   padding: 14px 24px 36px;
   overflow-wrap: break-word;
   color: var(--text);
   font: 14px/1.4 Arial, Helvetica, sans-serif;
-}
-
-.contest-statement-review > .statement-content + .statement-content {
-  border-top: 1px solid var(--line-strong);
-  margin-top: 2.4rem;
-  padding-top: 2.4rem;
 }
 
 .statement-preview-failure {
@@ -132,4 +127,22 @@
     border-top: 1px solid var(--line-strong);
     border-left: 0;
   }
+}
+
+.contest-statement-review > .statement-content {
+  padding-block: 18px 22px;
+}
+
+.contest-statement-review > .statement-content + .statement-content {
+  border-top: 1px solid var(--line-strong);
+  margin-top: 0;
+  padding-top: 22px;
+}
+
+.contest-statement-fallback-title {
+  margin: 0 0 3px;
+  font-size: 20px;
+  font-weight: 400;
+  line-height: 1.2;
+  text-align: center;
 }

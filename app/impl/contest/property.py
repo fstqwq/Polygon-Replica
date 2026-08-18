@@ -30,6 +30,9 @@ def contest_properties_page(request: Request, contest: str, user: Annotated[str,
             "location": props.get(_CONTEST_PROPERTY_LOCATION),
             "date_text": props.get(_CONTEST_PROPERTY_DATE),
             "statement_language": statement_language,
+            "insert_blank_pages": runtime().contest_service.statement_insert_blank_pages(
+                contest_id
+            ),
         },
     )
 
@@ -41,6 +44,7 @@ def contest_properties_save(
     location: str = Form(""),
     date_text: str = Form(""),
     statement_language: str = Form(""),
+    insert_blank_pages: Annotated[bool, Form()] = False,
 ):
     ctx = _contest_ctx(contest, user, "properties")
     if not bool(ctx["access"].get("can_write")):
@@ -70,5 +74,10 @@ def contest_properties_save(
         contest_id,
         actor_user_id,
         safe_language,
+    )
+    runtime().contest_service.set_statement_insert_blank_pages(
+        contest_id,
+        actor_user_id,
+        bool(insert_blank_pages),
     )
     return _contest_redirect(ctx["contest"]["slug"], "properties", message="contest properties saved")

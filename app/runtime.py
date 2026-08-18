@@ -386,6 +386,9 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
         self.contest_statement_service = ContestStatementService(
             self.contest_service,
             self.tex_compile_service,
+            error_text_limit_bytes=self.config_values.integer(
+                "AUX_DISPLAY_TEXT_LIMIT_BYTES"
+            ),
         )
         self.contest_package_service = ContestPackageService(
             self.contest_service,

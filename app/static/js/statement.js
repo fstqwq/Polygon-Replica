@@ -2,7 +2,6 @@ const {
   findCodeMirrorEditorForTextarea,
   localStorageAvailable,
   onReady,
-  setSubmitting,
   showConfirmDialog,
   storageScopeToken,
   submitForm,
@@ -11,16 +10,6 @@ const {
 const EDITOR_READY_EVENT = "polygonlike:code-editor-ready";
 const HISTORY_LIMIT = 10;
 const SAVE_DELAY_MS = 900;
-
-function initCompileState() {
-  document.querySelectorAll("form[data-preview-compile-form='1']").forEach((form) => {
-    form.addEventListener("submit", () => {
-      const button = form.querySelector("[data-preview-compile-button='1']") || form.querySelector("button[type='submit']");
-      if (!button || button.disabled) return;
-      setSubmitting(button, button.textContent.trim() || "Compile Statement", "Compiling...", true);
-    });
-  });
-}
 
 function initLanguageSwitch() {
   const canStore = localStorageAvailable("__polygonlike_statement_language_probe__");
@@ -222,7 +211,6 @@ function initDraftHistory() {
 }
 
 onReady(() => {
-  initCompileState();
   initLanguageSwitch();
   initExamplesTemplateToggle();
   initDraftHistory();

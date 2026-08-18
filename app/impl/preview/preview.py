@@ -52,6 +52,7 @@ from app.service.statement.context import (
 from app.service.statement.render import (
     ensure_statement_language_sources,
     render_statement_problem_assets_for_language,
+    statement_templates_are_default,
     statement_title_for_language,
 )
 from app.service.statement.signature import statement_sources_signature
@@ -554,6 +555,7 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
     statement_compile_assets = statement_compile_asset_rows(workspace)
     contestant_attachments = contestant_attachment_rows(workspace)
     statement_examples_template = _statement_examples_template_editor(workspace)
+    statement_templates_customized = not statement_templates_are_default(workspace)
     return template_response(
         request,
         'preview.html',
@@ -567,6 +569,7 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
             'statement_template_path': STATEMENT_TEMPLATE_REL.as_posix(),
             'statement_problem_path': STATEMENT_PROBLEM_REL.as_posix(),
             'statement_examples_template': statement_examples_template,
+            'statement_templates_customized': statement_templates_customized,
             'statement_style_path': STATEMENT_STYLE_REL.as_posix(),
             'statement_compile_assets': statement_compile_assets,
             'contestant_attachments': contestant_attachments,

@@ -155,7 +155,6 @@ router.add_api_route(
     "/contests/{contest}/statements/pdf",
     contest_statement_pdf_page,
     methods=["GET"],
-    response_class=HTMLResponse,
 )
 
 router.add_api_route(

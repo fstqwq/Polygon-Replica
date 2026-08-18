@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from html import escape
 from typing import Annotated, cast
 from urllib.parse import quote
 
 from fastapi import Depends, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 
 from app.impl.auth.session import require_session_user
 from app.impl.auth.shared import redirect_response, template_response
@@ -14,6 +15,7 @@ from app.impl.contest.shared import _contest_ctx
 from app.impl.runtime.dependency import runtime
 from app.service.statement.context import normalize_statement_language
 from app.service.statement.html_render import RESOURCE_PLACEHOLDER
+from app.service.statement.latex_error import latex_failure_text
 from app.service.statement.preview_state import StatementPreviewSource
 
 
@@ -28,6 +30,15 @@ def _language(value: str) -> str:
     if not language:
         raise HTTPException(status_code=400, detail="statement language is required")
     return language
+
+
+def _numbered_statement_fragment(fragment: str, idx: str) -> str:
+    """Prefix the rendered Statement title without changing the cached fragment."""
+    heading = "<h2>"
+    prefix = f"<h2>{escape(idx)}. "
+    if heading in fragment:
+        return fragment.replace(heading, prefix, 1)
+    return f'<h2 class="contest-statement-fallback-title">{escape(idx)}</h2>{fragment}'
 
 
 def _review_items(
@@ -57,12 +68,23 @@ def _review_items(
                 f"{item['preview_id']}/"
             )
             fragment = fragment.replace(RESOURCE_PLACEHOLDER, resource_base)
+            fragment = _numbered_statement_fragment(
+                fragment,
+                str(roster_item["idx"]),
+            )
+        pandoc_log = ""
+        if item["status"] == "failed" and item["preview_id"]:
+            pandoc_log = runtime().statement_preview_service.pandoc_log(
+                item["preview_id"],
+                actor_user_id=actor_user_id,
+            )
         items.append(
             {
                 **item,
                 "idx": roster_item["idx"],
                 "problem_slug": roster_item["problem_slug"],
                 "fragment": fragment,
+                "pandoc_log": pandoc_log,
             }
         )
     return items
@@ -74,33 +96,24 @@ def contest_statement_review_page(
     user: Annotated[str, Depends(require_session_user)],
     source: str = "workspace",
     language: str = "english",
-    preview_id: str = "",
 ):
     ctx = _contest_ctx(contest, user, "packages", request=request)
+    if not ctx["access"]["can_build"]:
+        raise HTTPException(
+            status_code=403,
+            detail=ctx["access"]["build_block_reason"],
+        )
     contest_id = int(ctx["contest"]["id"])
     source_kind = _source(source)
     safe_language = _language(language)
-    preview = None
-    if preview_id:
-        candidate = runtime().statement_preview_service.row(
-            preview_id,
-            actor_user_id=int(ctx["user"]["id"]),
-        )
-        if (
-            candidate is not None
-            and candidate["contest_id"] == contest_id
-            and candidate["source_kind"] == source_kind
-            and candidate["output_kind"] == "html"
-            and candidate["language"] == safe_language
-        ):
-            preview = candidate
-    if preview is None:
-        preview = runtime().contest_statement_preview_service.latest_html(
-            contest_id,
-            actor_user_id=int(ctx["user"]["id"]),
-            source_kind=source_kind,
-            language=safe_language,
-        )
+    preview = runtime().contest_statement_preview_service.build_html(
+        contest_id,
+        user_id=int(ctx["user"]["id"]),
+        username=user,
+        source_kind=source_kind,
+        language=safe_language,
+    )
+    ctx["page_single_column"] = True
     return template_response(
         request,
         "contest_statement_review.html",
@@ -134,7 +147,7 @@ def contest_statement_review_build(
         )
     source_kind = _source(source)
     safe_language = _language(language)
-    preview = runtime().contest_statement_preview_service.build_html(
+    runtime().contest_statement_preview_service.build_html(
         int(ctx["contest"]["id"]),
         user_id=int(ctx["user"]["id"]),
         username=user,
@@ -144,7 +157,6 @@ def contest_statement_review_build(
     target = (
         f"/contests/{ctx['contest']['slug']}/statements/review"
         f"?source={source_kind}&language={quote(safe_language)}"
-        f"&preview_id={quote(preview['id'])}"
     )
     return redirect_response(target, status_code=303)
 
@@ -191,52 +203,56 @@ def contest_statement_pdf_page(
     user: Annotated[str, Depends(require_session_user)],
     source: str = "workspace",
     language: str = "english",
-    preview_id: str = "",
 ):
     ctx = _contest_ctx(contest, user, "packages", request=request)
+    if not ctx["access"]["can_build"]:
+        raise HTTPException(
+            status_code=403,
+            detail=ctx["access"]["build_block_reason"],
+        )
     contest_id = int(ctx["contest"]["id"])
     source_kind = _source(source)
     safe_language = _language(language)
-    preview = None
-    if preview_id:
-        candidate = runtime().statement_preview_service.row(
-            preview_id,
-            actor_user_id=int(ctx["user"]["id"]),
+    preview = runtime().contest_statement_preview_service.build_pdf(
+        contest_id,
+        contest_slug=str(ctx["contest"]["slug"]),
+        user_id=int(ctx["user"]["id"]),
+        username=user,
+        source_kind=source_kind,
+        language=safe_language,
+        insert_blank_pages=runtime().contest_service.statement_insert_blank_pages(
+            contest_id
+        ),
+    )
+    if preview["status"] != "ok":
+        error = preview["summary"].get("error")
+        detail = (
+            error
+            if isinstance(error, str) and error
+            else "Contest statement PDF generation failed."
         )
-        if (
-            candidate is not None
-            and candidate["contest_id"] == contest_id
-            and candidate["source_kind"] == source_kind
-            and candidate["output_kind"] == "pdf"
-            and candidate["language"] == safe_language
-        ):
-            preview = candidate
-    if preview is None:
-        preview = runtime().contest_statement_preview_service.latest_pdf(
-            contest_id,
-            actor_user_id=int(ctx["user"]["id"]),
-            source_kind=source_kind,
-            language=safe_language,
-        )
-    pdf_available = bool(
-        preview is not None
-        and preview["status"] == "ok"
-        and runtime().statement_preview_service.pdf(
+        latex_log = runtime().statement_preview_service.latex_log(
             preview["id"],
             actor_user_id=int(ctx["user"]["id"]),
         )
-        is not None
+        return PlainTextResponse(
+            latex_failure_text(detail, latex_log),
+            status_code=422,
+        )
+    path = runtime().statement_preview_service.pdf(
+        preview["id"],
+        actor_user_id=int(ctx["user"]["id"]),
     )
-    return template_response(
-        request,
-        "contest_statement_pdf.html",
-        {
-            "ctx": ctx,
-            "source": source_kind,
-            "language": safe_language,
-            "preview": preview,
-            "pdf_available": pdf_available,
-        },
+    if path is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Contest statement PDF result is unavailable.",
+        )
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename=f"{ctx['contest']['slug']}-{safe_language}-statements.pdf",
+        content_disposition_type="inline",
     )
 
 
@@ -246,7 +262,6 @@ def contest_statement_pdf_build(
     user: Annotated[str, Depends(require_session_user)],
     source: str = "workspace",
     language: str = "english",
-    insert_blank_pages: bool = False,
 ):
     ctx = _contest_ctx(contest, user, "packages", request=request)
     if not ctx["access"]["can_build"]:
@@ -260,7 +275,9 @@ def contest_statement_pdf_build(
         username=user,
         source_kind=source_kind,
         language=safe_language,
-        insert_blank_pages=bool(insert_blank_pages),
+        insert_blank_pages=runtime().contest_service.statement_insert_blank_pages(
+            int(ctx["contest"]["id"])
+        ),
     )
     target = (
         f"/contests/{ctx['contest']['slug']}/statements/pdf"
