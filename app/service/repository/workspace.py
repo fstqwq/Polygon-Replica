@@ -206,6 +206,16 @@ class WorkspaceService:
             self._problem_cache.clear()
             self._user_cache.clear()
 
+    def problem_row(self, problem: str) -> ProblemRow:
+        """Resolve an existing problem without creating a Workspace."""
+
+        return self._problem_row(problem)
+
+    def user_row(self, username: str):
+        """Resolve an existing user without creating a Workspace."""
+
+        return self._user_row(username)
+
     def configure_problem_deletion_runtime(
         self,
         *,

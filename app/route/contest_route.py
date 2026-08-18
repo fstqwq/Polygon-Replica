@@ -29,6 +29,14 @@ from app.impl.contest.problem import (
     contest_problems_save,
 )
 from app.impl.contest.property import contest_properties_page, contest_properties_save
+from app.impl.contest.statement_review import (
+    contest_statement_pdf_build,
+    contest_statement_pdf_file,
+    contest_statement_pdf_page,
+    contest_statement_review_build,
+    contest_statement_review_page,
+    contest_statement_review_resource,
+)
 
 router = APIRouter()
 
@@ -122,6 +130,44 @@ router.add_api_route(
     contest_packages_page,
     methods=["GET"],
     response_class=HTMLResponse,
+)
+
+router.add_api_route(
+    "/contests/{contest}/statements/review",
+    contest_statement_review_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+
+router.add_api_route(
+    "/contests/{contest}/statements/review",
+    contest_statement_review_build,
+    methods=["POST"],
+)
+
+router.add_api_route(
+    "/contests/{contest}/statements/review/resources/{preview_id}/{name}",
+    contest_statement_review_resource,
+    methods=["GET"],
+)
+
+router.add_api_route(
+    "/contests/{contest}/statements/pdf",
+    contest_statement_pdf_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+
+router.add_api_route(
+    "/contests/{contest}/statements/pdf",
+    contest_statement_pdf_build,
+    methods=["POST"],
+)
+
+router.add_api_route(
+    "/contests/{contest}/statements/pdf/file/{preview_id}",
+    contest_statement_pdf_file,
+    methods=["GET"],
 )
 
 router.add_api_route(

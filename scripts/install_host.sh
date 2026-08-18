@@ -74,6 +74,9 @@ echo "[1/6] Installing system dependencies..."
   fonts-texgyre \
   fonts-noto-cjk \
   cm-super \
+  pandoc \
+  poppler-utils \
+  librsvg2-bin \
   util-linux \
   bubblewrap \
   libseccomp2

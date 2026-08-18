@@ -16,9 +16,31 @@ from app.impl.preview.preview import (
     statement_examples_template_toggle,
     statement_templates_reset,
 )
+from app.impl.preview.html import (
+    problem_statement_html_build,
+    problem_statement_html_page,
+    problem_statement_html_resource,
+)
 from app.route.problem_scoped_router import ProblemScopedRouter
 
 router = ProblemScopedRouter()
+
+router.add_api_route(
+    "/problems/{problem:path}/statement/html/resources/{preview_id}/{name}",
+    problem_statement_html_resource,
+    methods=["GET"],
+)
+router.add_api_route(
+    "/problems/{problem:path}/statement/html",
+    problem_statement_html_page,
+    methods=["GET"],
+    response_class=HTMLResponse,
+)
+router.add_api_route(
+    "/problems/{problem:path}/statement/html",
+    problem_statement_html_build,
+    methods=["POST"],
+)
 
 router.add_api_route(
     "/problems/{problem:path}/preview",

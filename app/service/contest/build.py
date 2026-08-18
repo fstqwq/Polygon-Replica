@@ -4,8 +4,6 @@ from pathlib import Path
 from app.service.access.query import AccessQuery
 from app.service.contest.package import ContestPackageService
 from app.service.contest.service import ContestService
-from app.service.contest.snapshot import ContestSourceSnapshotService
-from app.service.contest.statement import ContestStatementService
 from app.service.platform.worker_queue import WorkerQueueService
 from app.service.problem_package.service import (
     ProblemPackageService,
@@ -22,17 +20,13 @@ class ContestBuildService:
         contest_service: ContestService,
         access_query: AccessQuery,
         package_service: ProblemPackageService,
-        statement_service: ContestStatementService,
         contest_package_service: ContestPackageService,
-        snapshot_service: ContestSourceSnapshotService,
         worker_queue: WorkerQueueService,
     ) -> None:
         self._contest = contest_service
         self._access = access_query
         self._problem_packages = package_service
-        self._statements = statement_service
         self._contest_packages = contest_package_service
-        self._snapshots = snapshot_service
         self._workers = worker_queue
 
     @staticmethod
@@ -92,14 +86,11 @@ class ContestBuildService:
         contest_slug: str,
         actor_user_id: int,
         outputs: tuple[str, ...],
-        language: str = "",
-        insert_blank_pages: bool = False,
     ) -> tuple[str, bool, str]:
         access = self._access.contest_context(contest_id, actor_user_id)
         if not access["can_build"]:
             raise PermissionError(access["build_block_reason"])
         supported_outputs = {
-            "statement_pdf",
             "domjudge_bundle",
             "icpc_2025_09_bundle",
         }
@@ -110,7 +101,6 @@ class ContestBuildService:
         requested_outputs = tuple(
             output
             for output in (
-                "statement_pdf",
                 "domjudge_bundle",
                 "icpc_2025_09_bundle",
             )
@@ -118,19 +108,12 @@ class ContestBuildService:
         )
         if not requested_outputs:
             raise ValueError("select at least one contest build output")
-        job_language = (
-            self._statements.resolve_language(contest_id, language)
-            if "statement_pdf" in requested_outputs
-            else ""
-        )
         initial_summary: dict[str, object] = {
             "job_type": "build",
             "contest_slug": contest_slug,
             "requested_outputs": list(requested_outputs),
             "outputs": {},
         }
-        if job_language:
-            initial_summary["language"] = job_language
         frozen = self._contest.freeze_build_job(
             contest_id=contest_id,
             actor_user_id=actor_user_id,
@@ -152,8 +135,6 @@ class ContestBuildService:
                 contest_slug=contest_slug,
                 job_id=job_id,
                 requested_outputs=requested_outputs,
-                language=job_language,
-                insert_blank_pages=insert_blank_pages,
                 initial_summary=initial_summary,
             )
 
@@ -199,8 +180,6 @@ class ContestBuildService:
         contest_slug: str,
         job_id: str,
         requested_outputs: tuple[str, ...],
-        language: str,
-        insert_blank_pages: bool,
         initial_summary: dict[str, object],
     ) -> None:
         try:
@@ -212,25 +191,6 @@ class ContestBuildService:
                 finished=False,
             )
             items = self._contest.build_items(job_id)
-            if "statement_pdf" in requested_outputs:
-                source_folder_map = {
-                    int(entry["problem_id"]): str(entry["statement_folder"])
-                    for entry in items
-                    if entry["statement_folder"]
-                }
-                default_tex = self._statements.default_statements_tex(
-                    contest_id=contest_id,
-                    contest_slug=contest_slug,
-                    language=language,
-                    problem_entries=items,
-                    source_folder_map=source_folder_map,
-                )
-                self._snapshots.create(
-                    contest_slug=contest_slug,
-                    job_id=job_id,
-                    language=language,
-                    default_statements_tex=default_tex,
-                )
             output_results: dict[str, dict[str, object]] = {}
             try:
                 with ExitStack() as readers_stack:
@@ -245,28 +205,18 @@ class ContestBuildService:
                         )
                     for output in requested_outputs:
                         try:
-                            if output == "statement_pdf":
-                                output_results[output] = self._statements.build_pdf(
-                                    contest_id=contest_id,
-                                    contest_slug=contest_slug,
-                                    job_id=job_id,
-                                    language=language,
-                                    insert_blank_pages=insert_blank_pages,
-                                    readers=readers,
-                                )
-                            else:
-                                package_format = (
-                                    "domjudge"
-                                    if output == "domjudge_bundle"
-                                    else "icpc-2025-09"
-                                )
-                                output_results[output] = self._contest_packages.build_bundle(
-                                    contest_id=contest_id,
-                                    contest_slug=contest_slug,
-                                    job_id=job_id,
-                                    package_format=package_format,
-                                    readers=readers,
-                                )
+                            package_format = (
+                                "domjudge"
+                                if output == "domjudge_bundle"
+                                else "icpc-2025-09"
+                            )
+                            output_results[output] = self._contest_packages.build_bundle(
+                                contest_id=contest_id,
+                                contest_slug=contest_slug,
+                                job_id=job_id,
+                                package_format=package_format,
+                                readers=readers,
+                            )
                         except Exception as exc:
                             output_results[output] = {
                                 "error": str(exc),

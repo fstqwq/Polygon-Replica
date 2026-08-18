@@ -23,7 +23,7 @@ unavailable diagnostic payload.
 | Workspace root | mutable per-user Git workspaces | durable source until explicitly removed |
 | Contest source root | contest statement source and attachments outside problem Git | durable source |
 | `artifacts_root` | Native Package archives, cached external packages, and `contests/` build products | derived data; survives startup and is maintenance-cleanable |
-| Cache root | preview/verification payloads, temporary snapshots, runtime blobs, JudgeFS data, workdirs, queue history, and import drafts | disposable cache; startup-cleared and maintenance-cleanable |
+| Cache root | HTML/PDF Statement Preview payloads, verification payloads, temporary snapshots, runtime blobs, JudgeFS data, workdirs, queue history, and import drafts | disposable cache; startup-cleared and maintenance-cleanable |
 | Backup root | the single application source backup and operator-managed contest migration archives | permanent and never cleared by application cleanup |
 
 The six managed directory roots MUST be non-root directories, MUST NOT be
@@ -62,6 +62,13 @@ such a locator after startup cleanup, and reads report the payload unavailable.
 Verification program input, output, official answer, feedback, transcript, and
 logs are all cache even when their owning verification summary row remains.
 
+`statement_previews` records the request and terminal summary for disposable
+Problem HTML previews, Contest HTML reviews, and complete Contest PDF previews.
+Their files live only below the cache root. A Contest PDF preview is one full
+Contest TeX compilation; it is not a durable Contest artifact and is never
+assembled by merging per-Problem PDFs. Missing preview files are ordinary cache
+misses and never invalidate a Workspace, Native Package, or Contest.
+
 All verification cache refs are indexed by the currently named
 `verification_task_artifacts` table. The canonical structured task result owns
 the execution evidence shape, while the ownership index authorizes and locates
@@ -79,12 +86,13 @@ Before the worker queue starts, the application:
    opening every completed archive;
 2. in one durable recovery transaction, fails unfinished verifications and
    cancels all of their open tasks; startup stops if that transaction fails;
-3. cancels unfinished preview, contest-job, and Judgehost runtime work;
+3. invalidates all Statement Preview cache records, cancels other unfinished
+   preview, contest-job, and Judgehost runtime work;
 4. resets worker history in memory and removes its JSONL;
 5. clears the process-local runtime cache index;
 6. deletes every child of `cache_root` and recreates the empty root.
 
-Preview/verification cache payloads, runtime snapshots/blobs, JudgeFS data,
+Statement Preview/verification cache payloads, runtime snapshots/blobs, JudgeFS data,
 Judgehost workdirs, worker history, uploads, and import drafts do not survive
 startup. Durable terminal summary rows can survive after their cache payloads
 are cleared. Cache deletion failure aborts startup before workers begin.
@@ -94,7 +102,7 @@ are cleared. Cache deletion failure aborts startup before workers begin.
 Administrative cleanup closes both ordinary work admission and the Judgehost
 callback admission gate. It refuses to start while requests, callbacks, worker
 jobs, or queued/leased/reporting Judgehost work is active. It recreates
-the preview, Verification, Native Package materialization,
+the Statement Preview, legacy preview, Verification, Native Package materialization,
 external-package-cache, export-job, and Contest-build metadata tables;
 empties the entire `artifacts_root` and `cache_root`; resets process-local execution
 state; and vacuums SQLite. Recreating those explicitly registered cleanup-safe

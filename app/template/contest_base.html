@@ -63,6 +63,15 @@
             <h3>Contest</h3>
             <a class="workspace-side-link" href="{{ ctx.contest_access_href }}"{% if ctx.contest_access_active %} aria-current="page"{% endif %}>Manage access</a>
           </div>
+          {% for group in ctx.statement_review_link_groups %}
+          <div class="contest-review-link-group">
+            <strong>{{ group.label }}</strong>
+            {% for link in group.links %}
+            <a href="{{ link.href }}">{{ link.label }}</a>
+            <a href="{{ link.pdf_href }}">Preview PDF ({{ link.language.title() }})</a>
+            {% endfor %}
+          </div>
+          {% endfor %}
         </section>
       </aside>
     </div>

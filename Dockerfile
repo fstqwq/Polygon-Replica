@@ -34,6 +34,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         cm-super \
         util-linux \
         bubblewrap \
+        pandoc \
+        poppler-utils \
+        librsvg2-bin \
         libseccomp2 \
         tini \
     && mktexlsr >/dev/null \

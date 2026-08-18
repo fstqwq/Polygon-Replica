@@ -287,3 +287,10 @@
 .inline-meta-row > p {
   margin: 0;
 }
+.contest-review-link-group {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 0.7rem;
+  padding-top: 0.7rem;
+}

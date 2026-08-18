@@ -1,0 +1,34 @@
+{% extends "contest_base.html" %}
+{% block page_styles %}<link rel="stylesheet" href="{{ static_asset_url('css/statement_preview.css') }}" />{% endblock %}
+{% block content %}
+<div class="page-title-inline">
+  <h1 class="page-title">Statement Review</h1>
+  <a href="/contests/{{ ctx.contest.slug }}/packages">Back to Statements &amp; Builds</a>
+</div>
+<div class="page-title-inline">
+  <p class="muted">{{ language }} · {{ 'Workspace' if source == 'workspace' else 'Packages' }}</p>
+  {% if ctx.access.can_build %}
+  <form class="inline-action" method="post" action="/contests/{{ ctx.contest.slug }}/statements/review?source={{ source }}&language={{ language }}">
+    <button class="btn primary-action" type="submit">{{ 'Rebuild Review' if preview else 'Generate Review' }}</button>
+  </form>
+  {% endif %}
+</div>
+{% if preview and review_items %}
+<div class="statement-preview-document contest-statement-review">
+  {% for item in review_items %}
+  <article class="statement-content" aria-label="{{ item.idx }} — {{ item.problem_slug }} statement">
+    {% if item.status == 'ok' and item.fragment %}
+      {{ item.fragment | safe }}
+    {% else %}
+      <section class="statement-preview-failure">
+        <h2>{{ item.idx }} — {{ item.problem_slug }}</h2>
+        <p class="danger">{{ item.error or 'Statement preview failed.' }}</p>
+      </section>
+    {% endif %}
+  </article>
+  {% endfor %}
+</div>
+{% else %}
+<p class="muted">No statement review has been generated for this source and language.</p>
+{% endif %}
+{% endblock %}

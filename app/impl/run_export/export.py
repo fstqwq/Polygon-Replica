@@ -43,6 +43,7 @@ class PackageRevisionRow(TypedDict):
     revision_number: int
     current: bool
     package_download_href: str
+    statement_preview_links: list[dict[str, str]]
     external_packages: list[AvailablePackage]
 
 
@@ -118,6 +119,21 @@ def _revision_rows(
                     "native_package_file",
                     native_package_id=native_package["id"],
                 ),
+                "statement_preview_links": [
+                    {
+                        "language": language,
+                        "href": href(
+                            "problem_statement_html_page",
+                            query={
+                                "source": "native_package",
+                                "language": language,
+                            },
+                        ),
+                    }
+                    for language in runtime().problem_package_service.statement_languages(
+                        native_package["id"]
+                    )
+                ],
                 "external_packages": external_packages,
             }
         )

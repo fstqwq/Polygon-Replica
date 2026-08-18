@@ -8,3 +8,4 @@ vulture==2.16
 cryptography==50.0.0
 sortedcontainers==2.4.0
 PyYAML==6.0.3
+nh3==0.3.2

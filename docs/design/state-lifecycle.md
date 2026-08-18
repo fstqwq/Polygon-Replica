@@ -46,7 +46,7 @@ Persisted files belong to one of three classes:
 | --- | --- | --- | --- |
 | Workspace | A new problem, imported source, or an existing official version | Not fixed; its owner continues editing it | Durable until explicitly deleted |
 | Official problem version | A reviewed workspace published to the problem | Publish | Durable Git history |
-| Preview | One workspace and its statement/sample inputs | Preview request | Cache |
+| Statement Preview | A Workspace or Native Package statement render source plus requested language/output | Preview request | Cache; all entries are invalidated at startup/deploy |
 | Workspace verification | One workspace snapshot and selected verification targets | Verification admission and activation | Cleanup-safe database record; program input, output, answer, feedback, transcript, and logs are cache |
 | Native Package | One official problem version and a successful full verification of that exact source | Package Export verification phase | Derived; directly downloadable and reusable while its source snapshot and verified test data remain intact |
 | External package | One Native Package plus a target adapter; standalone DOMjudge exports also use the canonical problem slug | External-package adapter run | Derived; reusable for the same Native Package and format |
@@ -145,9 +145,8 @@ identity and archive checksum. Workers check both before and after reading it.
 A changed or corrupt payload fails the requested outputs instead of falling
 back to another revision.
 
-Statement PDF, DOMjudge bundle, and ICPC 2025-09 bundle are independent output
-choices. Statement compilation reads statement source, samples, and assets
-directly from the Native Package. Package bundles invoke the same adapters as
+DOMjudge bundle and ICPC 2025-09 bundle are independent output choices. Package
+bundles invoke the same adapters as
 single-problem export, with the frozen Contest index used as the DOMjudge short
 name. Child archives are temporary Contest-owned members and do not enter the
 problem external-package cache. Each bundle is all-or-nothing; successful

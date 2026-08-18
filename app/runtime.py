@@ -16,6 +16,7 @@ from app.service.contest.package import ContestPackageService
 from app.service.contest.snapshot import ContestSourceSnapshotService
 from app.service.contest.statement import ContestStatementService
 from app.service.contest.problem_query import ContestProblemQueryService
+from app.service.contest.statement_preview import ContestStatementPreviewService
 from app.service.platform.fs.layout import StorageLayout
 from app.service.verification.service import VerificationService
 from app.service.verification.completion import VerificationTaskCompletionService
@@ -41,6 +42,8 @@ from app.service.sandbox.base import SandboxBackend
 from app.service.sandbox.tex_backend import TexSandboxBackend
 from app.service.statement.tex_compile import TexCompileService
 from app.service.statement.preview import PreviewService
+from app.service.statement.html_render import StatementHtmlRenderer
+from app.service.statement.transient_preview import StatementPreviewService
 from app.service.statement.examples import StatementExamplesProducer
 from app.service.platform.system_config import SystemConfigService
 from app.service.mail.smtp_config import SmtpConfigService
@@ -49,6 +52,7 @@ from app.service.workspace.files import WorkspaceFileService
 from app.service.workspace.mutation import WorkspaceMutationService
 from app.service.disk.auth_store import AuthStore
 from app.service.disk.runtime_state_store import RuntimeStateStore
+from app.service.disk.statement_preview_store import StatementPreviewStore
 from app.service.runtime.state_service import RuntimeStateService
 from app.service.platform.worker_queue import WorkerFuture, WorkerQueueService
 from app.service.platform.maintenance.admission import MaintenanceAdmissionGate
@@ -106,6 +110,9 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
     verification_sanity_service: VerificationSanityService = field(init=False)
     verification_workflow: VerificationWorkflow = field(init=False)
     preview_service: PreviewService = field(init=False)
+    statement_html_renderer: StatementHtmlRenderer = field(init=False)
+    statement_preview_service: StatementPreviewService = field(init=False)
+    contest_statement_preview_service: ContestStatementPreviewService = field(init=False)
     judgehost_task_service: Judgehost = field(init=False)
     export_service: ExportService = field(init=False)
     problem_package_service: ProblemPackageService = field(init=False)
@@ -324,6 +331,20 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
             verification_id_allocator=self.verification_service.allocate_verification_id,
             statement_examples_producer=self.statement_examples_producer,
         )
+        self.statement_html_renderer = StatementHtmlRenderer(
+            self.tex_sandbox_backend,
+            self.config_values,
+        )
+        self.statement_preview_service = StatementPreviewService(
+            self.db,
+            self.storage_layout,
+            self.workspace_service,
+            self.problem_package_service,
+            self.statement_examples_producer,
+            self.verification_workflow,
+            self.statement_html_renderer,
+            self.tex_compile_service,
+        )
         self.native_package_workflow = NativePackageWorkflow(
             self.problem_package_service,
             self.verification_service,
@@ -363,7 +384,6 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
         self.contest_statement_service = ContestStatementService(
             self.contest_service,
             self.tex_compile_service,
-            self.config_values,
         )
         self.contest_package_service = ContestPackageService(
             self.contest_service,
@@ -372,14 +392,23 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
         self.contest_snapshot_service = ContestSourceSnapshotService(
             self.storage_layout,
         )
+        self.contest_statement_preview_service = ContestStatementPreviewService(
+            contest_service=self.contest_service,
+            access_query=self.access_query,
+            workspace_service=self.workspace_service,
+            package_service=self.problem_package_service,
+            problem_preview_service=self.statement_preview_service,
+            storage_layout=self.storage_layout,
+            preview_store=StatementPreviewStore(self.db),
+            statement_service=self.contest_statement_service,
+            snapshot_service=self.contest_snapshot_service,
+        )
 
         self.contest_build_service = ContestBuildService(
             contest_service=self.contest_service,
             access_query=self.access_query,
             package_service=self.problem_package_service,
-            statement_service=self.contest_statement_service,
             contest_package_service=self.contest_package_service,
-            snapshot_service=self.contest_snapshot_service,
             worker_queue=self.worker_queue_service,
         )
         cleanup_database = ArtifactCleanupDatabase(

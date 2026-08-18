@@ -643,7 +643,7 @@ TOOLCHAIN_DEFINITIONS = (
     ),
     _int(
         "PREVIEW_TEX_PROCESS_LIMIT",
-        64,
+        256,
         "UI",
         "TeX compile process limit.",
         _bounds(1, 4096),
@@ -654,6 +654,34 @@ TOOLCHAIN_DEFINITIONS = (
         "UI",
         "TeX compile output cap in KB.",
         _bounds(64, 1048576),
+    ),
+    _int(
+        "PREVIEW_HTML_TIMEOUT_SEC",
+        30,
+        "UI",
+        "Pandoc statement conversion timeout in seconds.",
+        _bounds(5, 300),
+    ),
+    _int(
+        "PREVIEW_HTML_MEMORY_MB",
+        512,
+        "UI",
+        "Pandoc statement conversion memory limit in MB.",
+        _bounds(64, 8192),
+    ),
+    _int(
+        "PREVIEW_HTML_PROCESS_LIMIT",
+        256,
+        "UI",
+        "Pandoc statement conversion process limit.",
+        _bounds(1, 256),
+    ),
+    _int(
+        "PREVIEW_HTML_OUTPUT_KB",
+        65536,
+        "UI",
+        "Pandoc statement conversion output cap in KB.",
+        _bounds(64, 262144),
     ),
 )
 

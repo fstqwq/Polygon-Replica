@@ -352,12 +352,19 @@ Selection is not restricted to current `main`: readiness reports `current`,
 It never starts Verification, calls Package Export, repairs an unavailable
 Native Package, or falls back to an older package within the job.
 
-One build can request `statement_pdf`, `domjudge_bundle`, and
-`icpc_2025_09_bundle`. Readers are shared across requested outputs. Statement
-PDF reads statement source, verified samples, and assets directly. Package
-bundles call the same adapters described above and place temporary child ZIPs
-inside a Contest-owned outer bundle. Child packages do not become problem-level
-external-package cache entries.
+One build can request `domjudge_bundle` and `icpc_2025_09_bundle`. Readers are
+shared across requested outputs. Package bundles call the same adapters
+described above and place temporary child ZIPs inside a Contest-owned outer
+bundle. Child packages do not become problem-level external-package cache
+entries.
+
+Contest statement PDF is not a Contest build output. It uses the complete
+Contest TeX pipeline -- the Contest `statements.tex`, cover and ordering,
+optional blank-page behavior, all Problem render trees, MetaPost, bounding-box
+preparation, and two XeLaTeX passes -- but publishes the resulting single PDF
+only in the disposable Statement Preview cache. It does not compile individual
+Problem PDFs and does not merge PDFs. Historical durable `statement_pdf`
+artifacts remain downloadable, but new builds never create one.
 
 Each package bundle is all-or-nothing: failure of one problem publishes no
 bundle of that format. Different requested outputs remain independent, so the

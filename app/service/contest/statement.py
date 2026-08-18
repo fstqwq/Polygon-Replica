@@ -4,23 +4,11 @@ import shutil
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from app.config import ConfigValues
-from app.main_util import problem_slug_leaf
 from app.service.contest.naming import problem_source_folder
-from app.service.contest.model import ContestBuildItemRecord
-from app.service.contest.service import ContestService
-from app.service.problem.runtime_config import problem_config_limits
-from app.service.problem_package.service import NativePackageReader
-from app.service.problem_package.statement_samples import (
-    hydrate_native_package_statement_samples,
-)
+from app.service.contest.service import ContestProblem, ContestService
 from app.service.sandbox.base import ExecResult
 from app.service.statement.constant import DEFAULT_OLYMP_STY
 from app.service.statement.context import normalize_statement_language
-from app.service.statement.render import (
-    render_statement_problem_assets_for_language,
-    statement_title_from_snapshot,
-)
 from app.service.statement.tex_compile import TexCompileService
 
 
@@ -59,17 +47,15 @@ _COLOR_DEFINITION_LINE_RE = re.compile(
 
 
 class ContestStatementService:
-    """Build Contest PDFs from frozen Native Packages and durable sources."""
+    """Compile complete Contest documents into caller-owned output roots."""
 
     def __init__(
         self,
         contest_service: ContestService,
         tex_compile_service: TexCompileService,
-        config_values: ConfigValues,
     ) -> None:
         self._contest = contest_service
         self._tex = tex_compile_service
-        self._config = config_values
 
     def languages(self, contest_id: int) -> list[str]:
         languages: list[str] = []
@@ -382,7 +368,7 @@ class ContestStatementService:
         log_path: Path,
         *,
         title: str,
-        extra_mounts: tuple[Path, ...],
+        writable_mounts: tuple[Path, ...],
         env: dict[str, str],
     ) -> ExecResult:
         merged_env = dict(os.environ)
@@ -390,7 +376,7 @@ class ContestStatementService:
         result = self._tex.run(
             command=command,
             cwd=cwd,
-            extra_mounts=extra_mounts,
+            writable_mounts=writable_mounts,
             env=merged_env,
         )
         self._append_log(log_path, title=title, result=result)
@@ -418,7 +404,7 @@ class ContestStatementService:
                 file_path.parent,
                 log_path,
                 title=f"extractbb {relative_name}",
-                extra_mounts=mounts,
+                writable_mounts=mounts,
                 env=env,
             )
             if result.timed_out:
@@ -482,64 +468,6 @@ class ContestStatementService:
         self._ensure_cjk_support(statements_tex)
         return statements_root
 
-    def _prepare_problem(
-        self,
-        *,
-        compile_root: Path,
-        entry: ContestBuildItemRecord,
-        source_folder: str,
-        language: str,
-        reader: NativePackageReader,
-    ) -> dict[str, object]:
-        problem_slug = str(entry["problem_slug"])
-        item: dict[str, object] = {
-            "idx": str(entry["idx"]),
-            "problem_id": int(entry["problem_id"]),
-            "problem_slug": problem_slug,
-            "source_folder": source_folder,
-            "status": "failed",
-            "source_commit": reader.manifest["source_commit"],
-            "error": "",
-        }
-        if not source_folder:
-            item["error"] = f"contest source folder missing for {problem_slug}"
-            return item
-        try:
-            hydrate_native_package_statement_samples(
-                reader,
-                tests_spec_max_bytes=self._config.integer("TEXTAREA_MAX_BYTES"),
-                statement_sample_max_bytes=self._config.integer(
-                    "STATEMENT_SAMPLE_MAX_BYTES"
-                ),
-            )
-            target = self._compile_target(
-                compile_root,
-                Path("problems") / source_folder / "statements" / language,
-            )
-            render_statement_problem_assets_for_language(
-                reader.root,
-                language,
-                target,
-                problem_title=statement_title_from_snapshot(
-                    reader.root,
-                    fallback_title=problem_slug_leaf(problem_slug),
-                    language=language,
-                ),
-                tests_spec_max_bytes=self._config.integer("TEXTAREA_MAX_BYTES"),
-                statement_sample_max_bytes=self._config.integer(
-                    "STATEMENT_SAMPLE_MAX_BYTES"
-                ),
-                problem_limits=problem_config_limits(self._config),
-            )
-            item["preamble_lines"] = self._extract_color_definitions(
-                reader.root / "statement" / "olymp.sty"
-            )
-            item["native_package_id"] = str(entry["materialization_id"])
-            item["status"] = "success"
-        except Exception as exc:  # Each problem is represented in the build report.
-            item["error"] = str(exc)
-        return item
-
     @staticmethod
     def _latex_wrapper(statements_root: Path) -> Path:
         wrapper = (statements_root / _LATEX_WRAPPER_NAME).resolve()
@@ -553,31 +481,32 @@ class ContestStatementService:
         )
         return wrapper
 
-    def build_pdf(
+    def build_preview_pdf(
         self,
         *,
-        contest_id: int,
         contest_slug: str,
-        job_id: str,
         language: str,
         insert_blank_pages: bool,
-        readers: dict[str, NativePackageReader],
+        source_snapshot: Path,
+        problem_entries: Sequence[ContestProblem],
+        render_roots: Mapping[int, Path],
+        output_root: Path,
     ) -> dict[str, object]:
-        job_root = self._contest.job_root(contest_slug, job_id)
-        compile_root = (job_root / "contest-pdf-src").resolve()
+        """Compile one complete Contest document into a Preview-owned root."""
+
+        compile_root = (output_root / "contest-pdf-src").resolve()
         shutil.rmtree(compile_root, ignore_errors=True)
         compile_root.mkdir(parents=True, exist_ok=True)
         mounts = (compile_root,)
         env = self._tex_env(compile_root)
-        log_path = job_root / "logs" / "contest-pdf.log"
-        entries = self._contest.build_items(job_id)
+        log_path = output_root / "logs" / "contest-pdf.log"
         source_folders = {
-            int(entry["problem_id"]): str(entry["statement_folder"])
-            for entry in entries
-            if entry["statement_folder"]
+            int(entry["problem_id"]): str(entry.get("statement_folder") or "")
+            for entry in problem_entries
+            if entry.get("statement_folder")
         }
         statements_root = self._copy_language_tree(
-            source_snapshot=job_root / "contest-sources",
+            source_snapshot=source_snapshot,
             language=language,
             compile_root=compile_root,
         )
@@ -589,19 +518,44 @@ class ContestStatementService:
                     _BLANK_PAGES_ENABLED.encode("ascii"),
                 )
             )
-        results = [
-            self._prepare_problem(
-                compile_root=compile_root,
-                entry=entry,
-                source_folder=problem_source_folder(entry, source_folders),
-                language=language,
-                reader=readers[str(entry["materialization_id"])],
-            )
-            for entry in entries
-        ]
+        results: list[dict[str, object]] = []
+        for entry in problem_entries:
+            problem_id = int(entry["problem_id"])
+            problem_slug = str(entry["problem_slug"])
+            source_folder = problem_source_folder(entry, source_folders)
+            item: dict[str, object] = {
+                "idx": str(entry.get("idx") or ""),
+                "problem_id": problem_id,
+                "problem_slug": problem_slug,
+                "source_folder": source_folder,
+                "status": "failed",
+                "error": "",
+            }
+            source_root = render_roots.get(problem_id)
+            if not source_folder:
+                item["error"] = f"contest source folder missing for {problem_slug}"
+            elif source_root is None:
+                item["error"] = f"statement render tree missing for {problem_slug}"
+            else:
+                try:
+                    target = self._compile_target(
+                        compile_root,
+                        Path("problems")
+                        / source_folder
+                        / "statements"
+                        / language,
+                    )
+                    shutil.copytree(source_root, target)
+                    item["preamble_lines"] = self._extract_color_definitions(
+                        source_root / "olymp.sty"
+                    )
+                    item["status"] = "success"
+                except Exception as exc:
+                    item["error"] = str(exc)
+            results.append(item)
         failed = [row for row in results if row["status"] != "success"]
         summary: dict[str, object] = {
-            "job_type": "pdf",
+            "job_type": "preview-pdf",
             "contest_slug": contest_slug,
             "language": language,
             "results": results,
@@ -634,7 +588,7 @@ class ContestStatementService:
                     problem_root,
                     log_path,
                     title=f"{row['problem_slug']} :: mpost {mp_file.name}",
-                    extra_mounts=mounts,
+                    writable_mounts=mounts,
                     env=env,
                 )
                 if result.timed_out or int(result.returncode or 0) != 0:
@@ -666,7 +620,7 @@ class ContestStatementService:
                 statements_root,
                 log_path,
                 title=title,
-                extra_mounts=mounts,
+                writable_mounts=mounts,
                 env=env,
             )
             output = "\n".join(
@@ -688,17 +642,14 @@ class ContestStatementService:
         if generated_pdf.is_symlink() or not generated_pdf.is_file():
             summary["error"] = "contest pdf missing after compile"
             return summary
-        pdf_dir = job_root / "contest-pdf"
-        pdf_dir.mkdir(parents=True, exist_ok=True)
-        target_pdf = (pdf_dir / "statements.pdf").resolve()
+        target_pdf = output_root / "pdf" / "statement.pdf"
+        target_pdf.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(generated_pdf, target_pdf)
         summary.update(
             {
-                "artifact_id": "",
+                "pdf": "pdf/statement.pdf",
                 "filename": f"{contest_slug}-{language}-statements.pdf",
-                "_artifact_path": str(target_pdf),
-                "_artifact_type": "contest-pdf",
-                "_artifact_filename": f"{contest_slug}-{language}-statements.pdf",
+                "log": "logs/contest-pdf.log",
             }
         )
         return summary

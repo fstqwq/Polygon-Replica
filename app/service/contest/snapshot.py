@@ -6,21 +6,20 @@ from app.service.platform.fs.layout import StorageLayout
 
 
 class ContestSourceSnapshotService:
-    """Freeze durable Contest sources into one build-owned directory."""
+    """Copy canonical Contest sources into a caller-owned derived tree."""
 
     def __init__(self, storage_layout: StorageLayout) -> None:
         self._storage = storage_layout
 
-    def create(
+    def copy_to(
         self,
         *,
         contest_slug: str,
-        job_id: str,
+        target: Path,
         language: str,
         default_statements_tex: str,
     ) -> Path:
         source = self._storage.contest_source(contest_slug)
-        target = self._storage.contest_job(contest_slug, job_id) / "contest-sources"
         shutil.rmtree(target, ignore_errors=True)
         target.mkdir(parents=True, exist_ok=True)
         for dirpath, dirnames, filenames in os.walk(

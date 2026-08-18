@@ -46,14 +46,16 @@ class TexCompileService:
         *,
         command: list[str],
         cwd: Path,
-        extra_mounts: tuple[Path, ...] = (),
+        read_only_mounts: tuple[Path, ...] = (),
+        writable_mounts: tuple[Path, ...] = (),
         env: dict[str, str] | None = None,
     ) -> ExecResult:
         return self._run_with_policy(
             self._policy(),
             command=command,
             cwd=cwd,
-            extra_mounts=extra_mounts,
+            read_only_mounts=read_only_mounts,
+            writable_mounts=writable_mounts,
             env=env,
         )
 
@@ -63,14 +65,16 @@ class TexCompileService:
         *,
         command: list[str],
         cwd: Path,
-        extra_mounts: tuple[Path, ...] = (),
+        read_only_mounts: tuple[Path, ...] = (),
+        writable_mounts: tuple[Path, ...] = (),
         env: dict[str, str] | None = None,
     ) -> ExecResult:
         return self.sandbox.run(
             ExecSpec(
                 command=command,
                 cwd=cwd,
-                extra_mounts=extra_mounts,
+                read_only_mounts=read_only_mounts,
+                writable_mounts=writable_mounts,
                 env=env,
                 timeout_sec=policy.timeout_sec,
                 output_kb=policy.output_kb,

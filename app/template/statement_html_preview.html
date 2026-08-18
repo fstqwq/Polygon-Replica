@@ -1,0 +1,27 @@
+{% extends "root_base.html" %}
+{% block root_title %}{{ problem.slug }} Statement Preview - {{ ui_browser_title }}{% endblock %}
+{% block page_styles %}<link rel="stylesheet" href="{{ static_asset_url('css/statement_preview.css') }}" />{% endblock %}
+{% block content %}
+<div class="page-title-inline">
+  <h1 class="page-title">Statement Preview</h1>
+  <a href="/problems/{{ problem.slug }}/statement?language={{ language }}">Back to Statements</a>
+</div>
+<div class="page-title-inline">
+  <p class="muted"><code>{{ problem.slug }}</code> · {{ language }} · {{ 'Workspace' if source == 'workspace' else 'Native Package' }}</p>
+  {% if can_build %}
+  <form class="inline-action" method="post" action="/problems/{{ problem.slug }}/statement/html?source={{ source }}&language={{ language }}">
+    <button class="btn primary-action" type="submit">{{ 'Rebuild HTML' if preview else 'Generate HTML' }}</button>
+  </form>
+  {% endif %}
+</div>
+{% if preview and preview.status == 'failed' %}
+<p class="flash">{{ preview.summary.error or 'Statement HTML generation failed.' }}</p>
+{% elif preview and preview.status == 'ok' and statement_fragment %}
+  {% for warning in preview.summary.warnings or [] %}<p class="flash warning statement-preview-warning">{{ warning }}</p>{% endfor %}
+  <div class="statement-preview-document">
+    <article class="statement-content" aria-label="{{ problem.slug }} statement">{{ statement_fragment | safe }}</article>
+  </div>
+{% else %}
+<p class="muted">No HTML preview has been generated for this source and language.</p>
+{% endif %}
+{% endblock %}

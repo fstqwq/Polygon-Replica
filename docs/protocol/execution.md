@@ -2,7 +2,11 @@
 
 ## Job model
 
-Preview compilation is synchronous in the HTTP request. Verification, custom
+Preview compilation is synchronous in the HTTP request. Contest HTML Review
+uses a bounded worker pool but the POST remains blocked until every Problem has
+reached a terminal result; it does not poll fragments or embed iframes. Contest
+PDF Preview runs the full, single-document Contest TeX pipeline in that request
+and writes only to Preview cache. Verification, custom
 run, export, and contest build jobs are submitted to one bounded process-local
 worker queue. Queue records and `worker-queue-events.jsonl` are runtime
 diagnostics; they are cleared at startup and do not recover work after restart.

@@ -54,7 +54,7 @@ from app.service.problem_package.store import (
     ProblemPackageStore,
     PublishedProblem,
 )
-from app.service.statement.context import statement_languages
+from app.service.statement.context import normalize_statement_language, statement_languages
 from app.service.statement.examples import StatementExamplesProducer
 from app.service.statement.render import render_statement_offline_tree
 from app.service.verification.result_match import run_verdict_short
@@ -426,6 +426,32 @@ class ProblemPackageService:
         if root not in path.parents:
             raise ValueError("Native Package archive path escapes artifacts root")
         return path
+
+    def statement_languages(self, native_package_id: str) -> list[str]:
+        """List rendered statement languages without validating or mutating a Package."""
+        row = self.store.materialization(native_package_id)
+        if row is None or row["status"] != "available":
+            return []
+        try:
+            archive = self._archive_path(row)
+            with zipfile.ZipFile(archive, "r") as package:
+                names = set(package.namelist())
+        except (OSError, ValueError, zipfile.BadZipFile):
+            return []
+        prefix = f"{STATEMENT_BUILD_DIR}/"
+        suffix = "/problem.tex"
+        languages: set[str] = set()
+        for name in names:
+            if not name.startswith(prefix) or not name.endswith(suffix):
+                continue
+            middle = name[len(prefix) : -len(suffix)]
+            if "/" in middle or not middle:
+                continue
+            try:
+                languages.add(normalize_statement_language(middle))
+            except ValueError:
+                continue
+        return sorted(language for language in languages if language)
 
     def _remove_artifact_file(self, rel_path: str) -> str:
         try:

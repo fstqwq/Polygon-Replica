@@ -106,8 +106,8 @@ remains the only removal rule. Their table has no write path to any decision
 column. This separation makes a late diagnostic incapable of reopening
 execution even when it arrives concurrently with completion or cancellation.
 
-Preview, Package Export, Native Package build, and Contest-job rows survive
-normal restarts. Unfinished rows are moved to `failed` because their
+Legacy Preview, Package Export, Native Package build, and Contest-job rows
+survive normal restarts. Unfinished rows are moved to `failed` because their
 process-local work cannot resume. Startup does not open and validate every
 completed Native Package archive; integrity is checked when a consumer opens
 one. Administrative generated-data cleanup removes the
@@ -125,6 +125,14 @@ materialization reference and a null `export_id`; it does not add a second
 archive. Direct Native Package downloads create no job or `exports`
 row. Contest child packages are Contest-owned temporary bundle members and do
 not enter `exports` or `export_jobs`.
+
+`statement_previews` stores only user-scoped, disposable Problem/Contest HTML and PDF
+Preview request metadata and terminal summaries. The payloads live below the
+cache root. Startup/deploy invalidates every row and clears every payload,
+including previously successful results; no Pandoc, Poppler, TeX, Lua-filter,
+renderer, executable, container, or toolchain version/hash is part of the
+Preview input identity. A renderer/toolchain deployment therefore requires the
+same global cache invalidation rather than an identity-format change.
 
 Contest roster rows persist `idx`, not a separate position. The application
 sorts the complete bounded roster by its shared natural problem-index ordering;

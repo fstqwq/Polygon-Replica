@@ -51,6 +51,12 @@ def _startup_reset_runtime_state(runtime: ApplicationRuntime) -> None:
     failure_reason = "interrupted by application restart"
     _startup_fail_summary_rows(runtime, "previews", failure_reason, now_text=now_text)
     _startup_fail_summary_rows(
+        runtime,
+        "statement_previews",
+        "statement preview cache cleared by application restart",
+        now_text=now_text,
+    )
+    _startup_fail_summary_rows(
         runtime, "contest_jobs", failure_reason, now_text=now_text
     )
     runtime.verification_service.recover_startup(reason=failure_reason)

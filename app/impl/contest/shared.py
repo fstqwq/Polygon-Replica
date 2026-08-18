@@ -1,4 +1,5 @@
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import HTTPException, Request
 
@@ -78,6 +79,7 @@ def _contest_ctx(
         "contest_nav": _contest_nav(str(contest_row["slug"]), active_page),
         "contest_access_href": f"/contests/{contest_row['slug']}/access",
         "contest_access_active": active_page == "access",
+        "statement_review_link_groups": [],
     }
     if request is not None:
         context["contest_workspace"] = contest_workspace_context_for_contest_page(
@@ -87,6 +89,32 @@ def _contest_ctx(
             contest_title=str(contest_row["title"]),
             user_id=int(gctx["user"]["id"]),
         )
+        link_groups = runtime().contest_statement_preview_service.link_groups(
+            int(contest_row["id"]),
+            user_id=int(gctx["user"]["id"]),
+            username=user,
+        )
+        context["statement_review_link_groups"] = [
+            {
+                **group,
+                "links": [
+                    {
+                        "label": f"Review Statements ({language.title()})",
+                        "language": language,
+                        "href": (
+                            f"/contests/{contest_row['slug']}/statements/review"
+                            f"?source={group['source']}&language={quote(language)}"
+                        ),
+                        "pdf_href": (
+                            f"/contests/{contest_row['slug']}/statements/pdf"
+                            f"?source={group['source']}&language={quote(language)}"
+                        ),
+                    }
+                    for language in group["languages"]
+                ],
+            }
+            for group in link_groups
+        ]
     return context
 
 

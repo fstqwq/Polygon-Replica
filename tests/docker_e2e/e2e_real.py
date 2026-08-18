@@ -24,7 +24,6 @@ from e2e_real_contest import (
     CONTEST,
     assert_contest_pdf,
     start_contest_pdf,
-    wait_for_contest_job,
 )
 from e2e_real_roles import exercise_role_pages_and_collaboration
 from runner import (
@@ -2184,19 +2183,17 @@ def verify_deployment() -> None:
         job_id, domjudge_archive = _agent_export("domjudge")
         icpc_job_id, icpc_archive = _agent_export("icpc-2025-09")
 
-        contest_job_id = start_contest_pdf(
+        contest_preview_id = start_contest_pdf(
             client,
             post_redirect=_post,
             problem=PROBLEM,
         )
-        contest_job = wait_for_contest_job(client, contest_job_id)
         with _connect() as connection:
-            artifact_id, materialization_verification_id = assert_contest_pdf(
+            materialization_verification_id = assert_contest_pdf(
                 client,
                 connection,
                 problem=PROBLEM,
-                job_id=contest_job_id,
-                job=contest_job,
+                preview_id=contest_preview_id,
                 expected_head=head,
                 expected_solution_verdicts=AGENT_SOLUTION_VERDICTS,
             )
@@ -2217,7 +2214,7 @@ def verify_deployment() -> None:
         )
     print(
         "e2e-real completed deployment, sample preview, verification, commit, "
-        "DOMjudge/ICPC 2025-09 exports, and contest PDF export "
+        "DOMjudge/ICPC 2025-09 exports, and Contest PDF Preview "
         f"variant={variant} "
         f"sample_verification={sample_verification_id} "
         f"generation_failure={generation_failure_id} "
@@ -2227,7 +2224,7 @@ def verify_deployment() -> None:
         f"domjudge_job={job_id} domjudge_archive={domjudge_archive} "
         f"icpc_job={icpc_job_id} icpc_archive={icpc_archive} "
         f"materialization_verification={materialization_verification_id} "
-        f"contest_job={contest_job_id} artifact={artifact_id} "
+        f"contest_preview={contest_preview_id} "
         f"collaboration_head={collaboration_head}"
     )
 

@@ -19,13 +19,9 @@
   >
     <div class="contest-build-grid">
       <article class="contest-build-card">
-        <h3>Outputs</h3>
+        <h3>Package outputs</h3>
         <label>
-          <input type="checkbox" name="outputs" value="statement_pdf" checked />
-          Contest statement PDF
-        </label>
-        <label>
-          <input type="checkbox" name="outputs" value="domjudge_bundle" />
+          <input type="checkbox" name="outputs" value="domjudge_bundle" checked />
           DOMjudge package bundle
         </label>
         <label>
@@ -36,24 +32,6 @@
           Package outputs use the latest available Package for every problem.
           They do not run Verification.
         </p>
-      </article>
-      <article class="contest-build-card">
-        <h3>PDF options</h3>
-        <p class="muted">
-          These settings apply only when the statement PDF is selected.
-        </p>
-        <label for="contest-pdf-language">Language</label>
-        <select id="contest-pdf-language" name="language">
-          {% for language in contest_statement_language_options %}
-          <option value="{{ language }}" {% if language == contest_statement_language %}selected{% endif %}>
-            {{ language }}
-          </option>
-          {% endfor %}
-        </select>
-        <label>
-          <input type="checkbox" name="insert_blank_pages" value="true" />
-          Insert blank pages after odd statements
-        </label>
       </article>
     </div>
     <button class="btn primary-action" type="submit">Start Build</button>

@@ -24,9 +24,11 @@ operators therefore control image pinning and upgrades outside the application.
 system dependencies, configures user namespaces, creates storage roots, probes
 bubblewrap and TeX as the runtime account, creates `.venv`, writes the bootstrap
 environment file, and installs the systemd unit. Required TeX initialization is
-fail-closed. TeX Gyre and Noto CJK fonts used by the canonical statement template
-are explicit installer dependencies, and the XeLaTeX probe resolves both font
-families as the runtime account. The environment file is atomically replaced as
+fail-closed. Pandoc, Poppler and librsvg provide the best-effort HTML Statement
+Preview conversion and controlled image conversion. TeX Gyre and Noto CJK fonts
+used by the canonical statement template are explicit installer dependencies,
+and the XeLaTeX probe resolves both font families as the runtime account. The
+environment file is atomically replaced as
 `root:root` mode `0600`; installer-managed paths are refreshed while other valid
 assignments are preserved as systemd `NAME=VALUE` records without executing the
 file. Input assignments may use an optional shell `export` prefix; output uses
@@ -55,7 +57,8 @@ or named index is missing, runtime startup is skipped and HTTP serves a raw
 SQLite offline, and restart. The application never upgrades an existing
 database automatically. Extra schema objects and rows are tolerated.
 
-After schema admission, startup initializes metadata, marks interrupted
+After schema admission, startup initializes metadata, invalidates every
+Statement Preview cache record, marks interrupted
 package/export work failed,
 applies durable configuration, and atomically terminalizes unfinished
 verification parents and tasks before deleting their runtime blobs. A failed
@@ -80,6 +83,8 @@ container; this is part of its current deployment security boundary. The image
 uses the regular GIL-enabled CPython 3.14 image and installs the same TeX Gyre
 and Noto CJK template fonts explicitly. Required TeX
 database, format, and font-map initialization failures stop the image build.
+The image also installs Pandoc, Poppler and librsvg; HTML conversion does not
+use an external MathJax CDN.
 `tests/docker_e2e/docker-compose.e2e.yml` is test infrastructure, not a production retention
 model.
 

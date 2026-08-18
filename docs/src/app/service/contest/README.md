@@ -21,11 +21,9 @@ A missing Native Package returns `not_ready` without a job, source snapshot,
 or Verification. Contest workers never prepare or repair a Native Package,
 call `ExportService`, or create problem-level export rows.
 
-A job may request statement PDF, DOMjudge bundle, and ICPC 2025-09 bundle. Its
+A job may request DOMjudge bundle and ICPC 2025-09 bundle. Its
 `NativePackageReader` instances are opened once and shared across selected
-outputs.
-Statement assembly reads source, assets, and samples directly from those
-readers. Package bundles invoke the common adapter for every problem; the
+outputs. Package bundles invoke the common adapter for every problem; the
 DOMjudge adapter receives the frozen roster index as its short name. Temporary
 child ZIPs exist only inside the Contest job and never enter the problem
 external-package cache.
@@ -36,3 +34,9 @@ Generated-data cleanup may remove jobs and products without deleting Contest
 metadata, membership, roster, or authored source. The exact lifecycle is owned
 by the [package protocol](../../../../protocol/package.md) and storage by the
 [storage protocol](../../../../protocol/storage.md).
+
+`ContestStatementPreviewService` owns blocking HTML Review orchestration and
+transient PDF Preview orchestration. PDF Preview reuses the complete Contest TeX
+compiler to produce one document; it is not a Contest job or artifact. The
+[Statement Preview protocol](../../../../protocol/statement-preview.md) owns
+that cache lifecycle.

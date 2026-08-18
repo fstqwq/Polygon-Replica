@@ -11,7 +11,7 @@ from app.service.sandbox.tex_backend import TexSandboxBackend
 
 @unittest.skipUnless(shutil.which("bwrap") and shutil.which("pdflatex"), "bwrap and pdflatex are required")
 class TestTexSandbox(unittest.TestCase):
-    def test_preexec_for_spec_does_not_set_nproc_limit(self) -> None:
+    def test_preexec_for_spec_applies_all_requested_limits(self) -> None:
         backend = object.__new__(TexSandboxBackend)
         spec = ExecSpec(
             command=["true"],
@@ -32,6 +32,7 @@ class TestTexSandbox(unittest.TestCase):
                 call(resource.RLIMIT_CORE, (0, 0)),
                 call(resource.RLIMIT_CPU, (20, 21)),
                 call(resource.RLIMIT_AS, (1024 * 1024 * 1024, 1024 * 1024 * 1024)),
+                call(resource.RLIMIT_NPROC, (64, 64)),
                 call(resource.RLIMIT_FSIZE, (131072 * 1024, 131072 * 1024)),
             ],
         )
@@ -139,7 +140,7 @@ class TestTexSandbox(unittest.TestCase):
                 ExecSpec(
                     command=["pdflatex", "-interaction=nonstopmode", "-halt-on-error", "main.tex"],
                     cwd=workdir,
-                    extra_mounts=(root,),
+                    writable_mounts=(root,),
                     timeout_sec=20,
                     memory_mb=1024,
                     process_limit=64,

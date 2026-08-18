@@ -1,7 +1,8 @@
 # `app/service/statement`
 
 Owns statement language discovery, section and template interpretation, source
-signatures, FreeMarker-subset rendering, TeX compilation, and preview records.
+signatures, FreeMarker-subset rendering, TeX compilation, sandboxed Pandoc HTML
+conversion, and Preview records.
 It consumes workspace statement source, problem limits, and testcase sample
 metadata; it produces regenerated TeX trees, PDFs/logs, and preview read models.
 The canonical template selects XeLaTeX and uses TeX Gyre Latin fonts plus Noto
@@ -35,6 +36,13 @@ resolver, override priority, and strict failure rules. Authored `sample_json`
 may define multi-pass pairs or interaction events inline; the producer converts
 those strings into render resources without writing derived paths back to
 `tests/spec.json`.
+
+`StatementPreviewService` prepares the same render tree from either a Workspace
+or a Native Package. `StatementHtmlRenderer` lets Pandoc consume the rendered
+`problem.tex` and its `\input{examples.tex}`, applies the registered Polygon Lua
+filter, rewrites bounded local images, emits MathML, and sanitizes the fragment.
+The complete Preview contract is owned by the
+[Statement Preview protocol](../../../../protocol/statement-preview.md).
 
 The source layout is owned by the
 [problem-source protocol](../../../../protocol/problem-source.md).

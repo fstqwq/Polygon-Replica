@@ -19,6 +19,7 @@ implementation structure, testing, and deployment.
 - [Storage roots and cleanup](protocol/storage.md)
 - [SQLite persistence](protocol/persistence.md)
 - [Package import and export](protocol/package.md)
+- [Statement Preview](protocol/statement-preview.md)
 
 ## Implementation and operations
 

@@ -108,6 +108,26 @@ class TestContestBuilds(ContestActionBase):
             [],
         )
 
+    def test_statement_pdf_is_not_a_durable_contest_build_output(self) -> None:
+        contest_slug, contest_id, _problem_id, _problem_slug = self._contest_with_problem()
+
+        with self.assertRaises(HTTPException) as raised:
+            contest_packages_build_start(
+                contest=contest_slug,
+                user="alice",
+                outputs=["statement_pdf"],
+            )
+
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertEqual(
+            str(raised.exception.detail),
+            "unsupported contest build output: statement_pdf",
+        )
+        self.assertEqual(
+            db_fetch_all("SELECT id FROM contest_jobs WHERE contest_id=?", [contest_id]),
+            [],
+        )
+
     def test_freeze_selects_latest_available_revision_and_ignores_newer_unavailable(
         self,
     ) -> None:
@@ -281,20 +301,6 @@ class TestContestBuilds(ContestActionBase):
                 "_artifact_filename": filename,
             }
 
-        def build_pdf(
-            *,
-            contest_slug: str,
-            job_id: str,
-            **_kwargs: object,
-        ) -> dict[str, object]:
-            return staged_output(
-                contest_slug=contest_slug,
-                job_id=job_id,
-                token="pdf",
-                artifact_type="contest-pdf",
-                filename="revision-build-english-statements.pdf",
-            )
-
         def build_bundle(
             *,
             package_format: str,
@@ -317,12 +323,6 @@ class TestContestBuilds(ContestActionBase):
         with (
             patch.object(runtime.worker_queue_service, "submit", side_effect=submit),
             patch.object(runtime.problem_package_service, "open_reader", side_effect=open_reader),
-            patch.object(runtime.contest_snapshot_service, "create") as snapshot,
-            patch.object(
-                runtime.contest_statement_service,
-                "build_pdf",
-                side_effect=build_pdf,
-            ) as build_pdf,
             patch.object(
                 runtime.contest_package_service,
                 "build_bundle",
@@ -333,28 +333,23 @@ class TestContestBuilds(ContestActionBase):
                 contest=contest_slug,
                 user="alice",
                 outputs=[
-                    "statement_pdf",
                     "domjudge_bundle",
                     "icpc_2025_09_bundle",
                 ],
-                language="english",
             )
 
         self.assertEqual(response.status_code, 303)
         job_id = parse_qs(urlparse(str(response.headers["location"])).query)["job_id"][0]
         self.assertEqual(opened[0][0], materialization_id)
         self.assertEqual(len(opened), 1)
-        snapshot.assert_called_once()
-        build_pdf.assert_called_once()
-        self.assertIs(build_pdf.call_args.kwargs["readers"][materialization_id], reader)
         self.assertEqual(package_formats, ["domjudge", "icpc-2025-09"])
         summary = read_contest_job_summary(contest_id, job_id)
         self.assertEqual(
             summary["successful_outputs"],
-            ["statement_pdf", "domjudge_bundle", "icpc_2025_09_bundle"],
+            ["domjudge_bundle", "icpc_2025_09_bundle"],
         )
 
-    def test_package_only_build_does_not_snapshot_contest_sources(self) -> None:
+    def test_package_build_uses_frozen_native_package_reader(self) -> None:
         contest_slug, _contest_id, problem_id, _problem_slug = self._contest_with_problem()
         materialization_id = self._seed_materialization(
             problem_id=problem_id,
@@ -391,7 +386,6 @@ class TestContestBuilds(ContestActionBase):
         with (
             patch.object(runtime.worker_queue_service, "submit", side_effect=submit),
             patch.object(runtime.problem_package_service, "open_reader", side_effect=open_reader),
-            patch.object(runtime.contest_snapshot_service, "create") as snapshot,
             patch.object(
                 runtime.contest_package_service,
                 "build_bundle",
@@ -405,7 +399,6 @@ class TestContestBuilds(ContestActionBase):
             )
 
         self.assertEqual(response.status_code, 303)
-        snapshot.assert_not_called()
         self.assertIn(materialization_id, build_bundle.call_args.kwargs["readers"])
 
     def test_reader_exit_failure_discards_staged_output_without_publishing(self) -> None:

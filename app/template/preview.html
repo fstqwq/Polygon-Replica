@@ -45,6 +45,9 @@
     <span class="muted"><strong>Language</strong>: missing</span>
     {% endif %}
     <a class="linkish" href="#statement-language-popup" data-popup-open="statement-language-popup">Add language</a>
+    {% if current_language %}
+    <a class="linkish" href="/problems/{{ ctx.problem.slug }}/statement/html?source=workspace&language={{ current_language }}{% if ctx.contest_workspace %}&contest={{ ctx.contest_workspace.contest_slug }}{% endif %}">Preview HTML</a>
+    {% endif %}
     <form class="inline-action" method="post" action="{{ problem_href('statement_templates_reset') }}" data-confirm-message="Restore statement/statements.ftl, statement/problem.tex, and statement/olymp.sty to Qiulygon defaults? This also removes the optional statement/examples.tex file, but keeps statement sections and attachments.">
       <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
       <input type="hidden" name="language" value="{{ current_language }}" />
