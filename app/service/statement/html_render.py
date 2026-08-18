@@ -17,6 +17,7 @@ nh3 = import_module("nh3")
 
 RESOURCE_PLACEHOLDER = "__STATEMENT_PREVIEW_RESOURCE__/"
 _FILTER_PATH = Path(__file__).with_name("pandoc_statement.lua")
+_PANDOC_SINGLE_CAPABILITY = ("+RTS", "-N1", "-RTS")
 _SAFE_RASTER_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 _MAX_IMAGE_COUNT = 128
 _MATHML_TAGS = {
@@ -94,6 +95,7 @@ class StatementHtmlRenderer:
         parse_result = self._run(
             [
                 "pandoc",
+                *_PANDOC_SINGLE_CAPABILITY,
                 str(problem_tex),
                 "--from=latex+raw_tex+latex_macros",
                 "--to=json",
@@ -124,6 +126,7 @@ class StatementHtmlRenderer:
         html_result = self._run(
             [
                 "pandoc",
+                *_PANDOC_SINGLE_CAPABILITY,
                 str(ast_path),
                 "--from=json",
                 "--to=html5",
