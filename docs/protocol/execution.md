@@ -275,3 +275,11 @@ startup while one or more payloads are unavailable. Downloads MUST resolve the
 locator through the owning store and fail as unavailable when the cache entry is
 missing. Verification detail downloads use
 `/problems/{problem:path}/artifacts/{verification_id}/{rel_path:path}`.
+
+Interactive transcript detail reads retain the first 100 events and scan at most
+1000 protocol events. A transcript that ends within that scan window reports its
+exact event total. If more data remains after the 1000th event, parsing stops and
+the UI reports only that it is showing the first 100 events; it does not claim an
+exact total. Statement sample and sample JSON projection use the same bounded
+parser and reject a scan-limited transcript instead of deriving partial authored
+sample content.

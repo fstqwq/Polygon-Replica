@@ -5,7 +5,9 @@ from typing import BinaryIO, Literal, TypedDict
 
 
 RunpipeTranscriptSource = Literal["interactor", "solution"]
-RunpipeTranscriptState = Literal["ok", "malformed"]
+RunpipeTranscriptState = Literal["ok", "malformed", "limited"]
+
+RUNPIPE_TRANSCRIPT_SCAN_LIMIT = 1000
 
 
 class RunpipeTranscriptEvent(TypedDict):
@@ -22,8 +24,8 @@ class RunpipeTranscript(TypedDict):
     state: RunpipeTranscriptState
     events: list[RunpipeTranscriptEvent]
     events_shown: int
-    events_total: int
-    events_omitted: int
+    events_total: int | None
+    events_omitted: int | None
     raw_size_bytes: int
     error_offset: int | None
     error_reason: str | None
@@ -132,17 +134,22 @@ def parse_runpipe_transcript(
     *,
     raw_size_bytes: int,
     event_limit: int = 100,
+    scan_limit: int = RUNPIPE_TRANSCRIPT_SCAN_LIMIT,
     payload_preview_limit: int = 8 * 1024,
 ) -> RunpipeTranscript:
     """Parse a DOMjudge runpipe transcript without interpreting payload bytes.
 
     The stream must start at offset zero. Parsing is anchored at the current
     record boundary; marker-looking bytes inside a payload are never scanned as
-    protocol data. No seek or look-behind is required.
+    protocol data. No seek or look-behind is required. If the scan limit is
+    reached before the declared raw size, the result is limited and the unread
+    suffix is intentionally left unvalidated.
     """
 
     if event_limit < 1:
         raise ValueError("event_limit must be positive")
+    if scan_limit < 1:
+        raise ValueError("scan_limit must be positive")
     if payload_preview_limit < 1:
         raise ValueError("payload_preview_limit must be positive")
     if raw_size_bytes < 0:
@@ -153,6 +160,17 @@ def parse_runpipe_transcript(
     try:
         offset = 0
         while offset < raw_size_bytes:
+            if event_total >= scan_limit:
+                return {
+                    "state": "limited",
+                    "events": events,
+                    "events_shown": len(events),
+                    "events_total": None,
+                    "events_omitted": None,
+                    "raw_size_bytes": raw_size_bytes,
+                    "error_offset": None,
+                    "error_reason": None,
+                }
             event_offset = offset
             first = _read_exact(
                 stream,

@@ -25,6 +25,8 @@ def statement_sample_events_from_transcript(
             )
     except OSError as exc:
         raise ValueError(f"{label} is unavailable") from exc
+    if transcript["state"] == "limited":
+        raise ValueError(f"{label} has too many events")
     if transcript["state"] != "ok":
         raise ValueError(
             f"{label} is malformed at byte {transcript['error_offset']}: "

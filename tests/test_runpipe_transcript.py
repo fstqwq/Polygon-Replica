@@ -145,6 +145,18 @@ class TestRunpipeTranscript(unittest.TestCase):
         self.assertEqual(transcript["events"][0]["payload_bytes_omitted"], 37)
         self.assertEqual(transcript["events"][1]["payload_display"], "next")
 
+    def test_scan_limit_stops_without_counting_the_remaining_stream(self) -> None:
+        raw = b"".join(_frame(index, b">", b"x") for index in range(1001))
+        stream = io.BytesIO(raw)
+
+        transcript = parse_runpipe_transcript(stream, raw_size_bytes=len(raw))
+
+        self.assertEqual(transcript["state"], "limited")
+        self.assertEqual(transcript["events_shown"], 100)
+        self.assertIsNone(transcript["events_total"])
+        self.assertIsNone(transcript["events_omitted"])
+        self.assertLess(stream.tell(), len(raw))
+
 
 if __name__ == "__main__":
     unittest.main()

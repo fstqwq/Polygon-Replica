@@ -34,10 +34,10 @@
   {% set diagnostics_error = cell.detail.compile_error_display if cell.detail.compile_error_display else '' %}
   {% set has_diagnostics = diagnostics_error or (diagnostics_entries | length) > 0 %}
   <section class="sol-card" data-program-id="{{ col.id }}">
-    <div class="sol-head">
+    <div class="content-heading-row">
       <strong class="sol-title">{{ col.title }}</strong>
       {% if cell.detail.pass_rows and not cell.detail.mode_malformed %}
-      <a class="content-heading-action" href="{{ problem_href('run_details_sample_json', query={'verification_id': verification_id, 'test': row.test_name, 'program_id': col.id}) }}">download json</a>
+      <a class="content-heading-action" href="{{ problem_href('run_details_sample_json', query={'verification_id': verification_id, 'test': row.test_name, 'program_id': col.id}) }}">download sample json</a>
       {% endif %}
     </div>
     {% if cell.detail.mode_malformed %}
@@ -122,7 +122,11 @@
               </div>
               {% endfor %}
             </div>
+            {% if transcript.state == 'limited' %}
+            <p class="transcript-count">Showing first {{ transcript.events_shown }} events.</p>
+            {% else %}
             <p class="transcript-count">Showing {{ transcript.events_shown }}/{{ transcript.events_total }} events.</p>
+            {% endif %}
           {% else %}
           <p class="transcript-message transcript-unavailable">Transcript {{ transcript.message }}.</p>
           {% endif %}
@@ -176,7 +180,7 @@
   </section>
   {% else %}
   <section class="sol-card" data-program-id="{{ col.id }}">
-    <div class="sol-head"><strong class="sol-title">{{ col.title }}</strong></div>
+    <div class="content-heading-row"><strong class="sol-title">{{ col.title }}</strong></div>
     <p class="muted">No details.</p>
   </section>
   {% endif %}

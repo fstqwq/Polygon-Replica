@@ -4413,6 +4413,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             b"[  0.019s/5]>: ping\n\n"
             b"[  0.024s/4]<: pong\n"
             b"[  0.025s/0]]"
+            + b"[  0.026s/1]>: x\n" * 998
         )
         transcript_two = b"[  0.031s/5]>: final\n" + b"broken"
         transcript_one_ref = store("transcript-one", transcript_one)
@@ -4587,7 +4588,8 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertNotIn("third pass input", html)
         self.assertNotIn("must not be read", html)
         self.assertNotIn("trap", html)
-        self.assertIn("download json", html)
+        self.assertIn("Showing first 100 events.", html)
+        self.assertIn("download sample json", html)
         self.assertIn("/run/details/sample-json?", html)
         json_response = run_details_sample_json(
             _request(

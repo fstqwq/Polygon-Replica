@@ -596,13 +596,6 @@ body.verification-compact .run-details-page-compact .verification-detail-wrap {
   gap: var(--space-2);
 }
 
-.sol-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-}
-
 .sol-title {
   min-width: 0;
   max-width: 100%;
