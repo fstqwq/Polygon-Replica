@@ -325,7 +325,7 @@ def template_response(request: Request, template_name: str, context: dict | None
                 "hosts_online": 0,
                 "hosts_total": 0,
                 "queued": 0,
-                "active": 0,
+                "busy_hosts": 0,
                 "summary": "offline",
                 "tone": "danger",
                 "hosts": [],

@@ -45,6 +45,7 @@ class JudgehostView(TypedDict):
     online: bool
     state: str
     state_class: str
+    activity: str
     age_label: str
     last_seen_at: str
     first_seen_at: str
@@ -301,6 +302,7 @@ def _judgehost_status_view() -> dict[str, object]:
             last_judging = dict(raw_last_judging) if isinstance(raw_last_judging, dict) else None
             recent_avg_raw = raw.get("recent_avg_per_case_sec")
             recent_avg = float(recent_avg_raw) if isinstance(recent_avg_raw, (int, float)) else None
+            active_leases = max(0, int(raw.get("active_leases") or 0))
             hosts.append(
                 {
                     "hostname": str(raw.get("hostname") or ""),
@@ -309,6 +311,7 @@ def _judgehost_status_view() -> dict[str, object]:
                     "online": online,
                     "state": state,
                     "state_class": "muted" if state == "disabled" else "ok" if state == "online" else "danger",
+                    "activity": "busy" if state == "online" and active_leases > 0 else "idle",
                     "age_label": _duration_label(raw.get("age_sec")),
                     "last_seen_at": str(raw.get("last_seen_at") or ""),
                     "first_seen_at": str(raw.get("first_seen_at") or ""),
@@ -317,7 +320,7 @@ def _judgehost_status_view() -> dict[str, object]:
                     "last_task_id": str(raw.get("last_task_id") or ""),
                     "last_run_id": str(raw.get("last_run_id") or ""),
                     "toolchains": _toolchain_views(raw.get("toolchains")),
-                    "active_leases": int(raw.get("active_leases") or 0),
+                    "active_leases": active_leases,
                     "update_count": int(raw.get("update_count") or 0),
                     "judged_case_count": int(raw.get("judged_case_count") or 0),
                     "last_judging_at": str(raw.get("last_judging_at") or ""),

@@ -36,7 +36,7 @@ class PublicJudgehostView(TypedDict):
     state: str
     tone: str
     last_contact: str
-    active_tasks: int
+    activity: str
     judged_cases: int
     recent_average: str
 
@@ -46,7 +46,7 @@ class PublicJudgehostStatus(TypedDict):
     hosts_online: int
     hosts_total: int
     queued: int
-    active: int
+    busy_hosts: int
     summary: str
     tone: str
     hosts: list[PublicJudgehostView]
@@ -153,8 +153,9 @@ def _public_hosts(
     hosts: list[PublicJudgehostView] = []
     for index, raw in enumerate(hosts_source, start=1):
         enabled = bool(raw.get("enabled"))
-        online = bool(raw.get("online"))
-        state = "disabled" if not enabled else "online" if online else "offline"
+        online = enabled and bool(raw.get("online"))
+        active_leases = _nonnegative_int(raw.get("active_leases"))
+        state = "online" if online else "offline"
         recent_raw = raw.get("recent_avg_per_case_sec")
         recent_average = (
             f"{float(recent_raw):.3f}s per case"
@@ -165,11 +166,9 @@ def _public_hosts(
             {
                 "label": f"Judgehost {index}",
                 "state": state,
-                "tone": (
-                    "muted" if state == "disabled" else "ok" if state == "online" else "danger"
-                ),
+                "tone": "ok" if online else "danger",
                 "last_contact": _duration_label(raw.get("age_sec")),
-                "active_tasks": _nonnegative_int(raw.get("active_leases")),
+                "activity": "busy" if online and active_leases > 0 else "idle",
                 "judged_cases": _nonnegative_int(raw.get("judged_case_count")),
                 "recent_average": recent_average,
             }
@@ -177,14 +176,19 @@ def _public_hosts(
     return hosts
 
 
-def _health_summary(enabled: bool, hosts_online: int, hosts_total: int) -> tuple[str, str]:
+def _health_summary(
+    enabled: bool,
+    hosts_online: int,
+    hosts_total: int,
+    busy_hosts: int,
+) -> tuple[str, str]:
     if not enabled:
         return "disabled", "muted"
     if hosts_online <= 0:
         return "offline", "danger"
     if hosts_online < hosts_total:
-        return f"{hosts_online}/{hosts_total} online", "warn"
-    return f"{hosts_online} online", "ok"
+        return f"{hosts_online}/{hosts_total} online ({busy_hosts} busy)", "warn"
+    return f"{hosts_online} online ({busy_hosts} busy)", "ok"
 
 
 def _compile_specs(
@@ -230,7 +234,8 @@ def project_public_status(
     enabled = bool(raw_status.get("enabled"))
     hosts_online = _nonnegative_int(raw_status.get("hosts_online"))
     hosts_total = _nonnegative_int(raw_status.get("hosts_total"))
-    summary, tone = _health_summary(enabled, hosts_online, hosts_total)
+    busy_hosts = sum(host["activity"] == "busy" for host in public_hosts)
+    summary, tone = _health_summary(enabled, hosts_online, hosts_total, busy_hosts)
 
     queue_raw = raw_status.get("queue")
     queue = queue_raw if isinstance(queue_raw, dict) else {}
@@ -239,7 +244,7 @@ def project_public_status(
         "hosts_online": hosts_online,
         "hosts_total": hosts_total,
         "queued": _nonnegative_int(queue.get("queued")),
-        "active": sum(host["active_tasks"] for host in public_hosts),
+        "busy_hosts": busy_hosts,
         "summary": summary,
         "tone": tone,
         "hosts": public_hosts,

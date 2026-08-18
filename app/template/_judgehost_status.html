@@ -2,27 +2,29 @@
 <div class="judgehost-status-summary">
   <div><span>Service</span><strong class="{{ judgehost.tone }}">{{ judgehost.summary }}</strong></div>
   <div><span>Queued</span><strong>{{ judgehost.queued }}</strong></div>
-  <div><span>Active</span><strong>{{ judgehost.active }}</strong></div>
+  <div><span>Busy</span><strong>{{ judgehost.busy_hosts }}</strong></div>
 </div>
 
 <section class="judgehost-status-section">
   <h3>Hosts</h3>
   {% if judgehost.hosts %}
-  <div class="judgehost-status-grid">
-    {% for host in judgehost.hosts %}
-    <article class="judgehost-status-card">
-      <div class="judgehost-status-card-head">
-        <strong>{{ host.label }}</strong>
-        <strong class="{{ host.tone }}">{{ host.state }}</strong>
-      </div>
-      <dl>
-        <div><dt>Last contact</dt><dd>{{ host.last_contact }}</dd></div>
-        <div><dt>Active tasks</dt><dd>{{ host.active_tasks }}</dd></div>
-        <div><dt>Judged cases</dt><dd>{{ host.judged_cases }}</dd></div>
-        <div><dt>Recent average</dt><dd>{{ host.recent_average }}</dd></div>
-      </dl>
-    </article>
-    {% endfor %}
+  <div class="table-scroll">
+    <table class="table-base judgehost-status-host-table">
+      <thead>
+        <tr><th>Name</th><th>Status</th><th>Activity</th><th>Judged cases</th><th>Recent average</th></tr>
+      </thead>
+      <tbody>
+        {% for host in judgehost.hosts %}
+        <tr>
+          <td>{{ host.label }}</td>
+          <td><span class="{{ host.tone }}">{{ host.state }}</span> <span class="muted">({{ host.last_contact }})</span></td>
+          <td>{{ host.activity }}</td>
+          <td>{{ host.judged_cases }}</td>
+          <td>{{ host.recent_average }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
   {% else %}
   <p class="muted">No Judgehost has reported yet.</p>

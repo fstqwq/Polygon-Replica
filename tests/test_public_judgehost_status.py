@@ -59,9 +59,10 @@ class PublicJudgehostStatusTests(unittest.TestCase):
             ],
         )
         rendered = repr(projected)
-        self.assertEqual(projected["summary"], "1 online")
-        self.assertEqual(projected["active"], 1)
+        self.assertEqual(projected["summary"], "1 online (1 busy)")
+        self.assertEqual(projected["busy_hosts"], 1)
         self.assertEqual(projected["hosts"][0]["label"], "Judgehost 1")
+        self.assertEqual(projected["hosts"][0]["activity"], "busy")
         self.assertNotIn("private-hostname", rendered)
         self.assertNotIn("203.0.113.10", rendered)
         self.assertNotIn("secret-task", rendered)
@@ -80,13 +81,35 @@ class PublicJudgehostStatusTests(unittest.TestCase):
         cases = (
             ({"enabled": False, "hosts_online": 0, "hosts_total": 0}, ("disabled", "muted")),
             ({"enabled": True, "hosts_online": 0, "hosts_total": 2}, ("offline", "danger")),
-            ({"enabled": True, "hosts_online": 1, "hosts_total": 2}, ("1/2 online", "warn")),
-            ({"enabled": True, "hosts_online": 2, "hosts_total": 2}, ("2 online", "ok")),
+            (
+                {"enabled": True, "hosts_online": 1, "hosts_total": 2},
+                ("1/2 online (0 busy)", "warn"),
+            ),
+            (
+                {"enabled": True, "hosts_online": 2, "hosts_total": 2},
+                ("2 online (0 busy)", "ok"),
+            ),
         )
         for raw, expected in cases:
             with self.subTest(raw=raw):
                 projected = project_public_status({**raw, "hosts": [], "queue": {}}, [])
                 self.assertEqual((projected["summary"], projected["tone"]), expected)
+
+    def test_disabled_host_uses_public_offline_idle_vocabulary(self) -> None:
+        projected = project_public_status(
+            {
+                "enabled": True,
+                "hosts_online": 0,
+                "hosts_total": 1,
+                "hosts": [_host("disabled", enabled=False)],
+                "queue": {},
+            },
+            [],
+        )
+
+        self.assertEqual(projected["hosts"][0]["state"], "offline")
+        self.assertEqual(projected["hosts"][0]["activity"], "idle")
+        self.assertEqual(projected["busy_hosts"], 0)
 
     def test_online_toolchain_mismatch_marks_reported_versions(self) -> None:
         raw = {

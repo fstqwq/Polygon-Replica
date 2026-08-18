@@ -91,82 +91,120 @@
     <input class="admin-host-filter" type="search" placeholder="Filter hosts" data-judgehost-filter-input="1" autocomplete="off" spellcheck="false" />
   </div>
   {% if judgehost.hosts %}
-  <div class="admin-host-list" data-judgehost-table="1">
-    {% for host in judgehost.hosts %}
-    <article
-      class="admin-host-card"
-      data-judgehost-row="1"
-      data-judgehost-hostname="{{ host.hostname | lower }}"
-      data-judgehost-status="{{ host.state }}"
-      data-judgehost-enabled="{{ 'yes' if host.enabled else 'no' }}"
-    >
-      <div class="admin-host-head">
-        <div>
-          <h3>{{ host.hostname }}</h3>
-          <div class="admin-host-identity">
-            <span class="{{ host.state_class }}">{{ host.state | status_label }}</span>
-            {% if host.peer_addr %}<code>{{ host.peer_addr }}</code>{% endif %}
-          </div>
-        </div>
-        <form
-          class="inline-form admin-judgehost-toggle-form"
-          method="post"
-          action="/admin/judgehosts/host-action"
-          data-judgehost-toggle-form="1"
-          data-confirm-message="Disable judgehost {{ host.hostname }}? In-flight work will be requeued."
-        >
-          <input type="hidden" name="hostname" value="{{ host.hostname }}" />
-          <input type="hidden" name="action" value="{% if host.enabled %}disable{% else %}enable{% endif %}" />
-          <label class="switch-toggle" title="Toggle judgehost enabled">
-            <input type="checkbox" data-judgehost-toggle="1" {% if host.enabled %}checked{% endif %} />
-            <span class="switch-track" aria-hidden="true"></span>
-          </label>
-        </form>
-      </div>
-
-      <dl class="admin-host-facts">
-        <div><dt>Last contact</dt><dd>{{ host.age_label }}{% if host.last_seen_at %}<span class="muted">{{ host.last_seen_at | local_time }}</span>{% endif %}</dd></div>
-        <div><dt>Last report</dt><dd>{{ host.last_action_label }}</dd></div>
-        <div><dt>Active leases</dt><dd>{{ host.active_leases }}</dd></div>
-        <div><dt>Judged cases</dt><dd>{{ host.judged_case_count }}</dd></div>
-        <div><dt>Recent average</dt><dd>{% if host.recent_avg_per_case_sec is not none %}{{ "%.3f s"|format(host.recent_avg_per_case_sec) }}{% else %}<span class="muted">none</span>{% endif %}</dd></div>
-        <div><dt>Contacts</dt><dd>{{ host.update_count }}</dd></div>
-      </dl>
-
-      {% if host.last_judging %}
-      <div class="admin-host-last-work">
-        <span class="muted">Last judging</span>
-        {% if host.last_judging_href %}<a href="{{ host.last_judging_href }}">{% endif %}
-          {{ host.last_judging.task_kind | replace('-', ' ') | title }} &middot; <code>{{ host.last_judging.problem_slug }}</code> &middot; {{ host.last_judging.source_label }} / {{ host.last_judging.test_name }}
-        {% if host.last_judging_href %}</a>{% endif %}
-      </div>
-      {% endif %}
-
-      <div class="admin-host-toolchains">
-        <h4>Reported toolchains</h4>
-        {% if host.toolchains %}
-        <div class="admin-toolchain-list">
-          {% for toolchain in host.toolchains %}
-          <details class="admin-toolchain">
-            <summary>
-              <strong>{{ toolchain.language_label }}</strong>
-              <span>{{ toolchain.compiler_summary }}{% if toolchain.runner and toolchain.runner_summary != toolchain.compiler_summary %} &middot; {{ toolchain.runner_summary }}{% endif %}</span>
-              <span class="muted">{{ toolchain.observed_at | local_time }}</span>
-            </summary>
-            <div class="admin-toolchain-output">
-              {% if toolchain.compiler %}<div><span>Compiler</span><pre>{{ toolchain.compiler }}</pre></div>{% endif %}
-              {% if toolchain.runner %}<div><span>Runner</span><pre>{{ toolchain.runner }}</pre></div>{% endif %}
-              <p class="muted">Reported for judging task {{ toolchain.judgetask_id }}.</p>
+  <div class="table-scroll">
+    <table class="table-base admin-host-table" data-judgehost-table="1">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Status</th>
+          <th>Last contact</th>
+          <th>Activity</th>
+          <th>Judged cases</th>
+          <th>Recent average</th>
+          <th>Last report</th>
+          <th>Enabled</th>
+        </tr>
+      </thead>
+      {% for host in judgehost.hosts %}
+      <tbody
+        data-judgehost-row="1"
+        data-judgehost-hostname="{{ host.hostname | lower }}"
+        data-judgehost-status="{{ host.state }}"
+        data-judgehost-enabled="{{ 'yes' if host.enabled else 'no' }}"
+      >
+        <tr>
+          <td>
+            <div class="admin-host-name">
+              <strong>{{ host.hostname }}</strong>
+              {% if host.peer_addr %}<code>{{ host.peer_addr }}</code>{% endif %}
             </div>
-          </details>
-          {% endfor %}
-        </div>
-        {% else %}
-        <p class="muted">No compiler or runner versions reported yet.</p>
-        {% endif %}
-      </div>
-    </article>
-    {% endfor %}
+          </td>
+          <td><span class="{{ host.state_class }}">{{ host.state | status_label }}</span></td>
+          <td>
+            <div class="admin-host-cell-stack">
+              <span>{{ host.age_label }}</span>
+              {% if host.last_seen_at %}<span class="muted">{{ host.last_seen_at | local_time }}</span>{% endif %}
+            </div>
+          </td>
+          <td>
+            {{ host.activity }}
+            {% if host.active_leases %}<span class="muted">({{ host.active_leases }} {{ 'lease' if host.active_leases == 1 else 'leases' }})</span>{% endif %}
+          </td>
+          <td>{{ host.judged_case_count }}</td>
+          <td>{% if host.recent_avg_per_case_sec is not none %}{{ "%.3f s"|format(host.recent_avg_per_case_sec) }}{% else %}<span class="muted">none</span>{% endif %}</td>
+          <td>
+            <div class="admin-host-cell-stack">
+              <span>{{ host.last_action_label }}</span>
+              <span class="muted">{{ host.update_count }} contacts</span>
+            </div>
+          </td>
+          <td class="admin-host-control">
+            <form
+              class="inline-form admin-judgehost-toggle-form"
+              method="post"
+              action="/admin/judgehosts/host-action"
+              data-judgehost-toggle-form="1"
+              data-confirm-message="Disable judgehost {{ host.hostname }}? In-flight work will be requeued."
+            >
+              <input type="hidden" name="hostname" value="{{ host.hostname }}" />
+              <input type="hidden" name="action" value="{% if host.enabled %}disable{% else %}enable{% endif %}" />
+              <label class="switch-toggle" title="Toggle judgehost enabled">
+                <input type="checkbox" data-judgehost-toggle="1" {% if host.enabled %}checked{% endif %} />
+                <span class="switch-track" aria-hidden="true"></span>
+              </label>
+            </form>
+          </td>
+        </tr>
+        <tr class="admin-host-detail-row">
+          <td colspan="8">
+            <details class="admin-host-details">
+              <summary>Details</summary>
+              <div class="admin-host-detail-content">
+                <div class="admin-host-detail-facts">
+                  <div><span>First contact</span><strong>{% if host.first_seen_at %}{{ host.first_seen_at | local_time }}{% else %}unknown{% endif %}</strong></div>
+                  <div><span>Last task</span><strong>{{ host.last_task_id or 'none' }}</strong></div>
+                  <div><span>Last run</span><strong>{{ host.last_run_id or 'none' }}</strong></div>
+                </div>
+
+                {% if host.last_judging %}
+                <div class="admin-host-last-work">
+                  <span class="muted">Last judging</span>
+                  {% if host.last_judging_href %}<a href="{{ host.last_judging_href }}">{% endif %}
+                    {{ host.last_judging.task_kind | replace('-', ' ') | title }} &middot; <code>{{ host.last_judging.problem_slug }}</code> &middot; {{ host.last_judging.source_label }} / {{ host.last_judging.test_name }}
+                  {% if host.last_judging_href %}</a>{% endif %}
+                </div>
+                {% endif %}
+
+                <div class="admin-host-toolchains">
+                  <h4>Reported toolchains</h4>
+                  {% if host.toolchains %}
+                  <div class="admin-toolchain-list">
+                    {% for toolchain in host.toolchains %}
+                    <details class="admin-toolchain">
+                      <summary>
+                        <strong>{{ toolchain.language_label }}</strong>
+                        <span>{{ toolchain.compiler_summary }}{% if toolchain.runner and toolchain.runner_summary != toolchain.compiler_summary %} &middot; {{ toolchain.runner_summary }}{% endif %}</span>
+                        <span class="muted">{{ toolchain.observed_at | local_time }}</span>
+                      </summary>
+                      <div class="admin-toolchain-output">
+                        {% if toolchain.compiler %}<div><span>Compiler</span><pre>{{ toolchain.compiler }}</pre></div>{% endif %}
+                        {% if toolchain.runner %}<div><span>Runner</span><pre>{{ toolchain.runner }}</pre></div>{% endif %}
+                        <p class="muted">Reported for judging task {{ toolchain.judgetask_id }}.</p>
+                      </div>
+                    </details>
+                    {% endfor %}
+                  </div>
+                  {% else %}
+                  <p class="muted">No compiler or runner versions reported yet.</p>
+                  {% endif %}
+                </div>
+              </div>
+            </details>
+          </td>
+        </tr>
+      </tbody>
+      {% endfor %}
+    </table>
   </div>
   {% else %}
   <p class="muted">No judgehost has contacted this runtime.</p>
