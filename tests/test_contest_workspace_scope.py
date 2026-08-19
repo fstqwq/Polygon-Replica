@@ -1,4 +1,3 @@
-# ascii-lint: allow; reason=chinese-test
 
 import json
 from html.parser import HTMLParser

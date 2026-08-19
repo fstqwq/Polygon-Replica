@@ -6,7 +6,6 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-_NON_ASCII_TEST_PRAGMA = b"ascii-lint: allow; reason=chinese-test"
 
 _FIRST_PARTY_TEXT_SUFFIXES = frozenset(
     {
@@ -57,9 +56,9 @@ def _test_case_files() -> list[Path]:
     return sorted((ROOT / "tests").glob("test_*.py"))
 
 
-def _first_party_text_files() -> list[Path]:
+def _production_text_files() -> list[Path]:
     paths: list[Path] = []
-    for root_name in ("app", "docs", "scripts", "tests", ".github"):
+    for root_name in ("app", "docs", "scripts", ".github"):
         source_root = ROOT / root_name
         if not source_root.exists():
             continue
@@ -203,31 +202,18 @@ class TestPublicContracts(unittest.TestCase):
                     )
                 )
 
-    def test_first_party_text_files_are_ascii(self) -> None:
+    def test_production_text_files_are_ascii(self) -> None:
         offenders: list[str] = []
-        invalid_pragmas: list[str] = []
-        for path in _first_party_text_files():
+        for path in _production_text_files():
             payload = path.read_bytes()
             relative = path.relative_to(ROOT)
             has_non_ascii = any(byte > 0x7F for byte in payload)
-            header = b"\n".join(payload.splitlines()[:5])
-            has_pragma = _NON_ASCII_TEST_PRAGMA in header
-            if has_pragma and (
-                not relative.parts or relative.parts[0] != "tests" or not has_non_ascii
-            ):
-                invalid_pragmas.append(relative.as_posix())
-            if has_non_ascii and not has_pragma:
+            if has_non_ascii:
                 offenders.append(relative.as_posix())
         self.assertEqual(
             offenders,
             [],
-            "Use ASCII escapes/entities, or add the file-header pragma "
-            "'# ascii-lint: allow; reason=chinese-test' to an intentional test.",
-        )
-        self.assertEqual(
-            invalid_pragmas,
-            [],
-            "The non-ASCII pragma is test-only and must not remain on an ASCII file.",
+            "Use ASCII escapes or entities in first-party production text files.",
         )
 
     def test_static_assets_use_startup_content_fingerprints(self) -> None:

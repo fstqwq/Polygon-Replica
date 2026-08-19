@@ -1,4 +1,3 @@
-# ascii-lint: allow; reason=chinese-test
 
 import io
 import unittest
