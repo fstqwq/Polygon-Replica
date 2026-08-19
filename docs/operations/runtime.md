@@ -17,6 +17,9 @@ configure uvicorn to accept forwarded headers from any direct peer. Keeping that
 listener private is therefore part of the deployment security boundary.
 The generated Judgehost command currently uses `domjudge/judgehost:latest`;
 operators therefore control image pinning and upgrades outside the application.
+The [Judgehost image choice](deployment.md#judgehost-image-choice) runbook
+compares that public image with the pinned source-built fork used for long-lived
+hosts and owns the reproducible build procedure.
 
 ## Host installation
 
