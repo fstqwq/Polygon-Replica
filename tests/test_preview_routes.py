@@ -14,46 +14,10 @@ from app.impl.workspace.context_ui import page_ctx
 from app.service.statement.signature import statement_sources_signature
 
 from tests.backend_e2e_fixture import BackendE2ETestBase
-from tests.db_helpers import db_execute, write_preview_summary
-from tests.ui_support import _flash_messages_from_response
+from tests.db_helpers import db_execute
 
 
 class TestPreviewRoutes(BackendE2ETestBase):
-    def test_preview_run_reports_statement_examples_failure(self) -> None:
-        ctx = runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
-        preview_id = self.random_id("p-preview-sample-sync-failed")
-        db_execute(
-            (
-                "INSERT INTO previews("
-                "id,problem_id,workspace_id,status,source_commit,source_ref,summary_json,created_at,finished_at"
-                ") VALUES(?,?,?,?,?,?,?,datetime('now'),datetime('now'))"
-            ),
-            [
-                preview_id,
-                int(ctx["problem"]["id"]),
-                int(ctx["workspace"]["id"]),
-                "failed",
-                "",
-                "",
-                "{}",
-            ],
-        )
-        write_preview_summary(
-            preview_id,
-            {
-                "error": "sample verification failed (ver-sample-123): validator failed",
-                "failed_stage": "statement_examples",
-            },
-        )
-        with patch.object(runtime.preview_service, "compile_preview", return_value=preview_id):
-            resp = preview_run(self.problem, self.user, page="statement")
-        self.assertEqual(resp.status_code, 303)
-        self.assertIn(
-            f"/problems/{self.problem}/statement?language=english",
-            resp.headers.get("location", ""),
-        )
-        self.assertIn("statement examples failed.", _flash_messages_from_response(resp))
-
     def test_preview_run_rejects_missing_language_directories(self) -> None:
         ws = Path(runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
         sections_root = ws / "statement-sections"
@@ -69,7 +33,6 @@ class TestPreviewRoutes(BackendE2ETestBase):
             resp = preview_run(self.problem, self.user, page="statement", language="english")
         self.assertEqual(resp.status_code, 303)
         self.assertEqual(resp.headers.get("location", ""), f"/problems/{self.problem}/statement")
-        self.assertEqual(_flash_messages_from_response(resp), ["statement language is missing."])
         compile_preview.assert_not_called()
 
     def test_preview_artifact_file_serves_statement_pdf_from_preview_root(self) -> None:

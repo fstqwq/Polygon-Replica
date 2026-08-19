@@ -1,7 +1,6 @@
 from tests.contest_support import ContestActionBase
 from tests.db_helpers import db_fetch_one
 from tests.ui_support import (
-    _flash_messages_from_response,
     runtime,
     contest_access_revoke,
     workspace_service,
@@ -24,7 +23,6 @@ class TestContestAccessActions(ContestActionBase):
         response = contest_access_revoke(contest=contest_slug, user="alice", target_user="carol")
 
         self.assertEqual(response.status_code, 303)
-        self.assertIn("derived problem access ended immediately", _flash_messages_from_response(response)[0])
         acl = db_fetch_one(
             "SELECT role FROM repo_acl WHERE problem_id=? AND user_id=(SELECT id FROM users WHERE username='carol')",
             [problem_id],

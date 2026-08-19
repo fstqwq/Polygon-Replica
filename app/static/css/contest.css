@@ -66,10 +66,6 @@
   margin-left: auto;
 }
 
-.contest-retry-form {
-  margin-top: var(--space-1);
-}
-
 .contest-add-problems-head {
   align-items: flex-end;
 }

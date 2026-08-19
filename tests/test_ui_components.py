@@ -4,16 +4,12 @@ from tests.common import E2ETestBase
 from tests.ui_support import (
     Path,
     UIHelpersMixin,
-    _flash_cookie_header,
-    _flash_messages_from_response,
     _request,
-    _request_with_cookie,
     checker_page,
     checker_rename_source,
     checker_save_source,
     checker_set_standard,
     files_save,
-    general_page,
     generator_rename_source,
     generator_save_source,
     generators_page,
@@ -24,7 +20,6 @@ from tests.ui_support import (
     quote_plus,
     solutions_delete,
     solutions_editor_page,
-    solutions_page,
     solutions_rename,
     solutions_save_source,
     solutions_set_tag,
@@ -54,11 +49,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         rel = "checkers/checker.cpp"
         (ws / rel).write_text("// checker placeholder\n", encoding="utf-8")
 
-        before = checker_page(
-            _request(f"/problems/{self.problem}/checker"), self.problem, self.user
-        )
-        self.assertEqual(before.status_code, 200)
-
         install = checker_set_standard(
             problem=self.problem,
             user=self.user,
@@ -74,13 +64,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         self.assertEqual(build_cfg.get("checker_source"), "checkers/fcmp.cpp")
         self.assertNotIn("checker_standard", build_cfg)
         self.assertTrue((ws / "checkers/fcmp.cpp").exists())
-
-        after = checker_page(
-            _request(f"/problems/{self.problem}/checker"), self.problem, self.user
-        )
-        self.assertEqual(after.status_code, 200)
-        after_html = after.body.decode("utf-8", errors="replace")
-        self.assertIn("std::fcmp.cpp", after_html)
 
     def test_checker_page_supports_source_save_without_files_page(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
@@ -131,9 +114,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         self.assertEqual(
             failed.headers.get("location", ""), f"/problems/{self.problem}/checker"
         )
-        messages = _flash_messages_from_response(failed)
-        self.assertTrue(messages)
-        self.assertIn("compile check failed", messages[0].lower())
         self.assertFalse((ws / rel).exists())
 
         cfg_after = json.loads(
@@ -179,9 +159,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
             _request(f"/problems/{self.problem}/generators"), self.problem, self.user
         )
         self.assertEqual(page.status_code, 200)
-        empty_html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("No generators", empty_html)
-        self.assertIn("?new=generator.cpp", empty_html)
         self.assertFalse((ws / rel).exists())
 
         draft = generators_page(
@@ -192,10 +169,7 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
             self.problem,
             self.user,
         )
-        draft_html = draft.body.decode("utf-8", errors="replace")
-        self.assertIn("New generator", draft_html)
-        self.assertIn("Insert testlib template", draft_html)
-        self.assertIn("registerGen", draft_html)
+        self.assertEqual(draft.status_code, 200)
         self.assertFalse((ws / rel).exists())
 
         with patch(
@@ -217,15 +191,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
             (ws / "config/build.json").read_text(encoding="utf-8")
         )
         self.assertIn(rel, created_build["generator_sources"])
-        page_after_create = generators_page(
-            _request(f"/problems/{self.problem}/generators"), self.problem, self.user
-        )
-        self.assertEqual(page_after_create.status_code, 200)
-        self.assertIn(
-            "generators/save-source",
-            page_after_create.body.decode("utf-8", errors="replace"),
-        )
-
         with patch(
             "app.impl.problem.generator.judgehost_compile_check_error", return_value=""
         ):
@@ -361,9 +326,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
                 content='#include "testlib.h"\nint main( { return 0; }\n',
             )
         self.assertEqual(failed.status_code, 303)
-        messages = _flash_messages_from_response(failed)
-        self.assertTrue(messages)
-        self.assertIn("compile check failed", messages[0].lower())
         self.assertFalse((ws / rel_bad).exists())
         build = json.loads(
             (ws / "config/build.json").read_text(encoding="utf-8")
@@ -397,41 +359,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual((ws / rel).read_text(encoding="utf-8"), content)
 
-    def test_solutions_page_uses_desc_metadata_for_expected_behavior(self) -> None:
-        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
-        source_rel = "solutions/std.cpp"
-        source = ws / source_rel
-        source.parent.mkdir(parents=True, exist_ok=True)
-        source.write_text("int main(){return 0;}\n", encoding="utf-8")
-        desc = ws / "solutions/std.cpp.desc"
-        desc.write_text(
-            "expected: wrong_answer\nnote: baseline negative case\n",
-            encoding="utf-8",
-        )
-
-        page = solutions_page(
-            _request(f"/problems/{self.problem}/solutions"), self.problem, self.user
-        )
-        self.assertEqual(page.status_code, 200)
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("solutions/std.cpp", html)
-        self.assertIn("wrong_answer (WA)", html)
-
-        set_tag = solutions_set_tag(
-            problem=self.problem,
-            user=self.user,
-            source_path=source_rel,
-            expected_behavior="accepted",
-        )
-        self.assertEqual(set_tag.status_code, 303)
-        self.assertTrue(desc.exists())
-        self.assertIn("expected: accepted", desc.read_text(encoding="utf-8"))
-
-        after = general_page(
-            _request(f"/problems/{self.problem}/general"), self.problem, self.user
-        )
-        self.assertEqual(after.status_code, 200)
-
     def test_solutions_set_tag_main_correct_updates_main_config(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
         token = uuid.uuid4().hex[:8]
@@ -440,13 +367,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         (ws / main_rel).write_text("int main(){return 0;}\n", encoding="utf-8")
         (ws / other_rel).write_text("int main(){return 1;}\n", encoding="utf-8")
         cfg_path = ws / "config" / "build.json"
-
-        before = solutions_page(
-            _request(f"/problems/{self.problem}/solutions"), self.problem, self.user
-        )
-        self.assertEqual(before.status_code, 200)
-        before_html = before.body.decode("utf-8", errors="replace")
-        self.assertIn("Main correct solution is required.", before_html)
 
         resp = solutions_set_tag(
             problem=self.problem,
@@ -459,13 +379,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
 
         cfg_after = json.loads(cfg_path.read_text(encoding="utf-8"))
         self.assertEqual(str(cfg_after.get("accepted_solution_source") or ""), main_rel)
-
-        after = solutions_page(
-            _request(f"/problems/{self.problem}/solutions"), self.problem, self.user
-        )
-        self.assertEqual(after.status_code, 200)
-        after_html = after.body.decode("utf-8", errors="replace")
-        self.assertNotIn("Main correct solution is required.", after_html)
 
     def test_solutions_set_tag_accepted_does_not_select_main_correct_source(
         self,
@@ -486,15 +399,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
 
         cfg_after = json.loads(cfg_path.read_text(encoding="utf-8"))
         self.assertNotIn("accepted_solution_source", cfg_after)
-
-        page = solutions_page(
-            _request(f"/problems/{self.problem}/solutions"), self.problem, self.user
-        )
-        self.assertEqual(page.status_code, 200)
-        self.assertIn(
-            "Main correct solution is required.",
-            page.body.decode("utf-8", errors="replace"),
-        )
 
     def test_solutions_rename_moves_desc_and_updates_config(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
@@ -580,9 +484,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(editor.status_code, 200)
         self.assertFalse((ws / target_rel).exists())
-        editor_html = editor.body.decode("utf-8", errors="replace")
-        self.assertIn('name="source_path" value="solutions/editor_case.cpp"', editor_html)
-
         updated_content = "int main(){return 42;}\n"
         saved = solutions_save_source(
             _request(
@@ -603,20 +504,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
             "expected: wrong_answer",
             (ws / f"{target_rel}.desc").read_text(encoding="utf-8"),
         )
-        messages = _flash_messages_from_response(saved)
-        self.assertEqual(messages, ["solution source and metadata saved."])
-
-        toast_page = solutions_editor_page(
-            _request_with_cookie(
-                f"/problems/{self.problem}/solutions/editor",
-                _flash_cookie_header("solution source saved"),
-                "path=solutions/editor_case.cpp",
-            ),
-            self.problem,
-            self.user,
-        )
-        toast_html = toast_page.body.decode("utf-8", errors="replace")
-        self.assertIn("solution source saved", toast_html)
 
     def test_solutions_save_source_ajax_success_returns_redirect(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
@@ -651,9 +538,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
             "expected: accepted",
             (ws / f"{target_rel}.desc").read_text(encoding="utf-8"),
         )
-        messages = _flash_messages_from_response(resp)
-        self.assertTrue(messages)
-        self.assertIn("solution source", messages[0])
 
     def test_validator_and_interactor_starters_remain_unsaved(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
@@ -666,8 +550,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
             _request(f"/problems/{self.problem}/validator"), self.problem, self.user
         )
         self.assertEqual(validator_resp.status_code, 200)
-        validator_html = validator_resp.body.decode("utf-8", errors="replace")
-        self.assertNotIn("registerValidation", validator_html)
         self.assertFalse((ws / validator_rel).exists())
 
         validator_create_resp = validator_page(
@@ -679,18 +561,12 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
             self.user,
         )
         self.assertEqual(validator_create_resp.status_code, 200)
-        validator_create_html = validator_create_resp.body.decode(
-            "utf-8", errors="replace"
-        )
-        self.assertIn("registerValidation", validator_create_html)
         self.assertFalse((ws / validator_rel).exists())
 
         interactor_resp = interactor_page(
             _request(f"/problems/{self.problem}/interactor"), self.problem, self.user
         )
         self.assertEqual(interactor_resp.status_code, 200)
-        interactor_html = interactor_resp.body.decode("utf-8", errors="replace")
-        self.assertNotIn("registerInteraction", interactor_html)
         self.assertFalse((ws / interactor_rel).exists())
 
         interactor_create_resp = interactor_page(
@@ -702,10 +578,6 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
             self.user,
         )
         self.assertEqual(interactor_create_resp.status_code, 200)
-        interactor_create_html = interactor_create_resp.body.decode(
-            "utf-8", errors="replace"
-        )
-        self.assertIn("registerInteraction", interactor_create_html)
         self.assertFalse((ws / interactor_rel).exists())
 
         with patch(

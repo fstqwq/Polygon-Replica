@@ -3,7 +3,6 @@ import shutil
 from pathlib import Path
 
 from app.impl.preview.preview import (
-    preview_page,
     preview_save,
     statement_attachment_delete,
     statement_attachment_upload,
@@ -18,35 +17,11 @@ from app.service.statement.render import (
     ensure_statement_language_sources,
 )
 from tests.backend_e2e_fixture import BackendE2ETestBase
-from tests.ui_support import _flash_messages_from_response, _request
 
 TEXTAREA_MAX_BYTES = int(CONFIG_REGISTRY.defaults()["TEXTAREA_MAX_BYTES"])
 
 
 class TestStatementRoutes(BackendE2ETestBase):
-    def test_preview_page_uses_requested_language_sections(self) -> None:
-        ws = Path(runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
-        english_dir = ws / "statement-sections" / "english"
-        chinese_dir = ws / "statement-sections" / "chinese"
-        english_dir.mkdir(parents=True, exist_ok=True)
-        chinese_dir.mkdir(parents=True, exist_ok=True)
-        (english_dir / "legend.tex").write_text("English legend body.\n", encoding="utf-8")
-        (chinese_dir / "legend.tex").write_text("Chinese legend body.\n", encoding="utf-8")
-
-        resp = preview_page(
-            _request(
-                f"/problems/{self.problem}/statement",
-                "language=chinese",
-            ),
-            self.problem,
-            self.user,
-        )
-
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("Chinese legend body.", html)
-        self.assertIn('name="language" value="chinese"', html)
-
     def test_statement_language_add_creates_seed_files_and_redirects_to_language(self) -> None:
         ws = Path(runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
         resp = statement_language_add(self.problem, self.user, language="japanese", page="statement")
@@ -91,12 +66,6 @@ class TestStatementRoutes(BackendE2ETestBase):
         self.assertEqual(resp.headers.get("location", ""), f"/problems/{self.problem}/statement")
         self.assertFalse((ws / "statement-sections" / "japanese").exists())
 
-        page = preview_page(_request(f"/problems/{self.problem}/statement"), self.problem, self.user)
-        self.assertEqual(page.status_code, 200)
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("/statement/languages/add", html)
-        self.assertNotIn("/statement/languages/delete", html)
-
     def test_statement_compile_asset_upload_stores_file_under_shared_root(self) -> None:
         ws = Path(runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
         upload = self._FakeUpload("diagram.png", b"PNG")
@@ -139,6 +108,15 @@ class TestStatementRoutes(BackendE2ETestBase):
         )
 
     def test_preview_save_rejects_statement_textarea_over_shared_limit(self) -> None:
+        ws = Path(
+            runtime.workspace_service.workspace_context(
+                self.problem,
+                self.user,
+                include_recent=False,
+            )["workspace"]["path"]
+        )
+        legend_path = ws / "statement-sections" / "english" / "legend.tex"
+        before = legend_path.read_bytes()
         oversized = ("L" * (TEXTAREA_MAX_BYTES + 32)) + "\n"
         resp = preview_save(
             self.problem,
@@ -153,7 +131,7 @@ class TestStatementRoutes(BackendE2ETestBase):
             preview_id="",
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertIn("statement legend is too long", _flash_messages_from_response(resp)[0])
+        self.assertEqual(legend_path.read_bytes(), before)
 
     def test_preview_save_normalizes_textarea_newlines_to_lf(self) -> None:
         ws = Path(runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])

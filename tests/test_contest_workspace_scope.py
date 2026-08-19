@@ -472,7 +472,6 @@ class TestContestWorkspaceScope(ContestActionBase):
                         )
 
         self.assertEqual(directory.status_code, 200, directory.text)
-        self.assertNotIn('data-code-editor="1"', directory.text)
 
         self.assertEqual(created.status_code, 303, created.text)
         created_location = urlsplit(created.headers["location"])

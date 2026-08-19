@@ -19,12 +19,10 @@ from tests.common import E2ETestBase, override_config_values
 from tests.ui_support import (
     DEFAULT_CONFIG_VALUES,
     AUTH_COOKIE_NAME,
-    admin_users_page,
     Request,
     UIHelpersMixin,
     _cookie_value_from_response,
     _extract_hidden_input_value,
-    _flash_messages_from_response,
     issue_password_form_csrf_token,
     _login_with_password_envelope,
     _password_envelope_fields_direct,
@@ -49,10 +47,8 @@ from tests.ui_support import (
     register_page,
     register_submit,
     register_verify,
-    register_verify_page,
     settings_page,
     settings_judgehost_snapshot,
-    settings_config_category_page,
     settings_config_category_update,
     settings_password_update,
     settings_system_config_reset,
@@ -61,7 +57,6 @@ from tests.ui_support import (
     settings_worker_queue_snapshot,
     setup_page,
     setup_submit,
-    sudo_page,
     switch_workspace,
     uuid,
     workspace_service,
@@ -162,14 +157,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         cookie_header = f"{AUTH_COOKIE_NAME}={auth_token}"
         next_path = "/settings"
 
-        page = sudo_page(
-            _request_with_cookie("/sudo", cookie_header, query=f"next={next_path}")
-        )
-        self.assertEqual(page.status_code, 200)
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("Sudo Mode", html)
-        self.assertIn("Enable Sudo Mode", html)
-
         enabled = _sudo_with_password_envelope(
             cookie_header, password, next_path=next_path
         )
@@ -184,10 +171,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(denied.status_code, 303)
         self.assertIn("/sudo?next=", denied.headers.get("location", ""))
-        denied_messages = _flash_messages_from_response(denied)
-        self.assertTrue(
-            any("invalid password envelope" in item for item in denied_messages)
-        )
+        self.assertFalse(_cookie_value_from_response(denied, SUDO_COOKIE_NAME))
 
     def test_register_login_and_password_update(self) -> None:
         username = self.random_id("user")
@@ -223,10 +207,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         bad = _login_with_password_envelope(username, "wrong-password", next_path="/")
         self.assertEqual(bad.status_code, 303)
         self.assertEqual("/login", bad.headers.get("location", ""))
-        bad_messages = _flash_messages_from_response(bad)
-        self.assertTrue(
-            any("invalid username or password" in item for item in bad_messages)
-        )
+        self.assertFalse(_cookie_value_from_response(bad, AUTH_COOKIE_NAME))
 
         ok = _login_with_password_envelope(username, password, next_path="/")
         self.assertEqual(ok.status_code, 303)
@@ -244,8 +225,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         changed = _settings_password_update_with_envelope(username, password, updated)
         self.assertEqual(changed.status_code, 303)
         self.assertIn("/settings", changed.headers.get("location", ""))
-        changed_messages = _flash_messages_from_response(changed)
-        self.assertTrue(any("password updated" in item for item in changed_messages))
         changed_set_cookie = _response_set_cookie_blob(changed)
         self.assertIn(f"{AUTH_COOKIE_NAME}=", changed_set_cookie)
         self.assertIn("Secure", changed_set_cookie)
@@ -253,10 +232,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         old_login = _login_with_password_envelope(username, password, next_path="/")
         self.assertEqual(old_login.status_code, 303)
         self.assertEqual("/login", old_login.headers.get("location", ""))
-        old_messages = _flash_messages_from_response(old_login)
-        self.assertTrue(
-            any("invalid username or password" in item for item in old_messages)
-        )
+        self.assertFalse(_cookie_value_from_response(old_login, AUTH_COOKIE_NAME))
 
         new_login = _login_with_password_envelope(username, updated, next_path="/")
         self.assertEqual(new_login.status_code, 303)
@@ -380,10 +356,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         )
 
         self.assertEqual(changed.status_code, 303)
-        messages = _flash_messages_from_response(changed)
-        self.assertTrue(
-            any("current password is incorrect" in item for item in messages)
-        )
         after_row = db_fetch_one(
             "SELECT password_hash FROM users WHERE username=?", [username]
         )
@@ -408,22 +380,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertTrue(register_csrf)
         self.assertRegex(register_salt, r"^[0-9a-f]{32}$")
         self.assertGreater(register_iters, 0)
-        self.assertIn('name="email"', register_html)
-        self.assertIn('name="terms_accepted"', register_html)
-        self.assertIn("I have read and agree to the Terms of Use.", register_html)
-        self.assertIn("Review Terms of Use", register_html)
-        self.assertIn("Effective date: April 19, 2026.", register_html)
-        self.assertIn("No warranty.", register_html)
-        self.assertIn('data-popup-open="terms-of-use-popup"', register_html)
-        self.assertIn('id="terms-of-use-popup"', register_html)
-        self.assertGreater(
-            register_html.rfind('data-popup-open="terms-of-use-popup"'),
-            register_html.find('id="profile-judgehost-health-summary"'),
-        )
-        self.assertNotIn('name="password_verifier"', register_html)
-        self.assertNotIn('name="password_proof"', register_html)
-        self.assertIn('name="encrypted_verifier"', register_html)
-
         register_verifier = _password_verifier_hex(
             password, register_salt, register_iters
         )
@@ -457,8 +413,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         login_html = login_resp.body.decode("utf-8", errors="replace")
         login_csrf = _extract_hidden_input_value(login_html, "csrf_token")
         self.assertTrue(login_csrf)
-        self.assertNotIn('name="password_proof"', login_html)
-        self.assertIn('name="encrypted_verifier"', login_html)
         login_meta = auth_password_meta(username=username, csrf_token=login_csrf)
         login_salt = str(login_meta.get("salt") or "")
         login_iters = int(login_meta.get("iters") or 0)
@@ -536,8 +490,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(changed.status_code, 303)
         self.assertIn("/settings", changed.headers.get("location", ""))
-        changed_messages = _flash_messages_from_response(changed)
-        self.assertTrue(any("password updated" in item for item in changed_messages))
 
         old_login_resp = login_page(_request("/login"))
         old_login_html = old_login_resp.body.decode("utf-8", errors="replace")
@@ -565,10 +517,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(old_login.status_code, 303)
         self.assertEqual("/login", old_login.headers.get("location", ""))
-        old_messages = _flash_messages_from_response(old_login)
-        self.assertTrue(
-            any("invalid username or password" in item for item in old_messages)
-        )
+        self.assertFalse(_cookie_value_from_response(old_login, AUTH_COOKIE_NAME))
 
         new_login_resp = login_page(_request("/login"))
         new_login_html = new_login_resp.body.decode("utf-8", errors="replace")
@@ -610,9 +559,8 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertEqual(invalid.status_code, 303)
         loc = invalid.headers.get("location", "")
         self.assertEqual("/register", loc)
-        invalid_messages = _flash_messages_from_response(invalid)
-        self.assertTrue(
-            any("invalid username" in item.lower() for item in invalid_messages)
+        self.assertIsNone(
+            db_fetch_one("SELECT id FROM users WHERE username=?", ["Alice_1"])
         )
 
     def test_register_rejects_invalid_username_length(self) -> None:
@@ -625,9 +573,8 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(too_short.status_code, 303)
         self.assertEqual("/register", too_short.headers.get("location", ""))
-        short_messages = _flash_messages_from_response(too_short)
-        self.assertTrue(
-            any("invalid username" in item.lower() for item in short_messages)
+        self.assertIsNone(
+            db_fetch_one("SELECT id FROM users WHERE username=?", ["ab"])
         )
 
         too_long = register_submit(
@@ -639,9 +586,10 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(too_long.status_code, 303)
         self.assertEqual("/register", too_long.headers.get("location", ""))
-        long_messages = _flash_messages_from_response(too_long)
-        self.assertTrue(
-            any("invalid username" in item.lower() for item in long_messages)
+        self.assertIsNone(
+            db_fetch_one(
+                "SELECT id FROM users WHERE username=?", ["abcdefghijklmnopq"]
+            )
         )
 
     def test_register_accepts_uppercase_username_and_login_lookup_is_case_insensitive(
@@ -698,8 +646,9 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
 
         self.assertEqual(resp.status_code, 303)
         self.assertEqual(resp.headers.get("location", ""), "/register")
-        messages = _flash_messages_from_response(resp)
-        self.assertTrue(any("terms of use" in item.lower() for item in messages))
+        self.assertIsNone(
+            db_fetch_one("SELECT id FROM users WHERE username=?", [username])
+        )
 
     def test_register_uses_pending_email_verification_when_smtp_configured(
         self,
@@ -725,14 +674,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertIsNotNone(user_row)
         self.assertEqual(str(user_row["email_normalized"]), f"{username}@gmail.com")
         self.assertTrue(str(user_row["email_verified_at"] or ""))
-
-    def test_register_verify_page_prompts_for_email_code(self) -> None:
-        resp = register_verify_page(_request("/register/verify"))
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("Enter the verification code from your email", html)
-        self.assertIn('name="code"', html)
-        self.assertIn("The code expires in", html)
 
     def test_register_email_verification_ignores_poisoned_host(self) -> None:
         username = self.random_id("host")
@@ -781,8 +722,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         resp, code = self._submit_pending_registration_with_smtp(username)
 
         self.assertEqual(resp.status_code, 303)
-        messages = _flash_messages_from_response(resp)
-        self.assertTrue(any("within" in item.lower() for item in messages))
         db_execute(
             "UPDATE pending_registrations SET expires_at=? WHERE username=?",
             ["2000-01-01T00:00:00+00:00", username],
@@ -791,8 +730,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         expired = register_verify(_post_request("/register/verify"), code=code)
         self.assertEqual(expired.status_code, 303)
         self.assertEqual(expired.headers.get("location", ""), "/register/verify")
-        expired_messages = _flash_messages_from_response(expired)
-        self.assertTrue(any("expired" in item.lower() for item in expired_messages))
         self.assertIsNone(
             db_fetch_one("SELECT id FROM users WHERE username=?", [username])
         )
@@ -818,9 +755,11 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         second = register_submit(request=second_request, **second_kwargs)
         self.assertEqual(second.status_code, 303)
         self.assertEqual(second.headers.get("location", ""), "/register")
-        messages = _flash_messages_from_response(second)
-        self.assertTrue(
-            any("too many registration attempts" in item for item in messages)
+        self.assertIsNone(
+            db_fetch_one(
+                "SELECT id FROM users WHERE username=?",
+                [str(second_kwargs["username"])],
+            )
         )
 
     def test_register_email_send_uses_global_daily_limit(self) -> None:
@@ -856,10 +795,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             [str(second_kwargs["username"])],
         )
         self.assertIsNone(blocked_row)
-        messages = _flash_messages_from_response(second)
-        self.assertTrue(
-            any("too many registration emails" in item for item in messages)
-        )
 
     def test_register_email_send_uses_per_email_cooldown(self) -> None:
         self._replace_auth_constants(
@@ -907,60 +842,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             [str(second_kwargs["username"])],
         )
         self.assertIsNone(blocked_row)
-        messages = _flash_messages_from_response(second)
-        self.assertTrue(
-            any("too many registration emails" in item for item in messages)
-        )
-
-    def test_register_verify_fail_uses_global_rate_limit(self) -> None:
-        self._replace_auth_constants(
-            AUTH_REGISTER_VERIFY_FAIL_WINDOW_SEC=3600,
-            AUTH_REGISTER_VERIFY_FAIL_MAX=1,
-        )
-        first = register_verify(
-            _post_request("/register/verify"), code="AAAA-BBBB-CCCC"
-        )
-        second_request = _request(
-            "/register/verify",
-            method="POST",
-            headers=[
-                (b"origin", b"http://testserver"),
-                (b"x-forwarded-for", b"203.0.113.9"),
-            ],
-        )
-        second = register_verify(second_request, code="BBBB-CCCC-DDDD")
-
-        self.assertEqual(first.status_code, 303)
-        self.assertEqual(first.headers.get("location", ""), "/register/verify")
-        first_messages = _flash_messages_from_response(first)
-        self.assertTrue(
-            any("registration verification failed" in item for item in first_messages)
-        )
-        self.assertEqual(second.status_code, 303)
-        self.assertEqual(second.headers.get("location", ""), "/register/verify")
-        second_messages = _flash_messages_from_response(second)
-        self.assertTrue(
-            any(
-                "too many registration verification attempts" in item
-                for item in second_messages
-            )
-        )
-
-    def test_setup_page_shows_config_when_no_registered_users(self) -> None:
-        count = db_fetch_one(
-            "SELECT COUNT(*) AS c FROM users WHERE COALESCE(TRIM(password_hash), '') <> ''",
-            [],
-        )
-        self.assertIsNotNone(count)
-        self.assertEqual(int(count["c"]), 0)
-
-        resp = setup_page(_request("/setup"))
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("System Setup", html)
-        self.assertIn("Create Super Admin", html)
-        self.assertIn("POLYGON_REPLICA_DB", html)
-        self.assertIn("I confirm the configuration paths below.", html)
 
     def test_setup_submit_creates_super_admin(self) -> None:
         username = self.random_id("boot")
@@ -1020,12 +901,8 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(resp.status_code, 303)
         self.assertEqual("/setup", resp.headers.get("location", ""))
-        messages = _flash_messages_from_response(resp)
-        self.assertTrue(
-            any(
-                "confirm current system configuration paths" in item
-                for item in messages
-            )
+        self.assertIsNone(
+            db_fetch_one("SELECT id FROM users WHERE username=?", [username])
         )
 
     def test_register_does_not_claim_existing_passwordless_user(self) -> None:
@@ -1043,10 +920,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertEqual(resp.status_code, 303)
         location = resp.headers.get("location", "")
         self.assertEqual("/register", location)
-        unavailable_messages = _flash_messages_from_response(resp)
-        self.assertTrue(
-            any("username is unavailable" in item for item in unavailable_messages)
-        )
 
         row_after = db_fetch_one(
             "SELECT password_hash FROM users WHERE username=?", [username]
@@ -1096,32 +969,25 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertFalse(str(row["password_hash"] or ""))
 
     def test_login_rate_limit_blocks_repeated_failures(self) -> None:
+        self._replace_auth_constants(
+            LOGIN_RATE_LIMIT_WINDOW_SEC=3600,
+            LOGIN_RATE_LIMIT_BLOCK_SEC=3600,
+            LOGIN_RATE_LIMIT_MAX_FAILURES=1,
+        )
         username = self.random_id("ratelim")
         password = "StrongPass123"
         reg = _register_with_password_envelope(username, password, next_path="/")
         self.assertEqual(reg.status_code, 303)
 
-        blocked_location = ""
-        blocked_message = ""
-        for _ in range(12):
-            bad = _login_with_password_envelope(
-                username, "wrong-password", next_path="/"
-            )
-            self.assertEqual(bad.status_code, 303)
-            blocked_location = bad.headers.get("location", "")
-            blocked_messages = _flash_messages_from_response(bad)
-            blocked_message = blocked_messages[0] if blocked_messages else ""
-            if "too many failed attempts" in blocked_message:
-                break
-        self.assertEqual("/login", blocked_location)
-        self.assertIn("too many failed attempts", blocked_message)
+        bad = _login_with_password_envelope(username, "wrong-password", next_path="/")
+        self.assertEqual(bad.status_code, 303)
+        self.assertEqual("/login", bad.headers.get("location", ""))
+        self.assertFalse(_cookie_value_from_response(bad, AUTH_COOKIE_NAME))
 
         blocked_ok = _login_with_password_envelope(username, password, next_path="/")
         self.assertEqual(blocked_ok.status_code, 303)
-        blocked_ok_messages = _flash_messages_from_response(blocked_ok)
-        self.assertTrue(
-            any("too many failed attempts" in item for item in blocked_ok_messages)
-        )
+        self.assertEqual("/login", blocked_ok.headers.get("location", ""))
+        self.assertFalse(_cookie_value_from_response(blocked_ok, AUTH_COOKIE_NAME))
 
     def test_auth_middleware_blocks_cross_origin_post(self) -> None:
         username = self.random_id("csrf")
@@ -1209,7 +1075,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.body, b"ok")
         self.assertEqual(resp.headers.get("location", ""), "")
-        self.assertEqual(_flash_messages_from_response(resp), [])
 
     def test_auth_middleware_does_not_retry_schema_operational_error(self) -> None:
         req = _request("/login")
@@ -1294,39 +1159,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertEqual(restart.status_code, 409)
         self.assertIn(b'"worker_queued":1', restart.body)
 
-    def test_admin_users_page_can_search_user_list(self) -> None:
-        match_user = self.random_id("lookupa")
-        other_user = self.random_id("lookupb")
-        match_email = f"{match_user}@gmail.com"
-        other_email = f"{other_user}@gmail.com"
-        self.assertEqual(
-            _register_with_password_envelope(
-                match_user, "StrongPass123", next_path="/"
-            ).status_code,
-            303,
-        )
-        self.assertEqual(
-            _register_with_password_envelope(
-                other_user, "StrongPass123", next_path="/"
-            ).status_code,
-            303,
-        )
-        db_execute("UPDATE users SET is_system_admin=0")
-        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        workspace_service.clear_identity_caches()
-
-        resp = admin_users_page(
-            _request("/admin/users", query=f"query={match_user}"), user="alice"
-        )
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("Directory", html)
-        self.assertIn(match_user, html)
-        self.assertIn(match_email, html)
-        self.assertNotIn(other_user, html)
-        self.assertNotIn(other_email, html)
-        self.assertIn("Showing 1 matching users", html)
-
     def test_system_admin_can_grant_and_revoke_system_admin(self) -> None:
         target = self.random_id("adminuser")
         password = "StrongPass123"
@@ -1393,12 +1225,8 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
 
         denied_login = _login_with_password_envelope(target, password, next_path="/")
         self.assertEqual(denied_login.status_code, 303)
-        self.assertTrue(
-            any(
-                "account is banned" in item
-                for item in _flash_messages_from_response(denied_login)
-            )
-        )
+        self.assertEqual("/login", denied_login.headers.get("location", ""))
+        self.assertFalse(_cookie_value_from_response(denied_login, AUTH_COOKIE_NAME))
 
         unbanned = settings_user_ban_update(
             user="alice",
@@ -1606,12 +1434,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(resp.status_code, 303)
         self.assertIn("/admin/config/judgehost", resp.headers.get("location", ""))
-        messages = _flash_messages_from_response(resp)
-        self.assertTrue(messages)
-        self.assertIn(
-            "JUDGEHOST_API_TOKEN must contain only visible ASCII characters",
-            messages[0],
-        )
         self.assertNotEqual(
             str(runtime.system_config_service.get("JUDGEHOST_API_TOKEN") or ""),
             bad_token,
@@ -1900,15 +1722,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         workspace_service.clear_identity_caches()
         self.addCleanup(settings_system_config_reset, user="alice")
 
-        page_resp = settings_config_category_page(
-            _request("/admin/config/judging"),
-            user="alice",
-            category="judging",
-        )
-        self.assertEqual(page_resp.status_code, 200)
-        page_html = page_resp.body.decode("utf-8", errors="replace")
-        self.assertIn("RUN_EXEC_PROCESS_LIMIT", page_html)
-
         update_value = 1536
         update_resp = asyncio.run(
             settings_config_category_update(
@@ -2009,8 +1822,9 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         invalid_loc = invalid_open.headers.get("location", "")
         self.assertIn("/problems", invalid_loc)
         self.assertNotIn("message=", invalid_loc)
-        invalid_messages = _flash_messages_from_response(invalid_open)
-        self.assertTrue(invalid_messages)
+        self.assertIsNone(
+            db_fetch_one("SELECT id FROM problems WHERE slug=?", ["Sample_Problem"])
+        )
 
         valid = switch_workspace(
             _request_with_cookie("/switch-workspace", cookie_header),

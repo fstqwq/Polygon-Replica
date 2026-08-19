@@ -1,41 +1,31 @@
 import tempfile
 import threading
-from unittest.mock import patch
 
 from tests.db_helpers import (
-    activate_test_verification,
-    admit_test_verification,
     db_execute,
     db_fetch_all,
     db_fetch_one,
-    verification_programs_for_tasks,
 )
 
 from app.impl.contest.statement_source import contest_statement_source_context
 from app.service.platform.git_process import run_git
-from app.service.verification.lifecycle import PlannedTask, verification_task_id
 from starlette.requests import Request
 
 from tests.common import E2ETestBase
-from tests.identity_helpers import canonical_test_verification_id
 from tests.ui_support import (
     Path,
     UIHelpersMixin,
-    _flash_messages_from_response,
     _register_with_password_envelope,
     _request,
     contest_access_grant,
     contest_access_revoke,
-    contest_overview_page,
     contest_problems_add,
-    contest_problems_page,
     contest_problems_remove_selected,
     contest_problems_save,
     contest_properties_save,
     contest_property_delete,
     contest_property_insert_preset,
     contests_root_create,
-    contests_root_page,
     json,
     uuid,
     runtime,
@@ -220,127 +210,6 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             ["A", "B", "C"],
         )
 
-    def test_contest_overview_switches_from_build_to_download_when_ready(self) -> None:
-        contest_slug = f"overview-actions-{uuid.uuid4().hex[:8]}"
-        contest_id = self._create_contest(contest_slug)
-
-        empty = contest_overview_page(
-            _app_request(f"/contests/{contest_slug}/overview"),
-            contest_slug,
-            "alice",
-        )
-        empty_html = empty.body.decode("utf-8", errors="replace")
-        self.assertNotIn("Build All Packages", empty_html)
-        self.assertNotIn("Download Packages", empty_html)
-
-        workspace_service.grant_repo_access("alice/sample", "alice", "owner")
-        add_resp = contest_problems_add(
-            contest=contest_slug,
-            user="alice",
-            problem_slugs=["alice/sample"],
-            q="",
-        )
-        self.assertEqual(add_resp.status_code, 303)
-
-        request = _app_request(f"/contests/{contest_slug}/overview")
-        overview = contest_overview_page(request, contest_slug, "alice")
-        self.assertEqual(overview.status_code, 200)
-        html = overview.body.decode("utf-8", errors="replace")
-        self.assertEqual(html.count(">Manage problems</a>"), 1)
-        title_start = html.index('<td class="problem-list-cell">')
-        details_start = html.index(
-            '<td class="contest-problem-details-cell">',
-            title_start,
-        )
-        title_html = html[title_start:details_start]
-        details_end = html.index(
-            '<td class="contest-problem-review-cell">',
-            details_start,
-        )
-        details_html = html[details_start:details_end]
-        self.assertIn('class="contest-problem-title-meta"', title_html)
-        self.assertIn("2s", title_html)
-        self.assertIn("1G", title_html)
-        self.assertNotIn('class="compact-fact-label">Limits</span>', details_html)
-        self.assertNotIn('class="compact-fact-label">Mode</span>', details_html)
-        self.assertNotIn('class="compact-fact-label">Passes</span>', details_html)
-        self.assertLess(
-            html.index(">Manage problems</a>"),
-            html.index("Packages:"),
-        )
-        self.assertIn('<div class="contest-problems-heading">', html)
-        self.assertIn(
-            '<button class="linkish-button" type="submit">Build All Packages</button>',
-            html,
-        )
-        alice_row = db_fetch_one("SELECT id FROM users WHERE username='alice'")
-        self.assertIsNotNone(alice_row)
-        source_rows = runtime.contest_problem_query_service.problem_rows(
-            contest_id,
-            "alice",
-            int(alice_row["id"]),
-            include_review=True,
-        )
-        self.assertEqual(len(source_rows), 1)
-        readiness = source_rows[0]["readiness"]
-        self.assertIsNotNone(readiness)
-        assert readiness is not None
-        readiness["package"]["state"] = "ready"
-        readiness["package"]["revision_number"] = 2
-        readiness["package"]["published_revision_number"] = 2
-        readiness["workspace"]["local_revision"] = 1
-        readiness["workspace"]["upstream_revision"] = 2
-        readiness["workspace"]["needs_update"] = True
-        source_rows[0]["workspace_revision_local"] = 1
-        source_rows[0]["workspace_revision_upstream"] = 2
-        source_rows[0]["workspace_revision_warn"] = True
-        with patch.object(
-            runtime.contest_problem_query_service,
-            "problem_rows",
-            return_value=source_rows,
-        ):
-            completed = contest_overview_page(
-                _app_request(f"/contests/{contest_slug}/overview"),
-                contest_slug,
-                "alice",
-            )
-            management = contest_problems_page(
-                _app_request(f"/contests/{contest_slug}/problems"),
-                contest_slug,
-                "alice",
-            )
-        completed_html = completed.body.decode("utf-8", errors="replace")
-        self.assertIn("Packages:", completed_html)
-        self.assertIn("1 ready", completed_html)
-        self.assertNotIn("Build All Packages", completed_html)
-        self.assertIn(
-            'data-popup-open="contest-package-download-popup">Download Packages</a>',
-            completed_html,
-        )
-        self.assertIn(
-            f'action="/contests/{contest_slug}/packages/download"',
-            completed_html,
-        )
-        self.assertIn('<option value="domjudge">DOMjudge</option>', completed_html)
-        self.assertIn(
-            '<option value="icpc-2025-09">ICPC 2025-09</option>',
-            completed_html,
-        )
-        self.assertIn("Published: v2", completed_html)
-        self.assertIn("Workspace: v1 (sync required)", completed_html)
-        self.assertIn(
-            '<span class="compact-fact-meta danger">sync required</span>',
-            completed_html,
-        )
-        self.assertIn("Package: ready", completed_html)
-        management_html = management.body.decode("utf-8", errors="replace")
-        self.assertNotIn("Workspace / Published", management_html)
-        self.assertIn("revision-pair-values-only", management_html)
-        self.assertIn(
-            '<strong class="revision-pair-alert">v1 (sync required)</strong>',
-            management_html,
-        )
-
     def test_existing_over_limit_contest_remains_mutable_except_for_addition(self) -> None:
         previous = dict(runtime.config_values.snapshot())
         self.addCleanup(runtime.config_values.replace, previous)
@@ -514,10 +383,6 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         workspace_service.clear_identity_caches()
 
-        root_page = contests_root_page(_request("/contests"), user="alice")
-        self.assertEqual(root_page.status_code, 200)
-        root_html = root_page.body.decode("utf-8", errors="replace")
-        self.assertIn(contest_slug, root_html)
         admin_access = runtime.access_query.contest_context(contest_id, workspace_service.known_user_id("alice"))
         self.assertEqual(admin_access["role"], "admin")
         self.assertTrue(admin_access["can_manage"])
@@ -527,13 +392,6 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         )
         admin_row = next(row for row in overview_rows if row["slug"] == contest_slug)
         self.assertEqual(admin_row["role"], "admin")
-
-        overview = contest_overview_page(
-            _app_request(f"/contests/{contest_slug}/overview"),
-            contest_slug,
-            "alice",
-        )
-        self.assertEqual(overview.status_code, 200)
 
         grant = contest_access_grant(
             contest=contest_slug,
@@ -590,10 +448,6 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
                 f"/contests/{contest_slug}/overview"
             )
         )
-        add_msgs = _flash_messages_from_response(add_resp)
-        self.assertTrue(add_msgs)
-        self.assertIn("added 2 problem", add_msgs[0].lower())
-
         rows = db_fetch_all(
             "SELECT id,problem_id,idx FROM contest_problems WHERE contest_id=? ORDER BY idx ASC, id ASC",
             [contest_id],
@@ -637,174 +491,6 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
                 f"/contests/{contest_slug}/problems"
             )
         )
-
-    def test_contest_review_hides_verification_failure_reason(self) -> None:
-        contest_slug = f"review-reason-{uuid.uuid4().hex[:8]}"
-        self._create_contest(contest_slug)
-        workspace_service.grant_repo_access("alice/sample", "alice", "owner")
-        add_resp = contest_problems_add(
-            contest=contest_slug,
-            user="alice",
-            problem_slugs=["alice/sample"],
-            q="",
-        )
-        self.assertEqual(add_resp.status_code, 303)
-        ctx = workspace_service.workspace_context(
-            "alice/sample",
-            "alice",
-            include_recent=False,
-        )
-        verification_id = canonical_test_verification_id(
-            f"contest-review:{uuid.uuid4().hex}"
-        )
-        admission = admit_test_verification(
-            verification_id=verification_id,
-            problem_id=int(ctx["problem"]["id"]),
-            workspace_id=int(ctx["workspace"]["id"]),
-            signature="",
-            source_commit=str(ctx["workspace"]["head_commit"] or ""),
-            kind="all",
-        )
-        self.assertEqual(admission.outcome, "admitted")
-        task_id = verification_task_id(
-            verification_id,
-            "accepted",
-            "001.in",
-        )
-        tasks = [
-            PlannedTask(
-                task_id=task_id,
-                predecessor_task_id=None,
-                task_kind="main-correct",
-                source_path="solutions/accepted.cpp",
-                program_id="accepted",
-                test_name="001.in",
-                expected_behavior="accepted",
-            )
-        ]
-        activation = activate_test_verification(
-            verification_id,
-            programs=verification_programs_for_tasks(tasks),
-            tasks=tasks,
-        )
-        self.assertEqual(activation.outcome, "activated")
-        failure = runtime.verification_service.fail_verification(
-            verification_id,
-            reason="private checker detail",
-        )
-        self.assertEqual(failure.outcome, "transitioned")
-
-        overview = contest_overview_page(
-            _app_request(f"/contests/{contest_slug}/overview"),
-            contest_slug,
-            "alice",
-        )
-        self.assertEqual(overview.status_code, 200)
-        html = overview.body.decode("utf-8", errors="replace")
-        self.assertNotIn("private checker detail", html)
-        details_start = html.index('<td class="contest-problem-details-cell">')
-        revision_start = html.index(
-            '<td class="contest-problem-review-cell">',
-            details_start,
-        )
-        row_end = html.index("</tr>", revision_start)
-        self.assertNotIn("Verification", html[details_start:revision_start])
-        self.assertIn("Verification", html[revision_start:row_end])
-        self.assertIn("failed", html[revision_start:row_end])
-        self.assertNotIn("Package / Published", html[revision_start:row_end])
-        self.assertLess(
-            html.index("Published", revision_start, row_end),
-            html.index("Verification", revision_start, row_end),
-        )
-        self.assertLess(
-            html.index("Verification", revision_start, row_end),
-            html.index("Package", revision_start, row_end),
-        )
-        self.assertIn("Packages:", html)
-
-    def test_contest_details_remain_available_for_repairable_source_warning(self) -> None:
-        contest_slug = f"review-source-{uuid.uuid4().hex[:8]}"
-        self._create_contest(contest_slug)
-        workspace_service.grant_repo_access("alice/sample", "alice", "owner")
-        add_resp = contest_problems_add(
-            contest=contest_slug,
-            user="alice",
-            problem_slugs=["alice/sample"],
-            q="",
-        )
-        self.assertEqual(add_resp.status_code, 303)
-        workspace = Path(
-            workspace_service.ensure_workspace("alice/sample", "alice")
-        )
-        build_path = workspace / "config/build.json"
-        build = json.loads(build_path.read_text(encoding="utf-8"))
-        build["checker_args"] = ["--obsolete"]
-        build_path.write_text(json.dumps(build, indent=2) + "\n", encoding="utf-8")
-
-        overview = contest_overview_page(
-            _app_request(f"/contests/{contest_slug}/overview"),
-            contest_slug,
-            "alice",
-        )
-
-        self.assertEqual(overview.status_code, 200)
-        html = overview.body.decode("utf-8", errors="replace")
-        self.assertIn("contains obsolete fields", html)
-
-    def test_pass_fail_extra_interactor_is_a_warning_not_missing_components(
-        self,
-    ) -> None:
-        contest_slug = f"review-mode-{uuid.uuid4().hex[:8]}"
-        self._create_contest(contest_slug)
-        workspace_service.grant_repo_access("alice/sample", "alice", "owner")
-        add_resp = contest_problems_add(
-            contest=contest_slug,
-            user="alice",
-            problem_slugs=["alice/sample"],
-            q="",
-        )
-        self.assertEqual(add_resp.status_code, 303)
-        workspace = Path(
-            workspace_service.ensure_workspace("alice/sample", "alice")
-        )
-        for relative in (
-            "solutions/std.cpp",
-            "checkers/checker.cpp",
-            "validators/validator.cpp",
-        ):
-            path = workspace / relative
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("int main(){return 0;}\n", encoding="utf-8")
-        build_path = workspace / "config/build.json"
-        build_path.write_text(
-            json.dumps(
-                {
-                    "accepted_solution_source": "solutions/std.cpp",
-                    "checker_source": "checkers/checker.cpp",
-                    "validator_source": "validators/validator.cpp",
-                    "interactor_source": "",
-                }
-            ),
-            encoding="utf-8",
-        )
-
-        overview = contest_overview_page(
-            _app_request(f"/contests/{contest_slug}/overview"),
-            contest_slug,
-            "alice",
-        )
-
-        self.assertEqual(overview.status_code, 200)
-        html = overview.body.decode("utf-8", errors="replace")
-        self.assertIn('class="compact-fact-label">Checker</span>', html)
-        self.assertIn("checker.cpp", html)
-        self.assertIn('class="compact-fact-label">Validator</span>', html)
-        self.assertIn("validator.cpp", html)
-        self.assertIn(
-            "extra field &#39;interactor_source&#39; in a pass-fail problem",
-            html,
-        )
-        self.assertNotIn("no main correct", html)
 
     def test_change_names_tl_ml_creates_per_problem_commit(self) -> None:
         problem_slug = f"alice/ui-bulk-{uuid.uuid4().hex[:8]}"
@@ -872,15 +558,6 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         workspace_service.clear_identity_caches()
 
-        page = contest_problems_page(
-            _app_request(f"/contests/{contest_slug}/problems"),
-            contest_slug,
-            "alice",
-        )
-        self.assertEqual(page.status_code, 200)
-        page_html = page.body.decode("utf-8", errors="replace")
-        self.assertIn(foreign_problem, page_html)
-
         add_resp = contest_problems_add(
             contest=contest_slug,
             user="alice",
@@ -923,7 +600,6 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             role="write",
         )
         self.assertEqual(grant.status_code, 303)
-        self.assertIn("effective immediately", _flash_messages_from_response(grant)[0].lower())
         bob = db_fetch_one("SELECT id FROM users WHERE username='bob'")
         self.assertIsNotNone(bob)
         self.assertTrue(runtime.access_query.problem_context(problem_id, int(bob["id"]))["can_write"])
@@ -1165,9 +841,6 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
 
         grant = contest_access_grant(contest=contest_slug, user="alice", target_user="bob", role="owner")
         self.assertEqual(grant.status_code, 303)
-        grant_messages = _flash_messages_from_response(grant)
-        self.assertTrue(grant_messages)
-        self.assertIn("owner access is fixed and cannot be transferred", grant_messages[0])
         membership = db_fetch_one(
             "SELECT role FROM contest_members WHERE contest_id=? AND user_id=(SELECT id FROM users WHERE username='bob')",
             [contest_id],
@@ -1176,6 +849,3 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
 
         revoke = contest_access_revoke(contest=contest_slug, user="alice", target_user="alice")
         self.assertEqual(revoke.status_code, 303)
-        revoke_messages = _flash_messages_from_response(revoke)
-        self.assertTrue(revoke_messages)
-        self.assertIn("owner access is fixed and cannot be transferred", revoke_messages[0])

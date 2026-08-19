@@ -87,7 +87,6 @@ def _api_attr(name: str):
     raise AttributeError(f"api symbol not found: {name}")
 
 AUTH_COOKIE_NAME = runtime.config_values.AUTH_COOKIE_NAME
-FLASH_COOKIE_NAME = runtime.config_values.FLASH_COOKIE_NAME
 DEFAULT_CONFIG_VALUES = CONFIG_REGISTRY.defaults()
 session_user = _api_attr("session_user")
 workspace_revision_info = _api_attr("workspace_revision_info")
@@ -304,43 +303,12 @@ def _extract_hidden_input_value(html: str, name: str) -> str:
     return ""
 
 
-def _flash_messages_from_set_cookie(set_cookie: str | list[str]) -> list[str]:
-    token = _extract_cookie_value(set_cookie, FLASH_COOKIE_NAME)
-    if not token:
-        return []
-    try:
-        padded = token + ("=" * ((4 - (len(token) % 4)) % 4))
-        raw = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
-        payload = json.loads(raw)
-    except Exception:
-        return []
-    if not isinstance(payload, list):
-        return []
-    messages: list[str] = []
-    for item in payload:
-        text = str(item or "").strip()
-        if text:
-            messages.append(text)
-    return messages
-
-
-def _flash_messages_from_response(response) -> list[str]:
-    return _flash_messages_from_set_cookie(_response_set_cookie_headers(response))
-
-
 def _cookie_value_from_response(response, cookie_name: str) -> str:
     return _extract_cookie_value(_response_set_cookie_headers(response), cookie_name)
 
 
 def _response_set_cookie_blob(response) -> str:
     return "\n".join(_response_set_cookie_headers(response))
-
-
-def _flash_cookie_header(*messages: str) -> str:
-    safe = [str(msg or "").strip() for msg in messages if str(msg or "").strip()]
-    payload = json.dumps(safe, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    token = base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
-    return f"{FLASH_COOKIE_NAME}={token}"
 
 
 def _password_verifier_hex(password: str, salt_hex: str, iters: int) -> str:

@@ -7,7 +7,6 @@ from tests.db_helpers import (
 )
 
 import asyncio
-import base64
 import json
 import re
 import uuid
@@ -58,7 +57,6 @@ db = runtime.db
 workspace_service = runtime.workspace_service
 
 TEXTAREA_MAX_BYTES = int(CONFIG_REGISTRY.defaults()["TEXTAREA_MAX_BYTES"])
-FLASH_COOKIE_NAME = runtime.config_values.FLASH_COOKIE_NAME
 
 
 def _request(
@@ -99,57 +97,6 @@ def _extract_hidden_input_value(html: str, name: str) -> str:
     return match.group(1)
 
 
-def _response_set_cookie_headers(response) -> list[str]:
-    headers = getattr(response, "headers", None)
-    if headers is None:
-        return []
-    values: list[str] = []
-    try:
-        values = [str(item or "") for item in headers.getlist("set-cookie")]
-    except Exception:
-        values = []
-    if values:
-        return values
-    raw_headers = list(getattr(response, "raw_headers", []) or [])
-    for key, value in raw_headers:
-        if bytes(key).lower() == b"set-cookie":
-            values.append(bytes(value).decode("latin-1", errors="ignore"))
-    if values:
-        return values
-    single = str(headers.get("set-cookie", "") or "")
-    return [single] if single else []
-
-
-def _extract_cookie_value(set_cookie: str | list[str], cookie_name: str) -> str:
-    prefix = f"{cookie_name}="
-    headers = [str(item or "") for item in set_cookie] if isinstance(set_cookie, list) else [str(set_cookie or "")]
-    for header in headers:
-        first = str(header).split(";", 1)[0].strip()
-        if first.startswith(prefix):
-            return first[len(prefix) :]
-    return ""
-
-
-def _flash_messages_from_response(response) -> list[str]:
-    token = _extract_cookie_value(_response_set_cookie_headers(response), FLASH_COOKIE_NAME)
-    if not token:
-        return []
-    try:
-        padded = token + ("=" * ((4 - (len(token) % 4)) % 4))
-        raw = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
-        payload = json.loads(raw)
-    except Exception:
-        return []
-    if not isinstance(payload, list):
-        return []
-    result: list[str] = []
-    for item in payload:
-        text = str(item or "").strip()
-        if text:
-            result.append(text)
-    return result
-
-
 class TestSecurity(E2ETestBase):
     seed_default_workspace = True
 
@@ -170,11 +117,6 @@ class TestSecurity(E2ETestBase):
 
         async def close(self) -> None:
             return None
-
-    def _first_flash_message(self, response) -> str:
-        messages = _flash_messages_from_response(response)
-        self.assertTrue(messages)
-        return str(messages[0] or "")
 
     def _fixture_verification_root(self, *, problem: str, workspace_id: int, verification_id: str) -> tuple[str, Path]:
         artifact_root = runtime.storage_layout.prepare_verification_root(str(verification_id or "").strip()).resolve()
@@ -397,10 +339,6 @@ class TestSecurity(E2ETestBase):
             resp = run_cancel("alice/sample", "bob", verification_id=verification_id)
 
         self.assertEqual(resp.status_code, 303)
-        self.assertIn(
-            "not the owner of this verification",
-            self._first_flash_message(resp).lower(),
-        )
         cancel_execution.assert_not_called()
         verification_row = db_fetch_one("SELECT status,finished_at FROM verifications WHERE id=?", [verification_id])
         self.assertIsNotNone(verification_row)
@@ -514,9 +452,6 @@ class TestSecurity(E2ETestBase):
             content="pwned\n",
         )
         self.assertEqual(resp.status_code, 303)
-        messages = _flash_messages_from_response(resp)
-        self.assertTrue(messages)
-        self.assertIn("invalid path", messages[0].lower())
         self.assertFalse(marker.exists())
 
     def test_files_upload_rejects_path_traversal_escape(self) -> None:
@@ -533,7 +468,6 @@ class TestSecurity(E2ETestBase):
             )
         )
         self.assertEqual(response.status_code, 303)
-        self.assertIn("invalid path", self._first_flash_message(response).lower())
         self.assertFalse(marker.exists())
 
     def test_files_save_rejects_textarea_content_over_shared_limit(self) -> None:
@@ -546,7 +480,8 @@ class TestSecurity(E2ETestBase):
             content=oversized,
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertIn("file content is too long", self._first_flash_message(resp).lower())
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        self.assertFalse((ws / "notes/oversized.txt").exists())
 
     def test_files_upload_rejects_payload_over_shared_upload_limit(self) -> None:
         upload = self._FakeUpload(b"x" * 1025)
@@ -565,10 +500,8 @@ class TestSecurity(E2ETestBase):
             )
         )
         self.assertEqual(response.status_code, 303)
-        self.assertIn(
-            "uploaded file is too large",
-            self._first_flash_message(response).lower(),
-        )
+        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        self.assertFalse((ws / "notes/upload-too-large.txt").exists())
 
     def test_files_new_rejects_path_traversal_escape(self) -> None:
         marker = suite_root() / f"files-new-escape-{uuid.uuid4().hex[:8]}.txt"
@@ -580,10 +513,6 @@ class TestSecurity(E2ETestBase):
             name="../../" + marker.name,
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertIn(
-            "name must not contain path separators",
-            self._first_flash_message(resp).lower(),
-        )
         self.assertFalse(marker.exists())
 
     def test_files_new_directory_rejects_path_traversal_escape(self) -> None:
@@ -596,10 +525,6 @@ class TestSecurity(E2ETestBase):
             dir="notes",
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertIn(
-            "name must not contain path separators",
-            self._first_flash_message(resp).lower(),
-        )
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         self.assertFalse((ws / marker_name).exists())
 
@@ -614,7 +539,6 @@ class TestSecurity(E2ETestBase):
             kind="checker",
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertIn("template is only available", self._first_flash_message(resp).lower())
         self.assertFalse(marker.exists())
 
     def test_files_delete_rejects_path_traversal_escape(self) -> None:
@@ -627,7 +551,6 @@ class TestSecurity(E2ETestBase):
             path="../../" + marker.name,
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertIn("invalid path", self._first_flash_message(resp).lower())
         self.assertFalse(marker.exists())
 
     def test_files_delete_redirect_preserves_query_delimiter_for_directory_only(self) -> None:
@@ -662,9 +585,6 @@ class TestSecurity(E2ETestBase):
             dir="notes",
         )
         self.assertEqual(resp.status_code, 303)
-        messages = _flash_messages_from_response(resp)
-        self.assertTrue(messages)
-        self.assertIn("name must not contain path separators", messages[0].lower())
         self.assertTrue(old_abs.exists())
         self.assertFalse(marker.exists())
 
@@ -684,9 +604,6 @@ class TestSecurity(E2ETestBase):
             dir="notes",
         )
         self.assertEqual(resp.status_code, 303)
-        messages = _flash_messages_from_response(resp)
-        self.assertTrue(messages)
-        self.assertIn("hidden path is not allowed", messages[0].lower())
         self.assertTrue(old_abs.exists())
         self.assertFalse((ws / "notes/.env").exists())
 
@@ -706,10 +623,6 @@ class TestSecurity(E2ETestBase):
             dir="config",
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertIn(
-            "selected file is not in the current folder",
-            self._first_flash_message(resp).lower(),
-        )
         self.assertTrue(old_abs.exists())
         self.assertFalse((ws / "config/moved.txt").exists())
 
@@ -797,7 +710,6 @@ class TestSecurity(E2ETestBase):
             self.assertEqual(resp.status_code, 303)
             self.assertFalse(marker.exists())
             self.assertTrue(old_abs.exists())
-            self.assertIn("new ", self._first_flash_message(resp).lower())
 
     def test_component_source_rename_rejects_existing_destination(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
@@ -817,7 +729,6 @@ class TestSecurity(E2ETestBase):
         self.assertEqual(resp.status_code, 303)
         self.assertTrue((ws / old_rel).exists())
         self.assertEqual((ws / new_rel).read_text(encoding="utf-8"), "// existing\n")
-        self.assertIn("destination source already exists", self._first_flash_message(resp).lower())
 
     def test_component_source_rename_rejects_source_path_traversal(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
@@ -835,7 +746,6 @@ class TestSecurity(E2ETestBase):
         self.assertEqual(resp.status_code, 303)
         self.assertTrue((ws / default_rel).exists())
         self.assertFalse((ws / "validators/renamed_validator.cpp").exists())
-        self.assertIn("validator source is required", self._first_flash_message(resp).lower())
 
     def test_solutions_save_source_rejects_path_traversal_escape(self) -> None:
         marker = suite_root() / f"solution-save-escape-{uuid.uuid4().hex[:8]}.py"
@@ -849,7 +759,6 @@ class TestSecurity(E2ETestBase):
             expected_behavior="accepted",
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertTrue(self._first_flash_message(resp).strip())
         self.assertFalse(marker.exists())
 
     def test_solutions_set_tag_rejects_path_traversal_escape(self) -> None:
@@ -862,7 +771,6 @@ class TestSecurity(E2ETestBase):
             expected_behavior="accepted",
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertTrue(self._first_flash_message(resp).strip())
         self.assertFalse(marker.exists())
 
     def test_solutions_rename_rejects_destination_path_traversal(self) -> None:
@@ -881,7 +789,6 @@ class TestSecurity(E2ETestBase):
             new_path="../../" + marker.name,
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertTrue(self._first_flash_message(resp).strip())
         self.assertTrue(old_abs.exists())
         self.assertFalse(marker.exists())
 
@@ -900,7 +807,6 @@ class TestSecurity(E2ETestBase):
             source_path="../../" + marker.name,
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertTrue(self._first_flash_message(resp).strip())
         self.assertTrue(keep_abs.exists())
         self.assertFalse(marker.exists())
 
@@ -955,8 +861,5 @@ class TestSecurity(E2ETestBase):
         cfg.write_text(json.dumps(build, indent=2) + "\n", encoding="utf-8")
         resp = checker_set_standard(problem="alice/sample", user="alice", checker_name="../../evil")
         self.assertEqual(resp.status_code, 303)
-        messages = _flash_messages_from_response(resp)
-        self.assertTrue(messages)
-        self.assertIn("invalid standard checker name", messages[0].lower())
         payload = json.loads(cfg.read_text(encoding="utf-8"))
         self.assertEqual(payload.get("checker_source"), "checkers/wcmp.cpp")

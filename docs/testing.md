@@ -83,6 +83,22 @@ Keep one owning assertion and name the behavior it protects. Visual layout and
 copy quality are review concerns unless the product defines a precise
 presentation or accessibility contract.
 
+Do not use substring, regular-expression, element-count, or source-order
+assertions over rendered HTML as evidence that a UI capability exists. Finding
+a label, link, form action, CSS class, status word, or template fragment proves
+only that the server emitted those bytes; it does not prove that the action is
+authorized, accepted, persisted, executed, or retrievable. Exercise the action
+and observe its durable or externally visible result instead. Delete a UI test
+whose only outcome is matching presentation strings. When a behavioral UI test
+also contains such assertions, remove the presentation checks and retain the
+smallest action-to-outcome journey.
+
+Rendered-output assertions remain appropriate when the bytes themselves are
+the contract, such as escaping untrusted values, preventing sensitive-data
+disclosure, generating a downloadable document, or returning an external
+protocol payload. Name that contract explicitly and avoid mixing it with
+incidental page copy or layout.
+
 A UI workflow should have a small number of high-value entry-path scenarios.
 Shared domain behavior belongs in its owning service or protocol test instead
 of being repeated on every page. When a UI fix changes an existing scenario,

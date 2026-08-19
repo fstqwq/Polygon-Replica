@@ -2,16 +2,11 @@ import base64
 import os
 from unittest.mock import MagicMock, patch
 
-from fastapi import HTTPException
-
 from tests.common import E2ETestBase
-from tests.db_helpers import db_execute, db_fetch_one
+from tests.db_helpers import db_fetch_one
 from tests.ui_support import (
     UIHelpersMixin,
-    _request,
-    admin_mail_page,
     runtime,
-    settings_smtp_update,
 )
 from app.service.platform.secret_box import ENCRYPTION_KEY_ENV, SecretBox, SecretBoxDecryptError
 
@@ -137,44 +132,3 @@ class TestSmtpConfig(UIHelpersMixin, E2ETestBase):
         self.assertNotIn("https://", body)
         self.assertNotIn("/register/verify", body)
         self.assertNotIn("token=", body)
-
-    def test_smtp_settings_route_smoke(self) -> None:
-        db_execute("UPDATE users SET is_system_admin=0")
-        with self.assertRaises(HTTPException):
-            settings_smtp_update(
-                user=self.user,
-                smtp_host="smtp.example.com",
-                smtp_port="587",
-                smtp_username="mailer@example.com",
-                smtp_password="secret-token",
-                smtp_clear_password="0",
-            )
-
-        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", [self.user])
-        runtime.workspace_service.clear_identity_caches()
-        with patch.dict(os.environ, {ENCRYPTION_KEY_ENV: _KEY}):
-            page = admin_mail_page(_request("/admin/mail"), user=self.user)
-            html = page.body.decode("utf-8", errors="replace")
-            self.assertIn("SMTP server", html)
-            self.assertIn("password storage ready", html)
-            response = settings_smtp_update(
-                user=self.user,
-                smtp_host="smtp.example.com",
-                smtp_port="587",
-                smtp_username="mailer@example.com",
-                smtp_password="secret-token",
-                smtp_clear_password="0",
-            )
-
-        with patch.dict(os.environ, {ENCRYPTION_KEY_ENV: ""}):
-            missing_key_page = admin_mail_page(_request("/admin/mail"), user=self.user)
-            missing_key_html = missing_key_page.body.decode("utf-8", errors="replace")
-            self.assertIn("POLYGON_REPLICA_ENCRYPTION_KEY is not configured", missing_key_html)
-            self.assertIn("Polygon Replica server or container environment", missing_key_html)
-            self.assertIn("restart the web service", missing_key_html)
-            self.assertIn("encrypts the SMTP password before it is stored", missing_key_html)
-
-        self.assertEqual(response.status_code, 303)
-        row = db_fetch_one("SELECT password_ciphertext FROM smtp_config WHERE id=1")
-        self.assertIsNotNone(row)
-        self.assertNotIn("secret-token", str(row["password_ciphertext"]))

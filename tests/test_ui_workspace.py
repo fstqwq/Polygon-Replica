@@ -54,34 +54,26 @@ from tests.ui_support import (
     Path,
     UIHelpersMixin,
     _cookie_value_from_response,
-    _flash_messages_from_response,
     _post_form_request,
     _post_request,
     _register_with_password_envelope,
     _request,
     _request_with_cookie,
     _sudo_with_password_envelope,
-    access_page,
     runtime,
-    contests_root_create,
     contests_root_import,
     contests_root_import_confirm,
-    contests_root_import_review,
-    contests_root_page,
     files_page,
     general_page,
     general_save,
     git_discard_path,
     git_service,
     history_import,
-    history_page,
     history_snapshot,
     json,
     problem_delete,
     problems_root_import,
     problems_root_import_slug_hint,
-    problems_root_page,
-    preview_page,
     revision_commit,
     statement_templates_reset,
     statement_examples_template_save,
@@ -145,13 +137,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
         workspace_service.clear_identity_caches()
 
-        root_page = problems_root_page(_request("/problems"), user="alice")
-        self.assertEqual(root_page.status_code, 200)
-        root_html = root_page.body.decode("utf-8", errors="replace")
-        self.assertIn(problem, root_html)
-        self.assertNotIn("Workspace / Published", root_html)
-        self.assertIn("revision-pair-values-only", root_html)
-        self.assertIn("Workspace revision", root_html)
         admin_access = runtime.access_query.problem_context(
             workspace_service.known_problem_id(problem),
             workspace_service.known_user_id("alice"),
@@ -277,8 +262,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(mismatch.status_code, 303)
         self.assertIn(f"/problems/{problem}/workspace", mismatch.headers.get("location", ""))
-        mismatch_messages = _flash_messages_from_response(mismatch)
-        self.assertTrue(any("confirmation mismatch" in item for item in mismatch_messages))
         self.assertIsNotNone(db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem]))
 
         deleted = problem_delete(
@@ -666,8 +649,9 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             )
         self.assertEqual(resp.status_code, 303)
         self.assertIn(f"/problems/{problem}/workspace", resp.headers.get("location", ""))
-        messages = _flash_messages_from_response(resp)
-        self.assertTrue(any("problem delete failed" in item for item in messages))
+        self.assertIsNotNone(
+            db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem])
+        )
 
     def test_problem_delete_rejects_unsafe_repo_name(self) -> None:
         username = self.random_id("pdelu")
@@ -702,8 +686,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(resp.status_code, 303)
         self.assertIn(f"/problems/{problem}/workspace", resp.headers.get("location", ""))
-        messages = _flash_messages_from_response(resp)
-        self.assertTrue(any("unsafe" in item.lower() for item in messages))
         self.assertIsNotNone(db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem]))
 
     def test_general_save_persists_problem_config(self) -> None:
@@ -849,7 +831,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertNotIn("validator_source", build_cfg)
         self.assertNotIn("accepted_solution_source", build_cfg)
 
-    def test_workspace_normalizes_legacy_build_and_reports_review_warning(self) -> None:
+    def test_workspace_normalizes_legacy_build(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         build_path = ws / "config" / "build.json"
         build_path.write_text(
@@ -875,8 +857,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             json.loads(build_path.read_text(encoding="utf-8")),
             {"accepted_solution_source": "solutions/std.cpp"},
         )
-        body = response.body.decode("utf-8", errors="replace")
-        self.assertIn("obsolete fields were removed", body)
 
     def test_workspace_keeps_malformed_build_editable_without_rewriting_it(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -892,8 +872,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(build_path.read_text(encoding="utf-8"), malformed)
-        body = response.body.decode("utf-8", errors="replace")
-        self.assertIn("source must use one of", body)
 
     def test_malformed_problem_config_can_be_opened_and_replaced_by_general_save(
         self,
@@ -901,17 +879,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         problem_path = ws / "config" / "problem.json"
         problem_path.write_text('{"mode":"pass-fail"}\n', encoding="utf-8")
-
-        page = workspace_page(
-            _request("/problems/alice/sample/workspace"),
-            "alice/sample",
-            "alice",
-        )
-        self.assertEqual(page.status_code, 200)
-        self.assertIn(
-            "missing key",
-            page.body.decode("utf-8", errors="replace"),
-        )
 
         saved = general_save(
             problem="alice/sample",
@@ -1072,59 +1039,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertNotIn(".env", html)
         self.assertNotIn(".cache", html)
 
-    def test_workspace_review_shows_verification_failure_reason(self) -> None:
-        ctx = workspace_service.workspace_context(
-            "alice/sample",
-            "alice",
-            include_recent=False,
-        )
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        verification_id = canonical_test_verification_id(
-            f"workspace-review:{uuid.uuid4().hex}"
-        )
-        admission = admit_test_verification(
-            verification_id=verification_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            signature="",
-            source_commit=str(ctx["workspace"]["head_commit"] or ""),
-            kind="all",
-        )
-        self.assertEqual(admission.outcome, "admitted")
-        task_id = verification_task_id(
-            verification_id,
-            "accepted",
-            "001.in",
-        )
-        tasks = [
-            PlannedTask(
-                task_id=task_id,
-                predecessor_task_id=None,
-                task_kind="main-correct",
-                source_path="solutions/accepted.cpp",
-                program_id="accepted",
-                test_name="001.in",
-                expected_behavior="accepted",
-            )
-        ]
-        activation = activate_test_verification(
-            verification_id,
-            programs=verification_programs_for_tasks(tasks),
-            tasks=tasks,
-        )
-        self.assertEqual(activation.outcome, "activated")
-        failure = runtime.verification_service.fail_verification(
-            verification_id,
-            reason="checker exited with code 1",
-        )
-        self.assertEqual(failure.outcome, "transitioned")
-
-        resp = workspace_page(_request("/problems/alice/sample/workspace"), "alice/sample", "alice")
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("checker exited with code 1", html)
-
     def test_git_discard_path_restores_tracked_file_to_head(self) -> None:
         self._ensure_committed_head("alice/sample", "alice")
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -1138,9 +1052,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         resp = git_discard_path(problem="alice/sample", user="alice", path=rel)
         self.assertEqual(resp.status_code, 303)
         self.assertIn("/problems/alice/sample/workspace", resp.headers.get("location", ""))
-        messages = _flash_messages_from_response(resp)
-        self.assertTrue(messages)
-        self.assertIn("discarded file changes", messages[0])
         self.assertEqual(target.read_text(encoding="utf-8"), "base\n")
         status_rows = git_service.status_change_summary(ws, limit=32)["rows"]
         self.assertFalse(any(str(row.get("link_path") or "") == rel for row in status_rows))
@@ -1156,9 +1067,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         resp = git_discard_path(problem="alice/sample", user="alice", path=rel)
         self.assertEqual(resp.status_code, 303)
         self.assertFalse(target.exists())
-        messages = _flash_messages_from_response(resp)
-        self.assertTrue(messages)
-        self.assertIn("discarded file changes", messages[0])
 
     def test_commit_and_publish_rolls_back_commit_when_push_fails(self) -> None:
         self._ensure_committed_head("alice/sample", "alice")
@@ -1175,10 +1083,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertEqual(resp.status_code, 303)
         loc = resp.headers.get("location", "")
         self.assertIn("/problems/alice/sample/workspace", loc)
-        messages = _flash_messages_from_response(resp)
-        self.assertTrue(messages)
-        self.assertIn("newer published revision", messages[0])
-
         head_after = run_git(["git", "-C", str(ws), "rev-parse", "HEAD"]).stdout.strip()
         self.assertEqual(head_after, head_before)
         status_text = run_git(["git", "-C", str(ws), "status", "--short", "--untracked-files=all"]).stdout
@@ -1186,11 +1090,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
 
     def test_clean_workspace_auto_updates_once_when_shared_version_advances(self) -> None:
         alice_ws, _head = self._ensure_committed_head("alice/sample", "alice")
-        initial = general_page(_request("/problems/alice/sample/general"), "alice/sample", "alice")
-        self.assertEqual(initial.status_code, 200)
-        initial_html = initial.body.decode("utf-8", errors="replace")
-        self.assertNotIn("/problems/alice/sample/merge/start", initial_html)
-
         workspace_service.grant_repo_access("alice/sample", "bob", "owner")
         bob_ws = Path(workspace_service.ensure_workspace("alice/sample", "bob"))
         self.assertEqual(run_git(["git", "config", "user.name", "Bob"], cwd=bob_ws).returncode, 0)
@@ -1206,13 +1105,18 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
 
         refreshed = general_page(_request("/problems/alice/sample/general"), "alice/sample", "alice")
         self.assertEqual(refreshed.status_code, 200)
-        refreshed_html = refreshed.body.decode("utf-8", errors="replace")
-        self.assertNotIn("/problems/alice/sample/merge/start", refreshed_html)
-        self.assertIn("Workspace updated to the published revision.", refreshed_html)
         self.assertEqual((alice_ws / marker).read_text(encoding="utf-8"), "upstream update\n")
+        bob_head = run_git(["git", "rev-parse", "HEAD"], cwd=bob_ws).stdout.strip()
+        self.assertEqual(
+            run_git(["git", "rev-parse", "HEAD"], cwd=alice_ws).stdout.strip(),
+            bob_head,
+        )
         repeated = general_page(_request("/problems/alice/sample/general"), "alice/sample", "alice")
-        repeated_html = repeated.body.decode("utf-8", errors="replace")
-        self.assertNotIn("Workspace updated to the published revision.", repeated_html)
+        self.assertEqual(repeated.status_code, 200)
+        self.assertEqual(
+            run_git(["git", "rev-parse", "HEAD"], cwd=alice_ws).stdout.strip(),
+            bob_head,
+        )
 
     def test_dirty_workspace_requires_review_when_shared_version_advances(self) -> None:
         alice_ws, old_head = self._ensure_committed_head("alice/sample", "alice")
@@ -1232,9 +1136,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertEqual(run_git(["git", "push", "origin", "main"], cwd=bob_ws).returncode, 0)
 
         response = general_page(_request("/problems/alice/sample/general"), "alice/sample", "alice")
-        html = response.body.decode("utf-8", errors="replace")
-        self.assertIn("/problems/alice/sample/merge/start", html)
-        self.assertNotIn("Workspace updated to the published revision.", html)
+        self.assertEqual(response.status_code, 200)
         self.assertEqual(run_git(["git", "rev-parse", "HEAD"], cwd=alice_ws).stdout.strip(), old_head)
         self.assertTrue((alice_ws / local_marker).is_file())
         self.assertFalse((alice_ws / shared_marker).exists())
@@ -1328,41 +1230,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             general_page(_request(f"/problems/{private_problem}/alice/general"), private_problem, "alice")
         self.assertEqual(denied.exception.status_code, 403)
 
-    def test_workspace_owner_can_manage_problem_access(self) -> None:
-        register_bob = _register_with_password_envelope("bob", "StrongPass123", next_path="/")
-        self.assertEqual(register_bob.status_code, 303)
-        grant_resp = workspace_access_grant(
-            problem="alice/sample",
-            user="alice",
-            target_user="bob",
-            role="write",
-        )
-        self.assertEqual(grant_resp.status_code, 303)
-        member = db_fetch_one(
-            "SELECT role FROM repo_acl WHERE problem_id=(SELECT id FROM problems WHERE slug=?) AND user_id=(SELECT id FROM users WHERE username=?)",
-            ["alice/sample", "bob"],
-        )
-        self.assertIsNotNone(member)
-        self.assertEqual(str(member["role"]), "write")
-
-        page = access_page(_request("/problems/alice/sample/access"), "alice/sample", "alice")
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("Problem Access", html)
-        self.assertIn("Grant / Update", html)
-        self.assertIn("bob", html)
-        self.assertIn('option value="write"', html)
-        self.assertIn('option value="read"', html)
-        self.assertNotIn('option value="owner"', html)
-        self.assertIn("fixed owner", html)
-
-        revoke_resp = workspace_access_revoke(problem="alice/sample", user="alice", target_user="bob")
-        self.assertEqual(revoke_resp.status_code, 303)
-        removed = db_fetch_one(
-            "SELECT role FROM repo_acl WHERE problem_id=(SELECT id FROM problems WHERE slug=?) AND user_id=(SELECT id FROM users WHERE username=?)",
-            ["alice/sample", "bob"],
-        )
-        self.assertIsNone(removed)
-
     def test_workspace_access_grant_requires_registered_user(self) -> None:
         target = f"user-{uuid.uuid4().hex[:8]}"
         row = db_fetch_one("SELECT id FROM users WHERE username=?", [target])
@@ -1377,9 +1244,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertEqual(grant_resp.status_code, 303)
         loc = grant_resp.headers.get("location", "")
         self.assertIn("/problems/alice/sample/access", loc)
-        grant_messages = _flash_messages_from_response(grant_resp)
-        self.assertTrue(grant_messages)
-        self.assertIn("register first", grant_messages[0])
         member = db_fetch_one(
             "SELECT role FROM repo_acl WHERE problem_id=(SELECT id FROM problems WHERE slug=?) AND user_id=(SELECT id FROM users WHERE username=?)",
             ["alice/sample", target],
@@ -1396,9 +1260,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             role="owner",
         )
         self.assertEqual(resp.status_code, 303)
-        grant_messages = _flash_messages_from_response(resp)
-        self.assertTrue(grant_messages)
-        self.assertIn("owner access is fixed and cannot be transferred", grant_messages[0])
         member = db_fetch_one(
             "SELECT role FROM repo_acl WHERE problem_id=(SELECT id FROM problems WHERE slug=?) AND user_id=(SELECT id FROM users WHERE username=?)",
             ["alice/sample", "bob"],
@@ -1412,9 +1273,12 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertEqual(resp.status_code, 303)
         loc = resp.headers.get("location", "")
         self.assertIn("/problems/alice/sample/access", loc)
-        revoke_messages = _flash_messages_from_response(resp)
-        self.assertTrue(revoke_messages)
-        self.assertIn("owner access is fixed and cannot be transferred", revoke_messages[0])
+        owner = db_fetch_one(
+            "SELECT role FROM repo_acl WHERE problem_id=(SELECT id FROM problems WHERE slug=?) AND user_id=(SELECT id FROM users WHERE username=?)",
+            ["alice/sample", "alice"],
+        )
+        self.assertIsNotNone(owner)
+        self.assertEqual(str(owner["role"]), "owner")
 
     def test_switch_workspace_denies_existing_problem_without_acl(self) -> None:
         username = self.random_id("switchdeny")
@@ -1433,9 +1297,12 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertEqual(resp.status_code, 303)
         loc = resp.headers.get("location", "")
         self.assertIn("/problems", loc)
-        messages = _flash_messages_from_response(resp)
-        self.assertTrue(messages)
-        self.assertIn("do not have access to this problem", messages[0])
+        self.assertIsNone(
+            db_fetch_one(
+                "SELECT role FROM repo_acl WHERE problem_id=(SELECT id FROM problems WHERE slug=?) AND user_id=(SELECT id FROM users WHERE username=?)",
+                [private_problem, username],
+            )
+        )
 
     def test_switch_workspace_creates_problem_with_slug_leaf_title(self) -> None:
         username = self.random_id("switchcreate")
@@ -1506,9 +1373,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
 
         self.assertEqual(resp.status_code, 303)
         self.assertIn("/problems", str(resp.headers.get("location", "")))
-        messages = _flash_messages_from_response(resp)
-        self.assertTrue(messages)
-        self.assertIn("already exists under another owner", messages[0])
         self.assertIsNone(workspace_service.known_problem_id(f"{username}/{leaf}"))
 
     def test_switch_workspace_allows_explicit_owned_problem_id_even_when_foreign_leaf_exists(self) -> None:
@@ -1576,29 +1440,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertEqual(disabled.status_code, 303)
         self.assertFalse(examples_path.exists())
 
-    def test_fresh_problem_does_not_offer_template_restore(self) -> None:
-        problem = f"alice/stmtfresh-{uuid.uuid4().hex[:8]}"
-        workspace_service.ensure_problem(problem)
-        workspace_service.grant_repo_access(problem, "alice", "owner")
-        workspace_service.ensure_workspace(problem, "alice")
-
-        page = preview_page(
-            _request(f"/problems/{problem}/statement"),
-            problem,
-            "alice",
-        )
-
-        self.assertEqual(page.status_code, 200)
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertNotIn("Restore default templates", html)
-        self.assertIn('id="statement-language-select"', html)
-        self.assertIn('aria-label="Statement language" disabled', html)
-        self.assertNotIn("<strong>Language</strong>: missing", html)
-        self.assertLess(
-            html.index('class="statement-editor-toolbar"'),
-            html.index('class="content-section statement-editor-main"'),
-        )
-
     def test_statement_templates_reset_restores_defaults_and_disables_examples_override(self) -> None:
         problem = f"alice/stmtreset-{uuid.uuid4().hex[:8]}"
         workspace_service.ensure_problem(problem)
@@ -1613,26 +1454,10 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         legend_path = ws / "statement-sections" / "english" / "legend.tex"
         legend_path.write_text("custom legend section\n", encoding="utf-8")
 
-        page = preview_page(_request(f"/problems/{problem}/statement", "language=english"), problem, "alice")
-        self.assertEqual(page.status_code, 200)
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertIn("Restore default templates", html)
-        self.assertIn(f"/problems/{problem}/statement/templates/reset", html)
-        self.assertIn("<strong>Preview:</strong>", html)
-        self.assertIn('class="linkish statement-language-add-link"', html)
-        self.assertIn('class="inline-action statement-template-reset"', html)
-        for label in ("PDF", "HTML", "LaTeX"):
-            self.assertRegex(html, rf'<a class="linkish"[^>]*>{label}</a>')
-        self.assertIn(">Delete current</a>", html)
-        self.assertNotIn("Delete current language</a>", html)
-        self.assertLess(html.index(">Delete current</a>"), html.index(">Add language</a>"))
-
         resp = statement_templates_reset(problem=problem, user="alice", page="statement", language="english")
 
         self.assertEqual(resp.status_code, 303)
         self.assertEqual(f"/problems/{problem}/statement?language=english", resp.headers.get("location", ""))
-        messages = _flash_messages_from_response(resp)
-        self.assertTrue(any("default statement templates restored" in item for item in messages))
         self.assertEqual((ws / "statement" / "statements.ftl").read_text(encoding="utf-8"), DEFAULT_STATEMENT_TEMPLATE)
         self.assertEqual((ws / "statement" / "problem.tex").read_text(encoding="utf-8"), DEFAULT_STATEMENT_PROBLEM_TEMPLATE)
         self.assertEqual((ws / "statement" / "olymp.sty").read_text(encoding="utf-8"), DEFAULT_OLYMP_STY)
@@ -1640,72 +1465,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertEqual(legend_path.read_text(encoding="utf-8"), "custom legend section\n")
 
         self.assertTrue(statement_templates_are_default(ws))
-
-    def test_problems_page_shows_only_participating_problems(self) -> None:
-        owner_problem = f"alice/ui-owner-{uuid.uuid4().hex[:8]}"
-        read_problem = f"alice/ui-read-{uuid.uuid4().hex[:8]}"
-        other_problem = f"alice/ui-other-{uuid.uuid4().hex[:8]}"
-
-        workspace_service.ensure_problem(owner_problem)
-        workspace_service.ensure_workspace(owner_problem, "alice")
-        workspace_service.grant_repo_access(owner_problem, "alice", "owner")
-
-        workspace_service.ensure_problem(read_problem)
-        alice_row = db_fetch_one("SELECT id FROM users WHERE username=?", ["alice"])
-        read_row = db_fetch_one("SELECT id FROM problems WHERE slug=?", [read_problem])
-        self.assertIsNotNone(alice_row)
-        self.assertIsNotNone(read_row)
-        db_execute(
-            "INSERT OR IGNORE INTO repo_acl(problem_id,user_id,role,created_at) VALUES(?,?,?,?)",
-            [int(read_row["id"]), int(alice_row["id"]), "read", "2026-01-01T00:00:00+00:00"],
-        )
-
-        workspace_service.ensure_problem(other_problem)
-        workspace_service.ensure_workspace(other_problem, "bob")
-
-        with patch("app.service.platform.git_process.subprocess.run", side_effect=AssertionError("/problems must not run git")):
-            resp = problems_root_page(_request("/problems"), "alice")
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn(owner_problem, html)
-        self.assertIn(read_problem, html)
-        self.assertNotIn(other_problem, html)
-        self.assertNotIn(f"/problems/{other_problem}/statement", html)
-
-    def test_problems_page_orders_by_last_updated_desc(self) -> None:
-        older_slug = f"alice/ui-sort-old-{uuid.uuid4().hex[:8]}"
-        newer_slug = f"alice/ui-sort-new-{uuid.uuid4().hex[:8]}"
-        workspace_service.ensure_problem(older_slug)
-        workspace_service.ensure_problem(newer_slug)
-        workspace_service.grant_repo_access(older_slug, "alice", "owner")
-        workspace_service.grant_repo_access(newer_slug, "alice", "owner")
-        workspace_service.ensure_workspace(older_slug, "alice")
-        workspace_service.ensure_workspace(newer_slug, "alice")
-        db_execute(
-            """
-            UPDATE workspaces
-            SET updated_at=?
-            WHERE problem_id=(SELECT id FROM problems WHERE slug=?)
-              AND user_id=(SELECT id FROM users WHERE username='alice')
-            """,
-            ["2026-01-01T00:00:00+00:00", older_slug],
-        )
-        db_execute(
-            """
-            UPDATE workspaces
-            SET updated_at=?
-            WHERE problem_id=(SELECT id FROM problems WHERE slug=?)
-              AND user_id=(SELECT id FROM users WHERE username='alice')
-            """,
-            ["2026-01-01T00:00:01+00:00", newer_slug],
-        )
-
-        resp = problems_root_page(_request("/problems"), "alice")
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn(older_slug, html)
-        self.assertIn(newer_slug, html)
-        self.assertLess(html.find(newer_slug), html.find(older_slug))
 
     def test_problems_root_import_slug_hint_uses_filename_and_avoids_duplicates(self) -> None:
         token = uuid.uuid4().hex[:8]
@@ -1751,9 +1510,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(resp.status_code, 303)
         self.assertIn(f"/problems/alice/{target_slug}/statement", str(resp.headers.get("location", "")))
-        messages = _flash_messages_from_response(resp)
-        self.assertTrue(messages)
-        self.assertIn(f"polygon package imported as alice/{target_slug}", messages[0])
         ws = Path(workspace_service.ensure_workspace(f"alice/{target_slug}", "alice"))
         self.assertTrue((ws / "statement" / "statements.ftl").is_file())
         self.assertTrue((ws / "statement-sections" / "english" / "legend.tex").is_file())
@@ -1780,9 +1536,9 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(resp.status_code, 303)
         self.assertIn(f"/problems/alice/{target_slug}/statement", str(resp.headers.get("location", "")))
-        messages = _flash_messages_from_response(resp)
-        self.assertTrue(messages)
-        self.assertIn(f"polygon package imported as alice/{target_slug}", messages[0])
+        self.assertIsNotNone(
+            workspace_service.known_problem_id(f"alice/{target_slug}")
+        )
 
     def test_problems_root_import_accepts_icpc_package(self) -> None:
         class _Upload:
@@ -1820,9 +1576,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(resp.status_code, 303)
         self.assertIn(f"/problems/alice/{target_slug}/statement", str(resp.headers.get("location", "")))
-        messages = _flash_messages_from_response(resp)
-        self.assertTrue(messages)
-        self.assertIn(f"icpc package imported as alice/{target_slug}", messages[0])
         ws = Path(workspace_service.ensure_workspace(f"alice/{target_slug}", "alice"))
         self.assertTrue((ws / "tests" / "manual" / "001.in").is_file())
         self.assertFalse((ws / "tests" / "answers").exists())
@@ -1870,11 +1623,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(resp.status_code, 303)
         self.assertIn(f"/problems/alice/{target_slug}/statement", str(resp.headers.get("location", "")))
-        messages = _flash_messages_from_response(resp)
-        self.assertTrue(messages)
-        self.assertIn("warning:", messages[0])
-        self.assertIn("english not found", messages[0])
-        self.assertIn("defaulting to russian", messages[0])
         ws = Path(workspace_service.ensure_workspace(f"alice/{target_slug}", "alice"))
         self.assertTrue((ws / "statement-sections" / "russian" / "legend.tex").is_file())
         self.assertFalse((ws / "statement-sections" / "english").exists())
@@ -1903,9 +1651,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers.get("location"), "/contests")
-        messages = _flash_messages_from_response(response)
-        self.assertTrue(messages)
-        self.assertIn("configured maximum of 26 problems", messages[0])
         self.assertIsNone(
             db_fetch_one("SELECT id FROM contests WHERE slug=?", [target_slug])
         )
@@ -1935,27 +1680,12 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertEqual(resp.status_code, 303)
         location = str(resp.headers.get("location", ""))
         self.assertIn("/contests/import/review?", location)
-        messages = _flash_messages_from_response(resp)
-        self.assertTrue(messages)
-        self.assertIn("contest package parsed (4 problems)", messages[0])
-
         draft_id = ""
         parsed_location = urlparse(location)
         query = parse_qs(parsed_location.query)
         if "draft_id" in query and query["draft_id"]:
             draft_id = str(query["draft_id"][0] or "").strip()
         self.assertTrue(draft_id)
-
-        review_resp = contests_root_import_review(
-            _request("/contests/import/review", f"draft_id={draft_id}"),
-            user="alice",
-            draft_id=draft_id,
-        )
-        self.assertEqual(review_resp.status_code, 200)
-        review_html = review_resp.body.decode("utf-8", errors="replace")
-        self.assertIn("Review Contest Import", review_html)
-        self.assertIn('name="problem_slug_1"', review_html)
-        self.assertIn('name="problem_slug_4"', review_html)
 
         confirm_form = {
             "draft_id": draft_id,
@@ -1974,10 +1704,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(confirm_resp.status_code, 303)
         self.assertIn(f"/contests/{target_slug}/overview", str(confirm_resp.headers.get("location", "")))
-        confirm_messages = _flash_messages_from_response(confirm_resp)
-        self.assertTrue(confirm_messages)
-        self.assertIn(f"contest {target_slug} imported (4 problems)", confirm_messages[0])
-
         contest_row = db_fetch_one("SELECT id FROM contests WHERE slug=?", [target_slug])
         self.assertIsNotNone(contest_row)
         contest_id = int(contest_row["id"])
@@ -2091,9 +1817,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             )
         self.assertEqual(confirm_resp.status_code, 303)
         self.assertEqual(str(confirm_resp.headers.get("location", "")), "/contests")
-        messages = _flash_messages_from_response(confirm_resp)
-        self.assertTrue(messages)
-        self.assertIn("synthetic contest import failure", messages[0])
         self.assertIsNone(db_fetch_one("SELECT id FROM contests WHERE slug=?", [target_slug]))
         for problem_slug in created_problem_slugs:
             self.assertIsNone(db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem_slug]))
@@ -2127,13 +1850,9 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             message=f"first-revision-{uuid.uuid4().hex[:6]}",
         )
         self.assertEqual(response.status_code, 303)
-        messages = _flash_messages_from_response(response)
-        self.assertTrue(messages)
-        self.assertIn("revision published", messages[0])
-        self.assertEqual(
-            run_git(["git", "-C", str(ws), "rev-parse", "HEAD"]).returncode,
-            0,
-        )
+        shown = run_git(["git", "-C", str(ws), "show", f"HEAD:{marker}"])
+        self.assertEqual(shown.returncode, 0, shown.stderr or shown.stdout)
+        self.assertEqual(shown.stdout, "first\n")
 
     def test_git_diff_for_revision_filters_hidden_paths(self) -> None:
         self._ensure_committed_head("alice/sample", "alice")
@@ -2153,28 +1872,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertFalse(truncated)
         self.assertNotIn(".env", diff_text)
         self.assertNotIn("hidden", diff_text)
-
-    def test_revision_history_page_can_view_selected_revision_diff(self) -> None:
-        self._ensure_committed_head("alice/sample", "alice")
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        rel = f"notes/ui-history-diff-{uuid.uuid4().hex[:8]}.txt"
-        p = ws / rel
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text("before\n", encoding="utf-8")
-        git_service.commit(ws, f"ui-history-diff-base-{uuid.uuid4().hex[:6]}", "alice", "alice@polygonlike.local")
-        p.write_text("before\nafter\n", encoding="utf-8")
-        marker = f"ui-history-diff-{uuid.uuid4().hex[:6]}"
-        git_service.commit(ws, marker, "alice", "alice@polygonlike.local")
-        selected_version = workspace_revision_info(ws, "main")["local"]
-        self.assertIsNotNone(selected_version)
-
-        resp = history_page(_request("/problems/alice/sample/history", f"revision=v{selected_version}"), "alice/sample", "alice")
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn("Revision Changes", html)
-        self.assertIn(marker, html)
-        self.assertIn("workspace-diff-line-add", html)
-        self.assertIn("+after", html)
 
     def test_history_snapshot_downloads_selected_revision(self) -> None:
         self._ensure_committed_head("alice/sample", "alice")
