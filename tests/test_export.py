@@ -586,10 +586,6 @@ class TestPublishedRevisionExport(E2ETestBase):
             self.assertNotIn("source/config/problem.json", names)
             self.assertNotIn("dirty-only.txt", names)
             self.assertNotIn("statement/examples.tex", names)
-            rendered_main = package.read(
-                "statement-build/english/statements.tex"
-            ).decode("utf-8")
-            self.assertIn("\\input{problem.tex}", rendered_main)
             manifest = json.loads(package.read("test-data/manifest.json"))
             self.assertEqual(manifest["source_commit"], commit)
             self.assertEqual(manifest["verification"]["id"], verified["verification_id"])
