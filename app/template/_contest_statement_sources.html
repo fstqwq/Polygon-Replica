@@ -71,7 +71,7 @@
               <code>{{ row.display_path }}</code>
               {% endif %}
             </td>
-            <td>{% if row.size_bytes is not none %}{{ row.size_bytes }} B{% else %}<span class="muted">—</span>{% endif %}</td>
+            <td>{% if row.size_bytes is not none %}{{ row.size_bytes }} B{% else %}<span class="muted">&mdash;</span>{% endif %}</td>
             <td class="table-cell-actions">
               <span class="contest-source-actions">
                 <a href="{{ row.download_href }}">Open</a>

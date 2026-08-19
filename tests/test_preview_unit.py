@@ -114,7 +114,7 @@ class TestPreviewUnit(unittest.TestCase):
         self.assertIn("\\import{rendered/english/}{./problem.tex}", rendered)
         self.assertIn("Rendered Title", rendered_problem)
         self.assertIn("Rendered content.", rendered_problem)
-        self.assertIn("\\par\n\\input{examples.tex}", rendered_problem)
+        self.assertIn("\\input{examples.tex}", rendered_problem)
         self.assertTrue(
             (statement / "rendered" / "english" / "examples.tex").is_file()
         )

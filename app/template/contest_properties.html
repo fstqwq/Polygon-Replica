@@ -50,7 +50,7 @@
               <ul class="contest-property-value-list">
                 {% for row in group["values"] %}
                 <li>
-                  <span class="contest-property-display-value">{% if row.value %}{{ row.value }}{% else %}<span class="muted">—</span>{% endif %}</span>
+                  <span class="contest-property-display-value">{% if row.value %}{{ row.value }}{% else %}<span class="muted">&mdash;</span>{% endif %}</span>
                   <span class="contest-property-meta contest-property-scope">({{ row.scope_label }})</span>
                 </li>
                 {% endfor %}

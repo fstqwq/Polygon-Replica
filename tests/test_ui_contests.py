@@ -639,16 +639,16 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             ],
             property_values=[
                 "Props Contest Updated",
-                "属性比赛",
+                "\u5c5e\u6027\u6bd4\u8d5b",
                 "San Francisco",
-                "旧金山",
+                "\u65e7\u91d1\u5c71",
                 "2026-03-01",
-                "2026 年 3 月 1 日",
+                "2026 \u5e74 3 \u6708 1 \u65e5",
                 "true",
                 r"\textbf{Preview only}",
-                r"\textbf{仅供预览}",
+                "\\textbf{\u4ec5\u4f9b\u9884\u89c8}",
                 "Example Foundation",
-                "示例基金会",
+                "\u793a\u4f8b\u57fa\u91d1\u4f1a",
             ],
             existing_property_keys=["title"],
         )
@@ -672,40 +672,40 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             {str(row["key"]): str(row["value"]) for row in contest_rows},
             {
                 "date": "2026-03-01",
-                "date.chinese": "2026 年 3 月 1 日",
+                "date.chinese": "2026 \u5e74 3 \u6708 1 \u65e5",
                 "location": "San Francisco",
-                "location.chinese": "旧金山",
+                "location.chinese": "\u65e7\u91d1\u5c71",
                 "sponsor": "Example Foundation",
-                "sponsor.chinese": "示例基金会",
+                "sponsor.chinese": "\u793a\u4f8b\u57fa\u91d1\u4f1a",
                 "banner": r"\textbf{Preview only}",
-                "banner.chinese": r"\textbf{仅供预览}",
+                "banner.chinese": "\\textbf{\u4ec5\u4f9b\u9884\u89c8}",
                 "insertBlankPage": "true",
                 "title": "Props Contest Updated",
-                "title.chinese": "属性比赛",
+                "title.chinese": "\u5c5e\u6027\u6bd4\u8d5b",
             },
         )
         localized = runtime.contest_service.localized_properties_map(
             contest_id,
             "chinese",
         )
-        self.assertEqual(localized["title"], "属性比赛")
-        self.assertEqual(localized["location"], "旧金山")
+        self.assertEqual(localized["title"], "\u5c5e\u6027\u6bd4\u8d5b")
+        self.assertEqual(localized["location"], "\u65e7\u91d1\u5c71")
 
         unchanged = runtime.contest_service.set_properties(
             contest_id,
             int(alice_row["id"]),
             {
                 "date": "2026-03-01",
-                "date.chinese": "2026 年 3 月 1 日",
+                "date.chinese": "2026 \u5e74 3 \u6708 1 \u65e5",
                 "location": "San Francisco",
-                "location.chinese": "旧金山",
+                "location.chinese": "\u65e7\u91d1\u5c71",
                 "sponsor": "Example Foundation",
-                "sponsor.chinese": "示例基金会",
+                "sponsor.chinese": "\u793a\u4f8b\u57fa\u91d1\u4f1a",
                 "banner": r"\textbf{Preview only}",
-                "banner.chinese": r"\textbf{仅供预览}",
+                "banner.chinese": "\\textbf{\u4ec5\u4f9b\u9884\u89c8}",
                 "insertBlankPage": True,
                 "title": "Props Contest Updated",
-                "title.chinese": "属性比赛",
+                "title.chinese": "\u5c5e\u6027\u6bd4\u8d5b",
             },
         )
         self.assertFalse(unchanged)
@@ -737,7 +737,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(fallback["title"], "Props Contest Updated")
         self.assertEqual(fallback["location"], "San Francisco")
-        self.assertEqual(fallback["sponsor"], "示例基金会")
+        self.assertEqual(fallback["sponsor"], "\u793a\u4f8b\u57fa\u91d1\u4f1a")
         cleared_rows = db_fetch_all(
             """
             SELECT key FROM contest_properties

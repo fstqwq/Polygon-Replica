@@ -92,12 +92,12 @@ class _ContestFixture:
         del contest_id, contest_slug
         if language == "chinese":
             return {
-                "banner": r"\textbf{仅供预览}",
+                "banner": "\\textbf{\u4ec5\u4f9b\u9884\u89c8}",
                 "insertBlankPage": "true",
-                "title": "完整比赛",
-                "location": "杭州",
-                "date": "2026 年 8 月 19 日",
-                "sponsor": "示例基金会",
+                "title": "\u5b8c\u6574\u6bd4\u8d5b",
+                "location": "\u676d\u5dde",
+                "date": "2026 \u5e74 8 \u6708 19 \u65e5",
+                "sponsor": "\u793a\u4f8b\u57fa\u91d1\u4f1a",
             }
         return {
             "banner": r"\textbf{Preview only}",
