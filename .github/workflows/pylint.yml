@@ -2,6 +2,10 @@ name: Fast CI
 
 on:
   push:
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      - "**/*.md"
 
 concurrency:
   group: fast-ci-${{ github.ref }}

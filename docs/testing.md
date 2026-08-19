@@ -241,8 +241,12 @@ three jobs. A manual `workflow_dispatch` always runs the workflow. There is no
 scheduled Docker E2E run.
 
 The separate `Fast CI` workflow runs static checks and the unit, service,
-executor, and ordinary E2E resource groups on every push. Both workflows cancel
-an older in-progress run for the same ref when a newer push supersedes it.
+executor, and ordinary E2E resource groups on every push that is not exclusively
+documentation. Documentation-only pushes under `docs/` or containing only
+Markdown files do not start either CI workflow. A push that mixes documentation
+and code still runs the workflows selected by the changed code paths. Both
+workflows cancel an older in-progress run for the same ref when a newer push
+supersedes it.
 
 Run the isolated E2E from the repository root:
 
