@@ -182,16 +182,16 @@ def _contest_statement_source_rows(
                 "stored": False,
             }
 
-    for display_path, row in stored_rows.items():
-        row["download_href"] = (
+    for display_path, source_row in stored_rows.items():
+        source_row["download_href"] = (
             f"/contests/{contest_slug}/properties/statement/files?"
             f"{urlencode({'language': language, 'path': display_path})}"
         )
-        row["edit_href"] = (
+        source_row["edit_href"] = (
             f"/contests/{contest_slug}/properties?"
             f"{_contest_statement_sources_query(language=language, source_path=display_path)}"
         )
-        row["delete_message"] = (
+        source_row["delete_message"] = (
             f"Delete {display_path}?"
             + (
                 " The default template will be used instead."
