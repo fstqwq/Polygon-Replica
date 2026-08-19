@@ -149,10 +149,10 @@
   <p class="danger">{{ maintenance.get('error', 'Unknown backup error') }}</p>
   {% endif %}
   <p>
-    Creates one downloadable archive containing every bare Git repository and
-    every user workspace, including uncommitted workspace files. SQLite,
-    contest sources, generated artifacts, caches, and deployment secrets are
-    not included.
+    Creates one downloadable recovery archive containing a consistent SQLite
+    snapshot, every bare Git repository, every user workspace (including
+    uncommitted files), and Contest statement sources. Generated artifacts,
+    caches, other backups, and deployment secrets are not included.
   </p>
   {% if source_backup.available %}
   <p>
@@ -168,7 +168,7 @@
   <form
     method="post"
     action="/admin/maintenance/source-backup"
-    data-confirm-message="Take the whole site offline and replace the previous source backup with a new archive of bare repositories and workspaces?"
+    data-confirm-message="Take the whole site offline and replace the previous recovery backup with a consistent SQLite and authoring-source archive?"
   >
     <button class="btn" type="submit"{% if maintenance.get('status') == 'running' or admission_state != 'draining' or busy_total %} disabled{% endif %}>Create source backup</button>
   </form>

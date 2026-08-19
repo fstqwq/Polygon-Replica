@@ -89,6 +89,7 @@ class TestArtifactCleanup(unittest.TestCase):
         )
         self.config_values = build_config_values()
         self.storage_layout = StorageLayout.from_settings(self.settings)
+        self.settings.contest_source_root.mkdir(parents=True)
         self.db = DB(self.settings.db_path, config_values=self.config_values)
         self.db.init()
         self.verification_task_store = VerificationTaskStore(self.db)
@@ -835,22 +836,43 @@ class TestArtifactCleanup(unittest.TestCase):
         self.assertFalse(retry_worker.is_alive())
         self.assertEqual(restarted_coordinator.snapshot()["status"], "succeeded")
 
-    def test_source_backup_contains_only_bare_repositories_and_workspaces(
+    def test_source_backup_contains_sqlite_and_all_durable_source_roots(
         self,
     ) -> None:
         uncommitted = self.workspace / "uncommitted.txt"
         uncommitted.write_text("not committed\n", encoding="utf-8")
+        contest_source = (
+            self.settings.contest_source_root
+            / "sample-contest"
+            / "statements"
+            / "english"
+            / "statements.tex"
+        )
+        contest_source.parent.mkdir(parents=True)
+        contest_source.write_text("durable contest source\n", encoding="utf-8")
         excluded = {
             self.settings.artifacts_root / "artifact.bin",
             self.settings.cache_root / "cache.bin",
-            self.settings.contest_source_root / "statement.tex",
             self.settings.backup_root / "contest-migration.tar.gz",
         }
         for path in excluded:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"excluded")
 
-        result = self._run_source_backup("backup-boundary")
+        writer = sqlite3.connect(self.settings.db_path)
+        try:
+            writer.execute("PRAGMA journal_mode=WAL")
+            writer.execute("PRAGMA wal_autocheckpoint=0")
+            writer.execute(
+                "CREATE TABLE backup_probe(value TEXT NOT NULL)"
+            )
+            writer.execute(
+                "INSERT INTO backup_probe(value) VALUES('committed in WAL')"
+            )
+            writer.commit()
+            result = self._run_source_backup("backup-boundary")
+        finally:
+            writer.close()
 
         self.assertEqual(result["completed_stage"], "publish")
         archive_path = self.source_backup.latest_archive_path()
@@ -859,7 +881,16 @@ class TestArtifactCleanup(unittest.TestCase):
         with tarfile.open(archive_path, mode="r:gz") as archive:
             names = set(archive.getnames())
             top_level = {name.split("/", maxsplit=1)[0] for name in names}
-            self.assertEqual(top_level, {"manifest.json", "bare", "workspaces"})
+            self.assertEqual(
+                top_level,
+                {
+                    "manifest.json",
+                    "database",
+                    "bare",
+                    "workspaces",
+                    "contest-sources",
+                },
+            )
             workspace_relative = self.workspace.relative_to(
                 self.settings.workspace_root
             )
@@ -874,11 +905,33 @@ class TestArtifactCleanup(unittest.TestCase):
                     for name in names
                 )
             )
+            contest_payload = archive.extractfile(
+                "contest-sources/sample-contest/statements/english/statements.tex"
+            )
+            self.assertIsNotNone(contest_payload)
+            assert contest_payload is not None
+            self.assertEqual(
+                contest_payload.read(),
+                b"durable contest source\n",
+            )
+            database_payload = archive.extractfile("database/metadata.db")
+            self.assertIsNotNone(database_payload)
+            assert database_payload is not None
+            restored_database = self.root / "restored-metadata.db"
+            restored_database.write_bytes(database_payload.read())
             manifest_file = archive.extractfile("manifest.json")
             self.assertIsNotNone(manifest_file)
             assert manifest_file is not None
             manifest = json.loads(manifest_file.read().decode("ascii"))
-        self.assertEqual(manifest["contents"], ["bare", "workspaces"])
+        self.assertEqual(
+            manifest["contents"],
+            ["database", "bare", "workspaces", "contest-sources"],
+        )
+        with sqlite3.connect(restored_database) as restored:
+            self.assertEqual(
+                restored.execute("SELECT value FROM backup_probe").fetchone(),
+                ("committed in WAL",),
+            )
 
     def test_source_backup_replaces_one_latest_archive(self) -> None:
         marker = self.workspace / "backup-marker.txt"

@@ -1949,11 +1949,16 @@ def _exercise_maintenance_and_backup(
         raise RuntimeError("source backup archive was not published")
     with tarfile.open(backup_path, mode="r:gz") as archive:
         names = set(archive.getnames())
+        database_stream = archive.extractfile("database/metadata.db")
+        if database_stream is None or not database_stream.read(16):
+            raise RuntimeError("source backup omitted the SQLite snapshot")
     if not any(name.startswith("bare/") for name in names):
         raise RuntimeError("source backup omitted bare repositories")
     if not any(name.startswith("workspaces/") for name in names):
         raise RuntimeError("source backup omitted workspaces")
-    if any("contest-sources" in name or name.startswith("artifacts/") for name in names):
+    if not any(name.startswith("contest-sources/") for name in names):
+        raise RuntimeError("source backup omitted Contest sources")
+    if any(name.startswith("artifacts/") for name in names):
         raise RuntimeError("source backup crossed its source-only boundary")
 
     _begin_idle_drain(client)

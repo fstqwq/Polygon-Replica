@@ -262,7 +262,8 @@ jobs receive a temporary maintenance response while already admitted worker and
 Judgehost work finishes. Admin reads remain available, and idle Judgehosts get
 an immediate empty fetch response instead of long-polling. When the displayed
 active counts reach zero, use **Create source backup**. The operation closes the
-remaining runtime boundary and archives the complete bare Git and workspace
+remaining runtime boundary and archives a transactionally consistent SQLite
+snapshot together with the complete bare Git, workspace, and Contest source
 roots. `/maintenance` shows progress.
 
 After it succeeds, use **Download latest backup**. The application retains one
@@ -270,12 +271,16 @@ published file at `backup_root/source-backup/latest.tar.gz`; a later successful
 run atomically replaces it. Move the downloaded file to independent off-host
 storage if it must survive loss of the application host.
 
-The archive contains committed problem history and every workspace, including
-uncommitted files. It deliberately excludes SQLite, Contest source and
-attachments, derived data, caches, other backup-root content, application code,
-the encryption key, and TLS/proxy configuration. Keep secrets and deployment
+The archive contains `database/metadata.db`, committed problem history, every
+workspace including uncommitted files, and Contest statement sources and
+attachments. SQLite is copied with its online backup API, so transactions
+committed in WAL are included without copying `-wal` or `-shm` files. Derived
+data, caches, other backup-root content, application code, the encryption key,
+and TLS/proxy configuration are excluded. Keep secrets and deployment
 configuration under the operator's separate secret/configuration backup policy.
-This source archive is not a full application-state backup.
+The archive itself is sensitive because SQLite contains authentication,
+session, access-control, and encrypted configuration records; store it encrypted
+and off host.
 
 The same drained state enables **Restart application**. That action exits the
 single process after sending the HTTP response; the installed systemd unit or
@@ -285,18 +290,22 @@ maintenance preparation without starting an operation.
 
 ## Restore
 
-Restore is an operator-managed source recovery procedure:
+Restore is an operator-managed recovery procedure:
 
 1. Stop the application and Judgehosts.
 2. Inspect `manifest.json` and the member paths before extraction.
 3. Extract into an isolated staging directory, not over live roots.
-4. Replace the configured bare Git and workspace roots from the staged `bare/`
-   and `workspaces/` trees, then restore runtime ownership.
-5. Reconcile or recreate the SQLite metadata that identifies those repositories
-   and workspaces; it is not present in this archive.
-6. Start one application process and validate repository history and workspace
-   contents before reopening traffic.
+4. Replace the configured bare Git, workspace, and Contest source roots from the
+   staged `bare/`, `workspaces/`, and `contest-sources/` trees, then restore
+   runtime ownership.
+5. Replace the configured SQLite database with `database/metadata.db`; do not
+   restore archive `-wal` or `-shm` files. Restore database ownership and mode.
+6. Start one application process and validate schema startup, repository
+   history, workspaces, Contest statement sources, and authentication before
+   reopening traffic.
 
-If an operator also retains a matching SQLite copy, it may be restored through
-the operator's offline procedure. Mixing source roots with unrelated SQLite
-metadata is not a supported point-in-time restore.
+The archive is manual disaster-recovery material rather than a versioned import
+format. Retain the application revision and deployment configuration used to
+create it, inspect its contents before restore, and adapt the offline restore
+procedure when application storage changes. Do not mix source roots with an
+unrelated database.

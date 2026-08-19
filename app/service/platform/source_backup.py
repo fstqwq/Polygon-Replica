@@ -1,10 +1,11 @@
-"""Site-wide source-state backup for bare repositories and workspaces."""
+"""Site-wide backup for SQLite and durable authoring sources."""
 
 import hashlib
 import io
 import json
 import logging
 import os
+import sqlite3
 import stat
 import tarfile
 import time
@@ -24,7 +25,10 @@ logger = logging.getLogger(__name__)
 _SOURCE_ROOTS = (
     ("bare_root", "bare"),
     ("workspace_root", "workspaces"),
+    ("contest_source_root", "contest-sources"),
 )
+_ARCHIVE_CONTENTS = ("database", "bare", "workspaces", "contest-sources")
+_DATABASE_ARCHIVE_PATH = "database/metadata.db"
 
 
 class SourceBackupSummary(TypedDict):
@@ -40,6 +44,7 @@ class SourceBackupPreflight(TypedDict):
     """Validated paths and bounded summary data used by one backup run."""
 
     roots: dict[str, Path]
+    database_path: Path
     source_stats: dict[str, dict[str, int]]
 
 
@@ -60,7 +65,7 @@ def _archive_directory_entry(archive: tarfile.TarFile, name: str) -> None:
 
 
 class SourceBackupService:
-    """Create and expose one atomic backup of both source-state roots."""
+    """Create and expose one atomic backup of durable application state."""
 
     def __init__(self, storage_layout: StorageLayout) -> None:
         self._storage_layout = storage_layout
@@ -137,7 +142,7 @@ class SourceBackupService:
         return entry_count, total_bytes
 
     def preflight(self) -> SourceBackupPreflight:
-        """Validate both source trees and the application-owned destination."""
+        """Validate durable inputs and the application-owned destination."""
 
         roots = self._storage_layout.validate()
         source_stats: dict[str, dict[str, int]] = {}
@@ -150,6 +155,14 @@ class SourceBackupService:
                 "entries": entry_count,
                 "bytes": total_bytes,
             }
+
+        database_path = self._storage_layout.database_path.absolute()
+        if (
+            database_path.is_symlink()
+            or not database_path.exists()
+            or not database_path.is_file()
+        ):
+            raise RuntimeError("backup source is unavailable: database_path")
 
         backup_root = roots["backup_root"]
         backup_root.mkdir(parents=True, exist_ok=True)
@@ -175,8 +188,45 @@ class SourceBackupService:
             )
         return {
             "roots": roots,
+            "database_path": database_path.resolve(),
             "source_stats": source_stats,
         }
+
+    @staticmethod
+    def _snapshot_database(source_path: Path, destination: Path) -> int:
+        """Write one transactionally consistent SQLite snapshot."""
+
+        source_uri = f"{source_path.as_uri()}?mode=ro"
+        source = sqlite3.connect(source_uri, uri=True)
+        snapshot = sqlite3.connect(destination)
+        try:
+            source.execute("PRAGMA query_only=ON")
+            source.backup(snapshot, pages=2048, sleep=0.01)
+            check_rows = snapshot.execute("PRAGMA quick_check").fetchall()
+            if check_rows != [("ok",)]:
+                raise RuntimeError("SQLite backup snapshot failed integrity check")
+        finally:
+            snapshot.close()
+            source.close()
+        descriptor = os.open(str(destination), os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        return int(destination.stat().st_size)
+
+    @staticmethod
+    def _archive_database(
+        archive: tarfile.TarFile,
+        database_snapshot: Path,
+    ) -> None:
+        _archive_directory_entry(archive, "database")
+        info = tarfile.TarInfo(_DATABASE_ARCHIVE_PATH)
+        info.mode = 0o600
+        info.mtime = int(time.time())
+        info.size = int(database_snapshot.stat().st_size)
+        with database_snapshot.open("rb") as stream:
+            archive.addfile(info, stream)
 
     @staticmethod
     def _tar_filter(
@@ -219,13 +269,14 @@ class SourceBackupService:
         operation_id: str,
         started_at: str,
         roots: dict[str, Path],
+        database_snapshot: Path,
         source_stats: dict[str, dict[str, int]],
     ) -> None:
         manifest = json.dumps(
             {
                 "operation_id": operation_id,
                 "created_at": started_at,
-                "contents": [archive_name for _setting, archive_name in _SOURCE_ROOTS],
+                "contents": list(_ARCHIVE_CONTENTS),
                 "source_stats": source_stats,
             },
             ensure_ascii=True,
@@ -243,6 +294,7 @@ class SourceBackupService:
             info.mtime = int(time.time())
             info.size = len(manifest)
             archive.addfile(info, io.BytesIO(manifest))
+            self._archive_database(archive, database_snapshot)
             for setting_name, archive_name in _SOURCE_ROOTS:
                 root = roots[setting_name]
                 _archive_directory_entry(archive, archive_name)
@@ -324,9 +376,16 @@ class SourceBackupService:
                         )
                     while stream.read(1024 * 1024):
                         pass
-        if manifest is None or manifest.get("contents") != ["bare", "workspaces"]:
+        if manifest is None:
             raise RuntimeError("source backup manifest has invalid contents")
-        if not {"manifest.json", "bare", "workspaces"}.issubset(names):
+        if manifest.get("contents") != list(_ARCHIVE_CONTENTS):
+            raise RuntimeError("source backup manifest has invalid contents")
+        required = {
+            "manifest.json",
+            *_ARCHIVE_CONTENTS,
+            _DATABASE_ARCHIVE_PATH,
+        }
+        if not required.issubset(names):
             raise RuntimeError("source backup archive is missing required roots")
 
     def _rollback_path(self, label: str) -> Path:
@@ -397,6 +456,9 @@ class SourceBackupService:
         partial_sidecar = self.backup_directory / (
             f".source-backup-{uuid.uuid4().hex}.sha256.partial"
         )
+        database_snapshot = self.backup_directory / (
+            f".source-backup-{uuid.uuid4().hex}.sqlite3.partial"
+        )
         archive_rollback: Path | None = None
         sidecar_rollback: Path | None = None
         published = False
@@ -405,9 +467,21 @@ class SourceBackupService:
             preflight = self.preflight()
             roots = preflight["roots"]
             source_stats = preflight["source_stats"]
-            result["source_stats"] = source_stats
             result["completed_stage"] = "preflight"
             self._remove_stale_staging()
+
+            stage = "database"
+            set_stage(stage)
+            database_bytes = self._snapshot_database(
+                preflight["database_path"],
+                database_snapshot,
+            )
+            source_stats["database"] = {
+                "entries": 1,
+                "bytes": database_bytes,
+            }
+            result["source_stats"] = source_stats
+            result["completed_stage"] = "database"
 
             stage = "archive"
             set_stage(stage)
@@ -416,6 +490,7 @@ class SourceBackupService:
                 operation_id=operation_id,
                 started_at=started_at,
                 roots=roots,
+                database_snapshot=database_snapshot,
                 source_stats=source_stats,
             )
             self._write_sidecar(partial, partial_sidecar)
@@ -467,6 +542,8 @@ class SourceBackupService:
             logger.exception("source backup failed", extra={"result": result})
             setattr(exc, "maintenance_result", result)
             raise
+        finally:
+            database_snapshot.unlink(missing_ok=True)
 
     def latest_archive_path(self) -> Path | None:
         """Resolve and fully verify the latest archive for download."""

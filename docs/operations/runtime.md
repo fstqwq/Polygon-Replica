@@ -91,12 +91,13 @@ model.
 ## Operations
 
 Admin operations include Judgehost status and enablement, users, SMTP/system
-configuration, exclusive generated-data cleanup, and exclusive source backup. Source
-backup publishes one archive containing the bare Git and workspace roots; it
-does not include SQLite or other storage roots. Do not manually delete active
-cache subtrees while the process is running. Observe process health, worker
-capacity, Judgehost leases, domain job status, derived-product integrity, disk
-space, and backup age as separate signals.
+configuration, exclusive generated-data cleanup, and exclusive recovery backup.
+The backup publishes one archive containing a consistent SQLite snapshot plus
+the bare Git, workspace, and Contest source roots. It excludes generated
+artifacts, caches, deployment configuration, and secrets outside SQLite. Do not
+manually delete active cache subtrees while the process is running. Observe
+process health, worker capacity, Judgehost leases, domain job status,
+derived-product integrity, disk space, and backup age as separate signals.
 
 Maintenance admission has three process-local states. `open` admits normal
 requests and jobs. `draining` rejects new business work while admitted workers,

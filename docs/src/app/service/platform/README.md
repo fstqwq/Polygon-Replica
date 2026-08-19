@@ -28,8 +28,10 @@ job source, and startup resets it together with in-memory queue records.
 Runtime blobs and cache entries live below the startup-cleared cache trees.
 SQLite is used only where a mechanism persists configuration or cleanup
 effects.
-Source backup archives only the bare Git and workspace roots while the shared
-maintenance gate is closed. It writes a temporary archive below the backup root
-and atomically replaces the one downloadable latest archive; it does not copy
-SQLite or other storage roots. Root ownership and maintenance ordering belong
-to the [storage protocol](../../../../protocol/storage.md).
+Recovery backup snapshots SQLite with SQLite's online backup API and archives
+that snapshot together with the bare Git, workspace, and Contest source roots
+while the shared maintenance gate is closed. It writes temporary files below
+the backup root, verifies the archive/digest pair, and atomically replaces the
+one downloadable latest archive. Root ownership, excluded derived roots, and
+maintenance ordering belong to the
+[storage protocol](../../../../protocol/storage.md).

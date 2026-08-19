@@ -130,16 +130,24 @@ as generated-data cleanup. It starts only after ordinary requests, Judgehost
 callbacks, worker jobs, and queued, leased, or reporting Judgehost work have
 drained. The gate stays closed while the archive is built and published.
 
-The archive contains exactly three top-level members:
+The current backup operation writes these top-level members:
 
 - `manifest.json`, with bounded creation and source-tree summary data;
+- `database/metadata.db`, a transactionally consistent SQLite snapshot created
+  with SQLite's online backup API (including transactions committed in WAL);
 - `bare/`, containing every repository and its Git history from the bare root;
 - `workspaces/`, containing every workspace, including Git metadata and
-  uncommitted files.
+  uncommitted files;
+- `contest-sources/`, containing authored Contest statement templates and
+  referenced resources.
 
-SQLite, Contest source, derived data, cache data, existing backup-root content,
-application code, and deployment secrets are not included. This is a source
-recovery archive, not a complete application-state backup.
+Derived data, cache data, existing backup-root content, application code, and
+deployment secrets are not included. Because SQLite contains user, session,
+access-control, and encrypted configuration records, the recovery archive is
+sensitive and must be handled like the live database. This is manually
+inspected disaster-recovery material, not a deployment or secret-configuration
+backup. Operators must inspect its contents and prepare the offline restoration
+procedure for the deployed storage layout.
 
 The application publishes the pair
 `backup_root/source-backup/latest.tar.gz` and `latest.tar.gz.sha256`. It builds
