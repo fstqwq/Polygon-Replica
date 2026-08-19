@@ -12,15 +12,7 @@ Polygon Replica runs on Linux. Follow the [deployment runbook](docs/operations/d
 
 ## Documentation
 
-- [Documentation index](docs/README.md)
-- [Product scope and rationale](docs/product.md)
-- [System design](docs/design/system.md)
+- [Deployment and operations](docs/operations/deployment.md)
 - [Problem source format](docs/protocol/problem-source.md)
-- [Execution and verification](docs/protocol/execution.md)
 - [Package import and export](docs/protocol/package.md)
-- [Access model](docs/design/access.md)
-- [Storage and cleanup](docs/protocol/storage.md)
-- [Configuration](docs/operations/configuration.md)
-- [Testing policy](docs/testing.md)
-
-The [package protocol](docs/protocol/package.md) lists supported import and export formats, the [execution protocol](docs/protocol/execution.md) explains verification, and the [storage protocol](docs/protocol/storage.md) describes the source, derived, and cache data classes.
+- [Development documentation index](docs/README.md)

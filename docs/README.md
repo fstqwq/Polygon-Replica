@@ -1,9 +1,8 @@
-# Documentation
+# Development documentation index
 
-Polygon Replica documentation covers product scope, system design, protocols,
-implementation structure, testing, and deployment.
+This index covers the design, protocols, engineering rules, and operations of Polygon Replica for contributors and maintainers.
 
-## System
+## Product and system design
 
 - [Product scope and rationale](product.md)
 - [State derivation and lifecycle](design/state-lifecycle.md)
@@ -21,13 +20,14 @@ implementation structure, testing, and deployment.
 - [Package import and export](protocol/package.md)
 - [Statement Preview](protocol/statement-preview.md)
 
-## Implementation and operations
+## Engineering
 
 - [Application package map](src/README.md)
 - [Python coding and import policy](coding-style.md)
 - [Testing policy](testing.md)
-- [SQLite implementation notes](implementation/sqlite.md)
-- [Findings ledger](implementation/findings.md)
+
+## Operations
+
 - [Configuration](operations/configuration.md)
 - [Runtime and deployment](operations/runtime.md)
 - [Operator deployment runbook](operations/deployment.md)

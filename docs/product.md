@@ -1,48 +1,25 @@
 # Product scope and rationale
 
-Polygon Replica covers the part of problem setting that begins after someone
-has written an initial solution and a few tests. It provides the execution,
-collaboration, and delivery workflow needed to turn that starting point into a
-contest-ready problem.
+Polygon Replica covers the stage of problem setting that begins once an author has a working idea, an initial solution, and enough tests to start validation. Its responsibility is to carry that work to a contest-ready problem.
 
 ## A complete problem-setting system
 
-A useful problem-authoring system has three layers.
+A problem-setting product has three layers. Execution establishes whether the problem behaves as intended. Collaboration gives the team an authoritative version and a controlled way to change it. Ecosystem contracts make the result usable by the systems around it.
+
+The product owns the connection between these layers. The source accepted by the team, the evidence produced by Verification, and the Package delivered at the end all refer to the same problem state.
 
 ### Execution tools
 
-The most visible layer compiles statements and programs, runs generators and
-input validators, checks answers with testlib checkers or interactors, verifies
-many solutions in parallel, and packages the result. Most command-line
-problem-setting tools concentrate on this layer.
+The execution layer turns authored source into evidence. Verification checks the intended behavior on remote DOMjudge Judgehosts, while statement rendering presents the same structured samples in the UI, TeX, and HTML. Interactive and multi-pass problems keep their complete pass structure throughout this process.
 
 ### Collaboration
 
-A team also needs users, isolated workspaces, an agreed official version of
-each problem, access control, review between authors, repeatable verification
-results, contest organization, and a record of generated packages and PDFs.
-
-Without this layer, teams reconstruct the workflow from Git, shell scripts,
-shared folders, chat, and unwritten conventions. A capable local build tool can
-therefore improve an individual task without reducing the coordination cost of
-producing a complete problem set.
+The collaboration layer makes that evidence authoritative for a team. Git records the official problem history, while isolated workspaces hold changes until they are reviewed and published. People and agents use the same permission model. [Polygon-Skills](https://github.com/fstqwq/Polygon-Skills) gives agents the project context and conventions needed to work with better taste inside that authority.
 
 ### Ecosystem contracts
 
-Codeforces Polygon is useful not only because it executes programs, but because
-its source layout, packages, solution expectations, and failure modes are
-already familiar to problem setters and surrounding tools. Contest delivery
-has similar contracts around ICPC Problem Packages and
-[DOMjudge](https://www.domjudge.org/).
+The ecosystem layer preserves compatibility across the product boundary. Existing Polygon sources and working habits carry over directly. A successful Verification produces a Native Package tied to the published source, and adapters turn that Package into deliverables ready for multiple contest systems.
 
-Polygon Replica brings these three layers into a self-hosted workflow. It
-imports established package formats where supported, provides workspaces and
-review, verifies problems on DOMjudge Judgehosts, and produces packages and
-Contest outputs for downstream infrastructure. Its
-[Polygon-Skills](https://github.com/fstqwq/Polygon-Skills) companion adds an
-Agent CLI so people and coding agents can operate the same workflow.
+The exact boundaries are defined by the [problem source](protocol/problem-source.md), [execution](protocol/execution.md), and [package](protocol/package.md) contracts.
 
-Polygon Replica is not a drop-in clone of the hosted Polygon service and does
-not implement its private API. It is intended for teams that want to operate
-the complete workflow themselves and are prepared to run the application,
-persistent storage, and Judgehosts.
+Polygon Replica owns this workflow from authored source to deliverable Package. Live contest operation remains with the target contest system. The hosted Polygon private API is outside the product contract. Self-hosting places deployment and execution infrastructure under the operator's control.

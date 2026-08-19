@@ -2,8 +2,7 @@
 
 The canonical schema is the `SCHEMA` declaration and validation manifest in
 `app/db.py`. SQLite does not store committed source files or large derived
-payloads. The physical table inventory is in
-[the SQLite implementation map](../implementation/sqlite.md).
+payloads.
 
 Foreign keys identify domain relationships. JSON columns carry structured
 details whose owning service defines their shape; they are not interchangeable
