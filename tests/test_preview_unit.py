@@ -120,6 +120,41 @@ class TestPreviewUnit(unittest.TestCase):
         )
         self.assertFalse((self.workspace / STATEMENT_EXAMPLES_REL).exists())
 
+    def test_statement_notes_ignore_whitespace_without_changing_real_content(
+        self,
+    ) -> None:
+        sections = self.workspace / "statement-sections" / "english"
+        for serial, notes in enumerate(("", "\n", " \t\n"), start=1):
+            with self.subTest(notes=repr(notes)):
+                (sections / "notes.tex").write_text(notes, encoding="utf-8")
+                target = self.workspace / "notes-empty" / str(serial)
+                render_statement_offline_tree(
+                    self.workspace,
+                    "english",
+                    target,
+                    problem_title="Notes Fixture",
+                    tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
+                    statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
+                    problem_limits=_PROBLEM_LIMITS,
+                )
+                rendered = (target / "problem.tex").read_text(encoding="utf-8")
+                self.assertNotIn("\\Note", rendered)
+
+        notes = "  First paragraph.\n\nSecond paragraph.  \n"
+        (sections / "notes.tex").write_text(notes, encoding="utf-8")
+        target = self.workspace / "notes-content"
+        render_statement_offline_tree(
+            self.workspace,
+            "english",
+            target,
+            problem_title="Notes Fixture",
+            tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
+            statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
+            problem_limits=_PROBLEM_LIMITS,
+        )
+        rendered = (target / "problem.tex").read_text(encoding="utf-8")
+        self.assertIn("\\Note\n" + notes, rendered)
+
     def test_offline_statement_tree_has_a_local_entrypoint_and_style(self) -> None:
         target = self.workspace / "package-output" / "english"
 

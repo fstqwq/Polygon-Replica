@@ -433,6 +433,47 @@ local function render_body(body)
 end
 
 
+local function normalize_legacy_note_guard(body)
+  local guard =
+    "\\ifdefined%s*\\Note%s*" ..
+    "\\ifx%s*\\Note%s*\\empty%s*" ..
+    "\\subsection%s*%*%s*%{Notes%}%s*" ..
+    "\\else%s*\\Note%s*\\fi%s*" ..
+    "\\else%s*\\subsection%s*%*%s*%{Notes%}%s*\\fi"
+  return (body:gsub(guard, "\\Note\n"))
+end
+
+
+local function remove_empty_trailing_note_marker(body)
+  body = body:gsub("\n%s*\\Notes%s*$", "")
+  body = body:gsub("\n%s*\\Note%s*$", "")
+  body = body:gsub("^%s*\\Notes%s*$", "")
+  body = body:gsub("^%s*\\Note%s*$", "")
+  return body
+end
+
+
+local section_commands = {
+  InputFile = "Input",
+  OutputFile = "Output",
+  Interaction = "Interaction",
+  Note = "Note",
+  Notes = "Notes",
+}
+
+
+local function translate_standalone_section_commands(body)
+  return (body:gsub("[^\n]+", function(line)
+    local command = line:match("^%s*\\([A-Za-z]+)%s*$")
+    local heading = section_commands[command]
+    if heading then
+      return "\\subsubsection*{" .. heading .. "}"
+    end
+    return line
+  end))
+end
+
+
 function RawBlock(element)
   if element.format ~= "latex" or not element.text:match("^\\begin%s*{problem}") then
     return nil
@@ -451,11 +492,9 @@ function RawBlock(element)
     error("rendered problem.tex does not contain a supported problem environment")
   end
 
-  body = body:gsub("\\InputFile", "\\subsubsection*{Input}")
-  body = body:gsub("\\OutputFile", "\\subsubsection*{Output}")
-  body = body:gsub("\\Interaction", "\\subsubsection*{Interaction}")
-  body = body:gsub("\\Notes([%s])", "\\subsubsection*{Notes}%1")
-  body = body:gsub("\\Note([%s])", "\\subsubsection*{Note}%1")
+  body = normalize_legacy_note_guard(body)
+  body = remove_empty_trailing_note_marker(body)
+  body = translate_standalone_section_commands(body)
   body = body:gsub("\\par%s*", "")
 
   local output = pandoc.Blocks({

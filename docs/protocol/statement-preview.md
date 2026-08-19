@@ -51,6 +51,11 @@ content-identity cache entry or generates the missing result before returning
 it. The editor does not expose a second compile/rebuild action or durable
 ready/stale state.
 
+Cache lookup uses a source-derived identity before creating a snapshot, running
+sample-only Verification, rendering templates, or compiling output. On a miss,
+the fully prepared source identity is checked again before publishing a new
+entry so a concurrent source change cannot reuse the earlier lookup.
+
 Restoring default templates is an authored-source action, not a Preview action.
 The editor offers it only when one of the three canonical Statement templates
 differs from the repository default, is missing/invalid, or when the optional
@@ -66,6 +71,11 @@ long document with no intermediate generation page, iframe, fragment polling,
 or client-side progressive replacement. A failed Problem occupies its original
 position with its diagnostic and complete available Pandoc log; other successful
 statements remain visible.
+
+When the ordered Problem preview identities and statuses are unchanged, the
+Contest HTML result itself is reused. Contest PDF likewise resolves the
+source-derived identities of all Problems and checks the complete-document
+cache before materializing any Problem render tree.
 
 An explicitly requested language is used as-is after canonical validation.
 Without an explicit language, Preview chooses English only when it is actually

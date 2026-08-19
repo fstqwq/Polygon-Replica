@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from html import escape
 from importlib import import_module
 import json
 import re
@@ -20,6 +21,7 @@ _FILTER_PATH = Path(__file__).with_name("pandoc_statement.lua")
 _PANDOC_SINGLE_CAPABILITY = ("+RTS", "-N1", "-RTS")
 _SAFE_RASTER_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 _MAX_IMAGE_COUNT = 128
+_STATEMENT_TITLE_START = re.compile(r"<h2(?:\s[^>]*)?>", re.IGNORECASE)
 _MATHML_TAGS = {
     "annotation",
     "math",
@@ -59,6 +61,19 @@ class StatementHtmlRenderError(RuntimeError):
     def __init__(self, message: str, *, log_text: str = "") -> None:
         super().__init__(message)
         self.log_text = log_text
+
+
+def number_statement_fragment(fragment: str, idx: str) -> str:
+    """Prefix the first sanitized Statement title while preserving its tag."""
+
+    match = _STATEMENT_TITLE_START.search(fragment)
+    if match is None:
+        raise ValueError("Statement HTML fragment is missing its title heading.")
+    return (
+        fragment[: match.end()]
+        + f"{escape(idx)}. "
+        + fragment[match.end() :]
+    )
 
 
 class StatementHtmlRenderer:

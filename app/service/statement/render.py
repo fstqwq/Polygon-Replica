@@ -120,6 +120,15 @@ def _statement_section_text(workspace: Path, language: str, section_name: str, f
     return _safe_read_text(workspace / (STATEMENT_SECTIONS_DIR / language / section_name), fallback)
 
 
+def _optional_statement_section_text(
+    workspace: Path,
+    language: str,
+    section_name: str,
+) -> str:
+    text = _statement_section_text(workspace, language, section_name, fallback="")
+    return text if text.strip() else ""
+
+
 def default_statement_title_for_workspace(workspace: Path) -> str:
     return problem_slug_leaf(workspace.name) or DEFAULT_PROBLEM_TITLE
 
@@ -245,7 +254,11 @@ def _problem_context_for_language(
         "input": _statement_section_text(workspace, language, "input.tex", fallback=""),
         "output": _statement_section_text(workspace, language, "output.tex", fallback=""),
         "interaction": _statement_section_text(workspace, language, "interaction.tex", fallback=""),
-        "notes": _statement_section_text(workspace, language, "notes.tex", fallback=""),
+        "notes": _optional_statement_section_text(
+            workspace,
+            language,
+            "notes.tex",
+        ),
         "sampleTests": list(
             examples_bundle.get("sample_tests", [])
             if examples_bundle is not None

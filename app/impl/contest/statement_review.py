@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from html import escape
 from typing import Annotated, cast
 from urllib.parse import quote
 
@@ -13,7 +12,10 @@ from app.impl.auth.session import require_session_user
 from app.impl.auth.shared import redirect_response, template_response
 from app.impl.contest.shared import _contest_ctx
 from app.impl.runtime.dependency import runtime
-from app.service.statement.html_render import RESOURCE_PLACEHOLDER
+from app.service.statement.html_render import (
+    RESOURCE_PLACEHOLDER,
+    number_statement_fragment,
+)
 from app.service.statement.latex_error import latex_failure_text
 from app.service.statement.preview_state import StatementPreviewSource
 
@@ -34,15 +36,6 @@ def _language(contest_id: int, value: str) -> str:
     return language
 
 
-def _numbered_statement_fragment(fragment: str, idx: str) -> str:
-    """Prefix the rendered Statement title without changing the cached fragment."""
-    heading = "<h2>"
-    prefix = f"<h2>{escape(idx)}. "
-    if heading in fragment:
-        return fragment.replace(heading, prefix, 1)
-    return f'<h2 class="contest-statement-fallback-title">{escape(idx)}</h2>{fragment}'
-
-
 def _review_items(
     contest_id: int,
     contest_slug: str,
@@ -58,8 +51,10 @@ def _review_items(
         roster_item = roster.get(item["problem_id"])
         if roster_item is None:
             continue
+        display_status = item["status"]
+        display_error = item["error"]
         fragment = ""
-        if item["status"] == "ok" and item["preview_id"]:
+        if display_status == "ok" and item["preview_id"]:
             fragment = runtime().statement_preview_service.html_fragment(
                 item["preview_id"],
                 actor_user_id=actor_user_id,
@@ -70,12 +65,17 @@ def _review_items(
                 f"{item['preview_id']}/"
             )
             fragment = fragment.replace(RESOURCE_PLACEHOLDER, resource_base)
-            fragment = _numbered_statement_fragment(
-                fragment,
-                str(roster_item["idx"]),
-            )
+            try:
+                fragment = number_statement_fragment(
+                    fragment,
+                    str(roster_item["idx"]),
+                )
+            except ValueError as exc:
+                display_status = "failed"
+                display_error = str(exc)
+                fragment = ""
         pandoc_log = ""
-        if item["status"] == "failed" and item["preview_id"]:
+        if display_status == "failed" and item["preview_id"]:
             pandoc_log = runtime().statement_preview_service.pandoc_log(
                 item["preview_id"],
                 actor_user_id=actor_user_id,
@@ -83,6 +83,8 @@ def _review_items(
         items.append(
             {
                 **item,
+                "status": display_status,
+                "error": display_error,
                 "idx": roster_item["idx"],
                 "problem_slug": roster_item["problem_slug"],
                 "fragment": fragment,

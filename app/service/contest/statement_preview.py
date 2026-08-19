@@ -194,6 +194,17 @@ class ContestStatementPreviewService:
             },
             ensure_ascii=True,
         )
+        cached = self._store.cached_contest(
+            contest_id,
+            actor_user_id=user_id,
+            source_kind=source_kind,
+            output_kind="html",
+            language=language,
+            input_identity=identity,
+            options={},
+        )
+        if cached is not None:
+            return cached
         preview_id = f"sp-{uuid.uuid4().hex[:16]}"
         self._store.insert(
             preview_id=preview_id,
@@ -286,6 +297,41 @@ class ContestStatementPreviewService:
                     else problem_access["read_block_reason"]
                 )
                 raise PermissionError(str(reason or "problem access required"))
+        preview_inputs = [
+            self._problem_previews.problem_input(
+                row["problem_slug"],
+                username,
+                source_kind=source_kind,
+                output_kind="pdf",
+                language=language,
+            )
+            for row in rows
+        ]
+        identity = self._pdf_identity(
+            contest_id,
+            source_generation=int(contest["source_generation"]),
+            source_kind=source_kind,
+            language=language,
+            rows=rows,
+            source_identities=[item.source_identity for item in preview_inputs],
+        )
+        cached = self._store.cached_contest(
+            contest_id,
+            actor_user_id=user_id,
+            source_kind=source_kind,
+            output_kind="pdf",
+            language=language,
+            input_identity=identity,
+            options=options,
+        )
+        if (
+            cached is not None
+            and self._problem_previews.pdf(
+                cached["id"], actor_user_id=user_id
+            )
+            is not None
+        ):
+            return cached
         with ExitStack() as stack:
             prepared: list[PreparedStatementRender] = [
                 stack.enter_context(
@@ -298,24 +344,13 @@ class ContestStatementPreviewService:
                 )
                 for row in rows
             ]
-            identity = sha256_hex_json(
-                {
-                    "subject": "contest",
-                    "contest_id": contest_id,
-                    "source_generation": contest["source_generation"],
-                    "source": source_kind,
-                    "output": "pdf",
-                    "language": language,
-                    "problems": [
-                        {
-                            "idx": row["idx"],
-                            "problem_id": row["problem_id"],
-                            "source_identity": item.source_identity,
-                        }
-                        for row, item in zip(rows, prepared, strict=True)
-                    ],
-                },
-                ensure_ascii=True,
+            identity = self._pdf_identity(
+                contest_id,
+                source_generation=int(contest["source_generation"]),
+                source_kind=source_kind,
+                language=language,
+                rows=rows,
+                source_identities=[item.source_identity for item in prepared],
             )
             cached = self._store.cached_contest(
                 contest_id,
@@ -381,6 +416,40 @@ class ContestStatementPreviewService:
             if result is None:
                 raise RuntimeError("Contest statement PDF result disappeared")
             return result
+
+    @staticmethod
+    def _pdf_identity(
+        contest_id: int,
+        *,
+        source_generation: int,
+        source_kind: StatementPreviewSource,
+        language: str,
+        rows: list[ContestProblem],
+        source_identities: list[str],
+    ) -> str:
+        return sha256_hex_json(
+            {
+                "subject": "contest",
+                "contest_id": contest_id,
+                "source_generation": source_generation,
+                "source": source_kind,
+                "output": "pdf",
+                "language": language,
+                "problems": [
+                    {
+                        "idx": row["idx"],
+                        "problem_id": row["problem_id"],
+                        "source_identity": source_identity,
+                    }
+                    for row, source_identity in zip(
+                        rows,
+                        source_identities,
+                        strict=True,
+                    )
+                ],
+            },
+            ensure_ascii=True,
+        )
 
     def latest_pdf(
         self,

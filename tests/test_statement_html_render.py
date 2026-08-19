@@ -1,5 +1,6 @@
 import shutil
 import tempfile
+from html.parser import HTMLParser
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,6 +12,7 @@ from app.service.problem.runtime_config import problem_config_limits
 from app.service.sandbox.base import ExecResult
 from app.service.statement.constant import DEFAULT_STATEMENT_PROBLEM_TEMPLATE
 from app.service.statement.examples import StatementExamplesBundle
+from app.service.statement.html_render import number_statement_fragment
 from app.service.statement.render import render_statement_offline_tree
 from app.service.statement.tex_compile import TexCompileResult
 
@@ -18,7 +20,157 @@ from tests.backend_e2e_fixture import BackendE2ETestBase
 from tests.common import suite_root
 
 
+class _HeadingCollector(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.headings: list[tuple[str, dict[str, str | None], str]] = []
+        self._tag = ""
+        self._attributes: dict[str, str | None] = {}
+        self._text: list[str] = []
+
+    def handle_starttag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        if tag in {"h2", "h3"}:
+            self._tag = tag
+            self._attributes = dict(attrs)
+            self._text = []
+
+    def handle_data(self, data: str) -> None:
+        if self._tag:
+            self._text.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == self._tag:
+            self.headings.append(
+                (
+                    self._tag,
+                    self._attributes,
+                    "".join(self._text).strip(),
+                )
+            )
+            self._tag = ""
+            self._attributes = {}
+            self._text = []
+
+
+def _headings(fragment: str) -> list[tuple[str, dict[str, str | None], str]]:
+    parser = _HeadingCollector()
+    parser.feed(fragment)
+    parser.close()
+    return parser.headings
+
+
 class TestStatementHtmlRender(BackendE2ETestBase):
+    def test_problem_and_contest_html_reuse_source_identity_cache(self) -> None:
+        workspace = Path(
+            runtime.workspace_service.workspace_context(
+                self.problem,
+                self.user,
+                include_recent=False,
+            )["workspace"]["path"]
+        )
+        (workspace / "statement-sections/english/legend.tex").write_text(
+            "Cache identity fixture.\n",
+            encoding="utf-8",
+        )
+        user_id = int(runtime.workspace_service.user_row(self.user)["id"])
+        problem_id = int(runtime.workspace_service.problem_row(self.problem)["id"])
+        contest_slug = self.random_id("statement-cache")
+        contest_id = runtime.contest_service.create_contest_with_owner(
+            slug=contest_slug,
+            title="Statement Cache",
+            owner_user_id=user_id,
+        )
+        runtime.contest_service.add_problem(
+            contest_id,
+            "A",
+            problem_id,
+            user_id,
+        )
+
+        first = runtime.contest_statement_preview_service.build_html(
+            contest_id,
+            user_id=user_id,
+            username=self.user,
+            source_kind="workspace",
+            language="english",
+        )
+        with patch.object(
+            runtime.statement_preview_service,
+            "prepare_render_tree",
+            side_effect=AssertionError("cache hit must not prepare a render tree"),
+        ):
+            second = runtime.contest_statement_preview_service.build_html(
+                contest_id,
+                user_id=user_id,
+                username=self.user,
+                source_kind="workspace",
+                language="english",
+            )
+
+        self.assertEqual(first["id"], second["id"])
+
+        def build_contest_pdf(**kwargs: object) -> dict[str, object]:
+            output_root = Path(str(kwargs["output_root"]))
+            target = output_root / "pdf" / "statement.pdf"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"%PDF-1.4\n% cache fixture\n")
+            return {"pdf": "pdf/statement.pdf"}
+
+        with patch.object(
+            runtime.contest_statement_preview_service._statements,
+            "build_preview_pdf",
+            side_effect=build_contest_pdf,
+        ):
+            first_pdf = runtime.contest_statement_preview_service.build_pdf(
+                contest_id,
+                contest_slug=contest_slug,
+                user_id=user_id,
+                username=self.user,
+                source_kind="workspace",
+                language="english",
+            )
+        current_pdf_input = runtime.statement_preview_service.problem_input(
+            self.problem,
+            self.user,
+            source_kind="workspace",
+            output_kind="pdf",
+            language="english",
+        )
+        expected_pdf_identity = (
+            runtime.contest_statement_preview_service._pdf_identity(
+                contest_id,
+                source_generation=int(
+                    runtime.contest_service.contest_context(contest_slug)[
+                        "source_generation"
+                    ]
+                ),
+                source_kind="workspace",
+                language="english",
+                rows=runtime.contest_service.contest_problems(contest_id),
+                source_identities=[current_pdf_input.source_identity],
+            )
+        )
+        self.assertEqual(first_pdf["input_identity"], expected_pdf_identity)
+        with patch.object(
+            runtime.statement_preview_service,
+            "prepare_render_tree",
+            side_effect=AssertionError("PDF cache hit must not prepare render trees"),
+        ):
+            second_pdf = runtime.contest_statement_preview_service.build_pdf(
+                contest_id,
+                contest_slug=contest_slug,
+                user_id=user_id,
+                username=self.user,
+                source_kind="workspace",
+                language="english",
+            )
+
+        self.assertEqual(first_pdf["id"], second_pdf["id"])
+
     def test_pdf_failure_returns_the_latex_error_as_plain_text(self) -> None:
         compile_log = (
             "This is pdfTeX.\n"
@@ -409,7 +561,133 @@ class TestStatementHtmlRender(BackendE2ETestBase):
         )
 
         self.assertEqual(result.warnings, ())
-        self.assertRegex(result.fragment, r"<h3[^>]*>Note</h3>")
-        self.assertRegex(result.fragment, r"<h3[^>]*>Notes</h3>")
+        self.assertEqual(
+            [(tag, text) for tag, _, text in _headings(result.fragment)],
+            [("h2", "Notes"), ("h3", "Note"), ("h3", "Notes")],
+        )
         self.assertIn("A single note.", result.fragment)
         self.assertIn("Several notes.", result.fragment)
+
+    def test_legacy_note_guard_renders_one_section_heading(self) -> None:
+        root = Path(
+            tempfile.mkdtemp(prefix="statement-html-note-guard-", dir=suite_root())
+        )
+        self.addCleanup(shutil.rmtree, root, True)
+        render_root = root / "render"
+        render_root.mkdir()
+        guard = (
+            "\\ifdefined\\Note\n"
+            "  \\ifx\\Note\\empty\n"
+            "    \\subsection*{Notes}\n"
+            "  \\else\n"
+            "    \\Note\n"
+            "  \\fi\n"
+            "\\else\n"
+            "  \\subsection*{Notes}\n"
+            "\\fi\n"
+        )
+        (render_root / "problem.tex").write_text(
+            "\\begin{problem}{Legacy Notes}{standard input}{standard output}"
+            "{1 second}{256 megabytes}\n"
+            + guard
+            + "Actual note content.\n"
+            "\\end{problem}\n",
+            encoding="utf-8",
+        )
+
+        result = runtime.statement_html_renderer.render(
+            render_root,
+            root / "html",
+            subject_token="html-preview-note-guard",
+        )
+
+        self.assertEqual(result.warnings, ())
+        self.assertEqual(
+            [(tag, text) for tag, _, text in _headings(result.fragment)],
+            [("h2", "Legacy Notes"), ("h3", "Note")],
+        )
+        self.assertIn("Actual note content.", result.fragment)
+
+    def test_legacy_note_guard_without_content_has_no_note_heading(self) -> None:
+        root = Path(
+            tempfile.mkdtemp(prefix="statement-html-empty-note-", dir=suite_root())
+        )
+        self.addCleanup(shutil.rmtree, root, True)
+        render_root = root / "render"
+        render_root.mkdir()
+        (render_root / "problem.tex").write_text(
+            "\\begin{problem}{Empty Notes}{standard input}{standard output}"
+            "{1 second}{256 megabytes}\n"
+            "\\ifdefined\\Note\n"
+            "  \\ifx\\Note\\empty\n"
+            "    \\subsection*{Notes}\n"
+            "  \\else\n"
+            "    \\Note\n"
+            "  \\fi\n"
+            "\\else\n"
+            "  \\subsection*{Notes}\n"
+            "\\fi\n"
+            "\\end{problem}\n",
+            encoding="utf-8",
+        )
+
+        result = runtime.statement_html_renderer.render(
+            render_root,
+            root / "html",
+            subject_token="html-preview-empty-note",
+        )
+
+        self.assertEqual(result.warnings, ())
+        self.assertEqual(
+            [(tag, text) for tag, _, text in _headings(result.fragment)],
+            [("h2", "Empty Notes")],
+        )
+
+    def test_note_token_inside_an_unknown_condition_is_not_a_section(self) -> None:
+        root = Path(
+            tempfile.mkdtemp(prefix="statement-html-note-token-", dir=suite_root())
+        )
+        self.addCleanup(shutil.rmtree, root, True)
+        render_root = root / "render"
+        render_root.mkdir()
+        (render_root / "problem.tex").write_text(
+            "\\begin{problem}{Conditional}{standard input}{standard output}"
+            "{1 second}{256 megabytes}\n"
+            "\\ifdefined\\Note\n"
+            "Conditional content.\n"
+            "\\fi\n"
+            "\\end{problem}\n",
+            encoding="utf-8",
+        )
+
+        result = runtime.statement_html_renderer.render(
+            render_root,
+            root / "html",
+            subject_token="html-preview-note-token",
+        )
+
+        self.assertEqual(
+            [(tag, text) for tag, _, text in _headings(result.fragment)],
+            [("h2", "Conditional")],
+        )
+
+    def test_contest_numbering_preserves_statement_title_attributes(self) -> None:
+        for fragment, expected_title, expected_attributes in (
+            ("<section><h2>绝对多数</h2></section>", "D. 绝对多数", {}),
+            (
+                '<div><h2 id="problem-title" class="localized">璀璨宝石</h2></div>',
+                "D. 璀璨宝石",
+                {"id": "problem-title", "class": "localized"},
+            ),
+        ):
+            with self.subTest(fragment=fragment):
+                numbered = number_statement_fragment(fragment, "D")
+                headings = _headings(numbered)
+                self.assertEqual(len(headings), 1)
+                self.assertEqual(headings[0][0], "h2")
+                self.assertEqual(headings[0][1], expected_attributes)
+                self.assertEqual(headings[0][2], expected_title)
+
+    def test_contest_numbering_requires_a_statement_title(self) -> None:
+        with self.assertRaisesRegex(ValueError, "missing its title heading"):
+            number_statement_fragment("<section><p>Body only.</p></section>", "A")

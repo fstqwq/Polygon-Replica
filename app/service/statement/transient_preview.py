@@ -43,6 +43,9 @@ from app.service.statement.render import (
 )
 from app.service.statement.signature import statement_sources_signature
 from app.service.statement.tex_compile import TexCompileService
+from app.service.verification.workspace_fingerprint import (
+    verification_sources_signature,
+)
 from app.service.verification.workflow import VerificationWorkflow
 
 
@@ -54,6 +57,15 @@ class PreparedStatementRender:
     root: Path
     source_identity: str
     sample_count: int | None
+
+
+@dataclass(frozen=True)
+class StatementPreviewInput:
+    """A cheap, source-derived cache identity for one Problem statement."""
+
+    problem_id: int
+    source_identity: str
+    identity: str
 
 
 class StatementPreviewService:
@@ -117,22 +129,35 @@ class StatementPreviewService:
     ) -> StatementPreviewRow:
         safe_language = self._language(language)
         actor_user_id = int(self._workspaces.user_row(username)["id"])
+        preview_input = self.problem_input(
+            problem,
+            username,
+            source_kind=source_kind,
+            output_kind=output_kind,
+            language=safe_language,
+        )
+        cached = self._cached_problem(
+            preview_input.problem_id,
+            actor_user_id=actor_user_id,
+            source_kind=source_kind,
+            output_kind=output_kind,
+            language=safe_language,
+            identity=preview_input.identity,
+        )
+        if cached is not None:
+            return cached
         with self.prepare_render_tree(
             problem,
             username,
             source_kind=source_kind,
             language=safe_language,
         ) as prepared:
-            identity = sha256_hex_json(
-                {
-                    "subject": "problem",
-                    "problem_id": prepared.problem_id,
-                    "source": source_kind,
-                    "output": output_kind,
-                    "language": safe_language,
-                    "source_identity": prepared.source_identity,
-                },
-                ensure_ascii=True,
+            identity = self._preview_identity(
+                prepared.problem_id,
+                source_kind=source_kind,
+                output_kind=output_kind,
+                language=safe_language,
+                source_identity=prepared.source_identity,
             )
             cached = self._cached_problem(
                 prepared.problem_id,
@@ -170,6 +195,53 @@ class StatementPreviewService:
                 if row is None:
                     raise RuntimeError("statement preview result disappeared") from exc
                 return row
+
+    def problem_input(
+        self,
+        problem: str,
+        username: str,
+        *,
+        source_kind: StatementPreviewSource,
+        output_kind: StatementPreviewOutput,
+        language: str,
+    ) -> StatementPreviewInput:
+        """Return the cache identity without materializing a render tree."""
+
+        safe_language = self._language(language)
+        if source_kind == "workspace":
+            ctx = self._workspaces.workspace_context(
+                problem,
+                username,
+                include_recent=False,
+            )
+            workspace = Path(ctx["workspace"]["path"])
+            problem_id = int(ctx["problem"]["id"])
+            with self._workspaces.workspace_lock(workspace):
+                source_identity = self._workspace_source_identity(
+                    workspace,
+                    problem=problem,
+                    problem_id=problem_id,
+                    language=safe_language,
+                )
+        elif source_kind == "native_package":
+            problem_id = int(self._workspaces.problem_row(problem)["id"])
+            source_identity = self._native_source_identity(
+                problem_id,
+                language=safe_language,
+            )
+        else:
+            raise ValueError("unsupported statement preview source")
+        return StatementPreviewInput(
+            problem_id=problem_id,
+            source_identity=source_identity,
+            identity=self._preview_identity(
+                problem_id,
+                source_kind=source_kind,
+                output_kind=output_kind,
+                language=safe_language,
+                source_identity=source_identity,
+            ),
+        )
 
     @contextmanager
     def prepare_render_tree(
@@ -294,6 +366,9 @@ class StatementPreviewService:
                 statement_sample_max_bytes=sample_limit,
                 problem_limits=limits,
             )
+            verification_signature = (
+                verification_sources_signature(workspace) if dynamic else ""
+            )
             status = self._workspaces.read_workspace_status(workspace)
             snapshot = self._workspaces.create_snapshot(
                 workspace,
@@ -321,7 +396,7 @@ class StatementPreviewService:
                     "source": "workspace",
                     "language": language,
                     "statement": signature,
-                    "examples": bundle,
+                    "verification_sources": verification_signature,
                 },
                 ensure_ascii=True,
             )
@@ -353,20 +428,14 @@ class StatementPreviewService:
         language: str,
     ) -> Iterator[PreparedStatementRender]:
         problem_id = int(self._workspaces.problem_row(problem)["id"])
+        source_identity = self._native_source_identity(
+            problem_id,
+            language=language,
+        )
         readiness = self._packages.published_readiness(problem_id)
         native_package_id = readiness["native_package_id"]
-        if readiness["status"] != "ready" or not native_package_id:
+        if not native_package_id:
             raise ValueError("current Native Package is unavailable")
-        source_identity = sha256_hex_json(
-            {
-                "subject": "problem",
-                "problem_id": problem_id,
-                "source": "native_package",
-                "native_package_id": native_package_id,
-                "language": language,
-            },
-            ensure_ascii=True,
-        )
         staging_parent = Path(
             tempfile.mkdtemp(prefix="statement-native-", dir=self._snapshot_parent())
         )
@@ -517,6 +586,86 @@ class StatementPreviewService:
                 else None
             )
         return row if self.pdf(row["id"], actor_user_id=actor_user_id) is not None else None
+
+    def _workspace_source_identity(
+        self,
+        workspace: Path,
+        *,
+        problem: str,
+        problem_id: int,
+        language: str,
+    ) -> str:
+        tests_spec_limit = self._db.config_values.integer("TEXTAREA_MAX_BYTES")
+        sample_limit = self._db.config_values.integer("STATEMENT_SAMPLE_MAX_BYTES")
+        limits = problem_config_limits(self._db.config_values)
+        title = statement_title_for_language(
+            workspace,
+            language,
+            fallback_title=problem_slug_leaf(problem),
+        )
+        statement_signature = statement_sources_signature(
+            workspace,
+            problem_title=title,
+            tests_spec_max_bytes=tests_spec_limit,
+            statement_sample_max_bytes=sample_limit,
+        )
+        dynamic = statement_examples_require_verification(
+            workspace,
+            tests_spec_max_bytes=tests_spec_limit,
+            statement_sample_max_bytes=sample_limit,
+            problem_limits=limits,
+        )
+        verification_signature = (
+            verification_sources_signature(workspace) if dynamic else ""
+        )
+        return sha256_hex_json(
+            {
+                "subject": "problem",
+                "problem_id": problem_id,
+                "source": "workspace",
+                "language": language,
+                "statement": statement_signature,
+                "verification_sources": verification_signature,
+            },
+            ensure_ascii=True,
+        )
+
+    def _native_source_identity(self, problem_id: int, *, language: str) -> str:
+        readiness = self._packages.published_readiness(problem_id)
+        native_package_id = readiness["native_package_id"]
+        if readiness["status"] != "ready" or not native_package_id:
+            raise ValueError("current Native Package is unavailable")
+        return sha256_hex_json(
+            {
+                "subject": "problem",
+                "problem_id": problem_id,
+                "source": "native_package",
+                "native_package_id": native_package_id,
+                "language": language,
+            },
+            ensure_ascii=True,
+        )
+
+    @staticmethod
+    def _preview_identity(
+        problem_id: int,
+        *,
+        source_kind: StatementPreviewSource,
+        output_kind: StatementPreviewOutput,
+        language: str,
+        source_identity: str,
+    ) -> str:
+        return sha256_hex_json(
+            {
+                "subject": "problem",
+                "problem_id": problem_id,
+                "source": source_kind,
+                "output": output_kind,
+                "language": language,
+                "source_identity": source_identity,
+            },
+            ensure_ascii=True,
+        )
 
     def _insert_problem(
         self,
