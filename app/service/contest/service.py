@@ -3,8 +3,8 @@ from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 from typing import TypedDict
 
-from app.db import DB, now_iso
 from app.config import ConfigValues
+from app.db import DB, now_iso
 from app.service.access.policy import access_role, contest_role
 from app.service.access.query import AccessQuery
 from app.service.contest.model import AgentContestRoster
@@ -16,13 +16,15 @@ from app.service.contest.property import (
     normalize_contest_property_key,
 )
 from app.service.contest.statement_meta import infer_contest_header_fields
+from app.service.contest.statement_source_contract import (
+    CONTEST_STATEMENT_OUTPUT_NAME,
+    CONTEST_STATEMENT_SHARED_PROTECTED_FILES,
+    CONTEST_STATEMENT_SHARED_SCOPE,
+    CONTEST_STATEMENT_TEMPLATE_NAME,
+)
 from app.service.disk.contest_store import ContestDiskStore
-from app.service.statement.context import normalize_statement_language
 from app.service.platform.fs.layout import StorageLayout
-
-
-CONTEST_STATEMENT_SHARED_SCOPE = "_shared"
-_CONTEST_STATEMENT_ROOT_TEMPLATES = {"olymp.sty", "statements.tex"}
+from app.service.statement.context import normalize_statement_language
 
 
 class ContestMemberEntry(TypedDict):
@@ -202,12 +204,17 @@ class ContestService:
         if not parts:
             raise ValueError("contest statement source path is required")
         relative_path = PurePosixPath(*parts).as_posix()
+        if relative_path == CONTEST_STATEMENT_OUTPUT_NAME:
+            raise ValueError(
+                f"{CONTEST_STATEMENT_OUTPUT_NAME} is a rendered Contest statement file"
+            )
         if (
             safe_language == CONTEST_STATEMENT_SHARED_SCOPE
-            and relative_path in _CONTEST_STATEMENT_ROOT_TEMPLATES
+            and relative_path in CONTEST_STATEMENT_SHARED_PROTECTED_FILES
         ):
             raise ValueError(
-                "shared Contest statement files cannot replace statements.tex or olymp.sty"
+                "shared Contest statement files cannot replace "
+                f"{CONTEST_STATEMENT_TEMPLATE_NAME} or olymp.sty"
             )
         return f"{prefix}{relative_path}"
 
@@ -592,13 +599,19 @@ class ContestService:
             raise ValueError("invalid contest source file path")
         return target
 
-    def _infer_statement_header_fields_for_contest(self, contest_id: int, contest_slug: str) -> dict[str, str]:
+    def _infer_statement_header_fields_for_contest(
+        self,
+        contest_id: int,
+        contest_slug: str,
+    ) -> dict[str, str]:
         statement_paths = sorted(
             str(row["rel_path"])
             for row in self.statement_attachment_rows(int(contest_id))
-            if str(row["rel_path"]).endswith("/statements.tex")
+            if str(row["rel_path"]).endswith(
+                f"/{CONTEST_STATEMENT_TEMPLATE_NAME}"
+            )
         )
-        english_path = "statements/english/statements.tex"
+        english_path = f"statements/english/{CONTEST_STATEMENT_TEMPLATE_NAME}"
         candidate_rel_paths = (
             [english_path, *[path for path in statement_paths if path != english_path]]
             if english_path in statement_paths

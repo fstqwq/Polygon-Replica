@@ -86,11 +86,9 @@ Contest Statement resources have two source scopes. Files below
 `statements/<language>/` are specific to that language. Preview copies the
 shared tree first and the selected language tree second, so a language-specific
 file with the same relative path overrides the shared file. The entry templates
-`statements.tex` and `olymp.sty` remain language-specific and MUST NOT be stored
-in the shared scope. The shared scope is additive: existing language-specific
-source rows and databases require no schema conversion. Older deployments that
-do not implement the shared overlay ignore `_shared` because it contains no
-language entry template; they continue to render the existing language trees.
+`statements.ftl` and `olymp.sty` remain language-specific and MUST NOT be stored
+in the shared scope. The shared scope is additive and does not supply either
+language-specific entry file.
 The editor labels this scope `Shared`. Removing a language from the editor
 deletes only that language's Contest source overrides; it does not remove the
 language from the constituent Problems. Consequently, a language supported by
@@ -100,9 +98,9 @@ its saved overrides are removed.
 ## Contest PDF
 
 Contest PDF Preview is the existing complete Contest TeX build placed under the
-Preview lifecycle. The authored `statements.tex` is an FTL source. Preview
+Preview lifecycle. The authored `statements.ftl` is an FTL source. Preview
 renders it with the effective Contest property mapping and the canonical
-ordered Problem entries before compiling the resulting `statements.tex`.
+ordered Problem entries into the derived `statements.tex` before compiling it.
 The default template emits the `olymp.sty` blank-page signal only when the
 Boolean `insertBlankPage` value is true. A non-empty `banner` value replaces
 the existing `\StatementBanner` slot and may reference a resource from the

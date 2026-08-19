@@ -9,6 +9,9 @@ from typing import TypedDict
 from urllib.parse import unquote, urlparse
 
 from app.service.contest.statement_meta import infer_contest_header_fields
+from app.service.contest.statement_source_contract import (
+    CONTEST_STATEMENT_TEMPLATE_NAME,
+)
 from app.service.importing.archive import ArchivePolicy, ArchiveView
 from app.service.statement.context import normalize_statement_language
 
@@ -107,9 +110,11 @@ class PolygonContestImportService:
     ) -> tuple[dict[str, str], dict[str, str]]:
         rows_by_key = {row["key"]: row for row in statement_files}
         statement_keys = sorted(
-            key for key in rows_by_key if key.endswith("/statements.tex")
+            key
+            for key in rows_by_key
+            if key.endswith(f"/{CONTEST_STATEMENT_TEMPLATE_NAME}")
         )
-        english_key = "statements/english/statements.tex"
+        english_key = f"statements/english/{CONTEST_STATEMENT_TEMPLATE_NAME}"
         candidate_keys = (
             [english_key, *[key for key in statement_keys if key != english_key]]
             if english_key in statement_keys
@@ -268,10 +273,12 @@ class PolygonContestImportService:
         )
         statement_files = self._statement_source_rows(entries)
         if not any(
-            row["key"].endswith("/statements.tex") for row in statement_files
+            row["key"].endswith(f"/{CONTEST_STATEMENT_TEMPLATE_NAME}")
+            for row in statement_files
         ):
             raise ValueError(
-                "contest package missing statements/<language>/statements.tex"
+                "contest package missing statements/<language>/"
+                f"{CONTEST_STATEMENT_TEMPLATE_NAME}"
             )
         inferred, localized_properties = self._infer_statement_header_properties(
             rooted,

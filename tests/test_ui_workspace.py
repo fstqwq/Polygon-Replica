@@ -1718,10 +1718,12 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             [contest_id],
         )
         attachment_keys = [str(row["key"] or "") for row in attachment_rows]
-        self.assertIn("statements/english/statements.tex", attachment_keys)
+        self.assertIn("statements/english/statements.ftl", attachment_keys)
         self.assertIn("statements/english/olymp.sty", attachment_keys)
         contest_source_root = runtime.contest_service.contest_source_root(target_slug)
-        self.assertTrue((contest_source_root / "statements" / "english" / "statements.tex").is_file())
+        self.assertTrue(
+            (contest_source_root / "statements" / "english" / "statements.ftl").is_file()
+        )
         self.assertTrue((contest_source_root / "statements" / "english" / "olymp.sty").is_file())
         imported_rows = runtime.contest_service.contest_problems(contest_id)
         self.assertEqual(len(imported_rows), 4)

@@ -7,9 +7,15 @@ from pathlib import Path
 from app.service.contest.naming import problem_source_folder
 from app.service.contest.property import contest_template_properties
 from app.service.contest.service import (
-    CONTEST_STATEMENT_SHARED_SCOPE,
     ContestProblem,
     ContestService,
+)
+from app.service.contest.statement_source_contract import (
+    CONTEST_STATEMENT_OUTPUT_NAME,
+    CONTEST_STATEMENT_SHARED_PROTECTED_FILES,
+    CONTEST_STATEMENT_SHARED_SCOPE,
+    CONTEST_STATEMENT_STYLE_NAME,
+    CONTEST_STATEMENT_TEMPLATE_NAME,
 )
 from app.service.sandbox.base import ExecResult
 from app.service.statement.constant import (
@@ -80,7 +86,7 @@ class ContestStatementService:
                 continue
             if parts[1] == CONTEST_STATEMENT_SHARED_SCOPE:
                 continue
-            if parts[2] != "statements.tex":
+            if parts[2] != CONTEST_STATEMENT_TEMPLATE_NAME:
                 continue
             language = normalize_statement_language(parts[1])
             if language and language not in seen:
@@ -178,8 +184,9 @@ class ContestStatementService:
         problem_entries: Sequence[ContestProblem],
         source_folder_map: dict[int, str],
     ) -> None:
-        statements_tex = statements_root / "statements.tex"
-        template_text = statements_tex.read_text(encoding="utf-8")
+        statements_ftl = statements_root / CONTEST_STATEMENT_TEMPLATE_NAME
+        statements_tex = statements_root / CONTEST_STATEMENT_OUTPUT_NAME
+        template_text = statements_ftl.read_text(encoding="utf-8")
         rendered = render_ftl_template(
             template_text,
             self._statements_template_context(
@@ -328,7 +335,7 @@ class ContestStatementService:
                     color_definitions.append(line)
         if not tikz_libraries and not color_definitions:
             return
-        statements_tex = statements_root / "statements.tex"
+        statements_tex = statements_root / CONTEST_STATEMENT_OUTPUT_NAME
         text = statements_tex.read_text(encoding="utf-8", errors="replace")
         lines: list[str] = []
         if color_definitions and not (
@@ -449,7 +456,7 @@ class ContestStatementService:
         shared_root = source_snapshot / "statements" / CONTEST_STATEMENT_SHARED_SCOPE
         language_root = source_snapshot / "statements" / language
 
-        for protected_name in ("olymp.sty", "statements.tex"):
+        for protected_name in CONTEST_STATEMENT_SHARED_PROTECTED_FILES:
             protected_path = shared_root / protected_name
             if protected_path.exists() or protected_path.is_symlink():
                 raise RuntimeError(
@@ -479,13 +486,14 @@ class ContestStatementService:
                 target = self._compile_target(statements_root, relative)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source_path, target)
-        olymp_sty = statements_root / "olymp.sty"
+        olymp_sty = statements_root / CONTEST_STATEMENT_STYLE_NAME
         if olymp_sty.is_symlink() or not olymp_sty.exists():
             olymp_sty.write_text(DEFAULT_OLYMP_STY, encoding="utf-8")
-        statements_tex = statements_root / "statements.tex"
-        if statements_tex.is_symlink() or not statements_tex.is_file():
+        statements_ftl = statements_root / CONTEST_STATEMENT_TEMPLATE_NAME
+        if statements_ftl.is_symlink() or not statements_ftl.is_file():
             raise RuntimeError(
-                f"contest statements.tex missing for language: {language}"
+                "contest statement template missing for language "
+                f"{language}: {CONTEST_STATEMENT_TEMPLATE_NAME}"
             )
         return statements_root
 
@@ -497,7 +505,7 @@ class ContestStatementService:
             "  \\providecommand{\\url}[1]{\\texttt{#1}}%\n"
             "  \\providecommand{\\href}[2]{#2}%\n"
             "}\n"
-            "\\input{statements.tex}\n",
+            f"\\input{{{CONTEST_STATEMENT_OUTPUT_NAME}}}\n",
             encoding="utf-8",
         )
         return wrapper
@@ -537,7 +545,7 @@ class ContestStatementService:
             problem_entries=problem_entries,
             source_folder_map=source_folders,
         )
-        self._ensure_cjk_support(statements_root / "statements.tex")
+        self._ensure_cjk_support(statements_root / CONTEST_STATEMENT_OUTPUT_NAME)
         results: list[dict[str, object]] = []
         for entry in problem_entries:
             problem_id = int(entry["problem_id"])

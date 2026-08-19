@@ -72,7 +72,7 @@ def polygon_contest_package(problem_count: int = 4) -> bytes:
             "</contest>\n",
         )
         package.writestr(
-            "statements/english/statements.tex",
+            "statements/english/statements.ftl",
             "\\contest{Synthetic Contest}{Test City}{August 3, 2026}\n",
         )
         package.writestr("statements/english/olymp.sty", "% synthetic style\n")

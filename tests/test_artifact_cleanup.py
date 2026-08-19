@@ -846,7 +846,7 @@ class TestArtifactCleanup(unittest.TestCase):
             / "sample-contest"
             / "statements"
             / "english"
-            / "statements.tex"
+            / "statements.ftl"
         )
         contest_source.parent.mkdir(parents=True)
         contest_source.write_text("durable contest source\n", encoding="utf-8")
@@ -906,7 +906,7 @@ class TestArtifactCleanup(unittest.TestCase):
                 )
             )
             contest_payload = archive.extractfile(
-                "contest-sources/sample-contest/statements/english/statements.tex"
+                "contest-sources/sample-contest/statements/english/statements.ftl"
             )
             self.assertIsNotNone(contest_payload)
             assert contest_payload is not None

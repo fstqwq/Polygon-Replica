@@ -284,7 +284,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             str(row["display_path"]): row
             for row in context["contest_statement_source_rows"]
         }
-        self.assertEqual(set(rows), {"statements.tex", "olymp.sty"})
+        self.assertEqual(set(rows), {"statements.ftl", "olymp.sty"})
         for row in rows.values():
             self.assertEqual(row["source_display"], "Default")
             self.assertFalse(row["stored"])
@@ -361,9 +361,14 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             for row in runtime.contest_service.statement_attachment_rows(contest_id)
         }
         self.assertEqual(remaining_keys, {shared_key})
-        with self.assertRaisesRegex(ValueError, "cannot replace statements.tex"):
+        with self.assertRaisesRegex(ValueError, "cannot replace statements.ftl"):
             runtime.contest_service.normalize_statement_source_key(
                 language="_shared",
+                path="statements.ftl",
+            )
+        with self.assertRaisesRegex(ValueError, "rendered Contest statement file"):
+            runtime.contest_service.normalize_statement_source_key(
+                language="english",
                 path="statements.tex",
             )
 
@@ -805,7 +810,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertIsNotNone(alice_row)
         actor_user_id = int(alice_row["id"])
         with tempfile.TemporaryDirectory(prefix="contest-statement-source-") as temp:
-            source_path = Path(temp) / "statements.tex"
+            source_path = Path(temp) / "statements.ftl"
             source_path.write_bytes(
                 b"\\documentclass{article}\n"
                 b"\\begin{document}\n"
@@ -821,7 +826,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
                 actor_user_id=actor_user_id,
                 files=[
                     {
-                        "key": "statements/english/statements.tex",
+                        "key": "statements/english/statements.ftl",
                         "language": "english",
                         "source_path": source_path,
                     }

@@ -9,7 +9,12 @@ from app.impl.auth.session import require_session_user
 from app.impl.contest.shared import _contest_ctx, _contest_redirect
 from app.impl.runtime.dependency import runtime
 from app.main_util import enforce_textarea_max_bytes, read_upload_bytes_limited
-from app.service.contest.service import CONTEST_STATEMENT_SHARED_SCOPE
+from app.service.contest.statement_source_contract import (
+    CONTEST_STATEMENT_LANGUAGE_DEFAULT_FILES,
+    CONTEST_STATEMENT_SHARED_SCOPE,
+    CONTEST_STATEMENT_STYLE_NAME,
+    CONTEST_STATEMENT_TEMPLATE_NAME,
+)
 from app.service.statement.constant import DEFAULT_OLYMP_STY
 from app.service.statement.context import normalize_statement_language
 
@@ -42,7 +47,7 @@ def _contest_statement_source_key(
     contest_id: int,
     language: str,
     path: str,
-    default_filename: str = "statements.tex",
+    default_filename: str = CONTEST_STATEMENT_TEMPLATE_NAME,
     upload_filename: str = "",
 ) -> str:
     return runtime().contest_service.normalize_statement_source_key(
@@ -111,9 +116,9 @@ def _contest_default_statement_source_text(
 ) -> str:
     if language == CONTEST_STATEMENT_SHARED_SCOPE:
         return ""
-    if display_path == "olymp.sty":
+    if display_path == CONTEST_STATEMENT_STYLE_NAME:
         return DEFAULT_OLYMP_STY
-    if display_path != "statements.tex":
+    if display_path != CONTEST_STATEMENT_TEMPLATE_NAME:
         return ""
     return runtime().contest_statement_service.default_statements_template()
 
@@ -155,7 +160,7 @@ def _contest_statement_source_rows(
                 "Missing"
                 if not exists
                 else "Custom"
-                if display_path in {"statements.tex", "olymp.sty"}
+                if display_path in CONTEST_STATEMENT_LANGUAGE_DEFAULT_FILES
                 else "Uploaded"
             ),
             "source_tone": "" if exists else "danger",
@@ -163,7 +168,7 @@ def _contest_statement_source_rows(
         }
 
     if language != CONTEST_STATEMENT_SHARED_SCOPE:
-        for display_path in ("statements.tex", "olymp.sty"):
+        for display_path in CONTEST_STATEMENT_LANGUAGE_DEFAULT_FILES:
             if display_path in stored_rows:
                 continue
             default_text = _contest_default_statement_source_text(
@@ -195,12 +200,15 @@ def _contest_statement_source_rows(
             f"Delete {display_path}?"
             + (
                 " The default template will be used instead."
-                if display_path in {"statements.tex", "olymp.sty"}
+                if display_path in CONTEST_STATEMENT_LANGUAGE_DEFAULT_FILES
                 else ""
             )
         )
 
-    default_order = {"statements.tex": 0, "olymp.sty": 1}
+    default_order = {
+        display_path: index
+        for index, display_path in enumerate(CONTEST_STATEMENT_LANGUAGE_DEFAULT_FILES)
+    }
     return sorted(
         stored_rows.values(),
         key=lambda item: (
@@ -383,7 +391,7 @@ def contest_statement_source_save(
     contest: str,
     user: Annotated[str, Depends(require_session_user)],
     language: Annotated[str, Form()] = "",
-    path: Annotated[str, Form()] = "statements.tex",
+    path: Annotated[str, Form()] = CONTEST_STATEMENT_TEMPLATE_NAME,
     content: Annotated[str, Form()] = "",
 ):
     ctx = _contest_ctx(contest, user, "properties")
@@ -395,7 +403,7 @@ def contest_statement_source_save(
     contest_id = int(ctx["contest"]["id"])
     current_language = _contest_statement_language(contest_id, language)
     message = "contest statement source saved"
-    display_path = path.strip() or "statements.tex"
+    display_path = path.strip() or CONTEST_STATEMENT_TEMPLATE_NAME
     try:
         key = _contest_statement_source_key(
             contest_id=contest_id,

@@ -117,8 +117,8 @@ class _LanguageFixture:
         del contest_id
         return [
             {
-                "key": f"statements/{language}/statements.tex",
-                "rel_path": f"statements/{language}/statements.tex",
+                "key": f"statements/{language}/statements.ftl",
+                "rel_path": f"statements/{language}/statements.ftl",
                 "created_at": "",
             }
             for language in self._languages
@@ -148,7 +148,7 @@ class TestContestStatementPreview(unittest.TestCase):
         source = root / "contest-source"
         statement_root = source / "statements" / "english"
         statement_root.mkdir(parents=True)
-        statement_root.joinpath("statements.tex").write_text(
+        statement_root.joinpath("statements.ftl").write_text(
             DEFAULT_STATEMENT_TEMPLATE.replace(
                 r"\begin {document}",
                 "% sponsor=${sponsor!}\n"
@@ -266,7 +266,7 @@ class TestContestStatementPreview(unittest.TestCase):
         source = root / "contest-source"
         statement_root = source / "statements" / "english"
         statement_root.mkdir(parents=True)
-        statement_root.joinpath("statements.tex").write_text(
+        statement_root.joinpath("statements.ftl").write_text(
             "\\documentclass{article}\n"
             "\\usepackage{import}\n"
             "\\begin{document}\n"

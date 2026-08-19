@@ -2,6 +2,9 @@ import os
 import shutil
 from pathlib import Path
 
+from app.service.contest.statement_source_contract import (
+    CONTEST_STATEMENT_TEMPLATE_NAME,
+)
 from app.service.platform.fs.layout import StorageLayout
 
 
@@ -50,9 +53,9 @@ class ContestSourceSnapshotService:
         if language:
             statements_root = target / "statements" / language
             statements_root.mkdir(parents=True, exist_ok=True)
-            statements_tex = statements_root / "statements.tex"
-            if not statements_tex.exists():
-                statements_tex.write_text(
+            statements_ftl = statements_root / CONTEST_STATEMENT_TEMPLATE_NAME
+            if not statements_ftl.exists():
+                statements_ftl.write_text(
                     default_statements_template,
                     encoding="utf-8",
                     newline="\n",
