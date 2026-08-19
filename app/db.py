@@ -212,16 +212,19 @@ CREATE TABLE IF NOT EXISTS workspaces (
 CREATE TABLE IF NOT EXISTS contests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     slug TEXT UNIQUE NOT NULL,
-    title TEXT NOT NULL,
     owner_user_id INTEGER NOT NULL,
     status TEXT NOT NULL DEFAULT 'draft',
     source_generation INTEGER NOT NULL DEFAULT 1,
-    location TEXT NOT NULL DEFAULT '',
-    date_text TEXT NOT NULL DEFAULT '',
-    statement_default_language TEXT NOT NULL DEFAULT 'english',
-    statement_insert_blank_pages INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     FOREIGN KEY(owner_user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS contest_properties (
+    contest_id INTEGER NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY(contest_id, key),
+    FOREIGN KEY(contest_id) REFERENCES contests(id)
 );
 
 CREATE TABLE IF NOT EXISTS contest_members (
@@ -248,50 +251,6 @@ CREATE TABLE IF NOT EXISTS contest_problems (
     FOREIGN KEY(contest_id) REFERENCES contests(id),
     FOREIGN KEY(problem_id) REFERENCES problems(id),
     FOREIGN KEY(added_by_user_id) REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS contest_jobs (
-    id TEXT PRIMARY KEY,
-    contest_id INTEGER NOT NULL,
-    actor_user_id INTEGER NOT NULL,
-    job_type TEXT NOT NULL,
-    status TEXT NOT NULL,
-    source_generation INTEGER NOT NULL,
-    created_at TEXT NOT NULL,
-    finished_at TEXT,
-    FOREIGN KEY(contest_id) REFERENCES contests(id),
-    FOREIGN KEY(actor_user_id) REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS contest_build_items (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    job_id TEXT NOT NULL,
-    contest_problem_id INTEGER NOT NULL,
-    ordinal INTEGER NOT NULL,
-    idx TEXT NOT NULL,
-    problem_id INTEGER NOT NULL,
-    statement_folder TEXT NOT NULL DEFAULT '',
-    source_commit TEXT NOT NULL,
-    revision_number INTEGER NOT NULL,
-    materialization_id TEXT,
-    archive_sha256 TEXT,
-    UNIQUE(job_id,contest_problem_id),
-    FOREIGN KEY(job_id) REFERENCES contest_jobs(id),
-    FOREIGN KEY(problem_id) REFERENCES problems(id),
-    FOREIGN KEY(materialization_id) REFERENCES problem_package_materializations(id)
-);
-
-CREATE TABLE IF NOT EXISTS contest_artifacts (
-    id TEXT PRIMARY KEY,
-    contest_id INTEGER NOT NULL,
-    job_id TEXT,
-    artifact_type TEXT NOT NULL,
-    filename TEXT NOT NULL,
-    sha256 TEXT,
-    size_bytes INTEGER,
-    created_at TEXT NOT NULL,
-    FOREIGN KEY(contest_id) REFERENCES contests(id),
-    FOREIGN KEY(job_id) REFERENCES contest_jobs(id)
 );
 
 CREATE TABLE IF NOT EXISTS contest_attachments (
@@ -567,12 +526,6 @@ CREATE INDEX IF NOT EXISTS idx_contests_owner ON contests(owner_user_id, created
 CREATE INDEX IF NOT EXISTS idx_contest_members_user ON contest_members(user_id, created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_contest_members_single_owner ON contest_members(contest_id) WHERE role='owner';
 CREATE INDEX IF NOT EXISTS idx_contest_problems_problem ON contest_problems(problem_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_contest_jobs_contest_created ON contest_jobs(contest_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_contest_jobs_actor_created ON contest_jobs(actor_user_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_contest_build_items_job_ordinal ON contest_build_items(job_id,ordinal);
-CREATE INDEX IF NOT EXISTS idx_contest_build_items_materialization ON contest_build_items(materialization_id);
-CREATE INDEX IF NOT EXISTS idx_contest_artifacts_contest_created ON contest_artifacts(contest_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_contest_artifacts_job_created ON contest_artifacts(job_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_contest_attachments_contest_created ON contest_attachments(contest_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_previews_problem_created ON previews(problem_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_previews_problem_workspace_created ON previews(problem_id, workspace_id, created_at DESC);
@@ -824,47 +777,13 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
         "updated_at",
     ),
     "contests": (
-        "id", "slug", "title", "owner_user_id", "status", "source_generation",
-        "location", "date_text", "statement_default_language",
-        "statement_insert_blank_pages", "created_at",
+        "id", "slug", "owner_user_id", "status", "source_generation", "created_at",
     ),
+    "contest_properties": ("contest_id", "key", "value"),
     "contest_members": ("id", "contest_id", "user_id", "role", "created_at"),
     "contest_problems": (
         "id", "contest_id", "idx", "problem_id", "statement_folder",
         "added_by_user_id", "created_at",
-    ),
-    "contest_jobs": (
-        "id",
-        "contest_id",
-        "actor_user_id",
-        "job_type",
-        "status",
-        "source_generation",
-        "created_at",
-        "finished_at",
-    ),
-    "contest_build_items": (
-        "id",
-        "job_id",
-        "contest_problem_id",
-        "ordinal",
-        "idx",
-        "problem_id",
-        "statement_folder",
-        "source_commit",
-        "revision_number",
-        "materialization_id",
-        "archive_sha256",
-    ),
-    "contest_artifacts": (
-        "id",
-        "contest_id",
-        "job_id",
-        "artifact_type",
-        "filename",
-        "sha256",
-        "size_bytes",
-        "created_at",
     ),
     "contest_attachments": (
         "id",

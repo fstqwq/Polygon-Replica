@@ -248,7 +248,6 @@ class ContestStatementPreviewService:
         username: str,
         source_kind: StatementPreviewSource,
         language: str,
-        insert_blank_pages: bool,
     ) -> StatementPreviewRow:
         groups = self.link_groups(
             contest_id,
@@ -269,7 +268,7 @@ class ContestStatementPreviewService:
             user_id,
         )
 
-        options: dict[str, object] = {"insert_blank_pages": insert_blank_pages}
+        options: dict[str, object] = {}
         contest = self._contests.contest_context(contest_slug)
         if contest is None or contest["id"] != contest_id:
             raise ValueError("contest not found")
@@ -307,7 +306,6 @@ class ContestStatementPreviewService:
                     "source": source_kind,
                     "output": "pdf",
                     "language": language,
-                    "insert_blank_pages": insert_blank_pages,
                     "problems": [
                         {
                             "idx": row["idx"],
@@ -351,28 +349,16 @@ class ContestStatementPreviewService:
             )
             preview_root = self._storage.resolve_preview_root(preview_id)
             try:
-                source_folder_map = {
-                    row["problem_id"]: row["statement_folder"]
-                    for row in rows
-                    if row["statement_folder"]
-                }
-                default_tex = self._statements.default_statements_tex(
-                    contest_id=contest_id,
-                    contest_slug=contest["slug"],
-                    language=language,
-                    problem_entries=rows,
-                    source_folder_map=source_folder_map,
-                )
+                default_template = self._statements.default_statements_template()
                 source_snapshot = self._snapshots.copy_to(
                     contest_slug=contest["slug"],
                     target=preview_root / "contest-sources",
                     language=language,
-                    default_statements_tex=default_tex,
+                    default_statements_template=default_template,
                 )
                 summary = self._statements.build_preview_pdf(
                     contest_slug=contest["slug"],
                     language=language,
-                    insert_blank_pages=insert_blank_pages,
                     source_snapshot=source_snapshot,
                     problem_entries=rows,
                     render_roots={item.problem_id: item.root for item in prepared},

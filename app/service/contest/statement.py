@@ -5,10 +5,19 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from app.service.contest.naming import problem_source_folder
-from app.service.contest.service import ContestProblem, ContestService
+from app.service.contest.property import contest_template_properties
+from app.service.contest.service import (
+    CONTEST_STATEMENT_SHARED_SCOPE,
+    ContestProblem,
+    ContestService,
+)
 from app.service.sandbox.base import ExecResult
-from app.service.statement.constant import DEFAULT_OLYMP_STY
+from app.service.statement.constant import (
+    DEFAULT_OLYMP_STY,
+    DEFAULT_STATEMENT_TEMPLATE,
+)
 from app.service.statement.context import normalize_statement_language
+from app.service.statement.ftl.renderer import render_ftl_template
 from app.service.statement.latex_error import (
     latex_error_excerpt,
     latex_log_for_display,
@@ -19,8 +28,6 @@ from app.service.statement.tex_compile import TexCompileService
 _EXTRACTBB_SUFFIXES = {".bmp", ".jpeg", ".jpg", ".pdf", ".png"}
 _LATEX_JOB_NAME = "statements"
 _LATEX_WRAPPER_NAME = "__contest_wrapper__.tex"
-_BLANK_PAGES_MARKER = r"%\intentionallyblankpagestrue"
-_BLANK_PAGES_ENABLED = _BLANK_PAGES_MARKER.removeprefix("%")
 _CJK_ITALIC_OPTIONS = (
     r"[ItalicFont={[FandolKai-Regular.otf]},"
     r"BoldItalicFont={[FandolKai-Regular.otf]}]"
@@ -71,6 +78,8 @@ class ContestStatementService:
             parts = Path(str(row["rel_path"])).parts
             if len(parts) < 3 or parts[0] != "statements":
                 continue
+            if parts[1] == CONTEST_STATEMENT_SHARED_SCOPE:
+                continue
             if parts[2] != "statements.tex":
                 continue
             language = normalize_statement_language(parts[1])
@@ -83,15 +92,16 @@ class ContestStatementService:
         explicit = normalize_statement_language(requested)
         if explicit:
             return explicit
-        configured = normalize_statement_language(
-            self._contest.statement_default_language(contest_id)
-        )
-        if configured:
-            return configured
         languages = self.languages(contest_id)
         if "english" in languages:
             return "english"
-        return languages[0] if languages else "english"
+        return languages[0] if languages else ""
+
+    @staticmethod
+    def default_statements_template() -> str:
+        """Return the canonical FTL source used for Contest statements."""
+
+        return DEFAULT_STATEMENT_TEMPLATE
 
     @staticmethod
     def _latex_escape(value: object) -> str:
@@ -107,67 +117,79 @@ class ContestStatementService:
             "~": r"\textasciitilde{}",
             "^": r"\textasciicircum{}",
         }
-        return "".join(replacements.get(character, character) for character in str(value))
+        return "".join(
+            replacements.get(character, character)
+            for character in str(value)
+        )
 
-    def default_statements_tex(
+    def _statements_template_context(
         self,
         *,
-        contest_id: int,
         contest_slug: str,
         language: str,
-        problem_entries: Sequence[Mapping[str, object]],
+        problem_entries: Sequence[ContestProblem],
         source_folder_map: dict[int, str],
-    ) -> str:
+    ) -> dict[str, object]:
         contest = self._contest.contest_context(contest_slug)
         if contest is None:
             raise ValueError("contest not found")
-        properties = self._contest.overview_properties_map(contest_id, contest_slug)
-        lines = [
-            r"\documentclass[11pt,a4paper,oneside]{article}",
-            *_CJK_PREAMBLE_LINES,
-            r"\usepackage{amsmath}",
-            r"\usepackage{amssymb}",
-            r"\usepackage{olymp}",
-            r"\usepackage{comment}",
-            r"\usepackage{epigraph}",
-            r"\usepackage{expdlist}",
-            r"\usepackage{import}",
-            r"\usepackage{graphicx}",
-            r"\usepackage{tikz}",
-            r"\usepackage{pgfplots}",
-            r"\usepackage{multirow}",
-            r"\usepackage{siunitx}",
-            r"\usepackage[normalem]{ulem}",
-            r"\usepackage{xparse}",
-            r"\usepackage{wrapfig}",
-            r"\usepackage{algorithm}",
-            r"\usepackage{algpseudocode}",
-            _BLANK_PAGES_MARKER,
-            r"\begin{document}",
-            r"\contest",
-            "{" + self._latex_escape(contest["title"]) + "}%",
-            "{" + self._latex_escape(properties.get("location", "")) + "}%",
-            "{" + self._latex_escape(properties.get("date", "")) + "}%",
-            r"\binoppenalty=10000",
-            r"\relpenalty=10000",
-            "",
-        ]
+        localized_properties = self._contest.localized_overview_properties_map(
+            int(contest["id"]),
+            contest_slug,
+            language,
+        )
+        properties = contest_template_properties(localized_properties)
+        for key in ("title", "location", "date"):
+            properties[key] = self._latex_escape(localized_properties.get(key, ""))
+        statements: list[dict[str, str]] = []
         for entry in problem_entries:
             source_folder = problem_source_folder(entry, source_folder_map)
-            import_path = f"../../problems/{source_folder}/statements/{language}/"
-            lines.extend(
-                [
-                    r"\clearpage",
-                    r"\graphicspath{{" + import_path + r"}}",
-                    r"\def\ProblemIndex{"
-                    + self._latex_escape(entry.get("idx") or "")
-                    + "}",
-                    r"\import{" + import_path + r"}{./problem.tex}",
-                    "",
-                ]
+            statements.append(
+                {
+                    "path": (
+                        f"../../problems/{source_folder}/statements/{language}/"
+                    ),
+                    "index": self._latex_escape(entry.get("idx") or ""),
+                    "file": "problem.tex",
+                }
             )
-        lines.append(r"\end{document}")
-        return "\n".join(lines) + "\n"
+        context: dict[str, object] = dict(properties)
+        context.update({
+            "properties": dict(properties),
+            "contest": {
+                "name": properties["title"],
+                "location": properties["location"],
+                "date": properties["date"],
+                "language": language,
+            },
+            "language": language,
+            "shortProblemTitle": True,
+            "providedStatementsCommands": [],
+            "statements": statements,
+        })
+        return context
+
+    def _render_statements_template(
+        self,
+        statements_root: Path,
+        *,
+        contest_slug: str,
+        language: str,
+        problem_entries: Sequence[ContestProblem],
+        source_folder_map: dict[int, str],
+    ) -> None:
+        statements_tex = statements_root / "statements.tex"
+        template_text = statements_tex.read_text(encoding="utf-8")
+        rendered = render_ftl_template(
+            template_text,
+            self._statements_template_context(
+                contest_slug=contest_slug,
+                language=language,
+                problem_entries=problem_entries,
+                source_folder_map=source_folder_map,
+            ),
+        )
+        statements_tex.write_text(rendered, encoding="utf-8", newline="\n")
 
     @staticmethod
     def _compile_target(root: Path, relative: Path) -> Path:
@@ -419,9 +441,30 @@ class ContestStatementService:
         language: str,
         compile_root: Path,
     ) -> Path:
+        statements_root = self._compile_target(
+            compile_root,
+            Path("statements") / language,
+        )
+        statements_root.mkdir(parents=True, exist_ok=True)
+        shared_root = source_snapshot / "statements" / CONTEST_STATEMENT_SHARED_SCOPE
         language_root = source_snapshot / "statements" / language
-        if language_root.exists():
-            for source_path in language_root.rglob("*"):
+
+        for protected_name in ("olymp.sty", "statements.tex"):
+            protected_path = shared_root / protected_name
+            if protected_path.exists() or protected_path.is_symlink():
+                raise RuntimeError(
+                    "shared Contest statement files cannot replace "
+                    f"{protected_name}"
+                )
+
+        for source_root in (shared_root, language_root):
+            if not source_root.exists():
+                continue
+            if source_root.is_symlink() or not source_root.is_dir():
+                raise RuntimeError(
+                    f"contest statement source is not a directory: {source_root}"
+                )
+            for source_path in source_root.rglob("*"):
                 if source_path.is_symlink():
                     raise RuntimeError(
                         f"contest statement source is a symlink: {source_path}"
@@ -432,15 +475,10 @@ class ContestStatementService:
                     raise RuntimeError(
                         f"contest statement source is not regular: {source_path}"
                     )
-                relative = source_path.relative_to(source_snapshot)
-                target = self._compile_target(compile_root, relative)
+                relative = source_path.relative_to(source_root)
+                target = self._compile_target(statements_root, relative)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source_path, target)
-        statements_root = self._compile_target(
-            compile_root,
-            Path("statements") / language,
-        )
-        statements_root.mkdir(parents=True, exist_ok=True)
         olymp_sty = statements_root / "olymp.sty"
         if olymp_sty.is_symlink() or not olymp_sty.exists():
             olymp_sty.write_text(DEFAULT_OLYMP_STY, encoding="utf-8")
@@ -449,7 +487,6 @@ class ContestStatementService:
             raise RuntimeError(
                 f"contest statements.tex missing for language: {language}"
             )
-        self._ensure_cjk_support(statements_tex)
         return statements_root
 
     @staticmethod
@@ -470,7 +507,6 @@ class ContestStatementService:
         *,
         contest_slug: str,
         language: str,
-        insert_blank_pages: bool,
         source_snapshot: Path,
         problem_entries: Sequence[ContestProblem],
         render_roots: Mapping[int, Path],
@@ -494,14 +530,14 @@ class ContestStatementService:
             language=language,
             compile_root=compile_root,
         )
-        if insert_blank_pages:
-            statements_tex = statements_root / "statements.tex"
-            statements_tex.write_bytes(
-                statements_tex.read_bytes().replace(
-                    _BLANK_PAGES_MARKER.encode("ascii"),
-                    _BLANK_PAGES_ENABLED.encode("ascii"),
-                )
-            )
+        self._render_statements_template(
+            statements_root,
+            contest_slug=contest_slug,
+            language=language,
+            problem_entries=problem_entries,
+            source_folder_map=source_folders,
+        )
+        self._ensure_cjk_support(statements_root / "statements.tex")
         results: list[dict[str, object]] = []
         for entry in problem_entries:
             problem_id = int(entry["problem_id"])

@@ -80,5 +80,4 @@ class TestLargePackageImport(unittest.TestCase):
             )
 
         self.assertEqual(parsed["total_problems"], 4)
-        self.assertEqual(parsed["default_language"], "english")
         self.assertIn("ICPC Asia East Continent Final", parsed["title"])

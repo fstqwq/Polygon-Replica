@@ -326,12 +326,19 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
         statement_files: list[ImportedContestStatementFile] = list(
             parsed["statement_files"]
         )
-        default_language_obj = parsed.get("default_language")
-        default_language = default_language_obj.strip().lower() if isinstance(default_language_obj, str) else ""
         location_obj = parsed.get("location")
         inferred_location = location_obj.strip() if isinstance(location_obj, str) else ""
         date_obj = parsed.get("date")
         inferred_date = date_obj.strip() if isinstance(date_obj, str) else ""
+        localized_properties_obj = parsed.get("localized_properties")
+        localized_properties = (
+            {
+                str(key): str(value)
+                for key, value in localized_properties_obj.items()
+            }
+            if isinstance(localized_properties_obj, dict)
+            else {}
+        )
         if len(parsed_rows) != len(review_rows):
             raise ValueError("contest package changed; please re-upload and review again")
         if len(parsed_rows) > max_problems:
@@ -413,11 +420,17 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
             actor_user_id=actor_user_id,
             files=staged_statement_files,
         )
-        runtime().contest_service.set_statement_default_language(contest_id, actor_user_id, default_language)
+        imported_properties: dict[str, object] = dict(localized_properties)
         if inferred_location:
-            runtime().contest_service.upsert_property(contest_id, actor_user_id, "location", inferred_location)
+            imported_properties["location"] = inferred_location
         if inferred_date:
-            runtime().contest_service.upsert_property(contest_id, actor_user_id, "date", inferred_date)
+            imported_properties["date"] = inferred_date
+        if imported_properties:
+            runtime().contest_service.set_properties(
+                contest_id,
+                actor_user_id,
+                imported_properties,
+            )
         runtime().contest_service.set_statement_problem_source_folders(contest_id, actor_user_id, source_folder_map)
 
         contest_archive.close()

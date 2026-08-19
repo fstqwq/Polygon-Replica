@@ -56,7 +56,7 @@
   "e2e": [
     "test_agent_api.py",
     "test_contest_access_actions.py",
-    "test_contest_builds.py",
+    "test_contest_packages.py",
     "test_contest_statement_preview.py",
     "test_contest_problem_actions.py",
     "test_contest_workspace_scope.py",

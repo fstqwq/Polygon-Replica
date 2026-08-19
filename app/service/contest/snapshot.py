@@ -17,7 +17,7 @@ class ContestSourceSnapshotService:
         contest_slug: str,
         target: Path,
         language: str,
-        default_statements_tex: str,
+        default_statements_template: str,
     ) -> Path:
         source = self._storage.contest_source(contest_slug)
         shutil.rmtree(target, ignore_errors=True)
@@ -53,7 +53,7 @@ class ContestSourceSnapshotService:
             statements_tex = statements_root / "statements.tex"
             if not statements_tex.exists():
                 statements_tex.write_text(
-                    default_statements_tex,
+                    default_statements_template,
                     encoding="utf-8",
                     newline="\n",
                 )

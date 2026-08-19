@@ -10,6 +10,7 @@ from urllib.parse import unquote, urlparse
 
 from app.service.contest.statement_meta import infer_contest_header_fields
 from app.service.importing.archive import ArchivePolicy, ArchiveView
+from app.service.statement.context import normalize_statement_language
 
 
 class ContestName(TypedDict):
@@ -26,6 +27,7 @@ class ContestProblemRow(TypedDict):
 
 class ParsedContest(TypedDict):
     title: str
+    titles: dict[str, str]
     problems: list[ContestProblemRow]
 
 
@@ -53,9 +55,9 @@ class ParsedContestPackage(TypedDict):
     title: str
     location: str
     date: str
+    localized_properties: dict[str, str]
     problems: list[ImportedContestProblem]
     statement_files: list[ImportedContestStatementFile]
-    default_language: str
     total_problems: int
 
 
@@ -98,26 +100,25 @@ def _xml_attr(node: ET.Element, name: str) -> str:
 class PolygonContestImportService:
     """Parse contest metadata and expose child archives without copying bytes."""
 
-    def _infer_statement_header_fields(
+    def _infer_statement_header_properties(
         self,
         package: ArchiveView,
         statement_files: list[ImportedContestStatementFile],
-        default_language: str,
-    ) -> dict[str, str]:
+    ) -> tuple[dict[str, str], dict[str, str]]:
         rows_by_key = {row["key"]: row for row in statement_files}
-        candidate_keys: list[str] = []
-        safe_default_language = default_language.strip().lower()
-        if safe_default_language:
-            candidate_keys.append(f"statements/{safe_default_language}/statements.tex")
-        if "statements/english/statements.tex" not in candidate_keys:
-            candidate_keys.append("statements/english/statements.tex")
-        candidate_keys.extend(
-            key
-            for key in sorted(rows_by_key)
-            if key.endswith("/statements.tex") and key not in candidate_keys
+        statement_keys = sorted(
+            key for key in rows_by_key if key.endswith("/statements.tex")
+        )
+        english_key = "statements/english/statements.tex"
+        candidate_keys = (
+            [english_key, *[key for key in statement_keys if key != english_key]]
+            if english_key in statement_keys
+            else statement_keys
         )
         entries = package.entries
-        for key in candidate_keys:
+        preferred = {"title": "", "location": "", "date": ""}
+        localized: dict[str, str] = {}
+        for key in statement_keys:
             row = rows_by_key.get(key)
             info = entries.get(row["archive_path"]) if row is not None else None
             if info is None:
@@ -126,9 +127,26 @@ class PolygonContestImportService:
                 "utf-8", errors="replace"
             )
             inferred = infer_contest_header_fields(text)
-            if inferred["title"] or inferred["location"] or inferred["date"]:
-                return inferred
-        return {"title": "", "location": "", "date": ""}
+            language = normalize_statement_language(
+                row["language"] if row is not None else ""
+            )
+            if language:
+                for property_key in ("title", "location", "date"):
+                    value = inferred[property_key]
+                    if value:
+                        localized[f"{property_key}.{language}"] = value
+        for key in candidate_keys:
+            row = rows_by_key.get(key)
+            if row is None:
+                continue
+            language = normalize_statement_language(row["language"])
+            for property_key in preferred:
+                value = localized.get(f"{property_key}.{language}", "")
+                if value and not preferred[property_key]:
+                    preferred[property_key] = value
+            if all(preferred.values()):
+                break
+        return preferred, localized
 
     @staticmethod
     def _statement_source_rows(
@@ -149,21 +167,6 @@ class PolygonContestImportService:
         return rows
 
     @staticmethod
-    def _default_statement_language(
-        statement_files: list[ImportedContestStatementFile],
-    ) -> str:
-        roots = {
-            row["language"].strip().lower()
-            for row in statement_files
-            if row["key"].endswith("/statements.tex")
-        }
-        if "english" in roots:
-            return "english"
-        if roots:
-            return sorted(roots)[0]
-        raise ValueError("contest package missing statements/<language>/statements.tex")
-
-    @staticmethod
     def _parse_contest_xml(xml_text: str) -> ParsedContest:
         try:
             root = ET.fromstring(xml_text)
@@ -175,8 +178,17 @@ class PolygonContestImportService:
             value = _xml_attr(node, "value")
             if language and value:
                 names.append({"language": language, "value": value})
+        titles = {
+            language: row["value"]
+            for row in names
+            if (language := normalize_statement_language(row["language"]))
+        }
         title = next(
-            (row["value"] for row in names if row["language"].lower() == "english"),
+            (
+                row["value"]
+                for row in names
+                if normalize_statement_language(row["language"]) == "english"
+            ),
             names[0]["value"] if names else "",
         )
         problems: list[ContestProblemRow] = []
@@ -195,7 +207,7 @@ class PolygonContestImportService:
             )
         if not problems:
             raise ValueError("contest.xml has no problems")
-        return {"title": title, "problems": problems}
+        return {"title": title, "titles": titles, "problems": problems}
 
     @staticmethod
     def _problem_folder_map(
@@ -253,11 +265,23 @@ class PolygonContestImportService:
             raise ValueError(
                 "contest package has more than the configured maximum of "
                 f"{int(max_problems)} problems"
-            )
+        )
         statement_files = self._statement_source_rows(entries)
-        default_language = self._default_statement_language(statement_files)
-        inferred = self._infer_statement_header_fields(
-            rooted, statement_files, default_language
+        if not any(
+            row["key"].endswith("/statements.tex") for row in statement_files
+        ):
+            raise ValueError(
+                "contest package missing statements/<language>/statements.tex"
+            )
+        inferred, localized_properties = self._infer_statement_header_properties(
+            rooted,
+            statement_files,
+        )
+        localized_properties.update(
+            {
+                f"title.{language}": value
+                for language, value in contest["titles"].items()
+            }
         )
         folder_map = self._problem_folder_map(entries)
         if not folder_map:
@@ -285,12 +309,16 @@ class PolygonContestImportService:
         package_name = package_name.strip()
         return {
             "package_name": package_name,
-            "title": contest["title"] or inferred["title"] or Path(package_name or "imported-contest").stem,
+            "title": (
+                contest["title"]
+                or inferred["title"]
+                or Path(package_name or "imported-contest").stem
+            ),
             "location": inferred["location"],
             "date": inferred["date"],
+            "localized_properties": localized_properties,
             "problems": imported_rows,
             "statement_files": statement_files,
-            "default_language": default_language,
             "total_problems": len(imported_rows),
         }
 

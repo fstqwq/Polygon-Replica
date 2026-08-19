@@ -103,7 +103,7 @@ def inspect_authoring_source(
     Invalid authoring files become diagnostics and page-local defaults. Known
     obsolete build fields are safely removed for writable workspaces. The
     strict source-tree loader remains the final authority for Verification,
-    Export, Contest builds, and package materialization.
+    Export, Contest package downloads, and package materialization.
     """
 
     issues: list[AuthoringSourceIssue] = []

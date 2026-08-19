@@ -6,13 +6,10 @@ from typing import Literal, TypedDict
 ARTIFACT_TABLES = (
     "statement_previews",
     "previews",
-    "contest_build_items",
-    "contest_artifacts",
     "export_jobs",
     "exports",
     "problem_package_builds",
     "problem_package_materializations",
-    "contest_jobs",
     "verification_task_artifacts",
     "verification_selected_tests",
     "verification_source_paths",

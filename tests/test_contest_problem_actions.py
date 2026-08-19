@@ -5,7 +5,6 @@ from tests.db_helpers import db_fetch_all
 from tests.ui_support import (
     contest_build_all_packages,
     runtime,
-    contest_problems_change_general_retry,
     contest_problems_save,
 )
 
@@ -91,58 +90,3 @@ class TestContestProblemActions(ContestActionBase):
             {int(row["id"]): str(row["idx"]) for row in rows},
             {first_id: "B", second_id: "A"},
         )
-
-    def test_retry_uses_only_failed_job_rows_and_original_limits(self) -> None:
-        contest_slug, contest_id, actor_user_id = self.create_contest("retry")
-        _first_row_id, first_problem_id, first_slug = self.add_owned_problem(
-            contest_id,
-            actor_user_id,
-            "A",
-            "retry-first",
-        )
-        _second_row_id, second_problem_id, second_slug = self.add_owned_problem(
-            contest_id,
-            actor_user_id,
-            "B",
-            "retry-second",
-        )
-        job_id = runtime.contest_service.create_job(
-            contest_id,
-            actor_user_id,
-            "change-general",
-            "failed",
-            {
-                "job_type": "change-general",
-                "results": [
-                    {
-                        "problem_id": first_problem_id,
-                        "problem_slug": first_slug,
-                        "status": "failed",
-                        "requested": {"time_limit_ms": "1234", "memory_limit_mb": "256"},
-                    },
-                    {
-                        "problem_id": second_problem_id,
-                        "problem_slug": second_slug,
-                        "status": "success",
-                        "requested": {"time_limit_ms": "9999", "memory_limit_mb": "999"},
-                    },
-                ],
-                "totals": {"total": 2, "success": 1, "failed": 1, "skipped": 0},
-            },
-        )
-
-        with patch(
-            "app.impl.contest.problem._run_problem_general_update",
-            return_value={"problem_id": first_problem_id, "status": "success"},
-        ) as update:
-            response = contest_problems_change_general_retry(
-                contest=contest_slug,
-                user="alice",
-                retry_job_id=job_id,
-            )
-
-        self.assertEqual(response.status_code, 303)
-        update.assert_called_once()
-        self.assertEqual(update.call_args.kwargs["problem_id"], first_problem_id)
-        self.assertEqual(update.call_args.kwargs["requested_time_limit_ms"], "1234")
-        self.assertEqual(update.call_args.kwargs["requested_memory_limit_mb"], "256")

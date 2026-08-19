@@ -45,11 +45,10 @@ class TestAccessService(DBTestBase):
             self.db,
             """
             INSERT INTO contests(
-                slug,title,owner_user_id,status,source_generation,location,
-                date_text,statement_default_language,created_at
-            ) VALUES(?,?,?,'draft',1,'','','english',?)
+                slug,owner_user_id,status,source_generation,created_at
+            ) VALUES(?,?,'draft',1,?)
             """,
-            [f"contest-{self.user}", "Contest", owner_user_id, now_iso()],
+            [f"contest-{self.user}", owner_user_id, now_iso()],
         )
         row = isolated_db_fetch_one(
             self.db,
@@ -58,6 +57,11 @@ class TestAccessService(DBTestBase):
         )
         assert row is not None
         contest_id = int(row["id"])
+        isolated_db_execute(
+            self.db,
+            "INSERT INTO contest_properties(contest_id,key,value) VALUES(?,'title','Contest')",
+            [contest_id],
+        )
         isolated_db_execute(
             self.db,
             "INSERT INTO contest_members(contest_id,user_id,role,created_at) VALUES(?,?,?,?)",

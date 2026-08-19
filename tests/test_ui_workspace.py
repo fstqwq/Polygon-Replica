@@ -1879,48 +1879,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertTrue((ws / "statement-sections" / "russian" / "legend.tex").is_file())
         self.assertFalse((ws / "statement-sections" / "english").exists())
 
-    def test_contests_root_page_orders_by_last_updated_desc(self) -> None:
-        older_slug = f"ui-contest-sort-old-{uuid.uuid4().hex[:8]}"
-        newer_slug = f"ui-contest-sort-new-{uuid.uuid4().hex[:8]}"
-        older_create = contests_root_create(_post_request("/contests/create"), user="alice", contest_slug=older_slug, contest_title="Old Contest")
-        newer_create = contests_root_create(_post_request("/contests/create"), user="alice", contest_slug=newer_slug, contest_title="New Contest")
-        self.assertEqual(older_create.status_code, 303)
-        self.assertEqual(newer_create.status_code, 303)
-        older_row = db_fetch_one("SELECT id FROM contests WHERE slug=?", [older_slug])
-        newer_row = db_fetch_one("SELECT id FROM contests WHERE slug=?", [newer_slug])
-        alice_row = db_fetch_one("SELECT id FROM users WHERE username='alice'")
-        self.assertIsNotNone(older_row)
-        self.assertIsNotNone(newer_row)
-        self.assertIsNotNone(alice_row)
-        older_contest_id = int(older_row["id"])
-        newer_contest_id = int(newer_row["id"])
-        alice_id = int(alice_row["id"])
-        db_execute("UPDATE contests SET created_at=? WHERE id=?", ["2026-01-01T00:00:00+00:00", older_contest_id])
-        db_execute("UPDATE contests SET created_at=? WHERE id=?", ["2026-01-01T00:00:00+00:00", newer_contest_id])
-        db_execute(
-            """
-            INSERT INTO contest_jobs(
-                id,contest_id,actor_user_id,job_type,status,source_generation,created_at,finished_at
-            ) VALUES(?,?,?,?,?,1,?,?)
-            """,
-            ["cj-sort-new", newer_contest_id, alice_id, "build", "ok", "2026-01-01T00:00:05+00:00", "2026-01-01T00:00:05+00:00"],
-        )
-        db_execute(
-            """
-            INSERT INTO contest_jobs(
-                id,contest_id,actor_user_id,job_type,status,source_generation,created_at,finished_at
-            ) VALUES(?,?,?,?,?,1,?,?)
-            """,
-            ["cj-sort-old", older_contest_id, alice_id, "build", "ok", "2026-01-01T00:00:01+00:00", "2026-01-01T00:00:01+00:00"],
-        )
-
-        resp = contests_root_page(_request("/contests"), "alice")
-        self.assertEqual(resp.status_code, 200)
-        html = resp.body.decode("utf-8", errors="replace")
-        self.assertIn(older_slug, html)
-        self.assertIn(newer_slug, html)
-        self.assertLess(html.find(newer_slug), html.find(older_slug))
-
     def test_contest_import_rejects_more_than_configured_problem_count(self) -> None:
         class _Upload:
             def __init__(self, filename: str, content: bytes):
@@ -2020,16 +1978,15 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertTrue(confirm_messages)
         self.assertIn(f"contest {target_slug} imported (4 problems)", confirm_messages[0])
 
-        contest_row = db_fetch_one("SELECT id,title FROM contests WHERE slug=?", [target_slug])
+        contest_row = db_fetch_one("SELECT id FROM contests WHERE slug=?", [target_slug])
         self.assertIsNotNone(contest_row)
-        self.assertEqual(str(contest_row["title"] or ""), "Synthetic Contest")
         contest_id = int(contest_row["id"])
-        default_language_row = db_fetch_one(
-            "SELECT statement_default_language FROM contests WHERE id=?",
+        title_row = db_fetch_one(
+            "SELECT value FROM contest_properties WHERE contest_id=? AND key='title'",
             [contest_id],
         )
-        self.assertIsNotNone(default_language_row)
-        self.assertEqual(str(default_language_row["statement_default_language"]), "english")
+        self.assertIsNotNone(title_row)
+        self.assertEqual(str(title_row["value"] or ""), "Synthetic Contest")
         attachment_rows = db_fetch_all(
             "SELECT key,rel_path FROM contest_attachments WHERE contest_id=? ORDER BY key ASC",
             [contest_id],

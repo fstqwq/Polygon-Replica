@@ -13,7 +13,6 @@ from app.impl.auth.session import require_session_user
 from app.impl.auth.shared import redirect_response, template_response
 from app.impl.contest.shared import _contest_ctx
 from app.impl.runtime.dependency import runtime
-from app.service.statement.context import normalize_statement_language
 from app.service.statement.html_render import RESOURCE_PLACEHOLDER
 from app.service.statement.latex_error import latex_failure_text
 from app.service.statement.preview_state import StatementPreviewSource
@@ -25,8 +24,11 @@ def _source(value: str) -> StatementPreviewSource:
     return cast(StatementPreviewSource, value)
 
 
-def _language(value: str) -> str:
-    language = normalize_statement_language(value)
+def _language(contest_id: int, value: str) -> str:
+    language = runtime().contest_statement_service.resolve_language(
+        contest_id,
+        value,
+    )
     if not language:
         raise HTTPException(status_code=400, detail="statement language is required")
     return language
@@ -95,9 +97,9 @@ def contest_statement_review_page(
     contest: str,
     user: Annotated[str, Depends(require_session_user)],
     source: str = "workspace",
-    language: str = "english",
+    language: str = "",
 ):
-    ctx = _contest_ctx(contest, user, "packages", request=request)
+    ctx = _contest_ctx(contest, user, "overview", request=request)
     if not ctx["access"]["can_build"]:
         raise HTTPException(
             status_code=403,
@@ -105,7 +107,11 @@ def contest_statement_review_page(
         )
     contest_id = int(ctx["contest"]["id"])
     source_kind = _source(source)
-    safe_language = _language(language)
+    safe_language = _language(contest_id, language)
+    localized_properties = runtime().contest_service.localized_properties_map(
+        contest_id,
+        safe_language,
+    )
     preview = runtime().contest_statement_preview_service.build_html(
         contest_id,
         user_id=int(ctx["user"]["id"]),
@@ -121,6 +127,10 @@ def contest_statement_review_page(
             "ctx": ctx,
             "source": source_kind,
             "language": safe_language,
+            "review_title": localized_properties.get(
+                "title",
+                str(ctx["contest"]["title"]),
+            ),
             "preview": preview,
             "review_items": _review_items(
                 contest_id,
@@ -137,16 +147,16 @@ def contest_statement_review_build(
     contest: str,
     user: Annotated[str, Depends(require_session_user)],
     source: str = "workspace",
-    language: str = "english",
+    language: str = "",
 ):
-    ctx = _contest_ctx(contest, user, "packages", request=request)
+    ctx = _contest_ctx(contest, user, "overview", request=request)
     if not ctx["access"]["can_build"]:
         raise HTTPException(
             status_code=403,
             detail=ctx["access"]["build_block_reason"],
         )
     source_kind = _source(source)
-    safe_language = _language(language)
+    safe_language = _language(int(ctx["contest"]["id"]), language)
     runtime().contest_statement_preview_service.build_html(
         int(ctx["contest"]["id"]),
         user_id=int(ctx["user"]["id"]),
@@ -168,7 +178,7 @@ def contest_statement_review_resource(
     name: str,
     user: Annotated[str, Depends(require_session_user)],
 ):
-    ctx = _contest_ctx(contest, user, "packages", request=request)
+    ctx = _contest_ctx(contest, user, "overview", request=request)
     row = runtime().statement_preview_service.row(
         preview_id,
         actor_user_id=int(ctx["user"]["id"]),
@@ -202,9 +212,9 @@ def contest_statement_pdf_page(
     contest: str,
     user: Annotated[str, Depends(require_session_user)],
     source: str = "workspace",
-    language: str = "english",
+    language: str = "",
 ):
-    ctx = _contest_ctx(contest, user, "packages", request=request)
+    ctx = _contest_ctx(contest, user, "overview", request=request)
     if not ctx["access"]["can_build"]:
         raise HTTPException(
             status_code=403,
@@ -212,7 +222,7 @@ def contest_statement_pdf_page(
         )
     contest_id = int(ctx["contest"]["id"])
     source_kind = _source(source)
-    safe_language = _language(language)
+    safe_language = _language(contest_id, language)
     preview = runtime().contest_statement_preview_service.build_pdf(
         contest_id,
         contest_slug=str(ctx["contest"]["slug"]),
@@ -220,9 +230,6 @@ def contest_statement_pdf_page(
         username=user,
         source_kind=source_kind,
         language=safe_language,
-        insert_blank_pages=runtime().contest_service.statement_insert_blank_pages(
-            contest_id
-        ),
     )
     if preview["status"] != "ok":
         error = preview["summary"].get("error")
@@ -261,13 +268,13 @@ def contest_statement_pdf_build(
     contest: str,
     user: Annotated[str, Depends(require_session_user)],
     source: str = "workspace",
-    language: str = "english",
+    language: str = "",
 ):
-    ctx = _contest_ctx(contest, user, "packages", request=request)
+    ctx = _contest_ctx(contest, user, "overview", request=request)
     if not ctx["access"]["can_build"]:
         raise HTTPException(status_code=403, detail=ctx["access"]["build_block_reason"])
     source_kind = _source(source)
-    safe_language = _language(language)
+    safe_language = _language(int(ctx["contest"]["id"]), language)
     preview = runtime().contest_statement_preview_service.build_pdf(
         int(ctx["contest"]["id"]),
         contest_slug=str(ctx["contest"]["slug"]),
@@ -275,9 +282,6 @@ def contest_statement_pdf_build(
         username=user,
         source_kind=source_kind,
         language=safe_language,
-        insert_blank_pages=runtime().contest_service.statement_insert_blank_pages(
-            int(ctx["contest"]["id"])
-        ),
     )
     target = (
         f"/contests/{ctx['contest']['slug']}/statements/pdf"
@@ -293,7 +297,7 @@ def contest_statement_pdf_file(
     preview_id: str,
     user: Annotated[str, Depends(require_session_user)],
 ):
-    ctx = _contest_ctx(contest, user, "packages", request=request)
+    ctx = _contest_ctx(contest, user, "overview", request=request)
     row = runtime().statement_preview_service.row(
         preview_id,
         actor_user_id=int(ctx["user"]["id"]),

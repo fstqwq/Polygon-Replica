@@ -24,8 +24,8 @@ They receive an already validated `NativePackageReader`, canonical naming
 options, and a caller-owned empty staging directory. They may render
 statements, but do not access SQLite, Git, workspaces, verification rows,
 runtime cache, or another adapter output. They do not create jobs or publish
-archives. Both single-problem Export and Contest builds invoke this boundary
-and own their respective atomic publication.
+archives. Both single-problem Export and synchronous Contest package downloads
+invoke this boundary and own their respective atomic output.
 
 Adapters never execute authored source or start a compiler in the application
 process or the local bubblewrap sandbox. An adapter that needs a source

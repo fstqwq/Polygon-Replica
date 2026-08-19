@@ -8,10 +8,10 @@ from tests.db_helpers import (
     db_execute,
     db_fetch_all,
     db_fetch_one,
-    read_contest_job_summary,
     verification_programs_for_tasks,
 )
 
+from app.impl.contest.statement_source import contest_statement_source_context
 from app.service.platform.git_process import run_git
 from app.service.verification.lifecycle import PlannedTask, verification_task_id
 from starlette.requests import Request
@@ -27,12 +27,13 @@ from tests.ui_support import (
     contest_access_grant,
     contest_access_revoke,
     contest_overview_page,
-    contest_packages_page,
     contest_problems_add,
     contest_problems_page,
     contest_problems_remove_selected,
     contest_problems_save,
     contest_properties_save,
+    contest_property_delete,
+    contest_property_insert_preset,
     contests_root_create,
     contests_root_page,
     json,
@@ -219,7 +220,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             ["A", "B", "C"],
         )
 
-    def test_contest_overview_moves_problem_management_and_hides_completed_build_all(self) -> None:
+    def test_contest_overview_switches_from_build_to_download_when_ready(self) -> None:
         contest_slug = f"overview-actions-{uuid.uuid4().hex[:8]}"
         contest_id = self._create_contest(contest_slug)
 
@@ -230,6 +231,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         )
         empty_html = empty.body.decode("utf-8", errors="replace")
         self.assertNotIn("Build All Packages", empty_html)
+        self.assertNotIn("Download Packages", empty_html)
 
         workspace_service.grant_repo_access("alice/sample", "alice", "owner")
         add_resp = contest_problems_add(
@@ -311,6 +313,19 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertIn("Packages:", completed_html)
         self.assertIn("1 ready", completed_html)
         self.assertNotIn("Build All Packages", completed_html)
+        self.assertIn(
+            'data-popup-open="contest-package-download-popup">Download Packages</a>',
+            completed_html,
+        )
+        self.assertIn(
+            f'action="/contests/{contest_slug}/packages/download"',
+            completed_html,
+        )
+        self.assertIn('<option value="domjudge">DOMjudge</option>', completed_html)
+        self.assertIn(
+            '<option value="icpc-2025-09">ICPC 2025-09</option>',
+            completed_html,
+        )
         self.assertIn("Published: v2", completed_html)
         self.assertIn("Workspace: v1 (sync required)", completed_html)
         self.assertIn(
@@ -351,11 +366,10 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         limited = dict(previous)
         limited["CONTEST_MAX_PROBLEMS"] = 1
         runtime.config_values.replace(limited)
-        runtime.contest_service.upsert_property(
+        runtime.contest_service.set_properties(
             contest_id,
             actor_id,
-            "location",
-            "Still editable",
+            {"location": "Still editable"},
         )
         self.assertEqual(len(runtime.contest_service.contest_problems(contest_id)), 2)
         self.assertEqual(
@@ -385,63 +399,104 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertIsNotNone(row)
         return int(row["id"])
 
-    def test_contest_page_sidebar_includes_workspace_navigation(self) -> None:
-        contest_slug = f"workspace-card-{uuid.uuid4().hex[:8]}"
-        contest_title = "Contest Workspace Card"
-        self._create_contest(contest_slug, contest_title)
-        workspace_service.grant_repo_access("alice/sample", "alice", "owner")
-        add_response = contest_problems_add(
-            contest=contest_slug,
-            user="alice",
-            problem_slugs=["alice/sample"],
-            q="",
-        )
-        self.assertEqual(add_response.status_code, 303)
+    def test_contest_statement_defaults_are_projected_as_files(self) -> None:
+        contest_slug = f"ui-contest-sources-{uuid.uuid4().hex[:8]}"
+        contest_id = self._create_contest(contest_slug, "Statement Sources")
 
-        page = contest_overview_page(
-            _app_request(f"/contests/{contest_slug}/overview"),
-            contest_slug,
-            "alice",
+        context = contest_statement_source_context(
+            contest_id=contest_id,
+            contest_slug=contest_slug,
+            language="english",
+            source_path="",
+            additional_languages=("english",),
         )
 
-        self.assertEqual(page.status_code, 200)
-        html = page.body.decode("utf-8", errors="replace")
-        self.assertEqual(html.count('id="contest-workspace-title"'), 1)
-        self.assertIn(f'href="/contests/{contest_slug}/overview"', html)
-        self.assertIn(f">{contest_title}</a>", html)
-        slug_markup = f'<code class="contest-context-slug">{contest_slug}</code>'
-        copy_markup = f'data-copy-text="{contest_slug}"'
-        self.assertIn(slug_markup, html)
-        self.assertIn(copy_markup, html)
-        self.assertLess(html.index(slug_markup), html.index(copy_markup))
-        self.assertIn("1 problem</p>", html)
-        self.assertIn(
-            f'href="/problems/alice/sample/statement?contest={contest_slug}"',
-            html,
-        )
-        self.assertIn(
-            '<div class="workspace-card-head">',
-            html,
-        )
-        self.assertIn("<h3>Workspace</h3>", html)
-        self.assertIn(
-            f'<a class="workspace-side-link" href="/contests/{contest_slug}/access">Manage access</a>',
-            html,
-        )
-        self.assertNotIn('aria-label="Contest management"', html)
+        rows = {
+            str(row["display_path"]): row
+            for row in context["contest_statement_source_rows"]
+        }
+        self.assertEqual(set(rows), {"statements.tex", "olymp.sty"})
+        for row in rows.values():
+            self.assertEqual(row["source_display"], "Default")
+            self.assertFalse(row["stored"])
+            self.assertGreater(int(row["size_bytes"]), 0)
+        self.assertEqual(context["contest_statement_selected_path"], "")
+        self.assertFalse(context["contest_statement_selected_is_text"])
 
-        packages = contest_packages_page(
-            _app_request(f"/contests/{contest_slug}/packages"),
-            contest_slug,
-            "alice",
+        actor_id = workspace_service.known_user_id("alice")
+        shared_key = runtime.contest_service.normalize_statement_source_key(
+            language="_shared",
+            path="figures/logo.svg",
         )
-        self.assertEqual(packages.status_code, 200)
+        self.assertEqual(shared_key, "statements/_shared/figures/logo.svg")
+        runtime.contest_service.write_statement_source_file(
+            contest_id=contest_id,
+            contest_slug=contest_slug,
+            actor_user_id=actor_id,
+            key=shared_key,
+            package_bytes=b"<svg></svg>\n",
+        )
+        shared_context = contest_statement_source_context(
+            contest_id=contest_id,
+            contest_slug=contest_slug,
+            language="",
+            source_path="",
+            scope="all",
+            additional_languages=("english",),
+        )
+        self.assertTrue(shared_context["contest_statement_source_is_shared"])
+        self.assertEqual(shared_context["contest_statement_language"], "_shared")
         self.assertEqual(
-            packages.body.decode("utf-8", errors="replace").count(
-                'id="contest-workspace-title"'
+            [
+                str(row["display_path"])
+                for row in shared_context["contest_statement_source_rows"]
+            ],
+            ["figures/logo.svg"],
+        )
+        english_key = runtime.contest_service.normalize_statement_source_key(
+            language="english",
+            path="figures/logo.svg",
+        )
+        runtime.contest_service.write_statement_source_file(
+            contest_id=contest_id,
+            contest_slug=contest_slug,
+            actor_user_id=actor_id,
+            key=english_key,
+            package_bytes=b"language override\n",
+        )
+        generation_before_remove = int(
+            db_fetch_one(
+                "SELECT source_generation FROM contests WHERE id=?",
+                [contest_id],
+            )["source_generation"]
+        )
+        self.assertEqual(
+            runtime.contest_service.delete_statement_language_sources(
+                contest_id=contest_id,
+                contest_slug=contest_slug,
+                language="english",
             ),
             1,
         )
+        self.assertEqual(
+            int(
+                db_fetch_one(
+                    "SELECT source_generation FROM contests WHERE id=?",
+                    [contest_id],
+                )["source_generation"]
+            ),
+            generation_before_remove + 1,
+        )
+        remaining_keys = {
+            str(row["rel_path"])
+            for row in runtime.contest_service.statement_attachment_rows(contest_id)
+        }
+        self.assertEqual(remaining_keys, {shared_key})
+        with self.assertRaisesRegex(ValueError, "cannot replace statements.tex"):
+            runtime.contest_service.normalize_statement_source_key(
+                language="_shared",
+                path="statements.tex",
+            )
 
     def test_system_admin_can_view_and_manage_all_contests(self) -> None:
         contest_slug = f"admin-contest-{uuid.uuid4().hex[:8]}"
@@ -799,20 +854,6 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             )
         )
 
-        job_row = db_fetch_one(
-            "SELECT id,status FROM contest_jobs WHERE contest_id=? ORDER BY created_at DESC LIMIT 1",
-            [contest_id],
-        )
-        self.assertIsNotNone(job_row)
-        summary = read_contest_job_summary(contest_id, str(job_row["id"]))
-        self.assertEqual(str(summary.get("job_type") or ""), "change-general")
-        results = summary.get("results") or []
-        self.assertEqual(len(results), 1)
-        first = dict(results[0])
-        self.assertEqual(str(first.get("status") or ""), "success")
-        commit_id = str(first.get("commit_id") or "")
-        self.assertRegex(commit_id, r"^[0-9a-f]{40}$")
-
         ws = Path(workspace_service.ensure_workspace(problem_slug, "alice"))
         cfg = json.loads((ws / "config" / "problem.json").read_text(encoding="utf-8"))
         self.assertEqual(int(cfg.get("time_limit_ms") or 0), 3500)
@@ -820,54 +861,6 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
 
         last_subject = run_git(["git", "-C", str(ws), "log", "-1", "--pretty=%s"]).stdout.strip()
         self.assertEqual(last_subject, f"contest {contest_slug}: bulk update TL/ML")
-
-    def test_change_names_tl_ml_rejects_uninitialized_repository(self) -> None:
-        problem_slug = f"alice/ui-bulk-unborn-{uuid.uuid4().hex[:8]}"
-        workspace_service.ensure_problem(problem_slug)
-        workspace_service.grant_repo_access(problem_slug, "alice", "owner")
-        contest_slug = f"ui-contest-bulk-unborn-{uuid.uuid4().hex[:8]}"
-        contest_id = self._create_contest(contest_slug, "Bulk Contest Unborn")
-
-        add_resp = contest_problems_add(
-            contest=contest_slug,
-            user="alice",
-            problem_slugs=[problem_slug],
-            q="",
-        )
-        self.assertEqual(add_resp.status_code, 303)
-        problem_row = db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem_slug])
-        self.assertIsNotNone(problem_row)
-        pid = int(problem_row["id"])
-        contest_problem_row = db_fetch_one(
-            "SELECT id,idx FROM contest_problems WHERE contest_id=? AND problem_id=?",
-            [contest_id, pid],
-        )
-        self.assertIsNotNone(contest_problem_row)
-
-        update_resp = contest_problems_save(
-            contest=contest_slug,
-            user="alice",
-            contest_problem_ids=[str(contest_problem_row["id"])],
-            contest_problem_indices=[str(contest_problem_row["idx"])],
-            problem_ids=[str(pid)],
-            time_limit_ms_values=["3500"],
-            memory_limit_mb_values=["512"],
-            original_time_limit_ms_values=["2000"],
-            original_memory_limit_mb_values=["1024"],
-        )
-        self.assertEqual(update_resp.status_code, 303)
-
-        job_row = db_fetch_one(
-            "SELECT id,status FROM contest_jobs WHERE contest_id=? ORDER BY created_at DESC LIMIT 1",
-            [contest_id],
-        )
-        self.assertIsNotNone(job_row)
-        summary = read_contest_job_summary(contest_id, str(job_row["id"]))
-        results = summary.get("results") or []
-        self.assertEqual(len(results), 1)
-        first = dict(results[0])
-        self.assertEqual(str(first.get("status") or ""), "failed")
-        self.assertIn("requires an initialized repository", str(first.get("error") or ""))
 
     def test_system_admin_can_add_problem_without_explicit_repo_acl(self) -> None:
         contest_slug = f"admin-contest-problems-{uuid.uuid4().hex[:8]}"
@@ -946,33 +939,157 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         contest_slug = f"ui-contest-props-{uuid.uuid4().hex[:8]}"
         contest_id = self._create_contest(contest_slug, "Props Contest")
         workspace_service.ensure_user("bob")
+        before = db_fetch_one(
+            "SELECT source_generation FROM contests WHERE id=?",
+            [contest_id],
+        )
+        self.assertIsNotNone(before)
 
         save_props = contest_properties_save(
             contest=contest_slug,
             user="alice",
-            title="Props Contest Updated",
-            location="San Francisco",
-            date_text="2026-03-01",
-            statement_language="chinese",
-            insert_blank_pages=True,
+            property_keys=[
+                "title",
+                "title.chinese",
+                "location",
+                "location.chinese",
+                "date",
+                "date.chinese",
+                "insertBlankPage",
+                "banner",
+                "banner.chinese",
+                "sponsor",
+                "sponsor.chinese",
+            ],
+            property_values=[
+                "Props Contest Updated",
+                "属性比赛",
+                "San Francisco",
+                "旧金山",
+                "2026-03-01",
+                "2026 年 3 月 1 日",
+                "true",
+                r"\textbf{Preview only}",
+                r"\textbf{仅供预览}",
+                "Example Foundation",
+                "示例基金会",
+            ],
+            existing_property_keys=["title"],
         )
         self.assertEqual(save_props.status_code, 303)
+        after = db_fetch_one(
+            "SELECT source_generation FROM contests WHERE id=?",
+            [contest_id],
+        )
+        self.assertIsNotNone(after)
+        self.assertEqual(
+            int(after["source_generation"]),
+            int(before["source_generation"]) + 1,
+        )
         alice_row = db_fetch_one("SELECT id FROM users WHERE username='alice'")
         self.assertIsNotNone(alice_row)
-        contest_row = db_fetch_one(
+        contest_rows = db_fetch_all(
+            "SELECT key,value FROM contest_properties WHERE contest_id=? ORDER BY key",
+            [contest_id],
+        )
+        self.assertEqual(
+            {str(row["key"]): str(row["value"]) for row in contest_rows},
+            {
+                "date": "2026-03-01",
+                "date.chinese": "2026 年 3 月 1 日",
+                "location": "San Francisco",
+                "location.chinese": "旧金山",
+                "sponsor": "Example Foundation",
+                "sponsor.chinese": "示例基金会",
+                "banner": r"\textbf{Preview only}",
+                "banner.chinese": r"\textbf{仅供预览}",
+                "insertBlankPage": "true",
+                "title": "Props Contest Updated",
+                "title.chinese": "属性比赛",
+            },
+        )
+        localized = runtime.contest_service.localized_properties_map(
+            contest_id,
+            "chinese",
+        )
+        self.assertEqual(localized["title"], "属性比赛")
+        self.assertEqual(localized["location"], "旧金山")
+
+        unchanged = runtime.contest_service.set_properties(
+            contest_id,
+            int(alice_row["id"]),
+            {
+                "date": "2026-03-01",
+                "date.chinese": "2026 年 3 月 1 日",
+                "location": "San Francisco",
+                "location.chinese": "旧金山",
+                "sponsor": "Example Foundation",
+                "sponsor.chinese": "示例基金会",
+                "banner": r"\textbf{Preview only}",
+                "banner.chinese": r"\textbf{仅供预览}",
+                "insertBlankPage": True,
+                "title": "Props Contest Updated",
+                "title.chinese": "属性比赛",
+            },
+        )
+        self.assertFalse(unchanged)
+        current = db_fetch_one(
+            "SELECT source_generation FROM contests WHERE id=?",
+            [contest_id],
+        )
+        self.assertIsNotNone(current)
+        self.assertEqual(
+            int(current["source_generation"]),
+            int(after["source_generation"]),
+        )
+
+        language_delete = contest_property_delete(
+            contest=contest_slug,
+            user="alice",
+            property_key="location.chinese",
+        )
+        self.assertEqual(language_delete.status_code, 303)
+        cleared = runtime.contest_service.set_properties(
+            contest_id,
+            int(alice_row["id"]),
+            {"title.chinese": ""},
+        )
+        self.assertTrue(cleared)
+        fallback = runtime.contest_service.localized_properties_map(
+            contest_id,
+            "chinese",
+        )
+        self.assertEqual(fallback["title"], "Props Contest Updated")
+        self.assertEqual(fallback["location"], "San Francisco")
+        self.assertEqual(fallback["sponsor"], "示例基金会")
+        cleared_rows = db_fetch_all(
             """
-            SELECT title,statement_default_language,statement_insert_blank_pages
-            FROM contests WHERE id=?
+            SELECT key FROM contest_properties
+            WHERE contest_id=? AND key IN ('title.chinese','location.chinese')
             """,
             [contest_id],
         )
-        self.assertIsNotNone(contest_row)
-        self.assertEqual(str(contest_row["title"]), "Props Contest Updated")
-        self.assertEqual(
-            str(contest_row["statement_default_language"]),
-            "chinese",
+        self.assertEqual(cleared_rows, [])
+
+        removed = runtime.contest_service.set_properties(
+            contest_id,
+            int(alice_row["id"]),
+            {"sponsor": None, "sponsor.chinese": None},
         )
-        self.assertEqual(int(contest_row["statement_insert_blank_pages"]), 1)
+        self.assertTrue(removed)
+        self.assertEqual(
+            db_fetch_all(
+                "SELECT key FROM contest_properties WHERE contest_id=? AND key LIKE 'sponsor%'",
+                [contest_id],
+            ),
+            [],
+        )
+        removed_blank_page = runtime.contest_service.set_properties(
+            contest_id,
+            int(alice_row["id"]),
+            {"insertBlankPage": None},
+        )
+        self.assertTrue(removed_blank_page)
 
         grant = contest_access_grant(contest=contest_slug, user="alice", target_user="bob", role="write")
         self.assertEqual(grant.status_code, 303)
@@ -982,6 +1099,28 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         )
         self.assertIsNotNone(membership)
         self.assertEqual(str(membership["role"]), "write")
+
+    def test_contest_property_presets_create_template_values(self) -> None:
+        contest_slug = f"ui-contest-property-presets-{uuid.uuid4().hex[:8]}"
+        contest_id = self._create_contest(contest_slug, "Preset Contest")
+
+        banner_response = contest_property_insert_preset(
+            contest=contest_slug,
+            user="alice",
+            property_key="banner",
+        )
+        blank_page_response = contest_property_insert_preset(
+            contest=contest_slug,
+            user="alice",
+            property_key="insertBlankPage",
+        )
+
+        self.assertEqual(banner_response.status_code, 303)
+        self.assertEqual(blank_page_response.status_code, 303)
+        properties = runtime.contest_service.properties_map(contest_id)
+        self.assertIn(r"\ifdefined\thecontestname", properties["banner"])
+        self.assertIn(r"\contestname", properties["banner"])
+        self.assertEqual(properties["insertBlankPage"], "true")
 
     def test_contest_overview_properties_map_infers_location_and_date_from_statements(self) -> None:
         contest_slug = f"ui-contest-overview-{uuid.uuid4().hex[:8]}"
@@ -1012,8 +1151,6 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
                     }
                 ],
             )
-        runtime.contest_service.set_statement_default_language(contest_id, actor_user_id, "english")
-
         properties = runtime.contest_service.overview_properties_map(
             contest_id,
             contest_slug,

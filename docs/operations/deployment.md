@@ -173,136 +173,58 @@ step is missed, the process remains available only as a raw `503` diagnostic
 that lists the missing schema objects; no workers or Judgehost runtime start.
 Extra tables, columns, indexes, and rows do not block startup and are preserved.
 
-### Contest problem-index upgrade
+### Contest property-map upgrade
 
-The release that removes independent Contest roster positions requires this
-one-time offline upgrade for a database whose `contest_problems` still contains
-`position` and `label`. A database that already contains
-`contest_problems.idx` and `contest_build_items.ordinal` must not run it again.
+The release that moves editable Contest metadata out of dedicated `contests`
+columns requires this one-time offline upgrade. A database that already has a
+`contest_properties` table and no `contests.title` column must not run it
+again.
 
-Stop the Web process, workers, and Judgehosts. Set `DB_PATH` to the configured
-SQLite file, then retain the database and any existing WAL/SHM files together:
-
-```bash
-backup_dir="$(dirname "$DB_PATH")/contest-idx-backup-$(date +%Y%m%d-%H%M%S)"
-install -d -m 0700 "$backup_dir"
-for suffix in '' '-wal' '-shm'; do
-  if test -e "$DB_PATH$suffix"; then
-    cp --preserve=all "$DB_PATH$suffix" "$backup_dir/"
-  fi
-done
-sqlite3 "$DB_PATH" 'PRAGMA wal_checkpoint(TRUNCATE);'
-```
-
-Before changing the schema, this query must return no rows. Any result means
-the old labels cannot become canonical unique indices without an operator
-decision:
-
-```bash
-sqlite3 "$DB_PATH" <<'SQL'
-SELECT contest_id, idx, COUNT(*) AS copies
-FROM (
-    SELECT contest_id, UPPER(TRIM(label)) AS idx
-    FROM contest_problems
-)
-GROUP BY contest_id, idx
-HAVING copies > 1
-    OR idx = ''
-    OR length(idx) > 16
-    OR substr(idx,1,1) NOT GLOB '[A-Z0-9]'
-    OR idx GLOB '*[^A-Z0-9._-]*';
-SQL
-```
-
-Run the following directly from the shell; do not save it in the checkout. The
-two `before` and `after` counts must match. Historical build positions are
-copied unchanged to `ordinal`, while current roster rows immediately acquire
-the application's natural `idx` ordering when read:
+Stop the Web process, workers, and Judgehosts, then back up the database and
+its WAL/SHM files as described above. Run the following against that stopped
+database with a recent SQLite CLI:
 
 ```bash
 sqlite3 -bail "$DB_PATH" <<'SQL'
-PRAGMA foreign_keys=OFF;
+PRAGMA foreign_keys=ON;
 BEGIN IMMEDIATE;
 
-SELECT 'contest_problems before', COUNT(*) FROM contest_problems;
-SELECT 'contest_build_items before', COUNT(*) FROM contest_build_items;
-
-DROP INDEX IF EXISTS idx_contest_problems_problem;
-DROP INDEX IF EXISTS idx_contest_build_items_job_position;
-DROP INDEX IF EXISTS idx_contest_build_items_materialization;
-
-ALTER TABLE contest_problems RENAME TO contest_problems_legacy;
-CREATE TABLE contest_problems (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+CREATE TABLE contest_properties (
     contest_id INTEGER NOT NULL,
-    idx TEXT NOT NULL,
-    problem_id INTEGER NOT NULL,
-    statement_folder TEXT NOT NULL DEFAULT '',
-    added_by_user_id INTEGER NOT NULL,
-    created_at TEXT NOT NULL,
-    UNIQUE(contest_id, problem_id),
-    UNIQUE(contest_id, idx),
-    FOREIGN KEY(contest_id) REFERENCES contests(id),
-    FOREIGN KEY(problem_id) REFERENCES problems(id),
-    FOREIGN KEY(added_by_user_id) REFERENCES users(id)
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY(contest_id, key),
+    FOREIGN KEY(contest_id) REFERENCES contests(id)
 );
-INSERT INTO contest_problems(
-    id,contest_id,idx,problem_id,statement_folder,added_by_user_id,created_at
-)
-SELECT id,contest_id,UPPER(TRIM(label)),problem_id,statement_folder,
-       added_by_user_id,created_at
-FROM contest_problems_legacy;
 
-ALTER TABLE contest_build_items RENAME TO contest_build_items_legacy;
-CREATE TABLE contest_build_items (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    job_id TEXT NOT NULL,
-    contest_problem_id INTEGER NOT NULL,
-    ordinal INTEGER NOT NULL,
-    idx TEXT NOT NULL,
-    problem_id INTEGER NOT NULL,
-    statement_folder TEXT NOT NULL DEFAULT '',
-    source_commit TEXT NOT NULL,
-    revision_number INTEGER NOT NULL,
-    materialization_id TEXT,
-    archive_sha256 TEXT,
-    UNIQUE(job_id,contest_problem_id),
-    FOREIGN KEY(job_id) REFERENCES contest_jobs(id),
-    FOREIGN KEY(problem_id) REFERENCES problems(id),
-    FOREIGN KEY(materialization_id) REFERENCES problem_package_materializations(id)
-);
-INSERT INTO contest_build_items(
-    id,job_id,contest_problem_id,ordinal,idx,problem_id,statement_folder,
-    source_commit,revision_number,materialization_id,archive_sha256
-)
-SELECT id,job_id,contest_problem_id,position,UPPER(TRIM(label)),problem_id,
-       statement_folder,source_commit,revision_number,materialization_id,
-       archive_sha256
-FROM contest_build_items_legacy;
+INSERT INTO contest_properties(contest_id,key,value)
+SELECT id,'title',title FROM contests;
+INSERT INTO contest_properties(contest_id,key,value)
+SELECT id,'location',location FROM contests WHERE location <> '';
+INSERT INTO contest_properties(contest_id,key,value)
+SELECT id,'date',date_text FROM contests WHERE date_text <> '';
+INSERT INTO contest_properties(contest_id,key,value)
+SELECT id,'insertBlankPage','true'
+FROM contests WHERE statement_insert_blank_pages <> 0;
 
-SELECT 'contest_problems after', COUNT(*) FROM contest_problems;
-SELECT 'contest_build_items after', COUNT(*) FROM contest_build_items;
-
-DROP TABLE contest_build_items_legacy;
-DROP TABLE contest_problems_legacy;
-CREATE INDEX idx_contest_problems_problem
-    ON contest_problems(problem_id,created_at DESC);
-CREATE INDEX idx_contest_build_items_job_ordinal
-    ON contest_build_items(job_id,ordinal);
-CREATE INDEX idx_contest_build_items_materialization
-    ON contest_build_items(materialization_id);
+ALTER TABLE contests DROP COLUMN statement_insert_blank_pages;
+ALTER TABLE contests DROP COLUMN statement_default_language;
+ALTER TABLE contests DROP COLUMN date_text;
+ALTER TABLE contests DROP COLUMN location;
+ALTER TABLE contests DROP COLUMN title;
 
 COMMIT;
-PRAGMA foreign_keys=ON;
 PRAGMA foreign_key_check;
 PRAGMA integrity_check;
 SQL
 ```
 
 `foreign_key_check` must print no rows and `integrity_check` must print `ok`.
-Start the new application only after both checks and the row-count comparison
-succeed. Remove any temporary command file outside the repository; retain the
-backup until the upgraded deployment has been verified.
+The removed default-language value is intentionally not migrated: Statement
+language selection now uses the explicit request, then an actually available
+English source, then the first available language. Start the new application
+only after the checks succeed. This upgrade is an operator command, not a
+repository migration script.
 
 The bearer credential is replayable by design. Keep the application data root
 and database private to the runtime user. The host installer applies mode

@@ -157,15 +157,22 @@ context and resources directly. Authors may also replace
 
 ## Blank pages and banners
 
-Use the existing `olymp.sty` signal directly:
+The default `statements.ftl` emits the existing `olymp.sty` signal when its
+`insertBlankPage` context value is true:
 
 ```tex
 \intentionallyblankpagestrue
 \intentionallyblankpagesfalse
 ```
 
-No wrapper commands are required. The banner command is empty by default and
-can be replaced in a template:
+Custom templates may consume the same Boolean context or use the signal
+directly. All effective Contest Properties are injected as top-level FTL
+values and through the `properties` mapping. No post-render text replacement
+is performed.
+
+No wrapper commands are required. The `banner` Contest Property is empty by
+default. A non-empty value makes the default template replace the existing
+banner slot:
 
 ```tex
 \renewcommand{\StatementBanner}{%

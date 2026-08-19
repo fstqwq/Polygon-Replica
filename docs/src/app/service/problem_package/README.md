@@ -27,8 +27,8 @@ the stored archive identity did not change while it was open. A caller with a
 frozen checksum can require that exact value.
 
 Package Export is the only orchestrator that may ask this service to prepare a
-missing or unavailable Native Package. Contest builds and adapters may only
-open an already available frozen package through `NativePackageReader`. The
+missing or unavailable Native Package. Contest package downloads and adapters
+may only open an already available package through `NativePackageReader`. The
 Native Package download returns that package's own serialization without
 creating an export job or external-package cache row.
 

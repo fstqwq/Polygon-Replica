@@ -1898,7 +1898,7 @@ def _exercise_maintenance_and_backup(
         / "e2e.txt"
     )
     upload = client.post(
-        f"/contests/{CONTEST}/packages/statement/upload",
+        f"/contests/{CONTEST}/properties/statement/upload",
         data={"language": "english", "path": "e2e.txt"},
         files={"upload": ("e2e.txt", b"durable contest source\n", "text/plain")},
         headers={"Origin": str(client.base_url).rstrip("/")},

@@ -2,6 +2,7 @@
 {% from "_problem_slug_link.html" import problem_slug_link %}
 {% from "_contest_problem_status.html" import contest_problem_status %}
 {% from "_revision_pair.html" import fact_row %}
+{% from "_component_dialogs.html" import ui_popup %}
 {% block content %}
 <div class="page-title-inline contest-problems-title">
   <div class="contest-problems-heading">
@@ -16,10 +17,12 @@
       <span class="warn">{{ package_stale_count }} stale</span>{% endif %}{% if package_none_count %},
       <span class="danger">{{ package_none_count }} none</span>{% endif %}
     </p>
-    {% if ctx.access.can_build and not package_all_ready %}
+    {% if problem_rows and ctx.access.can_build and not package_all_ready %}
     <form class="action-link-form" method="post" action="/contests/{{ ctx.contest.slug }}/packages/build-all">
       <button class="linkish-button" type="submit">Build All Packages</button>
     </form>
+    {% elif package_all_ready and ctx.access.can_download_packages %}
+    <a class="linkish" href="#contest-package-download-popup" data-popup-open="contest-package-download-popup">Download Packages</a>
     {% endif %}
   </div>
 </div>
@@ -88,4 +91,18 @@
   <p class="muted">No problems.</p>
   {% endif %}
 </section>
+
+{% if package_all_ready and ctx.access.can_download_packages %}
+{% call ui_popup('contest-package-download-popup', 'Download Packages', dialog_class='contest-package-download-popup') %}
+<form class="form-stack" method="post" action="/contests/{{ ctx.contest.slug }}/packages/download">
+  <label for="contest-package-download-format">Format</label>
+  <select id="contest-package-download-format" name="package_format" required>
+    {% for option in package_download_formats %}
+    <option value="{{ option.value }}">{{ option.label }}</option>
+    {% endfor %}
+  </select>
+  <button class="btn primary-action" type="submit">Download</button>
+</form>
+{% endcall %}
+{% endif %}
 {% endblock %}

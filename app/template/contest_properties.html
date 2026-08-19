@@ -1,45 +1,151 @@
 {% extends "contest_base.html" %}
+{% from "_component_dialogs.html" import ui_popup %}
 {% block content %}
-<h1 class="page-title">Properties</h1>
+<div class="page-title-inline contest-property-page-title">
+  <h1 class="page-title">Properties</h1>
+  {% if ctx.access.can_write %}
+  <div class="page-title-actions contest-property-title-actions">
+    {% if contest_property_table["can_insert_banner"] %}
+    <form class="inline-form" method="post" action="/contests/{{ ctx.contest.slug }}/properties/insert-preset">
+      <input type="hidden" name="property_key" value="banner" />
+      <button class="linkish-button" type="submit">Insert Default Banner</button>
+    </form>
+    {% endif %}
+    {% if contest_property_table["can_insert_blank_page"] %}
+    <form class="inline-form" method="post" action="/contests/{{ ctx.contest.slug }}/properties/insert-preset">
+      <input type="hidden" name="property_key" value="insertBlankPage" />
+      <button class="linkish-button" type="submit">Insert Blank Page After Odd Statements</button>
+    </form>
+    {% endif %}
+    <a class="linkish" href="#contest-property-add-popup" data-popup-open="contest-property-add-popup">Add property</a>
+  </div>
+  {% endif %}
+</div>
 
 {% include "_flash_message.html" %}
 
 <section class="content-section-plain contest-manage-section" aria-label="Contest properties">
-  <form class="contest-properties-form" method="post" action="/contests/{{ ctx.contest.slug }}/properties/save">
-    <div class="form-field-stack contest-property-title">
-      <label for="contest-title">Title</label>
-      <input id="contest-title" name="title" value="{{ ctx.contest.title }}" />
-    </div>
-    <div class="form-field-stack">
-      <label for="contest-location">Location</label>
-      <input id="contest-location" name="location" value="{{ location or '' }}" />
-    </div>
-    <div class="form-field-stack">
-      <label for="contest-date">Date</label>
-      <input id="contest-date" name="date_text" value="{{ date_text or '' }}" placeholder="YYYY-MM-DD" />
-    </div>
-    <div class="form-field-stack">
-      <label for="contest-statement-language">Default statement language</label>
-      <input
-        id="contest-statement-language"
-        name="statement_language"
-        value="{{ statement_language }}"
-        placeholder="english"
-        required
-      />
-    </div>
-    <label class="checkbox-row">
-      <input
-        type="checkbox"
-        name="insert_blank_pages"
-        value="true"
-        {% if insert_blank_pages %}checked{% endif %}
-      />
-      Insert blank pages after odd statements
-    </label>
-    <div class="contest-properties-actions">
-      <button class="btn primary-action" type="submit">Save properties</button>
-    </div>
-  </form>
+  <div class="table-scroll contest-property-table-scroll">
+      <table class="table-base table-compact contest-property-table">
+        <colgroup>
+          <col class="contest-property-key-column" />
+          <col />
+          <col class="contest-property-action-column" />
+        </colgroup>
+        <thead>
+          <tr>
+            <th scope="col">Key</th>
+            <th scope="col">Value (Language)</th>
+            <th scope="col"><span class="sr-only">Action</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for group in contest_property_table["groups"] %}
+          <tr>
+            <td class="contest-property-key-cell">
+              <code>{{ group["key"] }}</code>
+              {% if group["kind_label"] %}<span class="contest-property-meta contest-property-kind">({{ group["kind_label"] }})</span>{% endif %}
+            </td>
+            <td>
+              <ul class="contest-property-value-list">
+                {% for row in group["values"] %}
+                <li>
+                  <span class="contest-property-display-value">{% if row.value %}{{ row.value }}{% else %}<span class="muted">—</span>{% endif %}</span>
+                  <span class="contest-property-meta contest-property-scope">({{ row.scope_label }})</span>
+                </li>
+                {% endfor %}
+              </ul>
+            </td>
+            <td class="table-cell-actions contest-property-row-action">
+              {% if ctx.access.can_write %}
+              <span class="contest-property-actions">
+                <a class="linkish" href="#{{ group["popup_id"] }}" data-popup-open="{{ group["popup_id"] }}">Edit</a>
+                {% if group["deletable"] and group["persisted"] %}
+                <form class="inline-action" method="post" action="/contests/{{ ctx.contest.slug }}/properties/delete" data-confirm-message="Delete {{ group["key"] }} and all of its language values?">
+                  <input type="hidden" name="property_key" value="{{ group["key"] }}" />
+                  <button class="linkish-button danger-link" type="submit">Delete</button>
+                </form>
+                {% endif %}
+              </span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+  </div>
 </section>
+
+{% for group in contest_property_table["groups"] %}
+{% call ui_popup(group["popup_id"], 'Edit ' ~ group["key"], title_tag='h3', title_class='') %}
+  {% if group["kind_label"] == 'Required' %}
+  <p class="muted contest-property-policy-note">
+    Required properties must have an All value and cannot be deleted.
+  </p>
+  {% endif %}
+  <form class="form-stack contest-property-edit-form" method="post" action="/contests/{{ ctx.contest.slug }}/properties/save">
+    {% for key in group["existing_keys"] %}
+    <input type="hidden" name="existing_property_keys" value="{{ key }}" />
+    {% endfor %}
+    {% for row in group["edit_values"] %}
+    <input type="hidden" name="property_keys" value="{{ row.key }}" />
+    <div class="contest-property-edit-field-head">
+      <label for="contest-property-{{ loop.index }}-{{ group["popup_id"] }}">
+        {{ row.scope_label }}
+        {% if row.key != group["key"] %}<span class="muted">({{ row.key }})</span>{% endif %}
+      </label>
+      {% if row.key != group["key"] and row.persisted %}
+      <button
+        class="linkish-button danger-link"
+        type="submit"
+        name="property_key"
+        value="{{ row.key }}"
+        formaction="/contests/{{ ctx.contest.slug }}/properties/delete"
+        formnovalidate
+      >Delete</button>
+      {% endif %}
+    </div>
+    {% if group["boolean"] and row.key == group["key"] %}
+    <select id="contest-property-{{ loop.index }}-{{ group["popup_id"] }}" name="property_values">
+      <option value="true" {% if row.value == 'true' %}selected{% endif %}>true</option>
+      <option value="false" {% if row.value != 'true' %}selected{% endif %}>false</option>
+    </select>
+    {% else %}
+    <textarea
+      class="contest-property-value-editor"
+      id="contest-property-{{ loop.index }}-{{ group["popup_id"] }}"
+      name="property_values"
+      rows="{{ row.editor_rows }}"
+      {% if row.required %}required{% endif %}
+      autocomplete="off"
+    >{{ row.value }}</textarea>
+    {% endif %}
+    {% endfor %}
+    <button class="btn primary-action" type="submit">Save</button>
+  </form>
+  {% if group["localizable"] %}
+  <form class="form-stack contest-property-language-form" method="post" action="/contests/{{ ctx.contest.slug }}/properties/language/add">
+    <input type="hidden" name="property_key" value="{{ group["key"] }}" />
+    <h4>Add language</h4>
+    <label for="contest-property-language-{{ group["popup_id"] }}">Language</label>
+    <input id="contest-property-language-{{ group["popup_id"] }}" type="text" name="property_language" placeholder="chinese" autocomplete="off" required />
+    <label for="contest-property-language-value-{{ group["popup_id"] }}">Value</label>
+    <textarea class="contest-property-value-editor" id="contest-property-language-value-{{ group["popup_id"] }}" name="property_value" rows="3" autocomplete="off" required></textarea>
+    <button class="btn" type="submit">Add language</button>
+  </form>
+  {% endif %}
+{% endcall %}
+{% endfor %}
+
+{% call ui_popup('contest-property-add-popup', 'Add property', title_tag='h3', title_class='') %}
+  <form class="form-stack" method="post" action="/contests/{{ ctx.contest.slug }}/properties/add">
+    <label for="contest-property-new-key">Key</label>
+    <input id="contest-property-new-key" type="text" name="property_key" placeholder="sponsor" autocomplete="off" required />
+    <label for="contest-property-new-value">Value</label>
+    <textarea class="contest-property-value-editor" id="contest-property-new-value" name="property_value" rows="3" autocomplete="off" required></textarea>
+    <button class="btn primary-action" type="submit">Add</button>
+  </form>
+{% endcall %}
+
+{% include "_contest_statement_sources.html" %}
 {% endblock %}

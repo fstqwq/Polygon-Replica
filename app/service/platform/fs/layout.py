@@ -113,8 +113,8 @@ class StorageLayout:
         return self.snapshot_root / "downloads"
 
     @property
-    def contest_artifact_root(self) -> Path:
-        return self.artifacts_root / "contests"
+    def contest_package_download_root(self) -> Path:
+        return self.cache_root / "contest-package-downloads"
 
     @property
     def artifact_staging_root(self) -> Path:
@@ -263,27 +263,24 @@ class StorageLayout:
             field_name="contest_slug",
         )
 
-    def contest_job(self, contest_slug: str, job_id: str) -> Path:
+    def contest_package_download(
+        self,
+        contest_slug: str,
+        operation_id: str,
+    ) -> Path:
         contest = self._safe_relative(
-            self.contest_artifact_root,
+            self.contest_package_download_root,
             contest_slug,
             field_name="contest_slug",
         )
-        token = self._normalize_token(job_id, field_name="contest_job_id")
-        return self._safe_relative(contest, token, field_name="contest_job_id")
-
-    def contest_artifact(
-        self,
-        contest_slug: str,
-        job_id: str,
-        artifact_id: str,
-    ) -> Path:
-        job = self.contest_job(contest_slug, job_id)
-        token = self._normalize_token(artifact_id, field_name="contest_artifact_id")
+        token = self._normalize_token(
+            operation_id,
+            field_name="contest_package_download_id",
+        )
         return self._safe_relative(
-            job,
-            f"artifacts/{token}",
-            field_name="contest_artifact_id",
+            contest,
+            token,
+            field_name="contest_package_download_id",
         )
 
     def resolve_artifact(self, rel_path: str) -> Path:

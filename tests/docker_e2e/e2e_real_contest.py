@@ -69,9 +69,11 @@ def assert_contest_pdf(
     row = connection.execute(
         """
         SELECT sp.status,sp.output_kind,sp.source_kind,sp.language,sp.summary_json,
-               c.id AS contest_id,c.title
+               c.id AS contest_id,title_property.value AS title
         FROM statement_previews sp
         JOIN contests c ON c.id=sp.contest_id
+        JOIN contest_properties title_property
+          ON title_property.contest_id=c.id AND title_property.key='title'
         WHERE c.slug=? AND sp.id=?
         """,
         [CONTEST, preview_id],
@@ -161,10 +163,4 @@ def assert_contest_pdf(
         preview_root / "contest-sources"
     ).exists():
         raise RuntimeError("Contest PDF Preview retained an intermediate source tree")
-    durable_rows = connection.execute(
-        "SELECT id FROM contest_artifacts WHERE contest_id=?",
-        [int(row["contest_id"])],
-    ).fetchall()
-    if durable_rows:
-        raise RuntimeError("Contest PDF Preview created a durable Contest artifact")
     return verification_id

@@ -10,25 +10,22 @@ from app.impl.contest.overview import (
     contest_build_all_packages,
     contest_overview_page,
 )
-from app.impl.contest.package import (
-    contest_packages_artifact_download,
-    contest_packages_build_start,
-    contest_packages_job_status,
-    contest_packages_page,
-    contest_statement_source_delete,
-    contest_statement_source_file,
-    contest_statement_source_save,
-    contest_statement_source_upload,
-)
+from app.impl.contest.package import contest_packages_download
 from app.impl.contest.problem import (
     contest_problems_add,
-    contest_problems_change_general_retry,
     contest_problems_page,
     contest_problems_remove,
     contest_problems_remove_selected,
     contest_problems_save,
 )
-from app.impl.contest.property import contest_properties_page, contest_properties_save
+from app.impl.contest.property import (
+    contest_properties_page,
+    contest_properties_save,
+    contest_property_add,
+    contest_property_delete,
+    contest_property_insert_preset,
+    contest_property_language_add,
+)
 from app.impl.contest.statement_review import (
     contest_statement_pdf_build,
     contest_statement_pdf_file,
@@ -36,6 +33,13 @@ from app.impl.contest.statement_review import (
     contest_statement_review_build,
     contest_statement_review_page,
     contest_statement_review_resource,
+)
+from app.impl.contest.statement_source import (
+    contest_statement_language_remove,
+    contest_statement_source_delete,
+    contest_statement_source_file,
+    contest_statement_source_save,
+    contest_statement_source_upload,
 )
 
 router = APIRouter()
@@ -88,12 +92,6 @@ router.add_api_route(
 )
 
 router.add_api_route(
-    "/contests/{contest}/problems/change-general/retry",
-    contest_problems_change_general_retry,
-    methods=["POST"],
-)
-
-router.add_api_route(
     "/contests/{contest}/properties",
     contest_properties_page,
     methods=["GET"],
@@ -103,6 +101,30 @@ router.add_api_route(
 router.add_api_route(
     "/contests/{contest}/properties/save",
     contest_properties_save,
+    methods=["POST"],
+)
+
+router.add_api_route(
+    "/contests/{contest}/properties/add",
+    contest_property_add,
+    methods=["POST"],
+)
+
+router.add_api_route(
+    "/contests/{contest}/properties/language/add",
+    contest_property_language_add,
+    methods=["POST"],
+)
+
+router.add_api_route(
+    "/contests/{contest}/properties/delete",
+    contest_property_delete,
+    methods=["POST"],
+)
+
+router.add_api_route(
+    "/contests/{contest}/properties/insert-preset",
+    contest_property_insert_preset,
     methods=["POST"],
 )
 
@@ -123,13 +145,6 @@ router.add_api_route(
     "/contests/{contest}/access/revoke",
     contest_access_revoke,
     methods=["POST"],
-)
-
-router.add_api_route(
-    "/contests/{contest}/packages",
-    contest_packages_page,
-    methods=["GET"],
-    response_class=HTMLResponse,
 )
 
 router.add_api_route(
@@ -170,43 +185,37 @@ router.add_api_route(
 )
 
 router.add_api_route(
-    "/contests/{contest}/packages/build/start",
-    contest_packages_build_start,
+    "/contests/{contest}/packages/download",
+    contest_packages_download,
     methods=["POST"],
 )
 
 router.add_api_route(
-    "/contests/{contest}/packages/jobs/status",
-    contest_packages_job_status,
-    methods=["GET"],
-)
-
-router.add_api_route(
-    "/contests/{contest}/packages/artifacts/{artifact_id}",
-    contest_packages_artifact_download,
-    methods=["GET"],
-)
-
-router.add_api_route(
-    "/contests/{contest}/packages/statement/files",
+    "/contests/{contest}/properties/statement/files",
     contest_statement_source_file,
     methods=["GET"],
 )
 
 router.add_api_route(
-    "/contests/{contest}/packages/statement/save",
+    "/contests/{contest}/properties/statement/save",
     contest_statement_source_save,
     methods=["POST"],
 )
 
 router.add_api_route(
-    "/contests/{contest}/packages/statement/upload",
+    "/contests/{contest}/properties/statement/upload",
     contest_statement_source_upload,
     methods=["POST"],
 )
 
 router.add_api_route(
-    "/contests/{contest}/packages/statement/delete",
+    "/contests/{contest}/properties/statement/delete",
     contest_statement_source_delete,
+    methods=["POST"],
+)
+
+router.add_api_route(
+    "/contests/{contest}/properties/statement/language/remove",
+    contest_statement_language_remove,
     methods=["POST"],
 )

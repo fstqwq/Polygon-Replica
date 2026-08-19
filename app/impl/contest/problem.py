@@ -20,7 +20,7 @@ from app.main_util import form_text
 from app.service.contest.problem_index import normalize_contest_problem_idx
 
 
-def contest_problems_page(request: Request, contest: str, user: Annotated[str, Depends(require_session_user)], q: str = "", job_id: str = ""):
+def contest_problems_page(request: Request, contest: str, user: Annotated[str, Depends(require_session_user)], q: str = ""):
     ctx = _contest_ctx(contest, user, "problems", request=request)
     contest_id = int(ctx["contest"]["id"])
     user_id = int(ctx["user"]["id"])
@@ -79,7 +79,6 @@ def contest_problems_page(request: Request, contest: str, user: Annotated[str, D
         (len(str(row["slug_owner"])) + 1 for row in available_display_rows),
         default=0,
     )
-    latest_job = runtime().contest_service.load_job(contest_id, job_id)
     return template_response(
         request,
         "contest_problems.html",
@@ -90,7 +89,6 @@ def contest_problems_page(request: Request, contest: str, user: Annotated[str, D
             "available_rows": available_display_rows,
             "owner_prefix_chars": owner_prefix_chars,
             "available_owner_prefix_chars": available_owner_prefix_chars,
-            "latest_job": latest_job,
         },
     )
 
@@ -216,44 +214,6 @@ def _contest_problem_index_pairs(
     return pairs
 
 
-def _failed_general_job_payload(
-    contest_id: int,
-    retry_job_id: str,
-) -> tuple[list[int], dict[int, dict[str, object]]]:
-    retry_job = runtime().contest_service.load_job(contest_id, retry_job_id)
-    if retry_job is None:
-        raise ValueError("retry job not found")
-    if retry_job["job_type"] != "change-general":
-        raise ValueError("retry job type is invalid")
-    summary = retry_job["summary"]
-    if not isinstance(summary, dict):
-        raise ValueError("retry job report is invalid")
-    retry_results = summary.get("results")
-    if not isinstance(retry_results, list):
-        raise ValueError("retry job report is invalid")
-    selected_ids: list[int] = []
-    requested_map: dict[int, dict[str, object]] = {}
-    for result in retry_results:
-        if not isinstance(result, dict) or result.get("status") != "failed":
-            continue
-        problem_id = result.get("problem_id")
-        requested = result.get("requested")
-        if not isinstance(problem_id, int) or problem_id <= 0 or not isinstance(requested, dict):
-            raise ValueError("retry job report is invalid")
-        time_limit_ms = requested.get("time_limit_ms")
-        memory_limit_mb = requested.get("memory_limit_mb")
-        if not isinstance(time_limit_ms, str) or not isinstance(memory_limit_mb, str):
-            raise ValueError("retry job report is invalid")
-        selected_ids.append(problem_id)
-        requested_map[problem_id] = {
-            "time_limit_ms": time_limit_ms,
-            "memory_limit_mb": memory_limit_mb,
-        }
-    if not selected_ids:
-        raise ValueError("retry job has no failed problems")
-    return selected_ids, requested_map
-
-
 def _apply_general_changes(
     ctx: dict[str, object],
     selected_ids: list[int],
@@ -280,7 +240,9 @@ def _apply_general_changes(
             "problems",
             message="selected problems are not part of this contest",
         )
-    results: list[dict[str, object]] = []
+    success_count = 0
+    failed_count = 0
+    skipped_count = 0
     for row in rows:
         pid = int(row["problem_id"])
         defaults = {
@@ -305,29 +267,13 @@ def _apply_general_changes(
                 else ""
             ),
         )
-        results.append(result)
-    success_count = sum((1 for row in results if isinstance(row.get("status"), str) and row["status"] == "success"))
-    failed_count = sum((1 for row in results if isinstance(row.get("status"), str) and row["status"] == "failed"))
-    skipped_count = sum((1 for row in results if isinstance(row.get("status"), str) and row["status"] == "skipped"))
-    summary: dict[str, object] = {
-        "contest_slug": str(contest_ctx["slug"]),
-        "job_type": "change-general",
-        "results": results,
-        "totals": {
-            "total": len(results),
-            "success": success_count,
-            "failed": failed_count,
-            "skipped": skipped_count,
-        },
-    }
-    job_status = "ok" if failed_count == 0 else "failed"
-    runtime().contest_service.create_job(
-        contest_id,
-        actor_user_id,
-        "change-general",
-        job_status,
-        summary,
-    )
+        status = result.get("status")
+        if status == "success":
+            success_count += 1
+        elif status == "failed":
+            failed_count += 1
+        else:
+            skipped_count += 1
     return _contest_redirect(
         str(contest_ctx["slug"]),
         "overview",
@@ -434,21 +380,3 @@ def contest_problems_save(
         requested_map,
         message_prefix="contest problems saved",
     )
-
-
-def contest_problems_change_general_retry(
-    contest: str,
-    user: Annotated[str, Depends(require_session_user)],
-    retry_job_id: str = Form(...),
-):
-    ctx = _contest_ctx(contest, user, "problems")
-    if not bool(ctx["access"].get("can_write")):
-        raise HTTPException(status_code=403, detail=ctx["access"]["write_block_reason"])
-    try:
-        selected_ids, requested_map = _failed_general_job_payload(
-            int(ctx["contest"]["id"]),
-            retry_job_id,
-        )
-    except ValueError as exc:
-        return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message=str(exc))
-    return _apply_general_changes(ctx, selected_ids, requested_map)

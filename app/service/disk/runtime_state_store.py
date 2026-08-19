@@ -10,7 +10,6 @@ class RuntimeStateStore:
     _ALLOWED_SUMMARY_TABLES = {
         "previews",
         "statement_previews",
-        "contest_jobs",
     }
 
     def __init__(self, db: DB):

@@ -9,6 +9,7 @@ from app.impl.contest.problem_status import contest_problem_status
 from app.impl.contest.workspace_scope import add_contest_problem_hrefs
 from app.impl.runtime.dependency import runtime
 from app.impl.workspace.context_job import start_export_job
+from app.service.contest.package import CONTEST_PACKAGE_DOWNLOAD_FORMATS
 from app.service.export.service import NATIVE_PACKAGE_FORMAT
 
 from app.impl.contest.shared import _contest_ctx, _contest_redirect
@@ -54,7 +55,16 @@ def contest_overview_page(request: Request, contest: str, user: Annotated[str, D
         - package_queued_count
         - package_stale_count
     )
-    package_all_ready = package_ready_count == len(rows)
+    package_all_ready = bool(rows) and package_ready_count == len(rows)
+    package_download_formats = [
+        {
+            "value": package_format,
+            "label": runtime().export_service.package_format_display_name(
+                package_format
+            ),
+        }
+        for package_format in CONTEST_PACKAGE_DOWNLOAD_FORMATS
+    ]
     return template_response(
         request,
         "contest_overview.html",
@@ -67,6 +77,7 @@ def contest_overview_page(request: Request, contest: str, user: Annotated[str, D
             "package_stale_count": package_stale_count,
             "package_none_count": package_none_count,
             "package_all_ready": package_all_ready,
+            "package_download_formats": package_download_formats,
         },
     )
 

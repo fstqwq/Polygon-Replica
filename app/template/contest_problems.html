@@ -70,16 +70,6 @@
   {% else %}
   <p class="muted">No problems.</p>
   {% endif %}
-{% set retryable_job = latest_job
-  and latest_job.job_type == "change-general"
-  and latest_job.summary
-  and latest_job.summary.get("totals", {}).get("failed", 0) > 0 %}
-{% if retryable_job %}
-  <form class="contest-retry-form" method="post" action="/contests/{{ ctx.contest.slug }}/problems/change-general/retry">
-    <input type="hidden" name="retry_job_id" value="{{ latest_job.id }}" />
-    <button class="linkish-button" type="submit">Retry failed updates</button>
-  </form>
-{% endif %}
 </section>
 
 {% if ctx.access.can_manage_roster %}
@@ -119,26 +109,4 @@
 </section>
 {% endif %}
 
-{% if latest_job and latest_job.job_type == "change-general" and latest_job.summary and latest_job.summary.get("results") %}
-<section class="content-section-plain contest-manage-section">
-  <h2>Last Change Report</h2>
-  <p><strong>Job:</strong> <code>{{ latest_job.id }}</code> / {{ latest_job.status | status_label }}</p>
-  <table class="table-base">
-    <tr>
-      <th>Problem</th>
-      <th>Status</th>
-      <th>Commit</th>
-      <th>Error</th>
-    </tr>
-    {% for row in latest_job.summary.get("results") %}
-    <tr>
-      <td><code>{{ row.get("problem_slug", "-") }}</code></td>
-      <td>{{ row.get("status", "-") | status_label }}</td>
-      <td><code>{{ row.get("commit_id", "") }}</code></td>
-      <td>{{ row.get("error", "") }}</td>
-    </tr>
-    {% endfor %}
-  </table>
-</section>
-{% endif %}
 {% endblock %}

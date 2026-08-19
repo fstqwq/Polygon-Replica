@@ -320,14 +320,21 @@ class TestArtifactCleanup(unittest.TestCase):
             lambda connection: int(
                 connection.execute(
                     """
-                    INSERT INTO contests(slug,title,owner_user_id,created_at)
-                    VALUES('cleanup-contest','Cleanup Contest',?,?)
+                    INSERT INTO contests(slug,owner_user_id,created_at)
+                    VALUES('cleanup-contest',?,?)
                     """,
                     (self.actor_user_id, now),
                 ).lastrowid
             ),
         )
         self.contest_id = int(cursor_id)
+        self._execute(
+            """
+            INSERT INTO contest_properties(contest_id,key,value)
+            VALUES(?,'title','Cleanup Contest')
+            """,
+            (self.contest_id,),
+        )
         self._execute(
             """
             INSERT INTO contest_members(contest_id,user_id,role,created_at)
@@ -348,12 +355,6 @@ class TestArtifactCleanup(unittest.TestCase):
                 now,
             ),
         )
-        contest_problem = isolated_db_fetch_one(
-            self.db,
-            "SELECT id FROM contest_problems WHERE contest_id=? AND problem_id=?",
-            (self.contest_id, self.problem_id),
-        )
-        self.assertIsNotNone(contest_problem)
         self._execute(
             """
             INSERT INTO contest_attachments(
@@ -361,32 +362,6 @@ class TestArtifactCleanup(unittest.TestCase):
             ) VALUES(?,'statement','statement.pdf',?,?)
             """,
             (self.contest_id, now, self.actor_user_id),
-        )
-        self._execute(
-            """
-            INSERT INTO contest_jobs(
-                id,contest_id,actor_user_id,job_type,status,source_generation,created_at,finished_at
-            ) VALUES('contest-job-cleanup',? ,?,'build','ok',1,?,?)
-            """,
-            (self.contest_id, self.actor_user_id, now, now),
-        )
-        self._execute(
-            """
-            INSERT INTO contest_build_items(
-                job_id,contest_problem_id,ordinal,idx,problem_id,statement_folder,
-                source_commit,revision_number,materialization_id,archive_sha256
-            ) VALUES('contest-job-cleanup',?,1,'A',?,'a',?,1,'pm-cleanup',?)
-            """,
-            (int(contest_problem["id"]), self.problem_id, "c" * 40, "e" * 64),
-        )
-        self._execute(
-            """
-            INSERT INTO contest_artifacts(
-                id,contest_id,job_id,artifact_type,filename,created_at
-            ) VALUES('contest-artifact-cleanup',?,'contest-job-cleanup',
-                     'package','contest.zip',?)
-            """,
-            (self.contest_id, now),
         )
         self._execute(
             """
@@ -501,9 +476,6 @@ class TestArtifactCleanup(unittest.TestCase):
             "exports",
             "problem_package_builds",
             "problem_package_materializations",
-            "contest_build_items",
-            "contest_artifacts",
-            "contest_jobs",
             "verification_task_artifacts",
             "verification_selected_tests",
             "verification_source_paths",

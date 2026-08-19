@@ -22,8 +22,8 @@ unavailable diagnostic payload.
 | SQLite database | identities, metadata, configuration, summaries, locators | durable; selected rows are maintenance-cleanable |
 | Workspace root | mutable per-user Git workspaces | durable source until explicitly removed |
 | Contest source root | contest statement source and attachments outside problem Git | durable source |
-| `artifacts_root` | Native Package archives, cached external packages, and `contests/` build products | derived data; survives startup and is maintenance-cleanable |
-| Cache root | HTML/PDF Statement Preview payloads, verification payloads, temporary snapshots, runtime blobs, JudgeFS data, workdirs, queue history, and import drafts | disposable cache; startup-cleared and maintenance-cleanable |
+| `artifacts_root` | Native Package archives and cached external packages | derived data; survives startup and is maintenance-cleanable |
+| Cache root | HTML/PDF Statement Preview payloads, transient Contest package downloads, verification payloads, temporary snapshots, runtime blobs, JudgeFS data, workdirs, queue history, and import drafts | disposable cache; startup-cleared and maintenance-cleanable |
 | Backup root | the single application source backup and operator-managed contest migration archives | permanent and never cleared by application cleanup |
 
 The six managed directory roots MUST be non-root directories, MUST NOT be
@@ -36,7 +36,8 @@ root and MUST NOT escape through `..`, absolute paths, or symlink traversal.
 configured roots. That layout is the sole owner of application-derived locations for Git
 repositories, workspaces, verification and preview payloads, runtime snapshots
 and blobs, uploads and import drafts, external packages, Native Packages,
-contest build outputs, staging data, worker history, and source backups. Domain services
+temporary Contest package downloads, staging data,
+worker history, and source backups. Domain services
 receive this layout instead of raw settings and do not concatenate configured
 roots independently.
 
@@ -74,9 +75,11 @@ All verification cache refs are indexed by the currently named
 the execution evidence shape, while the ownership index authorizes and locates
 cache downloads without scanning that JSON. JudgeFS executable blobs and
 indexes are cache. Native Package materialization and external-package cache
-rows carry archive locators below the physical `artifacts_root`. Contest outputs
-are stored below `artifacts_root/contests`; the Contest source root owns only
-authored Contest content.
+rows carry archive locators below the physical `artifacts_root`. A current
+Contest package download uses a request-owned directory below the Contest
+artifact root and deletes it after transfer. Historical Contest outputs may
+remain below `artifacts_root/contests` until cleanup; the Contest source root
+owns only authored Contest content.
 
 ## Startup cleanup
 

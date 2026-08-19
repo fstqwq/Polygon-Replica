@@ -2,7 +2,7 @@
 {% block page_styles %}<link rel="stylesheet" href="{{ static_asset_url('css/statement_preview.css') }}" />{% endblock %}
 {% block content %}
 <div class="page-title-inline">
-  <h1 class="page-title">Statement Review</h1>
+  <h1 class="page-title">{{ review_title }}</h1>
   <a href="/contests/{{ ctx.contest.slug }}/overview">Back to Problems</a>
 </div>
 {% if preview and review_items %}

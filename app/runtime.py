@@ -11,7 +11,6 @@ from app.service.auth.service import AuthService
 from app.service.access.query import AccessQuery
 from app.service.agent.service import AgentService
 from app.service.contest.service import ContestService
-from app.service.contest.build import ContestBuildService
 from app.service.contest.package import ContestPackageService
 from app.service.contest.snapshot import ContestSourceSnapshotService
 from app.service.contest.statement import ContestStatementService
@@ -87,7 +86,6 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
     auth_service: AuthService = field(init=False)
     agent_service: AgentService = field(init=False)
     contest_service: ContestService = field(init=False)
-    contest_build_service: ContestBuildService = field(init=False)
     contest_package_service: ContestPackageService = field(init=False)
     contest_snapshot_service: ContestSourceSnapshotService = field(init=False)
     contest_statement_service: ContestStatementService = field(init=False)
@@ -393,6 +391,7 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
         self.contest_package_service = ContestPackageService(
             self.contest_service,
             self.export_service.package_adapters,
+            self.problem_package_service,
         )
         self.contest_snapshot_service = ContestSourceSnapshotService(
             self.storage_layout,
@@ -409,13 +408,6 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
             snapshot_service=self.contest_snapshot_service,
         )
 
-        self.contest_build_service = ContestBuildService(
-            contest_service=self.contest_service,
-            access_query=self.access_query,
-            package_service=self.problem_package_service,
-            contest_package_service=self.contest_package_service,
-            worker_queue=self.worker_queue_service,
-        )
         cleanup_database = ArtifactCleanupDatabase(
             self.db,
             self.storage_layout.database_path,

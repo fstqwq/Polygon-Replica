@@ -1,26 +1,28 @@
-import json
-import os
-import secrets
 import shutil
 from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
-from typing import Literal, TypedDict
+from typing import TypedDict
 
 from app.db import DB, now_iso
 from app.config import ConfigValues
 from app.service.access.policy import access_role, contest_role
 from app.service.access.query import AccessQuery
-from app.service.contest.model import AgentContestRoster, ContestBuildItemRecord
+from app.service.contest.model import AgentContestRoster
 from app.service.contest.problem_index import normalize_contest_problem_idx
-from app.service.contest.statement_meta import infer_contest_header_fields
-from app.service.disk.contest_store import (
-    ContestDiskStore,
-    ContestJobRecord,
+from app.service.contest.property import (
+    INSERT_BLANK_PAGE_PROPERTY,
+    REQUIRED_CONTEST_PROPERTY_KEYS,
+    localized_contest_properties,
+    normalize_contest_property_key,
 )
-from app.service.platform.hashing import sha256_file
-from app.service.platform.process import is_canonical_artifact_id
+from app.service.contest.statement_meta import infer_contest_header_fields
+from app.service.disk.contest_store import ContestDiskStore
 from app.service.statement.context import normalize_statement_language
 from app.service.platform.fs.layout import StorageLayout
+
+
+CONTEST_STATEMENT_SHARED_SCOPE = "_shared"
+_CONTEST_STATEMENT_ROOT_TEMPLATES = {"olymp.sty", "statements.tex"}
 
 
 class ContestMemberEntry(TypedDict):
@@ -66,10 +68,6 @@ class ContestContext(TypedDict):
     owner_user_id: int
     status: str
     source_generation: int
-    location: str
-    date: str
-    statement_default_language: str
-    statement_insert_blank_pages: bool
     created_at: str
 
 
@@ -87,36 +85,6 @@ def _required_row_int(
     return value
 
 
-class ContestJob(TypedDict):
-    id: str
-    job_type: str
-    status: str
-    summary: dict[str, object]
-    created_at: str
-    finished_at: str
-
-
-class ContestBuildFreeze(TypedDict):
-    outcome: Literal[
-        "created",
-        "already_running",
-        "busy",
-        "not_ready",
-    ]
-    job_id: str
-    blocked_problems: list[str]
-
-
-class ContestArtifact(TypedDict):
-    id: str
-    job_id: str
-    artifact_type: str
-    filename: str
-    size_bytes: int
-    created_at: str
-    downloadable: bool
-
-
 class ContestStatementSourceFile(TypedDict):
     key: str
     language: str
@@ -130,8 +98,6 @@ class ContestStatementAttachment(TypedDict):
 
 
 class ContestService:
-    _STATEMENT_DEFAULT_LANGUAGE_KEY = "statement_default_language"
-    _STATEMENT_INSERT_BLANK_PAGES_KEY = "statement_insert_blank_pages"
     _LOCATION_KEY = "location"
     _DATE_KEY = "date"
     _TEXT_SOURCE_SUFFIXES = {
@@ -164,31 +130,6 @@ class ContestService:
         self._config_values = config_values
         self._store = ContestDiskStore(db)
 
-    def _job_summary_path(self, contest_slug: str, job_id: str, *, create: bool) -> Path:
-        return (
-            self.job_root(contest_slug, job_id, create=create) / "summary.json"
-        ).resolve()
-
-    def _read_job_summary(self, contest_slug: str, job_id: str) -> dict[str, object]:
-        try:
-            text = self._job_summary_path(
-                contest_slug, job_id, create=False
-            ).read_text(encoding="utf-8")
-        except OSError:
-            return {}
-        if not text:
-            return {}
-        try:
-            payload = json.loads(text)
-        except Exception:
-            return {}
-        return payload if isinstance(payload, dict) else {}
-
-    def _write_job_summary(self, contest_slug: str, job_id: str, summary: dict[str, object]) -> None:
-        path = self._job_summary_path(contest_slug, job_id, create=True)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(summary, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-
     def _contest_idx_from_sequence(self, seq: int) -> str:
         value = max(1, int(seq))
         chars: list[str] = []
@@ -220,7 +161,14 @@ class ContestService:
         upload_filename: str = "",
         default_filename: str = "",
     ) -> str:
-        safe_language = normalize_statement_language(language) or "english"
+        raw_language = str(language or "").strip()
+        safe_language = (
+            CONTEST_STATEMENT_SHARED_SCOPE
+            if raw_language == CONTEST_STATEMENT_SHARED_SCOPE
+            else normalize_statement_language(raw_language)
+        )
+        if not safe_language:
+            raise ValueError("contest statement language is required")
         raw_path = str(path or "").strip().replace("\\", "/")
         upload_name = Path(str(upload_filename or "").strip().replace("\\", "/")).name
         if raw_path.endswith("/") and upload_name:
@@ -253,13 +201,21 @@ class ContestService:
             parts.append(item)
         if not parts:
             raise ValueError("contest statement source path is required")
-        return f"{prefix}{PurePosixPath(*parts).as_posix()}"
+        relative_path = PurePosixPath(*parts).as_posix()
+        if (
+            safe_language == CONTEST_STATEMENT_SHARED_SCOPE
+            and relative_path in _CONTEST_STATEMENT_ROOT_TEMPLATES
+        ):
+            raise ValueError(
+                "shared Contest statement files cannot replace statements.tex or olymp.sty"
+            )
+        return f"{prefix}{relative_path}"
 
     def _normalize_existing_statement_source_key(self, key: str) -> str:
         parts = PurePosixPath(str(key or "").strip().replace("\\", "/")).parts
         if len(parts) >= 3 and parts[0] == "statements":
             return self.normalize_statement_source_key(language=parts[1], path=str(key), default_filename="")
-        return self.normalize_statement_source_key(language="english", path=str(key), default_filename="")
+        raise ValueError("contest statement source must include its language path")
 
     def write_statement_source_file(
         self,
@@ -312,21 +268,34 @@ class ContestService:
         self._store.bump_source_generation(int(contest_id))
         return safe_key
 
-    def _job_payload(self, row: ContestJobRecord) -> ContestJob:
-        return {
-            "id": str(row["id"]),
-            "job_type": str(row["job_type"]),
-            "status": str(row["status"]),
-            "summary": self._read_job_summary(str(row["contest_slug"]), str(row["id"])),
-            "created_at": str(row["created_at"]),
-            "finished_at": str(row["finished_at"]),
-        }
+    def delete_statement_language_sources(
+        self,
+        *,
+        contest_id: int,
+        contest_slug: str,
+        language: str,
+    ) -> int:
+        safe_language = normalize_statement_language(language)
+        if not safe_language:
+            raise ValueError("contest statement language is required")
+        prefix = f"statements/{safe_language}/"
+        keys = [
+            self._normalize_existing_statement_source_key(str(row["rel_path"]))
+            for row in self.statement_attachment_rows(int(contest_id))
+            if str(row["rel_path"]).startswith(prefix)
+        ]
+        if not keys:
+            return 0
 
-    def artifacts_base(self, *, create: bool = True) -> Path:
-        base = self.storage_layout.contest_artifact_root.resolve()
-        if create:
-            base.mkdir(parents=True, exist_ok=True)
-        return base
+        root = self.contest_source_root(contest_slug)
+        language_root = (root / "statements" / safe_language).resolve()
+        if not self._path_within(root, language_root):
+            raise ValueError("invalid contest statement language path")
+        if language_root.exists():
+            if not language_root.is_dir() or language_root.is_symlink():
+                raise ValueError("contest statement language path must be a directory")
+            shutil.rmtree(language_root)
+        return self._store.delete_attachment_rows_and_bump(int(contest_id), keys)
 
     def contest_sources_base(self) -> Path:
         return self.storage_layout.contest_source_root.resolve()
@@ -338,60 +307,16 @@ class ContestService:
             raise ValueError("invalid contest source path")
         return root
 
-    def job_root(self, contest_slug: str, job_id: str, *, create: bool = True) -> Path:
-        safe_job_id = str(job_id).strip()
-        if not is_canonical_artifact_id(safe_job_id):
-            raise ValueError("invalid contest job id")
-        base = self.artifacts_base(create=create)
-        root = self.storage_layout.contest_job(str(contest_slug).strip(), safe_job_id)
+    def package_download_root(self, contest_slug: str, operation_id: str) -> Path:
+        base = self.storage_layout.contest_package_download_root.resolve()
+        root = self.storage_layout.contest_package_download(
+            str(contest_slug).strip(),
+            str(operation_id).strip(),
+        )
         if not self._path_within(base, root):
-            raise ValueError("invalid contest artifact path")
-        if create:
-            root.mkdir(parents=True, exist_ok=True)
+            raise ValueError("invalid Contest package download path")
+        root.mkdir(parents=True, exist_ok=True)
         return root
-
-    def artifact_root(
-        self,
-        contest_slug: str,
-        job_id: str,
-        artifact_id: str,
-        *,
-        create: bool = True,
-    ) -> Path:
-        safe_artifact_id = str(artifact_id).strip()
-        if not is_canonical_artifact_id(safe_artifact_id):
-            raise ValueError("invalid contest artifact id")
-        job_root = self.job_root(contest_slug, job_id, create=create)
-        root = self.storage_layout.contest_artifact(
-            contest_slug,
-            job_id,
-            safe_artifact_id,
-        )
-        if not self._path_within(job_root, root):
-            raise ValueError("invalid contest artifact path")
-        if create:
-            root.mkdir(parents=True, exist_ok=True)
-        return root
-
-    def artifact_path(
-        self,
-        contest_slug: str,
-        job_id: str,
-        artifact_id: str,
-        filename: str,
-        *,
-        create: bool = True,
-    ) -> Path:
-        safe_filename = Path(str(filename).strip()).name
-        if not safe_filename:
-            raise ValueError("invalid contest artifact filename")
-        root = self.artifact_root(
-            contest_slug, job_id, artifact_id, create=create
-        )
-        target = (root / safe_filename).resolve()
-        if not self._path_within(root, target):
-            raise ValueError("invalid contest artifact file path")
-        return target
 
     def user_contests_overview(self, user_id: int, *, limit: int) -> list[dict[str, object]]:
         items: list[dict[str, object]] = []
@@ -433,9 +358,6 @@ class ContestService:
         source_root = (self.contest_sources_base() / safe_slug).resolve()
         if source_root.exists():
             shutil.rmtree(source_root, ignore_errors=True)
-        artifact_root = (self.artifacts_base(create=False) / safe_slug).resolve()
-        if artifact_root.exists():
-            shutil.rmtree(artifact_root, ignore_errors=True)
 
     def create_contest_with_owner(self, *, slug: str, title: str, owner_user_id: int) -> int:
         return self._store.create_contest_with_owner(
@@ -467,12 +389,6 @@ class ContestService:
             "owner_user_id": int(row["owner_user_id"]),
             "status": str(row["status"]),
             "source_generation": int(row["source_generation"]),
-            "location": str(row["location"]),
-            "date": str(row["date_text"]),
-            "statement_default_language": str(row["statement_default_language"]),
-            "statement_insert_blank_pages": bool(
-                row["statement_insert_blank_pages"]
-            ),
             "created_at": str(row["created_at"]),
         }
 
@@ -521,14 +437,17 @@ class ContestService:
         self._store.revoke_member(int(contest_id), int(user_id))
 
     def properties_map(self, contest_id: int) -> dict[str, str]:
-        row = self._store.contest_context_by_id(int(contest_id))
-        if row is None:
-            return {}
-        return {
-            self._LOCATION_KEY: str(row["location"]),
-            self._DATE_KEY: str(row["date_text"]),
-            self._STATEMENT_DEFAULT_LANGUAGE_KEY: str(row["statement_default_language"]),
-        }
+        return self._store.property_map(int(contest_id))
+
+    def localized_properties_map(
+        self,
+        contest_id: int,
+        language: str,
+    ) -> dict[str, str]:
+        return localized_contest_properties(
+            self.properties_map(int(contest_id)),
+            language,
+        )
 
     def overview_properties_map(self, contest_id: int, contest_slug: str) -> dict[str, str]:
         result = self.properties_map(int(contest_id))
@@ -541,30 +460,58 @@ class ContestService:
             result[self._DATE_KEY] = inferred["date"]
         return result
 
-    def update_title(self, contest_id: int, title: str) -> None:
-        self._store.update_title(int(contest_id), title)
-        self._store.bump_source_generation(int(contest_id))
+    def localized_overview_properties_map(
+        self,
+        contest_id: int,
+        contest_slug: str,
+        language: str,
+    ) -> dict[str, str]:
+        result = localized_contest_properties(
+            self.properties_map(int(contest_id)),
+            language,
+        )
+        if result.get(self._LOCATION_KEY) and result.get(self._DATE_KEY):
+            return result
+        inferred = self._infer_statement_header_fields_for_contest(
+            int(contest_id), contest_slug
+        )
+        if not result.get(self._LOCATION_KEY) and inferred["location"]:
+            result[self._LOCATION_KEY] = inferred["location"]
+        if not result.get(self._DATE_KEY) and inferred["date"]:
+            result[self._DATE_KEY] = inferred["date"]
+        return result
 
-    def upsert_property(self, contest_id: int, actor_user_id: int, key: str, value: object) -> None:
+    def set_properties(
+        self,
+        contest_id: int,
+        actor_user_id: int,
+        values: Mapping[str, object],
+    ) -> bool:
         del actor_user_id
-        safe_key = str(key).strip()
-        if safe_key not in {self._LOCATION_KEY, self._DATE_KEY, self._STATEMENT_DEFAULT_LANGUAGE_KEY}:
-            raise ValueError(f"unsupported contest metadata field: {safe_key}")
-        self._store.update_metadata_field(int(contest_id), safe_key, str(value))
-        self._store.bump_source_generation(int(contest_id))
-
-    def property_value(self, contest_id: int, key: str) -> object:
-        row = self._store.contest_context_by_id(int(contest_id))
-        if row is None:
-            return ""
-        safe_key = str(key).strip()
-        if safe_key == self._LOCATION_KEY:
-            return row["location"]
-        if safe_key == self._DATE_KEY:
-            return row["date_text"]
-        if safe_key == self._STATEMENT_DEFAULT_LANGUAGE_KEY:
-            return row["statement_default_language"]
-        raise ValueError(f"unsupported contest metadata field: {key}")
+        normalized: dict[str, str | None] = {}
+        for key, value in values.items():
+            safe_key = normalize_contest_property_key(key)
+            if value is None:
+                if safe_key in REQUIRED_CONTEST_PROPERTY_KEYS:
+                    raise ValueError(f"contest property cannot be deleted: {safe_key}")
+                normalized[safe_key] = None
+                continue
+            if safe_key == INSERT_BLANK_PAGE_PROPERTY:
+                if isinstance(value, bool):
+                    normalized[safe_key] = "true" if value else "false"
+                    continue
+                safe_boolean = str(value).strip().lower()
+                if safe_boolean not in {"true", "false"}:
+                    raise ValueError(
+                        "insertBlankPage must be true or false"
+                    )
+                normalized[safe_key] = safe_boolean
+                continue
+            safe_value = str(value).strip()
+            if safe_key == "title" and not safe_value:
+                raise ValueError("contest title is required")
+            normalized[safe_key] = safe_value or None
+        return self._store.set_property_values(int(contest_id), normalized)
 
     def replace_statement_sources(
         self,
@@ -574,22 +521,30 @@ class ContestService:
         actor_user_id: int,
         files: list[ContestStatementSourceFile],
     ) -> None:
+        normalized_files: list[tuple[str, Path]] = []
+        for row in files:
+            key = self._normalize_existing_statement_source_key(
+                str(row["key"]).strip()
+            )
+            source_path = Path(row["source_path"])
+            if not source_path.is_file() or source_path.is_symlink():
+                raise ValueError(
+                    f"contest statement source is unavailable: {key}"
+                )
+            normalized_files.append((key, source_path))
+
         root = self.contest_source_root(contest_slug)
         if root.exists():
             shutil.rmtree(root, ignore_errors=True)
         root.mkdir(parents=True, exist_ok=True)
         attachment_rows: list[tuple[str, str]] = []
         safe_root = root.resolve()
-        for row in files:
-            key = str(row["key"]).strip()
+        for key, source_path in normalized_files:
             rel_path = Path(key)
             target = (root / rel_path).resolve()
             if safe_root not in target.parents:
                 raise ValueError(f"invalid contest source path: {key}")
             target.parent.mkdir(parents=True, exist_ok=True)
-            source_path = Path(row["source_path"])
-            if not source_path.is_file() or source_path.is_symlink():
-                raise ValueError(f"contest statement source is unavailable: {key}")
             if self.statement_source_is_text(key):
                 self._copy_normalized_text_file(source_path, target)
             else:
@@ -637,46 +592,18 @@ class ContestService:
             raise ValueError("invalid contest source file path")
         return target
 
-    def statement_default_language(self, contest_id: int) -> str:
-        return str(self.property_value(int(contest_id), self._STATEMENT_DEFAULT_LANGUAGE_KEY)).strip().lower()
-
-    def set_statement_default_language(self, contest_id: int, actor_user_id: int, language: str) -> None:
-        self.upsert_property(
-            int(contest_id),
-            int(actor_user_id),
-            self._STATEMENT_DEFAULT_LANGUAGE_KEY,
-            str(language).strip().lower(),
-        )
-
-    def statement_insert_blank_pages(self, contest_id: int) -> bool:
-        row = self._store.contest_context_by_id(int(contest_id))
-        return bool(row and row["statement_insert_blank_pages"])
-
-    def set_statement_insert_blank_pages(
-        self,
-        contest_id: int,
-        actor_user_id: int,
-        enabled: bool,
-    ) -> None:
-        del actor_user_id
-        self._store.update_metadata_field(
-            int(contest_id),
-            self._STATEMENT_INSERT_BLANK_PAGES_KEY,
-            1 if enabled else 0,
-        )
-        self._store.bump_source_generation(int(contest_id))
-
     def _infer_statement_header_fields_for_contest(self, contest_id: int, contest_slug: str) -> dict[str, str]:
-        default_language = self.statement_default_language(int(contest_id))
-        candidate_rel_paths: list[str] = []
-        if default_language:
-            candidate_rel_paths.append(f"statements/{default_language}/statements.tex")
-        if "statements/english/statements.tex" not in candidate_rel_paths:
-            candidate_rel_paths.append("statements/english/statements.tex")
-        for row in self.statement_attachment_rows(int(contest_id)):
-            rel_path = str(row["rel_path"]).strip()
-            if rel_path.endswith("/statements.tex") and rel_path not in candidate_rel_paths:
-                candidate_rel_paths.append(rel_path)
+        statement_paths = sorted(
+            str(row["rel_path"])
+            for row in self.statement_attachment_rows(int(contest_id))
+            if str(row["rel_path"]).endswith("/statements.tex")
+        )
+        english_path = "statements/english/statements.tex"
+        candidate_rel_paths = (
+            [english_path, *[path for path in statement_paths if path != english_path]]
+            if english_path in statement_paths
+            else statement_paths
+        )
         for rel_path in candidate_rel_paths:
             try:
                 source_path = self.statement_file_path(contest_slug, rel_path)
@@ -816,227 +743,3 @@ class ContestService:
                 }
             )
         return result
-
-    def create_job(
-        self,
-        contest_id: int,
-        actor_user_id: int,
-        job_type: str,
-        status: str,
-        summary: dict[str, object],
-        *,
-        finished_at: str | None = None,
-    ) -> str:
-        job_id = f"cj-{secrets.token_hex(6)}"
-        created_at = now_iso()
-        safe_status = str(status).strip().lower() or "failed"
-        resolved_finished_at = finished_at
-        if resolved_finished_at is None and safe_status not in {"running", "queued"}:
-            resolved_finished_at = created_at
-        contest_row = self._store.contest_context_by_id(int(contest_id))
-        if contest_row is None:
-            raise ValueError("contest not found")
-        self._store.insert_job(
-            job_id=job_id,
-            contest_id=int(contest_id),
-            actor_user_id=int(actor_user_id),
-            job_type=str(job_type).strip(),
-            status=safe_status,
-            created_at=created_at,
-            finished_at=resolved_finished_at,
-        )
-        self._write_job_summary(str(contest_row["slug"]), job_id, summary)
-        return job_id
-
-    def freeze_build_job(
-        self,
-        *,
-        contest_id: int,
-        actor_user_id: int,
-        job_type: str,
-        summary: dict[str, object],
-    ) -> ContestBuildFreeze:
-        job_id = f"cj-{secrets.token_hex(6)}"
-        result = self._store.freeze_build_job(
-            job_id=job_id,
-            contest_id=int(contest_id),
-            actor_user_id=int(actor_user_id),
-            job_type=job_type,
-            created_at=now_iso(),
-        )
-        outcome = result["outcome"]
-        blocked = result["blocked_problems"]
-        if outcome == "created":
-            stored_summary = dict(summary)
-            try:
-                self._write_job_summary(
-                    result["contest_slug"],
-                    result["job_id"],
-                    stored_summary,
-                )
-            except Exception:
-                self._store.update_job(
-                    contest_id=int(contest_id),
-                    job_id=result["job_id"],
-                    status="failed",
-                    finished_at=now_iso(),
-                )
-                raise
-        return {
-            "outcome": outcome,
-            "job_id": result["job_id"],
-            "blocked_problems": blocked,
-        }
-
-    def build_items(self, job_id: str) -> list[ContestBuildItemRecord]:
-        return self._store.build_items(job_id)
-
-    def update_job(
-        self,
-        contest_id: int,
-        job_id: str,
-        status: str,
-        summary: dict[str, object],
-        *,
-        finished: bool = True,
-    ) -> None:
-        safe_job_id = str(job_id).strip()
-        if not safe_job_id:
-            return
-        contest_row = self._store.contest_context_by_id(int(contest_id))
-        if contest_row is None:
-            return
-        changed = self._store.update_job(
-            contest_id=int(contest_id),
-            job_id=safe_job_id,
-            status=str(status).strip().lower() or "failed",
-            finished_at=now_iso() if finished else None,
-        )
-        if not changed and status == "running":
-            raise RuntimeError(f"contest job is not queued: {safe_job_id}")
-        if changed:
-            self._write_job_summary(str(contest_row["slug"]), safe_job_id, summary)
-
-    def load_job(self, contest_id: int, job_id: str) -> ContestJob | None:
-        safe_job_id = str(job_id).strip()
-        if not safe_job_id:
-            return None
-        row = self._store.job_row(int(contest_id), safe_job_id)
-        if row is None:
-            return None
-        return self._job_payload(row)
-
-    def latest_job(self, contest_id: int) -> ContestJob | None:
-        row = self._store.latest_job_row(int(contest_id))
-        if row is None:
-            return None
-        return self._job_payload(row)
-
-    def list_jobs(self, contest_id: int, *, limit: int) -> list[ContestJob]:
-        return [self._job_payload(row) for row in self._store.job_rows(int(contest_id), limit=max(1, int(limit)))]
-
-    def record_artifact(
-        self,
-        *,
-        contest_id: int,
-        job_id: str,
-        artifact_type: str,
-        filename: str,
-        artifact_path: Path,
-    ) -> str:
-        safe_filename = Path(str(filename).strip() or artifact_path.name).name
-        resolved = artifact_path.resolve()
-        if not resolved.exists() or not resolved.is_file() or resolved.is_symlink():
-            raise ValueError("contest artifact file not found")
-        contest_row = self._store.contest_context_by_id(int(contest_id))
-        if contest_row is None:
-            raise ValueError("contest not found")
-        safe_job_id = str(job_id).strip()
-        if not safe_job_id:
-            raise ValueError("contest job id is required")
-        artifact_id = f"ca-{secrets.token_hex(6)}"
-        target_path = self.artifact_path(str(contest_row["slug"]), safe_job_id, artifact_id, safe_filename)
-        partial_path = target_path.with_name(f".{target_path.name}.{secrets.token_hex(6)}.partial")
-        try:
-            shutil.copy2(resolved, partial_path)
-            os.replace(partial_path, target_path)
-        finally:
-            partial_path.unlink(missing_ok=True)
-        stored_file = target_path.resolve()
-        self._store.insert_artifact(
-            artifact_id=artifact_id,
-            contest_id=int(contest_id),
-            job_id=safe_job_id,
-            artifact_type=str(artifact_type).strip(),
-            filename=safe_filename,
-            sha256=sha256_file(stored_file),
-            size_bytes=int(stored_file.stat().st_size),
-            created_at=now_iso(),
-        )
-        return artifact_id
-
-    def list_artifacts(self, contest_id: int, *, limit: int) -> list[ContestArtifact]:
-        contest_row = self._store.contest_context_by_id(int(contest_id))
-        if contest_row is None:
-            return []
-        contest_slug = str(contest_row["slug"])
-        result: list[ContestArtifact] = []
-        for row in self._store.artifact_rows(int(contest_id), limit=max(1, int(limit))):
-            job_id = str(row["job_id"] or "")
-            artifact_id = str(row["id"] or "")
-            filename = str(row["filename"] or "")
-            try:
-                artifact_path = self.artifact_path(
-                    contest_slug,
-                    job_id,
-                    artifact_id,
-                    filename,
-                    create=False,
-                ).resolve()
-            except Exception:
-                artifact_path = Path()
-            downloadable = (
-                is_canonical_artifact_id(artifact_id)
-                and bool(job_id)
-                and artifact_path != Path()
-                and artifact_path.exists()
-                and artifact_path.is_file()
-                and (not artifact_path.is_symlink())
-            )
-            result.append(
-                {
-                    "id": str(row["id"]),
-                    "job_id": str(row["job_id"]),
-                    "artifact_type": str(row["artifact_type"]),
-                    "filename": str(row["filename"]),
-                    "size_bytes": int(row["size_bytes"]),
-                    "created_at": str(row["created_at"]),
-                    "downloadable": downloadable,
-                }
-            )
-        return result
-
-    def artifact_download(self, contest_id: int, artifact_id: str) -> tuple[Path, str] | None:
-        safe_artifact_id = str(artifact_id).strip()
-        if not is_canonical_artifact_id(safe_artifact_id):
-            return None
-        contest_row = self._store.contest_context_by_id(int(contest_id))
-        if contest_row is None:
-            return None
-        row = self._store.artifact_row(int(contest_id), safe_artifact_id)
-        if row is None:
-            return None
-        try:
-            file_path = self.artifact_path(
-                str(contest_row["slug"]),
-                str(row["job_id"] or ""),
-                safe_artifact_id,
-                str(row["filename"] or ""),
-                create=False,
-            ).resolve()
-        except Exception:
-            return None
-        if not file_path.exists() or not file_path.is_file() or file_path.is_symlink():
-            return None
-        filename = Path(str(row["filename"])).name or file_path.name
-        return (file_path, filename)

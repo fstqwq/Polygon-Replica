@@ -7,6 +7,7 @@ from typing import cast
 from app.service.contest.service import ContestService
 from app.service.contest.statement import ContestStatementService
 from app.service.sandbox.base import ExecResult
+from app.service.statement.constant import DEFAULT_STATEMENT_TEMPLATE
 from app.service.statement.tex_compile import TexCompileService
 
 from tests.common import suite_root
@@ -73,7 +74,74 @@ class _FailingTexCompiler:
         )
 
 
+class _ContestFixture:
+    @staticmethod
+    def contest_context(contest_slug: str) -> dict[str, object]:
+        return {
+            "id": 7,
+            "slug": contest_slug,
+            "title": "Complete Contest",
+        }
+
+    @staticmethod
+    def localized_overview_properties_map(
+        contest_id: int,
+        contest_slug: str,
+        language: str,
+    ) -> dict[str, str]:
+        del contest_id, contest_slug
+        if language == "chinese":
+            return {
+                "banner": r"\textbf{仅供预览}",
+                "insertBlankPage": "true",
+                "title": "完整比赛",
+                "location": "杭州",
+                "date": "2026 年 8 月 19 日",
+                "sponsor": "示例基金会",
+            }
+        return {
+            "banner": r"\textbf{Preview only}",
+            "insertBlankPage": "true",
+            "title": "Complete Contest",
+            "location": "Hangzhou",
+            "date": "19 August 2026",
+            "sponsor": "Example Foundation",
+        }
+
+
+class _LanguageFixture:
+    def __init__(self, languages: list[str]) -> None:
+        self._languages = languages
+
+    def statement_attachment_rows(self, contest_id: int) -> list[dict[str, str]]:
+        del contest_id
+        return [
+            {
+                "key": f"statements/{language}/statements.tex",
+                "rel_path": f"statements/{language}/statements.tex",
+                "created_at": "",
+            }
+            for language in self._languages
+        ]
+
+
 class TestContestStatementPreview(unittest.TestCase):
+    def test_language_resolution_requires_an_available_fallback(self) -> None:
+        compiler = cast(TexCompileService, _RecordingTexCompiler())
+        chinese_only = ContestStatementService(
+            cast(ContestService, _LanguageFixture(["chinese"])),
+            compiler,
+            error_text_limit_bytes=2048,
+        )
+        no_languages = ContestStatementService(
+            cast(ContestService, _LanguageFixture([])),
+            compiler,
+            error_text_limit_bytes=2048,
+        )
+
+        self.assertEqual(chinese_only.resolve_language(7), "chinese")
+        self.assertEqual(no_languages.resolve_language(7), "")
+
     def test_pdf_preview_compiles_one_complete_contest_document(self) -> None:
         root = Path(tempfile.mkdtemp(prefix="contest-pdf-preview-", dir=suite_root()))
         self.addCleanup(shutil.rmtree, root, True)
@@ -81,12 +149,26 @@ class TestContestStatementPreview(unittest.TestCase):
         statement_root = source / "statements" / "english"
         statement_root.mkdir(parents=True)
         statement_root.joinpath("statements.tex").write_text(
-            "\\documentclass{article}\n"
-            "\\usepackage{import}\n"
-            "\\begin{document}\n"
-            "\\import{../../problems/alpha/statements/english/}{problem.tex}\n"
-            "\\import{../../problems/beta/statements/english/}{problem.tex}\n"
-            "\\end{document}\n",
+            DEFAULT_STATEMENT_TEMPLATE.replace(
+                r"\begin {document}",
+                "% sponsor=${sponsor!}\n"
+                "% nested-sponsor=${properties.sponsor!}\n"
+                "\\begin {document}",
+            ),
+            encoding="utf-8",
+        )
+        shared_root = source / "statements" / "_shared"
+        shared_root.mkdir(parents=True)
+        shared_root.joinpath("shared-resource.txt").write_text(
+            "shared\n",
+            encoding="utf-8",
+        )
+        shared_root.joinpath("overridden.txt").write_text(
+            "shared\n",
+            encoding="utf-8",
+        )
+        statement_root.joinpath("overridden.txt").write_text(
+            "english\n",
             encoding="utf-8",
         )
         render_roots: dict[int, Path] = {}
@@ -106,7 +188,7 @@ class TestContestStatementPreview(unittest.TestCase):
 
         compiler = _RecordingTexCompiler()
         service = ContestStatementService(
-            cast(ContestService, object()),
+            cast(ContestService, _ContestFixture()),
             cast(TexCompileService, compiler),
             error_text_limit_bytes=2048,
         )
@@ -114,7 +196,6 @@ class TestContestStatementPreview(unittest.TestCase):
         summary = service.build_preview_pdf(
             contest_slug="complete-contest",
             language="english",
-            insert_blank_pages=False,
             source_snapshot=source,
             problem_entries=[
                 {
@@ -144,6 +225,35 @@ class TestContestStatementPreview(unittest.TestCase):
         self.assertTrue(
             (compile_root / "problems/beta/statements/english/problem.tex").is_file()
         )
+        rendered_entrypoint = (
+            compile_root / "statements/english/statements.tex"
+        ).read_text(encoding="utf-8")
+        self.assertEqual(
+            (compile_root / "statements/english/shared-resource.txt").read_text(
+                encoding="utf-8"
+            ),
+            "shared\n",
+        )
+        self.assertEqual(
+            (compile_root / "statements/english/overridden.txt").read_text(
+                encoding="utf-8"
+            ),
+            "english\n",
+        )
+        self.assertIn(r"\intentionallyblankpagestrue", rendered_entrypoint)
+        self.assertIn(r"\renewcommand{\StatementBanner}", rendered_entrypoint)
+        self.assertIn(r"\textbf{Preview only}", rendered_entrypoint)
+        self.assertIn("% sponsor=Example Foundation", rendered_entrypoint)
+        self.assertIn("% nested-sponsor=Example Foundation", rendered_entrypoint)
+        self.assertIn(
+            r"\def\ProblemIndex{A}",
+            rendered_entrypoint,
+        )
+        self.assertIn(
+            r"\import{../../problems/beta/statements/english/}{./problem.tex}",
+            rendered_entrypoint,
+        )
+        self.assertNotIn("<#", rendered_entrypoint)
         self.assertEqual(
             [command[0] for command in compiler.commands],
             ["xelatex", "xelatex"],
@@ -173,7 +283,7 @@ class TestContestStatementPreview(unittest.TestCase):
         render_root.joinpath("examples.tex").write_text("", encoding="utf-8")
         render_root.joinpath("olymp.sty").write_text("", encoding="utf-8")
         service = ContestStatementService(
-            cast(ContestService, object()),
+            cast(ContestService, _ContestFixture()),
             cast(TexCompileService, _FailingTexCompiler()),
             error_text_limit_bytes=2048,
         )
@@ -182,7 +292,6 @@ class TestContestStatementPreview(unittest.TestCase):
         summary = service.build_preview_pdf(
             contest_slug="broken-contest",
             language="english",
-            insert_blank_pages=False,
             source_snapshot=source,
             problem_entries=[
                 {

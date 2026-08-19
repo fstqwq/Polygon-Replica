@@ -34,14 +34,21 @@
 \usepackage {wrapfig}
 \usepackage {comment}
 
-%\intentionallyblankpagestrue
+<#if insertBlankPage?? && insertBlankPage>
+\intentionallyblankpagestrue
+</#if>
+<#if banner?? && banner>
+\renewcommand{\StatementBanner}{%
+${banner}
+}
+</#if>
 
 \begin {document}
 
 \contest
-{${contest.name!}}%
-{${contest.location!}}%
-{${contest.date!}}%
+{${title!}}%
+{${location!}}%
+{${date!}}%
 
 \binoppenalty=10000
 \relpenalty=10000

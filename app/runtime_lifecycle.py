@@ -56,9 +56,6 @@ def _startup_reset_runtime_state(runtime: ApplicationRuntime) -> None:
         "statement preview cache cleared by application restart",
         now_text=now_text,
     )
-    _startup_fail_summary_rows(
-        runtime, "contest_jobs", failure_reason, now_text=now_text
-    )
     runtime.verification_service.recover_startup(reason=failure_reason)
     _startup_cancel_judgehost_inflight(runtime, failure_reason)
     _startup_clear_all_caches(runtime)

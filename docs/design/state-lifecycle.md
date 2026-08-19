@@ -50,7 +50,7 @@ Persisted files belong to one of three classes:
 | Workspace verification | One workspace snapshot and selected verification targets | Verification admission and activation | Cleanup-safe database record; program input, output, answer, feedback, transcript, and logs are cache |
 | Native Package | One official problem version and a successful full verification of that exact source | Package Export verification phase | Derived; directly downloadable and reusable while its source snapshot and verified test data remain intact |
 | External package | One Native Package plus a target adapter; standalone DOMjudge exports also use the canonical problem slug | External-package adapter run | Derived; reusable for the same Native Package and format |
-| Contest output | Contest definition/source where needed plus a frozen mapping of roster entries to Native Packages | Contest build request | Derived |
+| Contest package download | Current Contest roster plus every problem's current Native Package | Download request | Transient response; deleted after transfer |
 
 SQLite records identities, relationships, lifecycle states, and filesystem
 locators. Large payloads live in their configured filesystem roots. Source and
@@ -125,44 +125,35 @@ that was current when the request was accepted; history downloads are read-only.
 Only one Package Export for a problem/version can run at a time, and a competing
 request fails immediately rather than waiting.
 
-## Contest build lifecycle
+## Contest package download lifecycle
 
 Contest definitions, membership, problem indices, statement folders, and
 contest attachments are durable authoring state. A problem's `idx` is both its
 display identity and the sole current-roster order; there is no independent
-position. A Contest build derives delivery products from that state and
-Native Packages that already exist.
+position. A Contest package download requires every roster problem's current
+published revision to have a ready Native Package.
 
-Build admission freezes the ordered roster and, for each problem, selects its
-highest available Native Package. That package may trail the current
-published version. The readiness state is `current`, `stale`, or `none`; `none`
-rejects the build without creating a job. Contest admission and workers never
-run Verification, repair a Native Package, or create a problem-level external
-package.
+The request rechecks readiness, opens each exact Native Package with its stored
+archive checksum, and invokes the selected DOMjudge or ICPC 2025-09 adapter in
+canonical Contest order. It never runs Verification, repairs a Native Package,
+or creates a problem-level external-package cache entry. Failure of any child
+package aborts the whole response.
 
-The build items store each selected Native Package's internal materialization
-identity and archive checksum. Workers check both before and after reading it.
-A changed or corrupt payload fails the requested outputs instead of falling
-back to another revision.
-
-DOMjudge bundle and ICPC 2025-09 bundle are independent output choices. Package
-bundles invoke the same adapters as
-single-problem export, with the frozen Contest index used as the DOMjudge short
-name. Child archives are temporary Contest-owned members and do not enter the
-problem external-package cache. Each bundle is all-or-nothing; successful
-outputs remain available when another requested output fails and the job becomes
-`partial`.
+The outer bundle and its child archives are request-owned temporary files. The
+response blocks until the bundle is complete and deletes the temporary tree
+after transfer. It creates no Contest job, build history, or durable Contest
+artifact.
 
 ## Invalidation and cleanup
 
 | Event | What changes | What remains unchanged |
 | --- | --- | --- |
-| Edit a workspace | Its verification signature and uncommitted content | Official versions, other workspaces, packages, Contest builds |
+| Edit a workspace | Its verification signature and uncommitted content | Official versions, other workspaces, packages, Contest package downloads |
 | Publish | The current official version advances | Earlier versions and derived products already tied to them |
 | Remove access | The next authorization query denies the removed capability | Source and derived bytes are not deleted as a side effect |
 | Restart the application | Active jobs fail; runtime queues, leases, and cache payloads are cleared | Git history, workspaces, users, contests, and durable contest source |
 | Detect a missing or corrupt Native Package payload | It becomes unavailable and its cached external packages are invalidated; a Package Export may rebuild it | Its official source version remains available |
-| Run generated-data cleanup | Verification, package, export, preview, and Contest-build rows and files are removed | Git history, workspaces, users, problem metadata, contest definitions, Contest source, and operator backups |
+| Run generated-data cleanup | Verification, package, export, and preview rows and files are removed | Git history, workspaces, users, problem metadata, contest definitions, Contest source, and operator backups |
 
 Cleanup removes Native Package materializations and cached external packages
 for an official problem version. The version remains in source history and can

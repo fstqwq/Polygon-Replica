@@ -15,10 +15,6 @@ from app.service.problem.runtime_config import (
 )
 
 
-_CONTEST_PROPERTY_LOCATION = "location"
-_CONTEST_PROPERTY_DATE = "date"
-
-
 def _contest_nav(contest_slug: str, active: str) -> list[dict[str, str | bool]]:
     base = f"/contests/{contest_slug}"
     return [
@@ -28,12 +24,6 @@ def _contest_nav(contest_slug: str, active: str) -> list[dict[str, str | bool]]:
             "label": "Properties",
             "href": f"{base}/properties",
             "active": active == "properties",
-        },
-        {
-            "key": "packages",
-            "label": "Statements & Builds",
-            "href": f"{base}/packages",
-            "active": active == "packages",
         },
     ]
 
@@ -69,12 +59,6 @@ def _contest_ctx(
             "owner_user_id": int(contest_row["owner_user_id"]),
             "status": str(contest_row["status"]),
             "source_generation": int(contest_row["source_generation"]),
-            "location": str(contest_row["location"]),
-            "date": str(contest_row["date"]),
-            "statement_default_language": str(contest_row["statement_default_language"]),
-            "statement_insert_blank_pages": bool(
-                contest_row["statement_insert_blank_pages"]
-            ),
             "created_at": contest_row["created_at"],
         },
         "access": access,

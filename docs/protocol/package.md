@@ -275,7 +275,7 @@ It excludes `statement/` and `submissions/submissions.yaml`. Standard accepted,
 wrong-answer, time-limit, and runtime-error submissions use their conventional
 directories. Only the three mixed behaviors use a language-appropriate
 `@EXPECTED_RESULTS@` annotation in the copied source. Standalone export uses the
-public slug segment as the short name; a Contest build passes the frozen problem
+public slug segment as the short name; a Contest download passes the current problem
 index to the adapter.
 
 ### QOJ package
@@ -334,42 +334,29 @@ recommends that API, while Nowcoder's older `testlib.h` may not provide it. A
 match is reported as an advisory Package Export warning; the archive is still
 published. The adapter does not compile the checker.
 
-## Contest builds
+## Contest package downloads
 
-Contest builds consume Native Packages that already exist. The current
-roster has no independent position: normalized `idx` is both its displayed
-identity and its order. Pure-letter indices use Excel-style order (`Z` before
-`AA`); other indices use numeric-aware natural order. In one SQLite writer
-transaction, admission applies that shared order, checks for an active build,
-selects each problem's highest available Native Package, and inserts the job
-and all frozen build items with their archive checksums. Each item receives a
-derived, consecutive `ordinal`; that snapshot remains unchanged if the Contest
-indices are edited later. If any problem has no Native Package, admission
-returns `not_ready` without creating a job or copying Contest source.
+The Contest Problems page offers `Build All Packages` until every roster
+problem's current published revision has a ready Native Package. Once all are
+ready, that action becomes `Download Packages`. The download dialog selects one
+supported bundle format: DOMjudge or ICPC Problem Package 2025-09.
 
-Selection is not restricted to current `main`: readiness reports `current`,
-`stale`, or `none`. A worker opens exactly the frozen identities and checksums.
-It never starts Verification, calls Package Export, repairs an unavailable
-Native Package, or falls back to an older package within the job.
+The POST request blocks until the selected bundle has been built. It reads the
+current roster in canonical `idx` order, rechecks published-package readiness,
+and opens each exact Native Package with its recorded archive checksum. A stale
+or missing Package rejects the request; the service never falls back to an
+older Package, starts Verification, or repairs an unavailable Package.
 
-One build can request `domjudge_bundle` and `icpc_2025_09_bundle`. Readers are
-shared across requested outputs. Package bundles call the same adapters
-described above and place temporary child ZIPs inside a Contest-owned outer
-bundle. Child packages do not become problem-level external-package cache
-entries.
+The bundle invokes the same adapters described above, using the Contest `idx`
+as the child package short name where the adapter accepts one. Child ZIP files
+exist only inside one temporary outer bundle and do not become problem-level
+external-package cache entries. Failure of any child package aborts the entire
+download.
 
-Contest statement PDF is not a Contest build output. It uses the complete
-Contest TeX pipeline -- the Contest `statements.tex`, cover and ordering,
-optional blank-page behavior, all Problem render trees, MetaPost, bounding-box
-preparation, and two XeLaTeX passes -- but publishes the resulting single PDF
-only in the disposable Statement Preview cache. It does not compile individual
-Problem PDFs and does not merge PDFs. Historical durable `statement_pdf`
-artifacts remain downloadable, but new builds never create one.
-
-Each package bundle is all-or-nothing: failure of one problem publishes no
-bundle of that format. Different requested outputs remain independent, so the
-job is `partial` when at least one output succeeds and another fails.
-Package-only builds do not snapshot the Contest source filesystem.
+The response creates no Contest job, frozen build-item rows, history entry, or
+durable Contest artifact. Its request-owned temporary directory is deleted
+after the file transfer. Contest HTML and PDF statements use the separate
+Statement Preview lifecycle and are not package-download outputs.
 
 ## Contest import
 
@@ -394,7 +381,8 @@ Contest; it only rejects new roster entries.
 ## Cleanup
 
 Native Package materializations and archives, external-package cache rows and
-archives, Package Export jobs, and Contest build products are Derived data.
+archives and Package Export jobs are Derived data. Contest package bundles are
+transient response files.
 Generated Artifacts cleanup removes them. Published Git commits, workspaces,
 Contest definitions and source, and operator backups remain. A cleaned Git
 revision simply has no Native Package and can be packaged again through a later

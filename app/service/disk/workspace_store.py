@@ -247,11 +247,11 @@ class WorkspaceDiskStore:
     def user_contest_rows(self, user_id: int, *, limit: int) -> list[UserContestOverviewRow]:
         rows = self.db.fetch_all(
             """
-            SELECT c.id,c.slug,c.title,c.owner_user_id,c.created_at,m.role,
+            SELECT c.id,c.slug,COALESCE(title_property.value, '') AS title,
+                   c.owner_user_id,c.created_at,m.role,
                    MAX(
                        c.created_at,
                        COALESCE((SELECT MAX(cp0.created_at) FROM contest_problems cp0 WHERE cp0.contest_id=c.id), ''),
-                       COALESCE((SELECT MAX(cj.created_at) FROM contest_jobs cj WHERE cj.contest_id=c.id), ''),
                        COALESCE((
                            SELECT MAX(w2.updated_at)
                            FROM contest_problems cp2
@@ -284,6 +284,8 @@ class WorkspaceDiskStore:
                    ) AS dirty_problem_count
             FROM contests c
             JOIN contest_members m ON m.contest_id=c.id
+            LEFT JOIN contest_properties title_property
+              ON title_property.contest_id=c.id AND title_property.key='title'
             WHERE m.user_id=?
             ORDER BY last_updated_at DESC, c.slug ASC
             LIMIT ?
@@ -606,18 +608,11 @@ class WorkspaceDiskStore:
                     SELECT 'package-build' AS kind,id,status
                     FROM problem_package_builds
                     WHERE problem_id=? AND status IN ('queued','running')
-                    UNION ALL
-                    SELECT 'contest' AS kind,job.id,job.status
-                    FROM contest_jobs job
-                    JOIN contest_build_items item ON item.job_id=job.id
-                    WHERE item.problem_id=?
-                      AND job.status IN ('queued','running')
                 )
                 ORDER BY kind,id
                 LIMIT 1
                 """,
                 [
-                    int(problem_id),
                     int(problem_id),
                     int(problem_id),
                     int(problem_id),
@@ -629,7 +624,6 @@ class WorkspaceDiskStore:
                 raise ValueError(
                     f"cannot delete problem while {kind} jobs are active"
                 )
-            conn.execute("DELETE FROM contest_build_items WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM contest_problems WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM export_jobs WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM exports WHERE problem_id=?", [int(problem_id)])

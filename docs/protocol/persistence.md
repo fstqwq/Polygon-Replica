@@ -139,13 +139,42 @@ sorts the complete bounded roster by its shared natural problem-index ordering;
 SQLite collation is not an ordering authority. A complete `id -> idx` edit
 uses temporary non-canonical values to exchange unique indices and increments
 `source_generation` once in the same writer transaction; an unchanged mapping
-performs no write. Contest build admission inserts
-the job, selected Native Package identities, frozen archive checksums, and a
-consecutive derived `ordinal` in one `BEGIN IMMEDIATE` transaction. The frozen
-build keeps that `idx` and `ordinal` even when the current Contest is edited. A
-roster problem with no available Native Package aborts admission without a
-partial job. Filesystem reads occur after that transaction and must match the
-frozen identities and checksums.
+performs no write. Current Contest package downloads persist no job, build item,
+or artifact row. They recheck the current published-package readiness and
+archive checksums in the request before producing a temporary response file.
+The retained Contest build tables describe historical data only and are
+removed by normal generated-data cleanup.
+
+Contest identity and lifecycle remain on `contests`. Editable Contest metadata
+is a sparse string mapping in `contest_properties`, keyed by
+`(contest_id, key)`. Property names use lower-case letters, digits, and
+underscores after a lower-case initial, and may also use upper-case letters for
+lower-camel-case FTL names. A single optional dot is reserved for a language override:
+`<property>.<language>`, for example `title.chinese`. The suffix is normalized
+with the Statement language token rules; an absent override inherits the base
+value. Every effective base key is injected directly into the Contest
+`statements.ftl` context and is also available through the `properties`
+mapping. The renderer reserves its structural context keys, including
+`contest`, `language`, and `statements`; they cannot be property names. Empty
+optional values are represented by absent rows rather than empty strings.
+The Properties UI describes a base value as applying to `All` languages; a
+`.<language>` row is the narrower override.
+
+`title` is required and cannot be deleted. The default template recognizes the
+optional `insertBlankPage` and `banner` properties: `insertBlankPage` accepts
+`true` or `false` and resolves to Boolean false when absent, while `banner`
+defaults to an empty string and may use a language override. Removing either
+property's saved values restores that default. Other property groups may be removed
+together with all of their language overrides. A single mapping edit increments
+the owning Contest's `source_generation` once when at least one value changes
+and performs no write when the mapping is unchanged.
+
+The Properties page can seed two ordinary mapping values. `Insert Default
+Banner` creates a `banner` value that renders `\contestname` in the existing
+statement header slot. `Insert Blank Page After Odd Statements` sets
+`insertBlankPage` to `true`. After insertion they are edited and removed like
+the corresponding mapping entries; the shortcuts do not introduce a separate
+property type.
 
 ## Agent authorization rows
 
@@ -200,3 +229,6 @@ The `idx`-only Contest roster schema requires the stopped-service
 The upgrade preserves current roster identities and copies each historical
 build's former position unchanged into its frozen `ordinal`; it does not resort
 old jobs.
+
+The Contest property-map schema requires the stopped-service
+[Contest property-map upgrade](../operations/deployment.md#contest-property-map-upgrade).

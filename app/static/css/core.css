@@ -1194,6 +1194,9 @@ textarea.textarea-md {
   background: transparent;
   color: var(--link);
   padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
 }
 
 .linkish:hover,
@@ -1202,12 +1205,8 @@ textarea.textarea-md {
   text-decoration: underline;
 }
 
-.table-base .linkish,
-.verification-list-table .linkish,
 .verification-actions > a,
-.workspace-side-link,
-.linkish.danger-link,
-.linkish-button.danger-link {
+.workspace-side-link {
   text-decoration: underline;
   text-underline-offset: 2px;
   text-decoration-thickness: 1px;

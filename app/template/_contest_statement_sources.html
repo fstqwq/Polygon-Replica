@@ -1,0 +1,144 @@
+<section class="content-section contest-statement-sources" aria-label="Contest statement source management">
+  <h2>Statement Sources</h2>
+  <p class="muted">Edit TeX sources and upload referenced resources for Contest statements.</p>
+
+  {% if contest_statement_language %}
+  <div class="contest-source-scope-row">
+    <nav class="section-tabs contest-source-language-tabs" aria-label="Statement source languages">
+      <a
+        class="section-tab{% if contest_statement_source_is_shared %} active{% endif %}"
+        href="/contests/{{ ctx.contest.slug }}/properties?scope=all"
+        {% if contest_statement_source_is_shared %}aria-current="page"{% endif %}
+      >Shared</a>
+      {% for language in contest_statement_language_options %}
+      <a
+        class="section-tab{% if language == contest_statement_language %} active{% endif %}"
+        href="/contests/{{ ctx.contest.slug }}/properties?language={{ language }}"
+        {% if language == contest_statement_language %}aria-current="page"{% endif %}
+      >{{ language.title() }}</a>
+      {% endfor %}
+      {% if ctx.access.can_write %}
+      <a class="section-tab" href="#contest-source-language-add-popup" data-popup-open="contest-source-language-add-popup">Add language</a>
+      {% endif %}
+    </nav>
+    {% if ctx.access.can_write and not contest_statement_source_is_shared %}
+    <form
+      class="inline-action contest-source-language-remove"
+      method="post"
+      action="/contests/{{ ctx.contest.slug }}/properties/statement/language/remove"
+      data-confirm-message="Remove saved Contest statement sources for {{ contest_statement_language.title() }}? Shared files and Problem statements are not changed."
+    >
+      <input type="hidden" name="language" value="{{ contest_statement_language }}" />
+      <button class="linkish-button danger-link" type="submit">Remove language</button>
+    </form>
+    {% endif %}
+  </div>
+
+  {% if contest_statement_source_error %}
+  <p class="inline-warning">{{ contest_statement_source_error }}</p>
+  {% endif %}
+
+  <section class="contest-source-file-list" aria-labelledby="contest-source-files-title">
+    <div class="content-heading-row">
+      <h3 id="contest-source-files-title">Files</h3>
+      {% if ctx.access.can_write %}
+      <a class="content-heading-action linkish" href="#contest-source-upload-popup" data-popup-open="contest-source-upload-popup">Upload file</a>
+      {% endif %}
+    </div>
+    <div class="table-scroll">
+      <table class="table-base table-compact">
+        <thead>
+          <tr>
+            <th scope="col">Path</th>
+            <th scope="col">Size</th>
+            <th scope="col"><span class="sr-only">Action</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% if not contest_statement_source_rows %}
+          <tr>
+            <td colspan="3" class="muted">No files.</td>
+          </tr>
+          {% endif %}
+          {% for row in contest_statement_source_rows %}
+          <tr>
+            <td>
+              {% if row.source_display == "Default" %}
+              <span class="muted"><code>{{ row.display_path }}</code> (Default)</span>
+              {% elif row.source_display == "Missing" %}
+              <span class="danger"><code>{{ row.display_path }}</code> (Missing)</span>
+              {% else %}
+              <code>{{ row.display_path }}</code>
+              {% endif %}
+            </td>
+            <td>{% if row.size_bytes is not none %}{{ row.size_bytes }} B{% else %}<span class="muted">—</span>{% endif %}</td>
+            <td class="table-cell-actions">
+              <span class="contest-source-actions">
+                <a href="{{ row.download_href }}">Open</a>
+                {% if row.is_text %}<a href="{{ row.edit_href }}">Edit</a>{% endif %}
+                {% if ctx.access.can_write and row.stored %}
+                <form class="inline-action" method="post" action="/contests/{{ ctx.contest.slug }}/properties/statement/delete" data-confirm-message="{{ row.delete_message }}">
+                  <input type="hidden" name="language" value="{{ contest_statement_language }}" />
+                  <input type="hidden" name="path" value="{{ row.display_path }}" />
+                  <button class="linkish-button danger-link" type="submit">Delete</button>
+                </form>
+                {% endif %}
+              </span>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  {% if contest_statement_selected_is_text %}
+  <section class="contest-source-editor" aria-labelledby="contest-source-editor-title">
+    <div class="content-heading-row">
+      <h3 id="contest-source-editor-title">Edit <code>{{ contest_statement_selected_path }}</code></h3>
+      <a class="content-heading-action" href="/contests/{{ ctx.contest.slug }}/properties{% if contest_statement_source_query %}?{{ contest_statement_source_query }}{% endif %}">Close</a>
+    </div>
+    <form class="form-stack" method="post" action="/contests/{{ ctx.contest.slug }}/properties/statement/save">
+      <input type="hidden" name="language" value="{{ contest_statement_language }}" />
+      <input type="hidden" name="path" value="{{ contest_statement_selected_path }}" />
+      <textarea id="contest-statement-source-content" name="content" rows="20" spellcheck="false" aria-label="Source content">{{ contest_statement_selected_text }}</textarea>
+      {% if ctx.access.can_write %}<button class="btn primary-action" type="submit">Save source</button>{% endif %}
+    </form>
+  </section>
+  {% elif contest_statement_selected_path %}
+  <p class="muted">Select a text source to edit. Binary resources can be opened or replaced below.</p>
+  {% endif %}
+
+  {% else %}
+  <p class="muted">No statement language is available.</p>
+  {% if ctx.access.can_write %}
+  <a class="linkish" href="#contest-source-language-add-popup" data-popup-open="contest-source-language-add-popup">Add language</a>
+  {% endif %}
+  {% endif %}
+</section>
+
+{% if ctx.access.can_write %}
+{% call ui_popup('contest-source-upload-popup', 'Upload statement file', title_tag='h3', title_class='') %}
+  <form class="form-stack" method="post" enctype="multipart/form-data" action="/contests/{{ ctx.contest.slug }}/properties/statement/upload">
+    <label for="contest-statement-upload-scope">Available to</label>
+    <select id="contest-statement-upload-scope" name="language">
+      {% for upload_scope in contest_statement_upload_scopes %}
+      <option value="{{ upload_scope.value }}"{% if upload_scope.selected %} selected{% endif %}>{{ upload_scope.label }}</option>
+      {% endfor %}
+    </select>
+    <label for="contest-statement-upload-path">Target path</label>
+    <input id="contest-statement-upload-path" type="text" name="path" placeholder="logo.png or figures/logo.png" autocomplete="off" />
+    <label for="contest-statement-upload-file">Local file</label>
+    <input id="contest-statement-upload-file" type="file" name="upload" required />
+    <button class="btn primary-action" type="submit">Upload</button>
+  </form>
+{% endcall %}
+
+{% call ui_popup('contest-source-language-add-popup', 'Add statement language', title_tag='h3', title_class='') %}
+  <form class="form-stack" method="get" action="/contests/{{ ctx.contest.slug }}/properties">
+    <label for="contest-source-new-language">Language</label>
+    <input id="contest-source-new-language" type="text" name="language" placeholder="chinese" autocomplete="off" required />
+    <button class="btn primary-action" type="submit">Open language</button>
+  </form>
+{% endcall %}
+{% endif %}

@@ -30,7 +30,7 @@ consumers never supply a missing field, clamp an authored value, or replace a
 missing or malformed file. Authoring pages are different: they show the
 configuration error under Review and Publish and use the defaults only to keep
 the editor operable. Saving the General form writes one complete canonical
-object. Verification, Package Export, Contest builds, and Native Package
+object. Verification, Package Export, Contest package downloads, and Native Package
 construction still reject the invalid source at their entrance.
 Execution dispatches the accepted values without another memory floor.
 

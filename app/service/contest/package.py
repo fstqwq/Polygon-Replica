@@ -1,12 +1,34 @@
 import json
 import os
 import shutil
+import uuid
+from contextlib import ExitStack
+from dataclasses import dataclass
 from pathlib import Path
 
 from app.service.contest.naming import problem_slug_file_token
 from app.service.contest.service import ContestService
 from app.service.export.adapters import PackageAdapterRegistry, PackageFormat
-from app.service.problem_package.service import NativePackageReader
+from app.service.problem_package.service import (
+    NativePackageReader,
+    ProblemPackageService,
+)
+
+
+CONTEST_PACKAGE_DOWNLOAD_FORMATS: tuple[PackageFormat, ...] = (
+    "domjudge",
+    "icpc-2025-09",
+)
+
+
+@dataclass(frozen=True)
+class ContestPackageDownload:
+    path: Path
+    filename: str
+    cleanup_root: Path
+
+    def close(self) -> None:
+        shutil.rmtree(self.cleanup_root, ignore_errors=True)
 
 
 class ContestPackageService:
@@ -16,9 +38,11 @@ class ContestPackageService:
         self,
         contest_service: ContestService,
         package_adapters: PackageAdapterRegistry,
+        problem_package_service: ProblemPackageService,
     ) -> None:
         self._contest = contest_service
         self._package_adapters = package_adapters
+        self._problem_packages = problem_package_service
 
     @staticmethod
     def _zip_directory(destination: Path, source_dir: Path) -> Path:
@@ -31,19 +55,18 @@ class ContestPackageService:
         )
         return Path(archive).resolve()
 
-    def build_bundle(
+    def _build_bundle(
         self,
         *,
-        contest_id: int,
         contest_slug: str,
-        job_id: str,
+        operation_root: Path,
+        items: list[dict[str, object]],
         package_format: PackageFormat,
         readers: dict[str, NativePackageReader],
     ) -> dict[str, object]:
         adapter = self._package_adapters.require(package_format)
-        job_root = self._contest.job_root(contest_slug, job_id)
         output_token = adapter.format
-        staging = job_root / f".{output_token}-bundle-staging"
+        staging = operation_root / f".{output_token}-bundle-staging"
         shutil.rmtree(staging, ignore_errors=True)
         package_roots = staging / "package-roots"
         packages_dir = staging / "bundle" / "packages"
@@ -54,17 +77,17 @@ class ContestPackageService:
         try:
             results: list[dict[str, object]] = []
             manifest_items: list[dict[str, object]] = []
-            for entry in self._contest.build_items(job_id):
+            for entry in items:
                 idx = str(entry["idx"])
                 problem_slug = str(entry["problem_slug"])
                 materialization_id = str(entry["materialization_id"])
                 item: dict[str, object] = {
                     "idx": idx,
-                    "problem_id": int(entry["problem_id"]),
+                    "problem_id": int(str(entry["problem_id"])),
                     "problem_slug": problem_slug,
                     "status": "failed",
                     "source_commit": str(entry["source_commit"]),
-                    "revision_number": int(entry["revision_number"]),
+                    "revision_number": int(str(entry["revision_number"])),
                     "native_package_id": materialization_id,
                     "archive_sha256": str(entry["archive_sha256"]),
                     "package_file": "",
@@ -90,7 +113,7 @@ class ContestPackageService:
                         {
                             "idx": idx,
                             "problem": problem_slug,
-                            "revision": int(entry["revision_number"]),
+                            "revision": int(str(entry["revision_number"])),
                             "source_commit": str(entry["source_commit"]),
                             "native_package_id": materialization_id,
                             "archive_sha256": str(entry["archive_sha256"]),
@@ -150,8 +173,8 @@ class ContestPackageService:
                 encoding="utf-8",
                 newline="\n",
             )
-            filename = f"{contest_slug}-{output_token}-packages-{job_id}.zip"
-            final_archive = job_root / filename
+            filename = f"{contest_slug}-{output_token}-packages.zip"
+            final_archive = operation_root / filename
             if final_archive.is_symlink():
                 raise RuntimeError("contest bundle target must not be a symbolic link")
             final_archive.unlink(missing_ok=True)
@@ -171,3 +194,101 @@ class ContestPackageService:
             shutil.rmtree(staging, ignore_errors=True)
             if final_archive is not None:
                 final_archive.unlink(missing_ok=True)
+
+    def build_download(
+        self,
+        *,
+        contest_id: int,
+        contest_slug: str,
+        package_format: str,
+    ) -> ContestPackageDownload:
+        safe_format = self._package_adapters.require_format(package_format)
+        if safe_format not in CONTEST_PACKAGE_DOWNLOAD_FORMATS:
+            raise ValueError("unsupported Contest package format")
+
+        roster = self._contest.contest_problems(contest_id)
+        if not roster:
+            raise ValueError("Contest has no problems")
+        readiness = self._problem_packages.published_readiness_many(
+            [int(row["problem_id"]) for row in roster]
+        )
+        blocked = [
+            str(row["problem_slug"])
+            for row in roster
+            if readiness[int(row["problem_id"])]["status"] != "ready"
+        ]
+        if blocked:
+            raise ValueError("Packages are not ready: " + ", ".join(blocked))
+
+        items: list[dict[str, object]] = []
+        for ordinal, row in enumerate(roster, start=1):
+            package = readiness[int(row["problem_id"])]
+            native_package = self._problem_packages.native_package(
+                package["native_package_id"]
+            )
+            if (
+                native_package is None
+                or native_package["status"] != "available"
+                or native_package["source_commit"] != package["published_commit"]
+            ):
+                raise ValueError(
+                    f"Package is no longer available: {row['problem_slug']}"
+                )
+            items.append(
+                {
+                    "contest_problem_id": int(row["contest_problem_id"]),
+                    "ordinal": ordinal,
+                    "idx": str(row["idx"]),
+                    "problem_id": int(row["problem_id"]),
+                    "problem_slug": str(row["problem_slug"]),
+                    "statement_folder": str(row["statement_folder"]),
+                    "source_commit": native_package["source_commit"],
+                    "revision_number": native_package["revision_number"],
+                    "materialization_id": native_package["id"],
+                    "archive_sha256": native_package["archive_sha256"],
+                }
+            )
+
+        operation_id = f"download-{uuid.uuid4().hex[:12]}"
+        operation_root = self._contest.package_download_root(
+            contest_slug,
+            operation_id,
+        )
+        try:
+            with ExitStack() as readers_stack:
+                readers = {
+                    str(item["materialization_id"]): readers_stack.enter_context(
+                        self._problem_packages.open_reader(
+                            str(item["materialization_id"]),
+                            expected_archive_sha256=str(item["archive_sha256"]),
+                        )
+                    )
+                    for item in items
+                }
+                summary = self._build_bundle(
+                    contest_slug=contest_slug,
+                    operation_root=operation_root,
+                    items=items,
+                    package_format=safe_format,
+                    readers=readers,
+                )
+            error = summary.get("error")
+            archive_value = summary.get("_artifact_path")
+            filename_value = summary.get("_artifact_filename")
+            if error:
+                raise ValueError(str(error))
+            if not isinstance(archive_value, str) or not archive_value:
+                raise RuntimeError("Contest package download was not produced")
+            if not isinstance(filename_value, str) or not filename_value:
+                raise RuntimeError("Contest package filename is missing")
+            archive_path = Path(archive_value)
+            if not archive_path.is_file() or archive_path.is_symlink():
+                raise RuntimeError("Contest package download is unavailable")
+            return ContestPackageDownload(
+                path=archive_path,
+                filename=filename_value,
+                cleanup_root=operation_root,
+            )
+        except Exception:
+            shutil.rmtree(operation_root, ignore_errors=True)
+            raise
