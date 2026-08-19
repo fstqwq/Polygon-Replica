@@ -10,6 +10,7 @@ from urllib.parse import unquote, urlparse
 
 from app.service.contest.statement_meta import infer_contest_header_fields
 from app.service.contest.statement_source_contract import (
+    CONTEST_STATEMENT_OUTPUT_NAME,
     CONTEST_STATEMENT_TEMPLATE_NAME,
 )
 from app.service.importing.archive import ArchivePolicy, ArchiveView
@@ -158,6 +159,7 @@ class PolygonContestImportService:
         entries: dict[str, zipfile.ZipInfo],
     ) -> list[ImportedContestStatementFile]:
         rows: list[ImportedContestStatementFile] = []
+        archive_paths_by_key: dict[str, str] = {}
         for path in sorted(entries):
             if not path.startswith("statements/"):
                 continue
@@ -166,8 +168,22 @@ class PolygonContestImportService:
                 continue
             language = parts[1].strip().lower()
             if language:
+                key_parts = list(parts)
+                if (
+                    len(key_parts) == 3
+                    and key_parts[-1] == CONTEST_STATEMENT_OUTPUT_NAME
+                ):
+                    key_parts[-1] = CONTEST_STATEMENT_TEMPLATE_NAME
+                key = "/".join(key_parts)
+                existing_archive_path = archive_paths_by_key.get(key)
+                if existing_archive_path is not None:
+                    raise ValueError(
+                        "contest package has ambiguous statement sources: "
+                        f"{existing_archive_path} and {path}"
+                    )
+                archive_paths_by_key[key] = path
                 rows.append(
-                    {"key": path, "language": language, "archive_path": path}
+                    {"key": key, "language": language, "archive_path": path}
                 )
         return rows
 

@@ -68,16 +68,32 @@ class TestLargePackageImport(unittest.TestCase):
         )
 
         problem_policy = problem_archive_policy(256 * 1024 * 1024)
-        with ArchiveView(
-            package,
-            contest_archive_policy(26, 256 * 1024 * 1024),
-        ) as archive:
-            parsed = PolygonContestImportService().parse_package(
-                package.name,
-                archive,
-                problem_policy=problem_policy,
-                max_problems=26,
-            )
+        with tempfile.TemporaryDirectory(prefix="polygon-contest-canary-") as temp_dir:
+            with ArchiveView(
+                package,
+                contest_archive_policy(26, 256 * 1024 * 1024),
+            ) as archive:
+                service = PolygonContestImportService()
+                parsed = service.parse_package(
+                    package.name,
+                    archive,
+                    problem_policy=problem_policy,
+                    max_problems=26,
+                )
+                staged = service.stage_statement_sources(
+                    archive,
+                    parsed["statement_files"],
+                    Path(temp_dir) / "statements",
+                )
+                statement_template = next(
+                    row
+                    for row in staged
+                    if row["key"] == "statements/english/statements.ftl"
+                )
+                staged_template_text = statement_template["source_path"].read_text(
+                    encoding="utf-8"
+                )
 
         self.assertEqual(parsed["total_problems"], 4)
         self.assertIn("ICPC Asia East Continent Final", parsed["title"])
+        self.assertIn(r"\documentclass", staged_template_text)

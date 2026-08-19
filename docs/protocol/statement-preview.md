@@ -95,6 +95,12 @@ language from the constituent Problems. Consequently, a language supported by
 every Problem can remain available through the default Contest templates after
 its saved overrides are removed.
 
+Polygon Contest packages use `statements/<language>/statements.tex` for the
+authored Contest entry source. Import normalizes that external entry name to
+the canonical internal `statements.ftl` name while preserving its source
+content; `statements.tex` remains reserved for Polygon Replica's derived
+render output.
+
 ## Contest PDF
 
 Contest PDF Preview is the existing complete Contest TeX build placed under the
