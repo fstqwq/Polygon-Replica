@@ -185,7 +185,6 @@ def _contest_pages(contest: str) -> tuple[str, ...]:
         f"{base}/problems",
         f"{base}/properties",
         f"{base}/access",
-        f"{base}/packages",
     )
 
 
