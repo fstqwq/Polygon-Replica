@@ -1,13 +1,13 @@
 from collections import deque
 from typing import TYPE_CHECKING
 
+from app.service.execution.policy import normalize_execution_result
 from app.service.judgehost.batch.model import (
     CaseRecord,
     ExecutionBatchRecord,
     HostLeaseRelease,
     VerificationCancellation,
 )
-from app.service.judgehost.domjudge.case_result import build_case_result
 
 if TYPE_CHECKING:
     from app.service.judgehost.batch.state import BatchState
@@ -54,25 +54,9 @@ class BatchMaintenance:
                 case.cancel_requested = False
                 case.terminal_result = None
                 case.requeue_on_abort = False
-                case.result = build_case_result(
-                    test_name=case.test_name,
-                    runresult="internal-error",
+                case.result = normalize_execution_result(
                     verdict="FL",
-                    runtime_sec=0.0,
-                    cpu_sec=0.0,
-                    wall_sec=0.0,
-                    memory_kb=0,
-                    score_text="",
-                    output_run_ref="",
-                    output_error_ref="",
-                    output_system_ref="",
-                    output_diff_ref="",
-                    metadata_ref="",
-                    compare_metadata_ref="",
-                    team_message_ref="",
-                    feedback_text=message,
-                    feedback_files=(),
-                    answer_correct=False,
+                    error=message,
                 )
                 self._state._transition_case_locked(
                     case,
