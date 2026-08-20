@@ -455,6 +455,11 @@ body.problem-layout:not(.verification-compact) {
   justify-self: center;
 }
 
+.problem-section-action-tab-single > .problem-section-tab-title-link {
+  grid-column: 1 / -1;
+  justify-self: center;
+}
+
 .problem-section-action-tab.active {
   position: relative;
   top: 1px;

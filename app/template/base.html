@@ -150,9 +150,9 @@
         <span class="problem-section-tab-status {{ 'section-tab-status-danger' if verification_tone == 'danger' else 'section-tab-status-warn' if verification_tone == 'warning' else '' }}">{{ verification_status }}</span>
       </div>
       {% set export_nav = nav_status.packages %}
-      <div class="section-tab problem-section-tab problem-section-action-tab{{ ' active' if problem_section == 'export' else '' }}">
+      {% set export_download = export_nav.download %}
+      <div class="section-tab problem-section-tab problem-section-action-tab{{ ' problem-section-action-tab-single' if not export_download else '' }}{{ ' active' if problem_section == 'export' else '' }}">
         <a class="problem-section-tab-title problem-section-tab-title-link" data-page="export" href="{{ problem_href('problem_export') }}"{% if problem_section == 'export' %} aria-current="page"{% endif %}>Packages</a>
-        {% set export_download = export_nav.download %}
         {% if export_download %}
         <a class="problem-section-tab-action-control" href="{{ problem_href('export_file', export_id=export_download.export_id, filename=export_download.filename) }}">Download</a>
         {% endif %}
