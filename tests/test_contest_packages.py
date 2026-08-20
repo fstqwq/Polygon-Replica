@@ -1,4 +1,4 @@
-import json
+import io
 import tempfile
 import unittest
 import zipfile
@@ -154,15 +154,25 @@ class TestContestPackageDownload(unittest.TestCase):
         self.assertEqual(download.filename, "example-contest-domjudge-packages.zip")
         self.assertTrue(download.path.is_file())
         with zipfile.ZipFile(download.path) as archive:
-            manifest = json.loads(archive.read("manifest.json"))
+            package_entries = archive.infolist()
             self.assertEqual(
-                [item["idx"] for item in manifest["problems"]],
-                ["A", "B"],
+                [entry.filename for entry in package_entries],
+                [
+                    "packages/A-alice-alpha.zip",
+                    "packages/B-alice-beta.zip",
+                ],
             )
-            self.assertEqual(
-                [item["native_package_id"] for item in manifest["problems"]],
-                ["np-101", "np-102"],
+            self.assertTrue(
+                all(
+                    entry.compress_type == zipfile.ZIP_STORED
+                    for entry in package_entries
+                )
             )
+            with zipfile.ZipFile(io.BytesIO(archive.read(package_entries[0]))) as package:
+                self.assertEqual(
+                    package.read("problem.yaml"),
+                    b"name: alice/alpha\nidx: A\n",
+                )
         self.assertEqual(
             self.packages.opened,
             [("np-101", "1" * 64), ("np-102", "2" * 64)],

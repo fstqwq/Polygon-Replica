@@ -371,6 +371,11 @@ exist only inside one temporary outer bundle and do not become problem-level
 external-package cache entries. Failure of any child package aborts the entire
 download.
 
+The outer ZIP contains only `packages/<idx>-<problem>.zip` children. It does not
+add a manifest or expose Git commits, Native Package identities, or archive
+checksums. Because every child is already a compressed ZIP, the outer archive
+stores those files without compressing them again.
+
 The response creates no Contest job, frozen build-item rows, history entry, or
 durable Contest artifact. Its request-owned temporary directory is deleted
 after the file transfer. Contest HTML and PDF statements use the separate

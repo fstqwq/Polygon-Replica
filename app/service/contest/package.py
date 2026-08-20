@@ -1,7 +1,7 @@
-import json
 import os
 import shutil
 import uuid
+import zipfile
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,6 +55,18 @@ class ContestPackageService:
         )
         return Path(archive).resolve()
 
+    @staticmethod
+    def _bundle_packages(destination: Path, packages: list[Path]) -> Path:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(
+            destination,
+            "w",
+            compression=zipfile.ZIP_STORED,
+        ) as archive:
+            for package in packages:
+                archive.write(package, arcname=f"packages/{package.name}")
+        return destination.resolve()
+
     def _build_bundle(
         self,
         *,
@@ -76,7 +88,7 @@ class ContestPackageService:
 
         try:
             results: list[dict[str, object]] = []
-            manifest_items: list[dict[str, object]] = []
+            package_archives: list[Path] = []
             for entry in items:
                 idx = str(entry["idx"])
                 problem_slug = str(entry["problem_slug"])
@@ -109,17 +121,7 @@ class ContestPackageService:
                     target = self._zip_directory(packages_dir / filename, package_root)
                     item["package_file"] = f"packages/{target.name}"
                     item["status"] = "success"
-                    manifest_items.append(
-                        {
-                            "idx": idx,
-                            "problem": problem_slug,
-                            "revision": int(str(entry["revision_number"])),
-                            "source_commit": str(entry["source_commit"]),
-                            "native_package_id": materialization_id,
-                            "archive_sha256": str(entry["archive_sha256"]),
-                            "package": f"packages/{target.name}",
-                        }
-                    )
+                    package_archives.append(target)
                 except Exception as exc:
                     item["error"] = str(exc)
                 results.append(item)
@@ -157,31 +159,12 @@ class ContestPackageService:
                         summary["common_error"] = errors[0]
                 return summary
 
-            bundle_root = staging / "bundle"
-            (bundle_root / "manifest.json").write_text(
-                json.dumps(
-                    {
-                        "contest": contest_slug,
-                        "format": package_format,
-                        "problems": manifest_items,
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                    sort_keys=True,
-                )
-                + "\n",
-                encoding="utf-8",
-                newline="\n",
-            )
             filename = f"{contest_slug}-{output_token}-packages.zip"
             final_archive = operation_root / filename
             if final_archive.is_symlink():
                 raise RuntimeError("contest bundle target must not be a symbolic link")
             final_archive.unlink(missing_ok=True)
-            staged_archive = self._zip_directory(
-                staging / filename,
-                bundle_root,
-            )
+            staged_archive = self._bundle_packages(staging / filename, package_archives)
             archive = final_archive
             os.replace(staged_archive, archive)
             summary["_artifact_path"] = str(archive)
