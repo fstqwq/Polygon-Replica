@@ -12,6 +12,7 @@ _CANONICAL = {
     "tle_or_re",
     "time_limit_exceeded",
     "run_time_error",
+    "compile_error",
     "rejected",
     "unknown",
 }
@@ -33,6 +34,8 @@ _ALIASES: dict[str, ExpectedBehavior] = {
     "re": "run_time_error",
     "rte": "run_time_error",
     "mle": "run_time_error",
+    "ce": "compile_error",
+    "compile": "compile_error",
     "rej": "rejected",
     "reject": "rejected",
 }
@@ -46,6 +49,8 @@ _POLYGON_TAG_BEHAVIOR: dict[str, ExpectedBehavior] = {
     "time-limit-exceeded-or-accepted": "tle_or_correct",
     "time-limit-exceeded-or-memory-limit-exceeded": "tle_or_re",
     "memory-limit-exceeded": "run_time_error",
+    "compilation-error": "compile_error",
+    "compile-error": "compile_error",
     "rejected": "rejected",
     "failed": "rejected",
     "do-not-run": "unknown",

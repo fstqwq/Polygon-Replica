@@ -22,7 +22,6 @@ from app.service.problem_package.layout import (
     PACKAGE_DERIVED_ROOT_NAMES,
     TEST_DATA_DIR,
 )
-from app.service.verification.identity import canonical_verification_id
 
 
 class NativePackageFileEntry(TypedDict):
@@ -41,20 +40,9 @@ class NativePackageTestEntry(TypedDict):
     sample_output: NotRequired[NativePackageFileEntry]
 
 
-NativePackageSolutionVerdict = Literal["AC", "WA", "TLE", "RTE", "CE"]
-NATIVE_PACKAGE_SOLUTION_VERDICT_ORDER: tuple[NativePackageSolutionVerdict, ...] = (
-    "AC",
-    "WA",
-    "TLE",
-    "RTE",
-    "CE",
-)
-
-
 class NativePackageSolutionEntry(TypedDict):
     source_path: str
     expected_behavior: str
-    verdicts: list[NativePackageSolutionVerdict]
 
 
 class NativePackageManifest(TypedDict):
@@ -63,7 +51,6 @@ class NativePackageManifest(TypedDict):
     source_digest: str
     mode: ProblemMode
     pass_limit: int
-    verification: dict[str, str]
     solutions: list[NativePackageSolutionEntry]
     tests: list[NativePackageTestEntry]
 
@@ -156,11 +143,10 @@ def load_manifest(path: Path) -> NativePackageManifest:
         "source_digest",
         "mode",
         "pass_limit",
-        "verification",
         "solutions",
         "tests",
     }
-    if set(raw) != required:
+    if not required.issubset(raw):
         raise ValueError("Polygon Replica package manifest has an unsupported shape")
     if not isinstance(raw["mode"], str) or raw["mode"] not in {
         "pass-fail",
@@ -187,15 +173,6 @@ def load_manifest(path: Path) -> NativePackageManifest:
         or raw["pass_limit"] < 1
     ):
         raise ValueError("Polygon Replica package pass_limit is invalid")
-    verification = raw["verification"]
-    if not isinstance(verification, dict) or set(verification) != {"id", "source"}:
-        raise ValueError("Polygon Replica package verification provenance is invalid")
-    if not all(isinstance(verification[key], str) and verification[key] for key in verification):
-        raise ValueError("Polygon Replica package verification provenance is invalid")
-    try:
-        canonical_verification_id(verification["id"])
-    except RuntimeError as exc:
-        raise ValueError("Polygon Replica package verification provenance is invalid") from exc
     solutions = raw["solutions"]
     if not isinstance(solutions, list) or not solutions:
         raise ValueError("Polygon Replica package must contain solutions")
@@ -228,11 +205,10 @@ def validate_manifest_files(
         for source_path in committed_solution_paths
     }
     for solution in manifest["solutions"]:
-        if not isinstance(solution, dict) or set(solution) != {
+        if not isinstance(solution, dict) or not {
             "source_path",
             "expected_behavior",
-            "verdicts",
-        }:
+        }.issubset(solution):
             raise ValueError("Native Package solution entry has an unsupported shape")
         source_path = solution["source_path"]
         if not isinstance(source_path, str):
@@ -250,28 +226,6 @@ def validate_manifest_files(
             raise ValueError(
                 f"Native Package solution behavior does not match source: {source_path}"
             )
-        verdicts = solution["verdicts"]
-        if not isinstance(verdicts, list) or not verdicts:
-            raise ValueError(
-                f"Native Package solution verdicts are incomplete: {source_path}"
-            )
-        if any(
-            not isinstance(verdict, str)
-            or verdict not in NATIVE_PACKAGE_SOLUTION_VERDICT_ORDER
-            for verdict in verdicts
-        ):
-            raise ValueError(
-                f"Native Package solution verdict is invalid: {source_path}"
-            )
-        canonical_verdicts = [
-            verdict
-            for verdict in NATIVE_PACKAGE_SOLUTION_VERDICT_ORDER
-            if verdict in verdicts
-        ]
-        if verdicts != canonical_verdicts:
-            raise ValueError(
-                f"Native Package solution verdicts are not canonical: {source_path}"
-            )
     if manifest_solution_paths != committed_solution_paths:
         raise ValueError(
             "Native Package solutions do not match committed solution sources"
@@ -283,21 +237,10 @@ def validate_manifest_files(
         sample_max_bytes=statement_sample_max_bytes,
     )
     manifest_shape: list[tuple[str, str, bool]] = []
-    allowed_test_keys = {
-        "id",
-        "kind",
-        "sample",
-        "input",
-        "answer",
-        "sample_input",
-        "sample_output",
-    }
     for test in manifest["tests"]:
         if not isinstance(test, dict):
             raise ValueError("Native Package test entry must be an object")
-        if not {"id", "kind", "sample", "input"}.issubset(test) or not set(
-            test
-        ).issubset(allowed_test_keys):
+        if not {"id", "kind", "sample", "input"}.issubset(test):
             raise ValueError("Native Package test entry has an unsupported shape")
         if not isinstance(test["id"], str) or not isinstance(test["kind"], str):
             raise ValueError("Native Package test identity is invalid")
@@ -322,11 +265,11 @@ def validate_manifest_files(
             descriptor = test.get(key)
             if descriptor is None:
                 continue
-            if not isinstance(descriptor, dict) or set(descriptor) != {
+            if not isinstance(descriptor, dict) or not {
                 "path",
                 "sha256",
                 "size",
-            }:
+            }.issubset(descriptor):
                 raise ValueError(f"Native Package payload descriptor is invalid: {test_id}/{key}")
             if not isinstance(descriptor["path"], str):
                 raise ValueError(f"Native Package payload path is invalid: {test_id}/{key}")

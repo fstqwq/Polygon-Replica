@@ -100,6 +100,7 @@ def _custom_input_expected_answer(
     accepted_source_file: PayloadFile | None,
     run_verification_payload_base: dict[str, object],
     bypass_case_result_cache: bool,
+    service_class: str,
     judgehost: Judgehost,
     runtime_blob_store: RuntimeBlobStore,
 ) -> PayloadFile:
@@ -140,6 +141,7 @@ def _custom_input_expected_answer(
         compile_only=False,
         persist_verification_run=False,
         prepared_payload=prepared,
+        service_class=service_class,
     )
     case_result = judgehost.wait_for_task_case_result(
         task_id,
@@ -173,6 +175,7 @@ def validate_custom_sample_outputs(
     accepted_source_file: PayloadFile | None = None,
     run_verification_payload_base: dict[str, object] | None = None,
     bypass_case_result_cache: bool = False,
+    service_class: str = "background",
     judgehost: Judgehost,
     runtime_blob_store: RuntimeBlobStore,
 ) -> SampleOutputValidationResult:
@@ -227,6 +230,7 @@ def validate_custom_sample_outputs(
                     accepted_source_file=accepted_source_file,
                     run_verification_payload_base=run_verification_payload_base,
                     bypass_case_result_cache=bypass_case_result_cache,
+                    service_class=service_class,
                     judgehost=judgehost,
                     runtime_blob_store=runtime_blob_store,
                 )
@@ -260,6 +264,7 @@ def validate_custom_sample_outputs(
                 compile_only=False,
                 persist_verification_run=False,
                 prepared_payload=prepared_payload,
+                service_class=service_class,
             )
             opened_program_ids.append(validation_program_id)
             case_result = judgehost.wait_for_task_case_result(
@@ -334,6 +339,7 @@ class VerificationSampleOutputService:
         accepted_source_file: PayloadFile | None = None,
         run_verification_payload_base: dict[str, object] | None = None,
         bypass_case_result_cache: bool = False,
+        service_class: str = "background",
     ) -> SampleOutputValidationResult:
         return validate_custom_sample_outputs(
             problem=problem,
@@ -347,6 +353,7 @@ class VerificationSampleOutputService:
             accepted_source_file=accepted_source_file,
             run_verification_payload_base=run_verification_payload_base,
             bypass_case_result_cache=bypass_case_result_cache,
+            service_class=service_class,
             judgehost=self._judgehost,
             runtime_blob_store=self._runtime_blob_store,
         )

@@ -35,6 +35,7 @@ class PackageFormatContext(TypedDict):
 class CurrentPackageContext(TypedDict):
     published_display: str
     package_state: Literal["ready", "queued", "none"]
+    package_verified: bool
     create_href: str
     external_formats: list[PackageFormatContext]
 
@@ -42,6 +43,7 @@ class CurrentPackageContext(TypedDict):
 class PackageRevisionRow(TypedDict):
     revision_number: int
     current: bool
+    verified: bool
     package_download_href: str
     statement_preview_links: list[dict[str, str]]
     external_packages: list[AvailablePackage]
@@ -100,6 +102,7 @@ def _revision_rows(
     problem: str,
     published_commit: str,
     native_packages: list[NativePackage],
+    verified_by_id: dict[str, bool],
     packages_by_revision: dict[str, dict[str, AvailablePackage]],
 ) -> list[PackageRevisionRow]:
     href = problem_href_builder(request, problem)
@@ -115,6 +118,7 @@ def _revision_rows(
             {
                 "revision_number": native_package["revision_number"],
                 "current": native_package["source_commit"] == published_commit,
+                "verified": verified_by_id.get(native_package["id"], False),
                 "package_download_href": href(
                     "native_package_file",
                     native_package_id=native_package["id"],
@@ -165,6 +169,7 @@ def _current_package_context(
             f"v{revision_number}" if revision_number is not None else "none"
         ),
         "package_state": package_state,
+        "package_verified": bool(readiness["verified"]),
         "create_href": href("export_create"),
         "external_formats": external_formats,
     }
@@ -233,6 +238,11 @@ def export_page(
         and current_native_package["id"] not in native_package_ids
     ):
         native_package_ids.append(current_native_package["id"])
+    verified_by_id = (
+        runtime().problem_package_service.native_packages_verified_many(
+            native_packages
+        )
+    )
     packages_by_revision = _available_packages_by_revision(
         request,
         problem,
@@ -251,6 +261,7 @@ def export_page(
         problem,
         package_readiness["published_commit"],
         native_packages,
+        verified_by_id,
         packages_by_revision,
     )
     activity_rows = _package_attempt_rows(
@@ -276,6 +287,7 @@ def _existing_current_package_href(
     problem: str,
     problem_id: int,
     package_format: str,
+    standard_solution_only: bool,
 ) -> str:
     readiness = runtime().problem_package_service.published_readiness(problem_id)
     native_package = _current_native_package(
@@ -289,6 +301,8 @@ def _existing_current_package_href(
         return ""
     href = problem_href_builder(request, problem)
     if package_format == NATIVE_PACKAGE_FORMAT:
+        if not readiness["verified"] and not standard_solution_only:
+            return ""
         return href(
             "native_package_file",
             native_package_id=native_package["id"],
@@ -321,6 +335,7 @@ def _start_current_package(
     actor_user_id: int,
     problem_id: int,
     package_format: str,
+    standard_solution_only: bool,
 ) -> None:
     started = start_export_job(
         runtime(),
@@ -330,6 +345,7 @@ def _start_current_package(
         problem_id=problem_id,
         requested_format=package_format,
         export_job_id=f"exp-{uuid.uuid4().hex[:12]}",
+        standard_solution_only=standard_solution_only,
     )
     if not started:
         raise HTTPException(
@@ -343,6 +359,7 @@ def export_create(
     problem: str,
     user: Annotated[str, Depends(require_session_user)],
     format: str = Form(...),  # pylint: disable=redefined-builtin
+    standard_solution_only: str | None = Form(None),
 ):
     user_ctx = global_user_ctx(user)
     problem_row = runtime().contest_service.problem_by_slug(problem)
@@ -365,11 +382,16 @@ def export_create(
         )
     try:
         package_format = runtime().export_service.require_job_format(format.lower())
+        run_standard_solution_only = bool(
+            package_format == NATIVE_PACKAGE_FORMAT
+            and standard_solution_only == "1"
+        )
         existing_href = _existing_current_package_href(
             request,
             problem,
             problem_id,
             package_format,
+            run_standard_solution_only,
         )
         if existing_href:
             return redirect_response(existing_href, status_code=303)
@@ -379,6 +401,7 @@ def export_create(
             actor_user_id,
             problem_id,
             package_format,
+            run_standard_solution_only,
         )
         message = "package export queued"
     except (RuntimeError, ValueError) as exc:

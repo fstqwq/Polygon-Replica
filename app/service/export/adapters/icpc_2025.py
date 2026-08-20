@@ -113,7 +113,7 @@ class ICPC2025PackageAdapter(PackageAdapterSupport):
         omitted = tuple(
             solution["source_path"]
             for solution in solutions
-            if "CE" in solution["verdicts"]
+            if solution["expected_behavior"] == "compile_error"
         )
         selected = tuple(
             solution
@@ -121,7 +121,7 @@ class ICPC2025PackageAdapter(PackageAdapterSupport):
             if solution["source_path"] not in omitted
         )
         warning = (
-            "ICPC 2025-09 omitted submissions with compile-error results: "
+            "ICPC 2025-09 omitted submissions authored as compile_error: "
             + ", ".join(omitted)
             if omitted
             else ""

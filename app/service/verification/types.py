@@ -4,6 +4,7 @@ from typing import TypedDict
 
 class Kind(StrEnum):
     ALL = "all"
+    PACKAGE = "package"
     SAMPLE = "sample"
     CUSTOM = "custom"
 

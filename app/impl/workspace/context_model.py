@@ -378,6 +378,8 @@ def navigation_context(
     package = readiness["package"]
     if package["state"] == "ready" and package["revision_number"] is not None:
         package_text = f'v{package["revision_number"]}'
+        if not package["verified"]:
+            package_text += " (not verified)"
     elif package["state"] == "queued":
         package_text = "queued"
     elif package["state"] == "stale" and package["revision_number"] is not None:

@@ -32,7 +32,7 @@ from app.service.problem.runtime_config import (
 )
 from app.service.problem.source_tree import ProblemSourceTree, load_problem_source_tree
 from app.service.problem_package.manifest import (
-    NATIVE_PACKAGE_SOLUTION_VERDICT_ORDER,
+    NativePackageFileEntry,
     NativePackageManifest,
     NativePackageSolutionEntry,
     NativePackageTestEntry,
@@ -49,15 +49,16 @@ from app.service.problem_package.layout import (
 )
 from app.service.problem_package.store import (
     MaterializationRow,
-    NativePackageSolutionResultRow,
     NativePackageTestExecutionRow,
     ProblemPackageStore,
     PublishedProblem,
 )
+from app.service.repository.revision import parse_verification_source
 from app.service.statement.context import normalize_statement_language, statement_languages
 from app.service.statement.examples import StatementExamplesProducer
 from app.service.statement.render import render_statement_offline_tree
 from app.service.verification.result_match import run_verdict_short
+from app.service.verification.types import Kind, VerificationStatus
 
 
 VerificationBuilder = Callable[[Path, str, int, str], str]
@@ -144,6 +145,7 @@ class NativePackageReadiness(TypedDict):
     native_package_revision_number: int | None
     native_package_id: str
     status: NativePackageStatus
+    verified: bool
     missing_reason: str
 
 
@@ -229,6 +231,37 @@ class ProblemPackageService:
     def native_package(self, native_package_id: str) -> NativePackage | None:
         return self.store.materialization(native_package_id)
 
+    def native_packages_verified_many(
+        self,
+        native_packages: list[NativePackage],
+    ) -> dict[str, bool]:
+        certifications = self.store.verification_certifications(
+            [row["verification_id"] for row in native_packages]
+        )
+        result: dict[str, bool] = {}
+        for row in native_packages:
+            certification = certifications.get(row["verification_id"])
+            certification_source = (
+                parse_verification_source(certification["source_commit"])
+                if certification is not None
+                else None
+            )
+            result[row["id"]] = bool(
+                certification is not None
+                and certification["problem_id"] == row["problem_id"]
+                and certification_source is not None
+                and certification_source.base_commit == row["source_commit"]
+                and certification["kind"] == Kind.ALL.value
+                and certification["status"] == VerificationStatus.OK.value
+            )
+        return result
+
+    def native_package_verified(self, native_package: NativePackage) -> bool:
+        return self.native_packages_verified_many([native_package]).get(
+            native_package["id"],
+            False,
+        )
+
     def _published_revision_for_problem(
         self,
         problem: PublishedProblem,
@@ -308,6 +341,7 @@ class ProblemPackageService:
         materialization: MaterializationRow | None,
         previous_materialization: MaterializationRow | None,
         build_active: bool,
+        verified_by_id: dict[str, bool],
         error: str = "",
     ) -> NativePackageReadiness:
         if published is None:
@@ -318,6 +352,7 @@ class ProblemPackageService:
                 "native_package_revision_number": None,
                 "native_package_id": "",
                 "status": "none",
+                "verified": False,
                 "missing_reason": error or "no published Git revision",
             }
         if materialization is not None and materialization["status"] == "available":
@@ -328,6 +363,7 @@ class ProblemPackageService:
                 "native_package_revision_number": materialization["revision_number"],
                 "native_package_id": materialization["id"],
                 "status": "ready",
+                "verified": verified_by_id.get(materialization["id"], False),
                 "missing_reason": "",
             }
         if build_active:
@@ -338,6 +374,7 @@ class ProblemPackageService:
                 "native_package_revision_number": None,
                 "native_package_id": "",
                 "status": "queued",
+                "verified": False,
                 "missing_reason": "",
             }
         if previous_materialization is not None:
@@ -348,6 +385,10 @@ class ProblemPackageService:
                 "native_package_revision_number": previous_materialization["revision_number"],
                 "native_package_id": previous_materialization["id"],
                 "status": "stale",
+                "verified": verified_by_id.get(
+                    previous_materialization["id"],
+                    False,
+                ),
                 "missing_reason": "A newer revision has no Native Package",
             }
         return {
@@ -357,6 +398,7 @@ class ProblemPackageService:
             "native_package_revision_number": None,
             "native_package_id": "",
             "status": "none",
+            "verified": False,
             "missing_reason": (
                 "Native Package unavailable; rebuild required"
                 if materialization is not None
@@ -394,6 +436,13 @@ class ProblemPackageService:
                 for problem_id, revision in revisions.items()
             ]
         )
+        readiness_materializations = [
+            *materializations.values(),
+            *previous_materializations.values(),
+        ]
+        verified_by_id = self.native_packages_verified_many(
+            readiness_materializations
+        )
         return {
             problem_id: self._published_readiness(
                 problem_id,
@@ -412,6 +461,7 @@ class ProblemPackageService:
                     if problem_id in revisions
                     else False
                 ),
+                verified_by_id,
                 errors.get(problem_id, ""),
             )
             for problem_id in ids
@@ -647,97 +697,17 @@ class ProblemPackageService:
             manifest_tests.append(item)
         return manifest_tests
 
-    def _materialize_solutions(
-        self,
-        *,
-        verification_id: str,
+    @staticmethod
+    def _manifest_solutions(
         source_tree: ProblemSourceTree,
-        test_owners: VerificationTestOwners,
     ) -> list[NativePackageSolutionEntry]:
-        rows_by_source: dict[str, list[NativePackageSolutionResultRow]] = {}
-        for row in self.store.solution_result_rows(verification_id):
-            rows_by_source.setdefault(row["source_path"], []).append(row)
-        expected_test_names = {
-            f"{ordinal:03d}.in"
-            for ordinal, _test in enumerate(source_tree.tests, start=1)
-        }
-        solutions: list[NativePackageSolutionEntry] = []
-        for source_path in sorted(source_tree.solution_behaviors):
-            expected_behavior = source_tree.solution_behaviors[source_path]
-            rows = rows_by_source.pop(source_path, [])
-            if (
-                len(rows) != len(expected_test_names)
-                or {row["test_name"] for row in rows} != expected_test_names
-            ):
-                raise ValueError(
-                    f"verification solution results are incomplete: {source_path}"
-                )
-            observed: set[str] = set()
-            row_by_test_name = {row["test_name"]: row for row in rows}
-            if len(row_by_test_name) != len(rows):
-                raise ValueError(
-                    f"verification solution results are incomplete: {source_path}"
-                )
-            for row in rows:
-                if (
-                    row["final_status"] != "done"
-                    or row["expected_behavior"] != expected_behavior
-                ):
-                    raise ValueError(
-                        f"verification solution results are incomplete: {source_path}"
-                    )
-                resolved_row = row
-                verdict = run_verdict_short(
-                    execution_result_from_json(
-                        resolved_row["result_json"]
-                    ).verdict.upper()
-                )
-                if verdict == "SK":
-                    owner = test_owners.by_test_name.get(row["test_name"])
-                    if owner is None:
-                        raise ValueError(
-                            "verification generated input owner is missing: "
-                            f"{row['test_name']}"
-                        )
-                    owner_row = row_by_test_name.get(owner.test_name)
-                    if owner_row is None or (
-                        owner_row["final_status"] != "done"
-                        or owner_row["expected_behavior"] != expected_behavior
-                    ):
-                        raise ValueError(
-                            "verification solution owner result is incomplete: "
-                            f"{source_path} / {row['test_name']}"
-                        )
-                    resolved_row = owner_row
-                    verdict = run_verdict_short(
-                        execution_result_from_json(
-                            resolved_row["result_json"]
-                        ).verdict.upper()
-                    )
-                manifest_verdict = {"TL": "TLE", "RE": "RTE"}.get(
-                    verdict,
-                    verdict,
-                )
-                if manifest_verdict not in NATIVE_PACKAGE_SOLUTION_VERDICT_ORDER:
-                    raise ValueError(
-                        "verification solution result is not a complete verdict: "
-                        f"{source_path} / {row['test_name']}"
-                    )
-                observed.add(manifest_verdict)
-            solutions.append(
-                {
-                    "source_path": source_path,
-                    "expected_behavior": expected_behavior,
-                    "verdicts": [
-                        verdict
-                        for verdict in NATIVE_PACKAGE_SOLUTION_VERDICT_ORDER
-                        if verdict in observed
-                    ],
-                }
-            )
-        if rows_by_source:
-            raise ValueError("verification contains an unknown committed solution")
-        return solutions
+        return [
+            {
+                "source_path": source_path,
+                "expected_behavior": source_tree.solution_behaviors[source_path],
+            }
+            for source_path in sorted(source_tree.solution_behaviors)
+        ]
 
     def _materialize_statement_build(
         self,
@@ -842,18 +812,13 @@ class ProblemPackageService:
                 source_tree=source_tree,
                 test_owners=test_owners,
             )
-            solutions = self._materialize_solutions(
-                verification_id=verification_id,
-                source_tree=source_tree,
-                test_owners=test_owners,
-            )
+            solutions = self._manifest_solutions(source_tree)
             manifest: NativePackageManifest = {
                 "source_commit": revision.source_commit,
                 "revision_number": revision.revision_number,
                 "source_digest": digest,
                 "mode": mode,
                 "pass_limit": pass_limit,
-                "verification": {"id": verification_id, "source": "full-verification"},
                 "solutions": solutions,
                 "tests": tests,
             }
@@ -983,10 +948,168 @@ class ProblemPackageService:
         finally:
             shutil.rmtree(snapshot_parent, ignore_errors=True)
 
+    @staticmethod
+    def _payload_matches_descriptor(
+        payload: PayloadFile | None,
+        descriptor: NativePackageFileEntry | None,
+    ) -> bool:
+        if payload is None or descriptor is None:
+            return payload is None and descriptor is None
+        if payload.path.is_symlink() or not payload.path.is_file():
+            return False
+        return bool(
+            int(payload.path.stat().st_size) == int(descriptor["size"])
+            and sha256_file(payload.path) == str(descriptor["sha256"])
+        )
+
+    def _verification_evidence_mismatch(
+        self,
+        reader: NativePackageReader,
+        verification_id: str,
+    ) -> str:
+        source_tree = load_problem_source_tree(
+            reader.root,
+            problem_limits=problem_config_limits(self.db.config_values),
+            tests_spec_max_bytes=self.db.config_values.integer(
+                "TEXTAREA_MAX_BYTES"
+            ),
+            statement_sample_max_bytes=self.db.config_values.integer(
+                "STATEMENT_SAMPLE_MAX_BYTES"
+            ),
+            ignored_root_names=PACKAGE_DERIVED_ROOT_NAMES,
+        )
+        owners = self._verification_test_owners(verification_id, source_tree)
+        for test in reader.manifest["tests"]:
+            test_id = str(test["id"])
+            owner = owners.by_source_id.get(test_id)
+            if owner is None:
+                return f"test {test_id} has no full Verification evidence"
+            input_payload = self._artifact_file_resolver(owner.input_ref)
+            if not self._payload_matches_descriptor(input_payload, test["input"]):
+                return f"test {test_id} input differs from the existing Package"
+            answer_payload = self._verification_payload(
+                verification_id,
+                owner.source_id,
+                "answer_ref",
+            )
+            if not self._payload_matches_descriptor(
+                answer_payload,
+                test.get("answer"),
+            ):
+                return f"test {test_id} answer differs from the existing Package"
+        return ""
+
+    def _promote_materialization_verification(
+        self,
+        materialization: MaterializationRow,
+        verification_id: str,
+    ) -> str:
+        certification = self.store.verification_certifications(
+            [verification_id]
+        ).get(verification_id)
+        if certification is None:
+            return "full Verification record is missing"
+        certification_source = parse_verification_source(
+            certification["source_commit"]
+        )
+        if (
+            certification["problem_id"] != materialization["problem_id"]
+            or certification_source.base_commit != materialization["source_commit"]
+        ):
+            return "full Verification does not identify this published revision"
+        if (
+            certification["kind"] != Kind.ALL.value
+            or certification["status"] != VerificationStatus.OK.value
+        ):
+            return "Verification is not a successful full Verification"
+        if materialization["verification_id"] == verification_id:
+            return ""
+        with self._validated_reader(materialization) as reader:
+            mismatch = self._verification_evidence_mismatch(
+                reader,
+                verification_id,
+            )
+        if mismatch:
+            return mismatch
+        updated = self.store.update_materialization_verification(
+            materialization["id"],
+            expected_verification_id=materialization["verification_id"],
+            verification_id=verification_id,
+        )
+        if not updated:
+            return "Native Package certification changed concurrently"
+        return ""
+
+    def promote_native_package_verification(
+        self,
+        *,
+        problem_id: int,
+        source_commit: str,
+        verification_id: str,
+    ) -> str:
+        with self._revision_operation(int(problem_id), source_commit):
+            materialization = self.store.materialization_for_revision(
+                int(problem_id),
+                source_commit,
+            )
+            if (
+                materialization is None
+                or materialization["status"] != "available"
+            ):
+                return ""
+            return self._promote_materialization_verification(
+                materialization,
+                verification_id,
+            )
+
+    def _verify_existing_native_package(
+        self,
+        revision: PublishedRevision,
+        materialization: MaterializationRow,
+        verification_builder: VerificationBuilder,
+    ) -> MaterializationRow:
+        verification_id = self._verification_id_allocator()
+        snapshot_parent = self.storage_layout.staging_directory(
+            f"snapshot-{uuid.uuid4().hex}"
+        )
+        snapshot = snapshot_parent / "source"
+        try:
+            extract_git_archive(
+                revision.bare_repo,
+                revision.source_commit,
+                snapshot,
+                timeout=120,
+            )
+            completed_verification_id = verification_builder(
+                snapshot,
+                revision.source_commit,
+                revision.revision_number,
+                verification_id,
+            )
+            if completed_verification_id != verification_id:
+                raise RuntimeError("Native Package verification identity changed")
+            mismatch = self._promote_materialization_verification(
+                materialization,
+                verification_id,
+            )
+            if mismatch:
+                raise ValueError(
+                    "Full Verification did not certify the existing Native Package: "
+                    f"{mismatch}"
+                )
+            current = self.store.materialization(materialization["id"])
+            if current is None:
+                raise RuntimeError("Native Package disappeared after Verification")
+            return current
+        finally:
+            shutil.rmtree(snapshot_parent, ignore_errors=True)
+
     def ensure_native_package(
         self,
         revision: PublishedRevision,
         verification_builder: VerificationBuilder,
+        *,
+        reuse_unverified: bool = False,
     ) -> MaterializationRow:
         problem_id = int(revision.problem["id"])
         with self._revision_operation(problem_id, revision.source_commit):
@@ -1001,7 +1124,16 @@ class ProblemPackageService:
                     except Exception as exc:
                         self._invalidate_materialization(existing, str(exc))
                     else:
-                        return existing
+                        if (
+                            reuse_unverified
+                            or self.native_package_verified(existing)
+                        ):
+                            return existing
+                        return self._verify_existing_native_package(
+                            revision,
+                            existing,
+                            verification_builder,
+                        )
             return self._run_materialization_build(
                 revision,
                 verification_builder,
@@ -1086,10 +1218,6 @@ class ProblemPackageService:
                 raise ValueError("Native Package manifest number does not match metadata")
             if manifest["source_digest"] != row["source_digest"]:
                 raise ValueError("Native Package source digest does not match metadata")
-            if manifest["verification"]["id"] != row["verification_id"]:
-                raise ValueError(
-                    "Native Package verification does not match metadata"
-                )
             validate_manifest_files(
                 extraction,
                 manifest,

@@ -17,6 +17,7 @@ function tagState(value) {
     wrong_answer: "wrong-answer",
     time_limit_exceeded: "time-limit-exceeded",
     run_time_error: "run-time-error",
+    compile_error: "compile-error",
     rejected: "rejected",
     unknown: "neutral",
   };

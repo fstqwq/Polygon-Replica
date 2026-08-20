@@ -17,8 +17,10 @@ same task storage, Judgehost dispatch, results, and cache-payload model.
 
 ## Verification lifecycle and DAG
 
-Verification kinds are `all`, `sample`, and `custom`. Their reachable durable
-state transitions are:
+User-facing Verification kinds are `all`, `sample`, and `custom`. Package
+preparation also uses an internal `package` kind that runs input generation and
+the main correct solution without claiming full Verification. Their reachable
+durable state transitions are:
 
 ```text
 absent -> queued -> running -> ok | failed | cancelled
@@ -115,7 +117,12 @@ The configured validator runs as the generator task's checker between
 generation and solution execution.
 
 The DAG scheduler publishes runnable tasks in bounded batches and polls
-Judgehost case-cache misses. Judgehost terminal reports, cache hits, and
+Judgehost case-cache misses. Full Verification and Package preparation use the
+background Judgehost service class. Sample-only Verification started for
+Problem or Contest HTML/PDF Preview uses the foreground service class; a valid
+Preview cache hit submits no work. Foreground changes the order of cases that
+have not started and does not preempt a running case. Judgehost terminal
+reports, cache hits, and
 terminal reconciliation all pass through the same completion service. The
 coordinator receives the effective persisted completions and advances
 dependants from that state; it does not receive an uncommitted Judgehost result.

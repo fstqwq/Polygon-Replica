@@ -5,7 +5,7 @@ import threading
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import yaml
 
@@ -30,10 +30,16 @@ from app.service.problem_package.manifest import load_manifest, validate_manifes
 from app.service.problem_package.service import (
     FrozenNativePackageMismatch,
     NativePackageOperationBusy,
+    PublishedRevision,
+)
+from app.service.problem_package.workflow import (
+    NativePackageWorkflow,
+    build_full_verification_targets,
+    build_standard_solution_verification_targets,
 )
 from app.service.verification.lifecycle import PlannedTask, verification_task_id
 from app.service.verification.task_completion import TaskCompletion
-from app.service.verification.types import VerificationTaskStatus
+from app.service.verification.types import VerificationStatus, VerificationTaskStatus
 from tests.archive_support import import_problem_package
 from tests.common import E2ETestBase, configure_interactive_workspace
 from tests.db_helpers import (
@@ -47,8 +53,6 @@ from tests.execution_result_helpers import execution_result
 
 class TestPublishedRevisionExport(E2ETestBase):
     def test_native_package_reserves_the_configured_main_solution(self) -> None:
-        from app.service.problem_package.workflow import build_full_verification_targets
-
         with tempfile.TemporaryDirectory() as temp_dir:
             source_root = Path(temp_dir)
             solutions = source_root / "solutions"
@@ -71,6 +75,9 @@ class TestPublishedRevisionExport(E2ETestBase):
             config_path.write_text(dumps_build_config(config), encoding="utf-8")
 
             targets, accepted_source = build_full_verification_targets(source_root)
+            standard_targets, standard_source = (
+                build_standard_solution_verification_targets(source_root)
+            )
 
         self.assertEqual(accepted_source, "solutions/official.cpp")
         self.assertEqual(
@@ -91,6 +98,104 @@ class TestPublishedRevisionExport(E2ETestBase):
                     "expected_behavior": "wrong_answer",
                     "program_id": "solution-1",
                 },
+            ],
+        )
+        self.assertEqual(standard_source, "solutions/official.cpp")
+        self.assertEqual(
+            standard_targets,
+            [
+                {
+                    "path": "solutions/official.cpp",
+                    "expected_behavior": "accepted",
+                    "program_id": "accepted",
+                }
+            ],
+        )
+
+    def test_standard_solution_package_workflow_uses_background_package_verification(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_root = Path(temp_dir)
+            solutions = source_root / "solutions"
+            solutions.mkdir(parents=True)
+            (solutions / "accepted.cpp").write_text(
+                "int main() { return 0; }\n",
+                encoding="utf-8",
+            )
+            config_path = source_root / "config" / "build.json"
+            config_path.parent.mkdir(parents=True)
+            config = BuildConfig(generator_sources=[])
+            config["accepted_solution_source"] = "solutions/accepted.cpp"
+            config_path.write_text(dumps_build_config(config), encoding="utf-8")
+
+            package_service = Mock()
+            verification_service = Mock()
+            verification_workflow = Mock()
+            verification_service.admit_verification.return_value = SimpleNamespace(
+                outcome="admitted"
+            )
+            verification_service.verification_record.return_value = {
+                "status": VerificationStatus.OK,
+                "fail_reason": "",
+            }
+            captured_reuse: list[bool] = []
+
+            def ensure_native_package(
+                revision: PublishedRevision,
+                verification_builder,
+                *,
+                reuse_unverified: bool,
+            ) -> dict[str, object]:
+                captured_reuse.append(reuse_unverified)
+                completed = verification_builder(
+                    source_root,
+                    revision.source_commit,
+                    revision.revision_number,
+                    "ver-package-workflow",
+                )
+                self.assertEqual(completed, "ver-package-workflow")
+                return {"id": "pm-package-workflow"}
+
+            package_service.ensure_native_package.side_effect = ensure_native_package
+            service = NativePackageWorkflow(
+                package_service,
+                verification_service,
+                verification_workflow,
+            )
+            revision = PublishedRevision(
+                problem={
+                    "id": 17,
+                    "slug": "alice/package-workflow",
+                    "repo_name": "alice-package-workflow.git",
+                },
+                source_commit="a" * 40,
+                revision_number=3,
+                bare_repo=source_root,
+            )
+
+            native_package = service.ensure(
+                revision=revision,
+                actor_user_id=11,
+                actor_username="alice",
+                standard_solution_only=True,
+            )
+
+        self.assertEqual(native_package["id"], "pm-package-workflow")
+        self.assertEqual(captured_reuse, [True])
+        verification_workflow.run.assert_called_once()
+        run_kwargs = verification_workflow.run.call_args.kwargs
+        self.assertEqual(run_kwargs["kind"], "package")
+        self.assertEqual(run_kwargs["service_class"], "background")
+        self.assertTrue(run_kwargs["skip_sanity"])
+        self.assertEqual(
+            run_kwargs["targets"],
+            [
+                {
+                    "path": "solutions/accepted.cpp",
+                    "expected_behavior": "accepted",
+                    "program_id": "accepted",
+                }
             ],
         )
 
@@ -178,6 +283,7 @@ class TestPublishedRevisionExport(E2ETestBase):
         solution_verdicts: dict[str, tuple[str, str]] | None = None,
         mode: str = "pass-fail",
         pre_skipped_ordinals: frozenset[int] = frozenset(),
+        verification_kind: str = "all",
     ):
         def build(
             _snapshot: Path,
@@ -190,7 +296,7 @@ class TestPublishedRevisionExport(E2ETestBase):
                    WHERE verification_id=?""",
                 [verification_id],
             )
-            if build_row is None or (
+            if build_row is not None and (
                 str(build_row["status"]),
                 str(build_row["phase"]),
             ) != ("running", "verification"):
@@ -201,7 +307,7 @@ class TestPublishedRevisionExport(E2ETestBase):
                 workspace_id=None,
                 signature="native-package-test",
                 source_commit=commit,
-                kind="all",
+                kind=verification_kind,
             )
             if admission.outcome != "admitted":
                 raise AssertionError(f"unexpected admission outcome: {admission.outcome}")
@@ -587,15 +693,25 @@ class TestPublishedRevisionExport(E2ETestBase):
             self.assertNotIn("dirty-only.txt", names)
             self.assertNotIn("statement/examples.tex", names)
             manifest = json.loads(package.read("test-data/manifest.json"))
+            self.assertEqual(
+                set(manifest),
+                {
+                    "mode",
+                    "pass_limit",
+                    "revision_number",
+                    "solutions",
+                    "source_commit",
+                    "source_digest",
+                    "tests",
+                },
+            )
             self.assertEqual(manifest["source_commit"], commit)
-            self.assertEqual(manifest["verification"]["id"], verified["verification_id"])
             self.assertEqual(
                 manifest["solutions"],
                 [
                     {
                         "source_path": "solutions/accepted.cpp",
                         "expected_behavior": "accepted",
-                        "verdicts": ["AC"],
                     }
                 ],
             )
@@ -814,7 +930,7 @@ class TestPublishedRevisionExport(E2ETestBase):
         self,
     ) -> None:
         _workspace, problem_id, _commit = self._publish_problem(
-            extra_solutions={"rejected.cpp": "rejected"},
+            extra_solutions={"rejected.cpp": "compile_error"},
         )
         revision = runtime.problem_package_service.published_revision(problem_id)
         verified = runtime.problem_package_service.ensure_native_package(
@@ -822,7 +938,7 @@ class TestPublishedRevisionExport(E2ETestBase):
             self._verification_builder(
                 problem_id,
                 solution_verdicts={
-                    "solutions/rejected.cpp": ("rejected", "CE"),
+                    "solutions/rejected.cpp": ("compile_error", "CE"),
                 },
             ),
         )
@@ -854,25 +970,204 @@ class TestPublishedRevisionExport(E2ETestBase):
                 any(name.endswith("/rejected.cpp") for name in package.namelist())
             )
 
-    def test_incomplete_solution_verdict_prevents_native_package(self) -> None:
+    def test_package_verification_does_not_require_other_solution_results(self) -> None:
         _workspace, problem_id, _commit = self._publish_problem(
             extra_solutions={"broken.cpp": "rejected"},
         )
         revision = runtime.problem_package_service.published_revision(problem_id)
+        native_package = runtime.problem_package_service.ensure_native_package(
+            revision,
+            self._verification_builder(
+                problem_id,
+                verification_kind="package",
+            ),
+        )
+
+        self.assertFalse(
+            runtime.problem_package_service.native_package_verified(native_package)
+        )
+        with runtime.problem_package_service.open_reader(native_package["id"]) as reader:
+            self.assertEqual(
+                reader.manifest["solutions"],
+                [
+                    {
+                        "source_path": "solutions/accepted.cpp",
+                        "expected_behavior": "accepted",
+                    },
+                    {
+                        "source_path": "solutions/broken.cpp",
+                        "expected_behavior": "rejected",
+                    },
+                ],
+            )
+
+    def test_full_verification_certifies_existing_package_without_rewriting_it(
+        self,
+    ) -> None:
+        _workspace, problem_id, _commit = self._publish_problem()
+        revision = runtime.problem_package_service.published_revision(problem_id)
+        native_package = runtime.problem_package_service.ensure_native_package(
+            revision,
+            self._verification_builder(
+                problem_id,
+                verification_kind="package",
+            ),
+        )
+        _stored, archive = runtime.problem_package_service.native_package_archive(
+            native_package["id"]
+        )
+        archive_bytes = archive.read_bytes()
+        with patch.object(
+            runtime.tex_compile_service,
+            "compile_pdf",
+            side_effect=self._compile_statement,
+        ):
+            export_id, export_archive, _warning = (
+                runtime.export_service.create_export(
+                    self.problem,
+                    "domjudge",
+                    native_package_id=native_package["id"],
+                )
+            )
+        external_bytes = export_archive.read_bytes()
+
+        certified = runtime.problem_package_service.ensure_native_package(
+            revision,
+            self._verification_builder(problem_id),
+        )
+
+        self.assertEqual(certified["id"], native_package["id"])
+        self.assertNotEqual(
+            certified["verification_id"],
+            native_package["verification_id"],
+        )
+        self.assertTrue(
+            runtime.problem_package_service.native_package_verified(certified)
+        )
+        self.assertEqual(archive.read_bytes(), archive_bytes)
+        cached_export = db_fetch_one(
+            "SELECT id,archive_rel_path FROM exports WHERE materialization_id=?",
+            [native_package["id"]],
+        )
+        self.assertIsNotNone(cached_export)
+        self.assertEqual(str(cached_export["id"]), export_id)
+        self.assertEqual(export_archive.read_bytes(), external_bytes)
+
+    def test_standard_only_and_full_verification_write_the_same_archive(self) -> None:
+        _workspace, problem_id, _commit = self._publish_problem()
+        revision = runtime.problem_package_service.published_revision(problem_id)
+        standard_package = runtime.problem_package_service.ensure_native_package(
+            revision,
+            self._verification_builder(
+                problem_id,
+                verification_kind="package",
+            ),
+        )
+        _stored, archive = runtime.problem_package_service.native_package_archive(
+            standard_package["id"]
+        )
+        standard_archive_bytes = archive.read_bytes()
+        archive.write_bytes(b"force a deterministic rebuild")
+
+        full_package = runtime.problem_package_service.ensure_native_package(
+            revision,
+            self._verification_builder(problem_id),
+        )
+        _stored, rebuilt_archive = (
+            runtime.problem_package_service.native_package_archive(
+                full_package["id"]
+            )
+        )
+
+        self.assertTrue(
+            runtime.problem_package_service.native_package_verified(full_package)
+        )
+        self.assertEqual(rebuilt_archive.read_bytes(), standard_archive_bytes)
+
+    def test_full_verification_evidence_mismatch_keeps_package_uncertified(
+        self,
+    ) -> None:
+        _workspace, problem_id, _commit = self._publish_problem()
+        revision = runtime.problem_package_service.published_revision(problem_id)
+        native_package = runtime.problem_package_service.ensure_native_package(
+            revision,
+            self._verification_builder(
+                problem_id,
+                verification_kind="package",
+            ),
+        )
 
         with self.assertRaisesRegex(
             ValueError,
-            "verification solution result is not a complete verdict",
+            "answer differs from the existing Package",
         ):
             runtime.problem_package_service.ensure_native_package(
                 revision,
-                self._verification_builder(
-                    problem_id,
-                    solution_verdicts={
-                        "solutions/broken.cpp": ("rejected", "SK"),
-                    },
-                ),
+                self._verification_builder(problem_id, answer_bytes=b"changed\n"),
             )
+
+        current = runtime.problem_package_service.native_package(native_package["id"])
+        self.assertIsNotNone(current)
+        self.assertEqual(
+            current["verification_id"],
+            native_package["verification_id"],
+        )
+        self.assertEqual(current["archive_sha256"], native_package["archive_sha256"])
+        self.assertFalse(
+            runtime.problem_package_service.native_package_verified(current)
+        )
+
+    def test_failed_full_verification_keeps_package_uncertified(self) -> None:
+        _workspace, problem_id, _commit = self._publish_problem()
+        revision = runtime.problem_package_service.published_revision(problem_id)
+        native_package = runtime.problem_package_service.ensure_native_package(
+            revision,
+            self._verification_builder(
+                problem_id,
+                verification_kind="package",
+            ),
+        )
+
+        def fail_verification(
+            _snapshot: Path,
+            commit: str,
+            _revision_number: int,
+            verification_id: str,
+        ) -> str:
+            admission = admit_test_verification(
+                verification_id=verification_id,
+                problem_id=problem_id,
+                workspace_id=None,
+                signature="native-package-failed-test",
+                source_commit=commit,
+                kind="all",
+            )
+            self.assertEqual(admission.outcome, "admitted")
+            transition = runtime.verification_service.fail_verification(
+                verification_id,
+                reason="full Verification failed",
+            )
+            self.assertEqual(transition.outcome, "transitioned")
+            return verification_id
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "not a successful full Verification",
+        ):
+            runtime.problem_package_service.ensure_native_package(
+                revision,
+                fail_verification,
+            )
+
+        current = runtime.problem_package_service.native_package(native_package["id"])
+        self.assertIsNotNone(current)
+        self.assertEqual(
+            current["verification_id"],
+            native_package["verification_id"],
+        )
+        self.assertFalse(
+            runtime.problem_package_service.native_package_verified(current)
+        )
 
     def test_duplicate_generated_input_copies_owner_into_native_package(self) -> None:
         _workspace, problem_id, _commit = self._publish_problem(
@@ -900,19 +1195,18 @@ class TestPublishedRevisionExport(E2ETestBase):
                 self.assertIsNotNone(owner)
                 self.assertIsNotNone(duplicate)
                 self.assertEqual(duplicate.read_bytes(), owner.read_bytes())
-            solutions = {
-                solution["source_path"]: solution
-                for solution in reader.manifest["solutions"]
-            }
             self.assertEqual(
-                solutions["solutions/wrong.cpp"]["verdicts"],
-                ["WA"],
-            )
-            self.assertNotIn(
-                '"SK"',
-                (reader.root / "test-data" / "manifest.json").read_text(
-                    encoding="utf-8"
-                ),
+                reader.manifest["solutions"],
+                [
+                    {
+                        "source_path": "solutions/accepted.cpp",
+                        "expected_behavior": "accepted",
+                    },
+                    {
+                        "source_path": "solutions/wrong.cpp",
+                        "expected_behavior": "wrong_answer",
+                    },
+                ],
             )
 
     def test_pre_skipped_duplicate_interactive_input_uses_actual_owner(self) -> None:
@@ -946,13 +1240,18 @@ class TestPublishedRevisionExport(E2ETestBase):
             self.assertIsNotNone(owner_input)
             self.assertIsNotNone(duplicate_input)
             self.assertEqual(duplicate_input.read_bytes(), owner_input.read_bytes())
-            solutions = {
-                solution["source_path"]: solution
-                for solution in reader.manifest["solutions"]
-            }
             self.assertEqual(
-                solutions["solutions/wrong.cpp"]["verdicts"],
-                ["WA"],
+                reader.manifest["solutions"],
+                [
+                    {
+                        "source_path": "solutions/accepted.cpp",
+                        "expected_behavior": "accepted",
+                    },
+                    {
+                        "source_path": "solutions/wrong.cpp",
+                        "expected_behavior": "wrong_answer",
+                    },
+                ],
             )
 
     def test_native_package_duplicate_input_requires_one_actual_owner(self) -> None:
@@ -1055,85 +1354,6 @@ class TestPublishedRevisionExport(E2ETestBase):
                 return_value=rows,
             ), self.assertRaisesRegex(ValueError, message):
                 service._verification_test_owners("ver-test", source_tree)
-
-    def test_duplicate_input_requires_complete_owner_solution_result(self) -> None:
-        source_tree = SimpleNamespace(
-            tests=({"id": "001"}, {"id": "002"}),
-            solution_behaviors={"solutions/wrong.cpp": "wrong_answer"},
-        )
-        service = runtime.problem_package_service
-        with patch.object(
-            service.store,
-            "test_execution_rows",
-            return_value=[
-                {
-                    "source_id": "001",
-                    "test_name": "001.in",
-                    "ordinal": 1,
-                    "final_status": "done",
-                    "result_json": execution_result_json(execution_result("OK")),
-                    "input_ref": "blob://duplicate",
-                },
-                {
-                    "source_id": "002",
-                    "test_name": "002.in",
-                    "ordinal": 2,
-                    "final_status": "done",
-                    "result_json": execution_result_json(execution_result("SK")),
-                    "input_ref": "blob://duplicate",
-                },
-            ],
-        ):
-            test_owners = service._verification_test_owners(
-                "ver-test",
-                source_tree,
-            )
-
-        owner = {
-            "task_kind": "solution-run",
-            "source_path": "solutions/wrong.cpp",
-            "test_name": "001.in",
-            "expected_behavior": "wrong_answer",
-            "final_status": "done",
-            "result_json": execution_result_json(execution_result("WA")),
-        }
-        duplicate = {
-            "task_kind": "solution-run",
-            "source_path": "solutions/wrong.cpp",
-            "test_name": "002.in",
-            "expected_behavior": "wrong_answer",
-            "final_status": "done",
-            "result_json": execution_result_json(execution_result("SK")),
-        }
-        cases = (
-            ("results are incomplete", [duplicate]),
-            ("results are incomplete", [{**owner, "final_status": "running"}, duplicate]),
-            (
-                "not a complete verdict",
-                [
-                    {
-                        **owner,
-                        "result_json": execution_result_json(execution_result("FL")),
-                    },
-                    duplicate,
-                ],
-            ),
-            (
-                "results are incomplete",
-                [{**owner, "expected_behavior": "accepted"}, duplicate],
-            ),
-        )
-        for message, rows in cases:
-            with self.subTest(message=message), patch.object(
-                service.store,
-                "solution_result_rows",
-                return_value=rows,
-            ), self.assertRaisesRegex(ValueError, message):
-                service._materialize_solutions(
-                    verification_id="ver-test",
-                    source_tree=source_tree,
-                    test_owners=test_owners,
-                )
 
     def test_export_publication_holds_native_package_operation(self) -> None:
         _problem_id, _commit, verified = self._native_package()
@@ -1259,6 +1479,85 @@ class TestPublishedRevisionExport(E2ETestBase):
         stored = runtime.problem_package_service.native_package(verified["id"])
         self.assertIsNotNone(stored)
         self.assertEqual(stored["status"], "available")
+
+    def test_native_package_manifest_ignores_unknown_legacy_fields(self) -> None:
+        _problem_id, _commit, native_package = self._native_package()
+        with runtime.problem_package_service.open_reader(native_package["id"]) as reader:
+            manifest_path = reader.root / "test-data" / "manifest.json"
+            raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+            raw["verification"] = {
+                "id": native_package["verification_id"],
+                "source": "full-verification",
+            }
+            raw["solutions"][0]["verdicts"] = ["AC"]
+            raw["tests"][0]["input"]["legacy_note"] = "ignored"
+            manifest_path.write_text(
+                json.dumps(raw, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+            manifest = load_manifest(manifest_path)
+            validate_manifest_files(
+                reader.root,
+                manifest,
+                tests_spec_max_bytes=int(runtime.config_values.TEXTAREA_MAX_BYTES),
+                statement_sample_max_bytes=int(
+                    runtime.config_values.STATEMENT_SAMPLE_MAX_BYTES
+                ),
+            )
+
+    def test_native_package_manifest_still_rejects_invalid_required_data(self) -> None:
+        _problem_id, _commit, native_package = self._native_package()
+        with runtime.problem_package_service.open_reader(native_package["id"]) as reader:
+            manifest_path = reader.root / "test-data" / "manifest.json"
+            original = json.loads(manifest_path.read_text(encoding="utf-8"))
+            invalid_documents = (
+                (
+                    "unsupported shape",
+                    {
+                        key: value
+                        for key, value in original.items()
+                        if key != "source_digest"
+                    },
+                ),
+                (
+                    "revision_number is invalid",
+                    {**original, "revision_number": True},
+                ),
+                (
+                    "Native Package path",
+                    {
+                        **original,
+                        "tests": [
+                            {
+                                **original["tests"][0],
+                                "input": {
+                                    **original["tests"][0]["input"],
+                                    "path": "../input",
+                                },
+                            }
+                        ],
+                    },
+                ),
+            )
+            for message, document in invalid_documents:
+                with self.subTest(message=message):
+                    manifest_path.write_text(
+                        json.dumps(document, indent=2, sort_keys=True) + "\n",
+                        encoding="utf-8",
+                    )
+                    with self.assertRaisesRegex(ValueError, message):
+                        manifest = load_manifest(manifest_path)
+                        validate_manifest_files(
+                            reader.root,
+                            manifest,
+                            tests_spec_max_bytes=int(
+                                runtime.config_values.TEXTAREA_MAX_BYTES
+                            ),
+                            statement_sample_max_bytes=int(
+                                runtime.config_values.STATEMENT_SAMPLE_MAX_BYTES
+                            ),
+                        )
 
     def test_native_package_reader_detects_archive_change_during_read(self) -> None:
         _problem_id, _commit, verified = self._native_package()

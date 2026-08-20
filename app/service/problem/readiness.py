@@ -74,6 +74,7 @@ class VerificationReadiness(TypedDict):
 class PackageReadiness(TypedDict):
     state: PackageReadinessState
     revision_number: int | None
+    verified: bool
     tone: ReadinessTone
     reason: str
     native_package_id: str | None
@@ -151,6 +152,7 @@ class ProblemReadinessService:
             "package": {
                 "state": "none",
                 "revision_number": None,
+                "verified": False,
                 "tone": "danger",
                 "reason": "readiness unavailable",
                 "native_package_id": None,
@@ -178,6 +180,7 @@ class ProblemReadinessService:
             return {
                 "state": "ready",
                 "revision_number": readiness["native_package_revision_number"],
+                "verified": readiness["verified"],
                 "tone": "normal",
                 "reason": "",
                 "native_package_id": readiness["native_package_id"],
@@ -188,6 +191,7 @@ class ProblemReadinessService:
             return {
                 "state": "stale",
                 "revision_number": readiness["native_package_revision_number"],
+                "verified": readiness["verified"],
                 "tone": "warning",
                 "reason": readiness["missing_reason"],
                 "native_package_id": readiness["native_package_id"],
@@ -198,6 +202,7 @@ class ProblemReadinessService:
             return {
                 "state": "queued",
                 "revision_number": None,
+                "verified": False,
                 "tone": "normal",
                 "reason": "",
                 "native_package_id": None,
@@ -207,6 +212,7 @@ class ProblemReadinessService:
         return {
             "state": "none",
             "revision_number": None,
+            "verified": False,
             "tone": "danger",
             "reason": readiness["missing_reason"],
             "native_package_id": None,

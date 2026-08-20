@@ -131,6 +131,7 @@ select.tag-select.tag-select-main-correct option[value="main_correct"] {
 select.tag-select.tag-select-wrong-answer,
 select.tag-select.tag-select-time-limit-exceeded,
 select.tag-select.tag-select-run-time-error,
+select.tag-select.tag-select-compile-error,
 select.tag-select.tag-select-rejected {
   color: var(--tag-fail-fg);
   border-color: var(--tag-fail-border);
@@ -168,6 +169,7 @@ select.tag-select.tag-select-neutral {
 .tag-select option[value="wrong_answer"],
 .tag-select option[value="time_limit_exceeded"],
 .tag-select option[value="run_time_error"],
+.tag-select option[value="compile_error"],
 .tag-select option[value="rejected"] {
   color: var(--tag-fail-fg);
   background-color: var(--tag-fail-bg);

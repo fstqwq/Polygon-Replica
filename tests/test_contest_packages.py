@@ -67,6 +67,7 @@ class _ProblemPackageService:
                 "native_package_revision_number": problem_id,
                 "native_package_id": f"np-{problem_id}",
                 "status": self.statuses[problem_id],
+                "verified": self.statuses[problem_id] == "ready",
                 "missing_reason": "",
             }
             for problem_id in problem_ids

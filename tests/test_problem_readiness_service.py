@@ -45,6 +45,7 @@ def _missing_package(problem_id: int) -> NativePackageReadiness:
         "native_package_revision_number": None,
         "native_package_id": "",
         "status": "none",
+        "verified": False,
         "missing_reason": "Package not built",
     }
 
@@ -145,6 +146,7 @@ class TestProblemReadinessService(unittest.TestCase):
                 "native_package_revision_number": None,
                 "native_package_id": "",
                 "status": "queued",
+                "verified": False,
                 "missing_reason": "",
             },
         )

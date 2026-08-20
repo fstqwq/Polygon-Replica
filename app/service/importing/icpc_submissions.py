@@ -1,9 +1,9 @@
 """Canonical expected-behavior parsing for ICPC package submissions."""
 
-import re
 import os
-from pathlib import Path, PurePosixPath
+import re
 import uuid
+from pathlib import Path, PurePosixPath
 
 import yaml
 
@@ -15,6 +15,7 @@ _BEHAVIOR_BY_RULE: dict[tuple[frozenset[str], frozenset[str]], str] = {
     (frozenset({"AC", "WA"}), frozenset({"WA"})): "wrong_answer",
     (frozenset({"AC", "TLE"}), frozenset({"TLE"})): "time_limit_exceeded",
     (frozenset({"AC", "RTE"}), frozenset({"RTE"})): "run_time_error",
+    (frozenset({"CE"}), frozenset({"CE"})): "compile_error",
     (frozenset({"AC", "TLE"}), frozenset({"AC", "TLE"})): "tle_or_correct",
     (frozenset({"TLE", "RTE"}), frozenset({"TLE", "RTE"})): "tle_or_re",
     (
@@ -36,6 +37,7 @@ _ANNOTATION_BEHAVIOR_BY_RESULTS = {
     frozenset({"AC", "WA"}): "wrong_answer",
     frozenset({"AC", "TLE"}): "tle_or_correct",
     frozenset({"AC", "RTE"}): "run_time_error",
+    frozenset({"CE"}): "compile_error",
     frozenset({"TLE", "RTE"}): "tle_or_re",
     frozenset({"WA", "TLE", "RTE", "CE"}): "rejected",
 }
@@ -53,6 +55,8 @@ def submission_expected_from_group(raw_group: str) -> str:
         "run_time_error": "run_time_error",
         "runtime_error": "run_time_error",
         "rte": "run_time_error",
+        "compile_error": "compile_error",
+        "ce": "compile_error",
         "accepted": "accepted",
         "ac": "accepted",
         "mixed_tle_or_correct": "tle_or_correct",
@@ -70,7 +74,7 @@ def _verdict_set(raw: object, *, field: str) -> frozenset[str]:
         raise ValueError(f"submissions.yaml {field} must be a sequence")
     tokens: list[str] = []
     for item in raw:
-        if not isinstance(item, str) or item not in {"AC", "WA", "TLE", "RTE"}:
+        if not isinstance(item, str) or item not in {"AC", "WA", "TLE", "RTE", "CE"}:
             raise ValueError(f"submissions.yaml contains invalid {field} verdict")
         tokens.append(item)
     if len(tokens) != len(set(tokens)):

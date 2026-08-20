@@ -103,6 +103,7 @@ class TestVerificationAdapters(E2ETestBase):
             run_verification_payload_base={},
             generate_verification_payload_base={},
             bypass_case_result_cache=True,
+            service_class="foreground",
             judgehost=runtime.judgehost_task_service,
             runtime_blob_store=runtime.runtime_blob_store,
             verification_service=runtime.verification_service,
@@ -168,6 +169,10 @@ class TestVerificationAdapters(E2ETestBase):
             skipped = _publish_run_task(skipped_row, execution=execution)
 
         self.assertEqual([call["bypass_case_result_cache"] for call in calls], [True, True, True])
+        self.assertEqual(
+            [call["service_class"] for call in calls],
+            ["foreground", "foreground", "foreground"],
+        )
         self.assertEqual(prepare_template.call_count, 2)
         self.assertIsNotNone(skipped.terminal_result)
         assert skipped.terminal_result is not None
@@ -224,10 +229,15 @@ class TestVerificationAdapters(E2ETestBase):
                 logs_dir=logs_dir,
                 test_plans=[sanity_test_plan()],
                 bypass_case_result_cache=True,
+                service_class="foreground",
             )
 
         self.assertEqual(result.status, "passed")
         self.assertEqual(result.checked_count, 2)
+        self.assertEqual(
+            [call["service_class"] for call in calls],
+            ["foreground", "foreground"],
+        )
         self.assertEqual([str(call["upload_filename"]) for call in calls], ["sanity_empty_output.py", "sanity_unicode_output.py"])
         self.assertTrue(all(call["persist_verification_run"] is False for call in calls))
         self.assertTrue(all(call["selected_tests"] == ["001.in"] for call in calls))
@@ -500,6 +510,7 @@ class TestVerificationAdapters(E2ETestBase):
                     run_verification_payload_base={},
                     generate_verification_payload_base={},
                     bypass_case_result_cache=False,
+                    service_class="background",
                     judgehost=runtime.judgehost_task_service,
                     runtime_blob_store=runtime.runtime_blob_store,
                     verification_service=runtime.verification_service,

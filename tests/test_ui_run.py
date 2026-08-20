@@ -338,6 +338,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             "native_package_revision_number": None,
             "native_package_id": "",
             "status": "none",
+            "verified": False,
             "missing_reason": "Package not built",
         }
         with patch.object(
@@ -2941,6 +2942,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             "native_package_revision_number": 3,
             "native_package_id": native_package_id,
             "status": "ready",
+            "verified": True,
             "missing_reason": "",
         }
         native_package = {
@@ -3003,6 +3005,90 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertEqual(
             response.headers["location"],
             "/problems/alice/sample/exports/e-current/sample-domjudge-v3.zip",
+        )
+        start_export.assert_not_called()
+
+    def test_unverified_native_package_runs_full_or_reuses_standard_only(self) -> None:
+        context = workspace_service.workspace_context(
+            "alice/sample",
+            "alice",
+            include_recent=False,
+        )
+        problem_id = int(context["problem"]["id"])
+        native_package_id = "pm-unverified-package"
+        readiness = {
+            "problem_id": problem_id,
+            "published_commit": "a" * 40,
+            "published_revision_number": 3,
+            "native_package_revision_number": 3,
+            "native_package_id": native_package_id,
+            "status": "ready",
+            "verified": False,
+            "missing_reason": "",
+        }
+        native_package = {
+            "id": native_package_id,
+            "problem_id": problem_id,
+            "source_commit": "a" * 40,
+            "revision_number": 3,
+            "source_digest": "b" * 64,
+            "archive_rel_path": "materializations/unverified.zip",
+            "archive_sha256": "c" * 64,
+            "archive_size_bytes": 100,
+            "verification_id": "ver-package-only",
+            "status": "available",
+            "created_at": "2026-08-16T00:00:00Z",
+            "checked_at": "2026-08-16T00:00:00Z",
+            "unavailable_reason": "",
+        }
+        with (
+            patch.object(
+                runtime.problem_package_service,
+                "published_readiness",
+                return_value=readiness,
+            ),
+            patch.object(
+                runtime.problem_package_service,
+                "native_package",
+                return_value=native_package,
+            ),
+            patch(
+                "app.impl.run_export.export.start_export_job",
+                return_value=True,
+            ) as start_export,
+        ):
+            full_response = export_create(
+                _request(
+                    "/problems/alice/sample/export/create",
+                    method="POST",
+                ),
+                "alice/sample",
+                "alice",
+                format="native",
+                standard_solution_only=None,
+            )
+            self.assertEqual(full_response.status_code, 303)
+            start_export.assert_called_once()
+            self.assertFalse(
+                start_export.call_args.kwargs["standard_solution_only"]
+            )
+
+            start_export.reset_mock()
+            standard_response = export_create(
+                _request(
+                    "/problems/alice/sample/export/create",
+                    method="POST",
+                ),
+                "alice/sample",
+                "alice",
+                format="native",
+                standard_solution_only="1",
+            )
+
+        self.assertEqual(standard_response.status_code, 303)
+        self.assertEqual(
+            standard_response.headers["location"],
+            "/problems/alice/sample/native-packages/pm-unverified-package/download",
         )
         start_export.assert_not_called()
 

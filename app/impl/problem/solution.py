@@ -43,6 +43,7 @@ _EXPECTED_BEHAVIOR_TAG_CLASS: dict[str, str] = {
     "tle_or_re": "tag-select-mixed",
     "time_limit_exceeded": "tag-select-time-limit-exceeded",
     "run_time_error": "tag-select-run-time-error",
+    "compile_error": "tag-select-compile-error",
     "rejected": "tag-select-rejected",
     "unknown": "tag-select-neutral",
 }

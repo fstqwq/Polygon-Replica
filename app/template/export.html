@@ -8,11 +8,24 @@
   <div class="package-create-revision">
     <span class="muted">Published:</span> <strong>{{ current_package.published_display }}</strong>
     <span aria-hidden="true">&middot;</span>
-    <span class="muted">Package:</span> <strong class="{{ 'danger' if current_package.package_state == 'none' else '' }}">{{ current_package.package_state }}</strong>
-    {% if current_package.package_state == 'none' %}
+    <span class="muted">Package:</span>
+    <strong class="{{ 'danger' if current_package.package_state == 'none' else '' }}">
+      {{- current_package.package_state -}}
+      {% if current_package.package_state == 'ready' and not current_package.package_verified %} (not verified){% endif %}
+    </strong>
+    {% if current_package.package_state == 'none'
+          or (current_package.package_state == 'ready' and not current_package.package_verified) %}
     <form class="package-verify-form" method="post" action="{{ current_package.create_href }}">
       <input type="hidden" name="format" value="native" />
-      <span aria-hidden="true">(</span><button class="linkish-button" type="submit" {% if not ctx.access.can_create_packages %}disabled title="{{ ctx.access.package_create_block_reason }}"{% endif %}>Create</button><span aria-hidden="true">)</span>
+      <span aria-hidden="true">(</span><button
+        class="linkish-button"
+        type="submit"
+        {% if not ctx.access.can_create_packages %}disabled title="{{ ctx.access.package_create_block_reason }}"{% endif %}
+      >{{ 'Create' if current_package.package_state == 'none' else 'Verify' }}</button><span aria-hidden="true">)</span>
+      <label>
+        <input type="checkbox" name="standard_solution_only" value="1" />
+        Run standard solution only
+      </label>
     </form>
     {% endif %}
   </div>
@@ -39,7 +52,10 @@
     <tr><th>Published</th><th>Package</th><th>External packages</th></tr>
     {% for row in revision_rows %}
     <tr>
-      <td>v{{ row.revision_number }}{% if row.current %} <span class="muted">Current</span>{% endif %}</td>
+      <td>
+        v{{ row.revision_number }}{% if not row.verified %} <span class="muted">(not verified)</span>{% endif %}
+        {% if row.current %}<span class="muted">Current</span>{% endif %}
+      </td>
       <td>
         <a href="{{ row.package_download_href }}">Download</a>
         {% for preview in row.statement_preview_links %}<br /><a href="{{ preview.href }}">Preview statement ({{ preview.language }})</a>{% endfor %}

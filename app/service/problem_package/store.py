@@ -43,13 +43,12 @@ class MaterializationExportRow(TypedDict):
     archive_rel_path: str
 
 
-class NativePackageSolutionResultRow(TypedDict):
-    task_kind: str
-    source_path: str
-    test_name: str
-    expected_behavior: str
-    final_status: str
-    result_json: str
+class VerificationCertificationRow(TypedDict):
+    id: str
+    problem_id: int
+    source_commit: str
+    kind: str
+    status: str
 
 
 class NativePackageTestExecutionRow(TypedDict):
@@ -178,6 +177,36 @@ class ProblemPackageStore:
                     materialization["source_commit"],
                 )
                 result[key] = materialization
+        return result
+
+    def verification_certifications(
+        self,
+        verification_ids: list[str],
+    ) -> dict[str, VerificationCertificationRow]:
+        ids = list(dict.fromkeys(item for item in verification_ids if item))
+        result: dict[str, VerificationCertificationRow] = {}
+        for offset in range(0, len(ids), 300):
+            chunk = ids[offset : offset + 300]
+            if not chunk:
+                continue
+            placeholders = ",".join("?" for _verification_id in chunk)
+            rows = self.db.fetch_all(
+                f"""
+                SELECT id,problem_id,source_commit,kind,status
+                FROM verifications
+                WHERE id IN ({placeholders})
+                """,
+                chunk,
+            )
+            for row in rows:
+                verification_id = str(row["id"])
+                result[verification_id] = {
+                    "id": verification_id,
+                    "problem_id": int(row["problem_id"]),
+                    "source_commit": str(row["source_commit"]),
+                    "kind": str(row["kind"]),
+                    "status": str(row["status"]),
+                }
         return result
 
     def latest_available_materializations_before(
@@ -409,6 +438,31 @@ class ProblemPackageStore:
 
         return self.db.write_transaction(transaction)
 
+    def update_materialization_verification(
+        self,
+        materialization_id: str,
+        *,
+        expected_verification_id: str,
+        verification_id: str,
+    ) -> bool:
+        def transaction(connection) -> bool:
+            cursor = connection.execute(
+                """
+                UPDATE problem_package_materializations
+                SET verification_id=?,checked_at=?
+                WHERE id=? AND verification_id=? AND status='available'
+                """,
+                [
+                    verification_id,
+                    now_iso(),
+                    materialization_id,
+                    expected_verification_id,
+                ],
+            )
+            return int(cursor.rowcount or 0) == 1
+
+        return self.db.write_transaction(transaction)
+
     def artifact_ref(self, verification_id: str, test_id: str, key: str) -> str:
         if key not in {"input_ref", "answer_ref"}:
             raise ValueError("invalid verification artifact key")
@@ -472,33 +526,6 @@ class ProblemPackageStore:
                 "final_status": str(row["final_status"]),
                 "result_json": str(row["result_json"]),
                 "input_ref": str(row["input_ref"]),
-            }
-            for row in rows
-        ]
-
-    def solution_result_rows(
-        self,
-        verification_id: str,
-    ) -> list[NativePackageSolutionResultRow]:
-        rows = self.db.fetch_all(
-            """
-            SELECT task_kind,source_path,test_name,expected_behavior,
-                   final_status,result_json
-            FROM verification_tasks
-            WHERE verification_id=?
-              AND task_kind IN ('main-correct','solution-run')
-            ORDER BY source_path,test_name,id
-            """,
-            [verification_id],
-        )
-        return [
-            {
-                "task_kind": str(row["task_kind"]),
-                "source_path": str(row["source_path"]),
-                "test_name": str(row["test_name"]),
-                "expected_behavior": str(row["expected_behavior"]),
-                "final_status": str(row["final_status"]),
-                "result_json": str(row["result_json"]),
             }
             for row in rows
         ]

@@ -135,7 +135,7 @@ source is stored next to it as `<source>.desc`. When a descriptor is needed, the
 canonical writer emits `expected: <behavior>` and zero or more `note: <text>`
 lines. It omits a descriptor for `unknown` with no note. Current behavior values
 are `accepted`, `wrong_answer`, `tle_or_correct`, `tle_or_re`,
-`time_limit_exceeded`, `run_time_error`, `rejected`, and `unknown`.
+`time_limit_exceeded`, `run_time_error`, `compile_error`, `rejected`, and `unknown`.
 The system does not accept or dispatch `.c` solution sources.
 
 A missing descriptor means `unknown`. When a descriptor exists, `expected`

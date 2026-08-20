@@ -162,6 +162,7 @@ def _run_stability_probe(
     plan: VerificationTestPlan,
     probe: _StabilityProbe,
     bypass_case_result_cache: bool,
+    service_class: str,
     judgehost: Judgehost,
 ) -> tuple[str, str]:
     run_id = _stability_run_id(
@@ -187,6 +188,7 @@ def _run_stability_probe(
         bypass_case_result_cache=bypass_case_result_cache,
         compile_only=False,
         persist_verification_run=False,
+        service_class=service_class,
     )
     try:
         return _result_verdict(
@@ -208,6 +210,7 @@ def _run_stability_checks(
     logs_dir: Path,
     test_plans: list[VerificationTestPlan],
     bypass_case_result_cache: bool,
+    service_class: str,
     judgehost: Judgehost,
 ) -> list[VerificationSanityCheckResult]:
     probe_plan = next((plan for plan in test_plans if plan.test_name), None)
@@ -230,6 +233,7 @@ def _run_stability_checks(
                 plan=probe_plan,
                 probe=probe,
                 bypass_case_result_cache=bypass_case_result_cache,
+                service_class=service_class,
                 judgehost=judgehost,
             )
         except Exception as exc:
@@ -335,6 +339,7 @@ def run_verification_sanity_checks(
     runtime_columns: list[dict[str, object]] | None = None,
     time_limit_ms: int = 0,
     bypass_case_result_cache: bool = False,
+    service_class: str = "background",
     judgehost: Judgehost,
     sample_output_service: VerificationSampleOutputService,
 ) -> VerificationSanityResult:
@@ -355,6 +360,7 @@ def run_verification_sanity_checks(
         logs_dir=logs_dir,
         test_plans=test_plans,
         bypass_case_result_cache=bypass_case_result_cache,
+        service_class=service_class,
         judgehost=judgehost,
     )
     if SUMMARY_RUNTIME_THRESHOLD_CHECK in checks:
@@ -433,6 +439,7 @@ def run_verification_sanity_checks(
             accepted_source_file=accepted_source_file,
             run_verification_payload_base=run_verification_payload_base,
             bypass_case_result_cache=bypass_case_result_cache,
+            service_class=service_class,
         )
         messages: tuple[VerificationSanityMessage, ...] = ()
         if result.status == SANITY_FAILED:
@@ -485,6 +492,7 @@ class VerificationSanityService:
         runtime_columns: list[dict[str, object]] | None = None,
         time_limit_ms: int = 0,
         bypass_case_result_cache: bool = False,
+        service_class: str = "background",
     ) -> VerificationSanityResult:
         return run_verification_sanity_checks(
             problem=problem,
@@ -501,6 +509,7 @@ class VerificationSanityService:
             runtime_columns=runtime_columns,
             time_limit_ms=time_limit_ms,
             bypass_case_result_cache=bypass_case_result_cache,
+            service_class=service_class,
             judgehost=self._judgehost,
             sample_output_service=self._sample_outputs,
         )
@@ -519,6 +528,7 @@ class VerificationSanityService:
         accepted_source_file: PayloadFile | None = None,
         run_verification_payload_base: dict[str, object] | None = None,
         bypass_case_result_cache: bool = False,
+        service_class: str = "background",
     ) -> SampleOutputValidationResult:
         return self._sample_outputs.validate(
             problem=problem,
@@ -532,4 +542,5 @@ class VerificationSanityService:
             accepted_source_file=accepted_source_file,
             run_verification_payload_base=run_verification_payload_base,
             bypass_case_result_cache=bypass_case_result_cache,
+            service_class=service_class,
         )

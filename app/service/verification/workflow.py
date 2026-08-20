@@ -5,29 +5,24 @@ from pathlib import Path
 from typing import cast
 
 from app.config import ConfigValues
-from app.service.judgehost.api import Judgehost
-from app.service.platform.fs.layout import StorageLayout
-from app.service.repository.workspace import WorkspaceService
-from app.service.verification.execution_plan import VerificationExecutionPlanner
-from app.service.verification.sanity import (
-    SANITY_FAILED,
-    SANITY_PASSED,
-    SANITY_RUNNING,
-    SANITY_SKIPPED,
-    SANITY_WARNING,
-    VerificationSanityService,
-)
-from app.service.verification.runtime_threshold import time_limit_ms_from_run_config_json
-from app.service.verification.payload import prepared_payload_for_uploaded_source
 from app.service.execution.identity import new_run_id
 from app.service.execution.policy import normalize_execution_result
+from app.service.judgehost.api import Judgehost
+from app.service.platform.fs.layout import StorageLayout
 from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
 from app.service.problem.solution_metadata import normalize_expected_behavior
+from app.service.problem.source_file import resolve_source
+from app.service.repository.workspace import WorkspaceService
 from app.service.verification.completion import verification_task_fail_reason
 from app.service.verification.execution import (
     VerificationCoordinatorFailure,
     VerificationExecutionCallbacks,
     VerificationExecutionService,
+)
+from app.service.verification.execution_plan import VerificationExecutionPlanner
+from app.service.verification.identity import (
+    canonical_verification_id,
+    new_verification_id,
 )
 from app.service.verification.lifecycle import (
     ActivationPlan,
@@ -38,20 +33,25 @@ from app.service.verification.lifecycle import (
     VerificationAdmission,
     VerificationProgram,
 )
-from app.service.verification.identity import (
-    canonical_verification_id,
-    new_verification_id,
-)
+from app.service.verification.payload import prepared_payload_for_uploaded_source
 from app.service.verification.plan import VerificationTestPlan
+from app.service.verification.runtime_threshold import time_limit_ms_from_run_config_json
+from app.service.verification.sanity import (
+    SANITY_FAILED,
+    SANITY_PASSED,
+    SANITY_RUNNING,
+    SANITY_SKIPPED,
+    SANITY_WARNING,
+    VerificationSanityService,
+)
+from app.service.verification.service import VerificationService
 from app.service.verification.signature import (
     VerificationManifest,
     verification_manifest,
 )
-from app.service.problem.source_file import resolve_source
 from app.service.verification.task_completion import TaskCompletion
 from app.service.verification.task_scheduler import TaskPublishResult
 from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
-from app.service.verification.service import VerificationService
 from app.service.verification.types import Kind, VerificationStatus, VerificationTaskStatus
 from app.service.verification.workflow_policy import (
     VerificationTaskCounts,
@@ -65,6 +65,7 @@ from app.service.verification.workflow_policy import (
 
 _ARTIFACT_READY_TIMEOUT_SEC = 2.0
 _ARTIFACT_READY_INTERVAL_SEC = 0.05
+
 
 @dataclass(frozen=True)
 class TaskExecutionContext:
@@ -81,6 +82,7 @@ class TaskExecutionContext:
     run_verification_payload_base: dict[str, object]
     generate_verification_payload_base: dict[str, object]
     bypass_case_result_cache: bool
+    service_class: str
     judgehost: Judgehost
     runtime_blob_store: RuntimeBlobStore
     verification_service: VerificationService
@@ -352,6 +354,7 @@ def _publish_generate_task(task_row: VerificationTaskRow, *, execution: TaskExec
             persist_verification_run=False,
             prepared_payload=prepared,
             execution_template=execution_template,
+            service_class=execution.service_class,
         )
         return TaskPublishResult(
             task_id=task_id,
@@ -454,6 +457,7 @@ def _publish_run_task(task_row: VerificationTaskRow, *, execution: TaskExecution
             persist_verification_run=False,
             prepared_payload=prepared,
             execution_template=execution_template,
+            service_class=execution.service_class,
         )
         return TaskPublishResult(task_id=task_id, run_id=run_id, judgehost_task_id=judgehost_task_id)
     except Exception as exc:
@@ -531,6 +535,7 @@ def run_workspace_verification_dag(
     selected_test_names: list[str] | None = None,
     bypass_case_result_cache: bool = False,
     skip_sanity: bool = False,
+    service_class: str = "background",
     planner: VerificationExecutionPlanner,
     sanity_service: VerificationSanityService,
     verification_service: VerificationService,
@@ -683,6 +688,7 @@ def run_workspace_verification_dag(
             run_verification_payload_base=execution_plan.run_verification_payload_base,
             generate_verification_payload_base=execution_plan.generate_verification_payload_base,
             bypass_case_result_cache=bool(bypass_case_result_cache),
+            service_class=service_class,
             judgehost=judgehost,
             runtime_blob_store=runtime_blob_store,
             verification_service=verification_service,
@@ -782,6 +788,7 @@ def run_workspace_verification_dag(
                     str(execution_plan.run_verification_payload_base.get("run_config_json") or ""),
                 ),
                 bypass_case_result_cache=execution.bypass_case_result_cache,
+                service_class=execution.service_class,
             )
             updated_detail = dict(detail)
             updated_detail["sanity_status"] = sanity_result.status
@@ -892,6 +899,7 @@ class VerificationWorkflow:
         *,
         sample_only: bool = False,
         verification_id: str = "",
+        service_class: str = "background",
     ) -> str:
         """Admit and synchronously execute one workspace verification."""
 
@@ -962,6 +970,7 @@ class VerificationWorkflow:
             sample_only=sample_only,
             snapshot_root_override=snapshot,
             manifest=manifest,
+            service_class=service_class,
         )
         return target_id
 
@@ -987,6 +996,7 @@ class VerificationWorkflow:
         selected_test_names: list[str] | None = None,
         bypass_case_result_cache: bool = False,
         skip_sanity: bool = False,
+        service_class: str = "background",
     ) -> None:
         run_workspace_verification_dag(
             problem,
@@ -1008,6 +1018,7 @@ class VerificationWorkflow:
             selected_test_names=selected_test_names,
             bypass_case_result_cache=bypass_case_result_cache,
             skip_sanity=skip_sanity,
+            service_class=service_class,
             planner=self._planner,
             sanity_service=self._sanity_service,
             verification_service=self._verification_service,

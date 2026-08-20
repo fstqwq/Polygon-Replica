@@ -7,9 +7,9 @@ from app.main_constant import SOLUTION_SOURCE_EXTENSIONS
 from app.service.problem.build_config import load_build_config
 from app.service.problem.solution_metadata import load_solution_desc
 from app.service.problem_package.service import (
+    NativePackage,
     ProblemPackageService,
     PublishedRevision,
-    NativePackage,
 )
 from app.service.verification.lifecycle import VerificationAdmission
 from app.service.verification.service import VerificationService
@@ -77,8 +77,32 @@ def build_full_verification_targets(
     return targets, accepted_source
 
 
+def build_standard_solution_verification_targets(
+    snapshot: Path,
+) -> tuple[list[dict[str, object]], str]:
+    """Build a package-only target set containing the main correct solution."""
+
+    build = load_build_config(snapshot)
+    accepted_source = build.get("accepted_solution_source", "")
+    if not accepted_source:
+        raise ValueError("main correct solution is required")
+    accepted_path = snapshot / accepted_source
+    if accepted_path.is_symlink() or not accepted_path.is_file():
+        raise ValueError("main correct solution source does not exist")
+    return (
+        [
+            {
+                "path": accepted_source,
+                "expected_behavior": "accepted",
+                "program_id": "accepted",
+            }
+        ],
+        accepted_source,
+    )
+
+
 class NativePackageWorkflow:
-    """Run the one full verification that prepares a published revision."""
+    """Prepare or certify the Native Package for one published revision."""
 
     def __init__(
         self,
@@ -96,6 +120,8 @@ class NativePackageWorkflow:
         revision: PublishedRevision,
         actor_user_id: int,
         actor_username: str,
+        standard_solution_only: bool = False,
+        reuse_unverified_existing: bool = False,
     ) -> NativePackage:
         problem_slug = revision.problem["slug"]
         problem_id = int(revision.problem["id"])
@@ -107,7 +133,14 @@ class NativePackageWorkflow:
             verification_id: str,
         ) -> str:
             del revision_number
-            targets, _accepted_source = build_full_verification_targets(snapshot)
+            if standard_solution_only:
+                targets, _accepted_source = (
+                    build_standard_solution_verification_targets(snapshot)
+                )
+                verification_kind = Kind.PACKAGE.value
+            else:
+                targets, _accepted_source = build_full_verification_targets(snapshot)
+                verification_kind = Kind.ALL.value
             signature = verification_sources_signature(snapshot)
             admission = self.verification_service.admit_verification(
                 VerificationAdmission(
@@ -116,7 +149,7 @@ class NativePackageWorkflow:
                     workspace_id=None,
                     signature=signature,
                     source_commit=commit,
-                    kind=Kind.ALL.value,
+                    kind=verification_kind,
                 )
             )
             if admission.outcome != "admitted":
@@ -133,18 +166,26 @@ class NativePackageWorkflow:
                 verification_id=verification_id,
                 signature=signature,
                 source_commit=commit,
-                kind=Kind.ALL.value,
+                kind=verification_kind,
                 snapshot_root_override=snapshot,
                 retain_snapshot_override=True,
+                skip_sanity=standard_solution_only,
+                service_class="background",
             )
             record = self.verification_service.verification_record(verification_id)
             if record is None or record["status"] != VerificationStatus.OK:
                 error = (
-                    "full verification failed"
+                    "package Verification failed"
                     if record is None
-                    else record["fail_reason"] or "full verification failed"
+                    else record["fail_reason"] or "package Verification failed"
                 )
                 raise ValueError(f"Native Package verification failed: {error}")
             return verification_id
 
-        return self.package_service.ensure_native_package(revision, verify)
+        return self.package_service.ensure_native_package(
+            revision,
+            verify,
+            reuse_unverified=(
+                standard_solution_only or reuse_unverified_existing
+            ),
+        )

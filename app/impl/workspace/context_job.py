@@ -1,3 +1,5 @@
+import logging
+import re
 from pathlib import Path
 
 from app.runtime import ApplicationRuntime
@@ -6,16 +8,19 @@ from app.service.platform.worker_queue import WorkerFuture
 from app.service.problem_package.service import PublishedRevision
 from app.service.repository.revision import workspace_verification_source
 from app.service.verification.lifecycle import VerificationAdmission
-from app.service.verification.types import Kind
-
+from app.service.verification.types import Kind, VerificationStatus
 from app.service.verification.workspace_fingerprint import (
     remember_verification_fingerprint,
     verification_sources_fingerprint,
     verification_sources_signature,
 )
 
+LOGGER = logging.getLogger(__name__)
+
+
 def _verification_workspace_key(problem_id: int, workspace_id: int) -> str:
     return f"{int(problem_id)}:{int(workspace_id)}"
+
 
 def _run_verification_start_worker(
     application_runtime: ApplicationRuntime,
@@ -29,10 +34,10 @@ def _run_verification_start_worker(
     workspace_dirty: bool,
     targets: list[dict[str, object]],
     verification_id: str,
-    signature: str='',
+    signature: str = "",
     source_commit: str = "",
-    kind: str=Kind.ALL.value,
-    selected_test_names: list[str] | None=None,
+    kind: str = Kind.ALL.value,
+    selected_test_names: list[str] | None = None,
     bypass_case_result_cache: bool = False,
 ) -> None:
     application_runtime.verification_workflow.run(
@@ -50,13 +55,46 @@ def _run_verification_start_worker(
         kind=kind,
         selected_test_names=selected_test_names or [],
         bypass_case_result_cache=bypass_case_result_cache,
+        service_class="background",
     )
+    if kind != Kind.ALL.value or workspace_dirty:
+        return
+    published_commit = str(source_commit or workspace_head).strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", published_commit):
+        return
+    record = application_runtime.verification_service.verification_record(
+        verification_id
+    )
+    if record is None or record["status"] != VerificationStatus.OK:
+        return
+    try:
+        mismatch = (
+            application_runtime.problem_package_service
+            .promote_native_package_verification(
+                problem_id=problem_id,
+                source_commit=published_commit,
+                verification_id=verification_id,
+            )
+        )
+        if mismatch:
+            LOGGER.warning(
+                "Full Verification %s did not certify an existing Native Package: %s",
+                verification_id,
+                mismatch,
+            )
+    except Exception:
+        LOGGER.exception(
+            "Failed to reconcile Native Package certification for Verification %s",
+            verification_id,
+        )
 
 
 def _requested_verification_kind(*, selected_test_names: list[str]) -> str:
     if selected_test_names:
         return Kind.CUSTOM.value
     return Kind.ALL.value
+
+
 def start_verification_job(
     application_runtime: ApplicationRuntime,
     problem: str,
@@ -69,8 +107,8 @@ def start_verification_job(
     workspace_dirty: bool,
     targets: list[dict[str, object]],
     verification_id: str,
-    workspace_path: Path | str | None=None,
-    selected_test_names: list[str] | None=None,
+    workspace_path: Path | str | None = None,
+    selected_test_names: list[str] | None = None,
     bypass_case_result_cache: bool = False,
     source_commit: str = "",
 ) -> bool:
@@ -192,6 +230,7 @@ def start_verification_job(
         raise
     return True
 
+
 def _export_key(problem_id: int, source_commit: str) -> str:
     return f"{int(problem_id)}:{source_commit}"
 
@@ -206,6 +245,7 @@ def _run_export_create_worker(
     requested_format: str,
     revision: PublishedRevision,
     export_job_id: str = "",
+    standard_solution_only: bool = False,
 ) -> None:
     if not export_job_id:
         raise ValueError("export_job_id is required")
@@ -224,6 +264,10 @@ def _run_export_create_worker(
             revision=revision,
             actor_user_id=actor_user_id,
             actor_username=user,
+            standard_solution_only=standard_solution_only,
+            reuse_unverified_existing=(
+                package_format != NATIVE_PACKAGE_FORMAT
+            ),
         )
         if package_format == NATIVE_PACKAGE_FORMAT:
             application_runtime.export_service.mark_export_job_succeeded(
@@ -262,6 +306,7 @@ def start_export_job(
     problem_id: int,
     requested_format: str,
     export_job_id: str,
+    standard_solution_only: bool = False,
 ) -> bool:
     if not export_job_id:
         raise ValueError("export_job_id is required")
@@ -301,6 +346,7 @@ def start_export_job(
                 requested_format=requested_format,
                 revision=revision,
                 export_job_id=export_job_id,
+                standard_solution_only=standard_solution_only,
             )
         finally:
             worker = worker_ref[0]

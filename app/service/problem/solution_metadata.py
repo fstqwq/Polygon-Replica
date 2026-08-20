@@ -12,6 +12,7 @@ ExpectedBehavior = Literal[
     "tle_or_re",
     "time_limit_exceeded",
     "run_time_error",
+    "compile_error",
     "rejected",
     "unknown",
 ]
@@ -23,6 +24,7 @@ EXPECTED_BEHAVIOR_VALUES: tuple[ExpectedBehavior, ...] = (
     "tle_or_re",
     "time_limit_exceeded",
     "run_time_error",
+    "compile_error",
     "rejected",
     "unknown",
 )
@@ -35,6 +37,7 @@ EXPECTED_BEHAVIOR_LABELS: dict[ExpectedBehavior, str] = {
     "tle_or_re": "tle_or_re (TL/RE)",
     "time_limit_exceeded": "time_limit_exceeded (TL)",
     "run_time_error": "run_time_error (RE)",
+    "compile_error": "compile_error (CE)",
     "rejected": "rejected",
     "unknown": "unknown",
 }

@@ -1,7 +1,7 @@
 from collections.abc import Iterable
 
-from app.service.problem.solution_metadata import normalize_expected_behavior
 from app.service.execution.model import ExecutionResult
+from app.service.problem.solution_metadata import normalize_expected_behavior
 
 
 _COMPILE_ERROR_VALUES = {"compile_error", "compile error", "ce"}
@@ -14,6 +14,7 @@ _EXPECTED_STATUS_RULES: dict[str, dict[str, tuple[str, ...]]] = {
     "tle_or_re": {"required": ("TL", "RE"), "allowed": ("AC", "TL", "RE")},
     "time_limit_exceeded": {"required": ("TL",), "allowed": ("AC", "TL")},
     "run_time_error": {"required": ("RE",), "allowed": ("AC", "RE")},
+    "compile_error": {"required": ("CE",), "allowed": ("CE",)},
     "rejected": {
         "required": ("WA", "TL", "RE", "CE"),
         "allowed": ("AC", "WA", "TL", "RE", "CE"),

@@ -378,7 +378,12 @@ class StatementPreviewService:
             )
         try:
             verification_id = (
-                self._verification.run_workspace(problem, username, sample_only=True)
+                self._verification.run_workspace(
+                    problem,
+                    username,
+                    sample_only=True,
+                    service_class="foreground",
+                )
                 if dynamic
                 else ""
             )

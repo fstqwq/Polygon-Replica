@@ -45,7 +45,10 @@ def _package_item(readiness: ProblemReadiness) -> ContestProblemStatusItem:
     package = readiness["package"]
     state = package["state"]
     if state == "ready":
-        return _item("Package", "ready")
+        return _item(
+            "Package",
+            "ready" if package["verified"] else "ready (not verified)",
+        )
     if state == "stale":
         return _item(
             "Package",

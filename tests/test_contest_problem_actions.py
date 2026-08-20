@@ -26,6 +26,7 @@ class TestContestProblemActions(ContestActionBase):
                 "native_package_revision_number": None,
                 "native_package_id": "",
                 "status": "none",
+                "verified": False,
                 "missing_reason": "No Native Package",
             }
             for problem_id in (first_problem_id, second_problem_id)

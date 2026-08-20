@@ -7,11 +7,12 @@ published source -> Native Package -> external packages
 ```
 
 A Native Package is not another source revision. It is the cleanup-safe result
-of fully verifying one immutable published Git commit and retaining the
-committed source, generated testcase inputs, and official answers needed by
-delivery consumers. The implementation stores its metadata as a package
-materialization and exposes its validated archive through
-`NativePackageReader`.
+of running the main correct solution for one immutable published Git commit and
+retaining the committed source, generated testcase inputs, and official answers
+needed by delivery consumers. A full Verification may produce the Package
+directly or certify an existing Package whose evidence is identical. The
+implementation stores its metadata as a package materialization and exposes its
+validated archive through `NativePackageReader`.
 
 ## Import boundary
 
@@ -56,15 +57,14 @@ result, and pushes `main`. Importing into an existing problem converts in a
 staging directory, overwrites paths present in the converted tree, and keeps
 existing paths absent from that tree; it leaves the merged changes uncommitted.
 
-A Native Package contains a complete verified payload, but source import does
-not transfer its materialization identity. Native source is
-identified by `config/problem.json`. The importer selects only canonical
+A Native Package contains a complete materialized payload, but source import
+does not transfer its materialization identity or certification. Native source
+is identified by `config/problem.json`. The importer selects only canonical
 authored roots; `test-data/`, `statement-build/`, and every other unknown
 top-level member all remain unopened under the same rule. It validates and
-imports only authored source. Generated inputs, answers, verification
-provenance, and offline statement products never enter the destination
-workspace, Git, or materialization tables. The imported problem must run its
-own Verification before it has a Native Package.
+imports only authored source. Generated inputs, answers, and offline statement
+products never enter the destination workspace, Git, or materialization
+tables. The imported problem must create its own Native Package.
 
 The ICPC importer accepts standard 2025-09 packages and the supported
 DOMjudge-compatible layout. It parses scalar or sequence problem types,
@@ -78,10 +78,13 @@ workspace tree before comparison or replacement.
 ## Native Package identity and contents
 
 At most one Native Package materialization exists for a
-`(problem_id, source_commit)` pair. Its internal native-package record keeps
-the published revision number, source digest, Verification provenance, archive
-locator, archive size and SHA-256, timestamps, and current availability.
-Rebuilding the same Git revision reuses that identity.
+`(problem_id, source_commit)` pair. Its internal native-package record keeps the
+published revision number, source digest, current certification Verification
+reference, archive locator, archive size and SHA-256, timestamps, and current
+availability. Rebuilding the same Git revision reuses that identity. The
+Package is certified only while this reference identifies a successful full
+Verification for the same published commit; a package-only run leaves it
+available but marked `not verified`.
 
 The Native Package keeps the committed source at its root without
 renaming `statement/`. It adds two package-owned derived trees:
@@ -124,35 +127,38 @@ xelatex -interaction=nonstopmode -halt-on-error statements.tex
 ```
 
 This render consumes authored statement source plus an ephemeral
-`StatementExamplesBundle` derived from the full Verification that created the
-Native Package. Browser Preview uses the same producer with its sample-only
+`StatementExamplesBundle` derived from the main-correct evidence that created
+the Native Package. Browser Preview uses the same producer with its sample-only
 Verification, so pass order and resource bytes follow one contract. The bundle
 does not backfill source from `test-data/`, modify `tests/spec.json`, or become a
 manifest field.
 
-`test-data/` is not Git source, but it is the verified payload consumed when the
-platform opens a Native Package or runs an external-package adapter. Those read
-paths validate its manifest, checksums, paths, and complete inventory. Source
-import deliberately does none of that because it neither consumes nor stores
-the verified payload. `statement-build/` is a reproducible convenience product:
+`test-data/` is not Git source, but it is the materialized payload consumed when
+the platform opens a Native Package or runs an external-package adapter. Those
+read paths validate its manifest, checksums, paths, and complete inventory.
+Source import deliberately does none of that because it neither consumes nor
+stores the materialized payload. `statement-build/` is a reproducible
+convenience product:
 it is excluded from the source digest, is not interpreted during source import,
 and does not add fields to the manifest. The exact package directory name is
 `test-data`; the former underscore spelling is not part of this protocol.
 
 The manifest contains `source_commit`, `revision_number`, `source_digest`,
-`mode`, `pass_limit`, verification provenance, and the ordered tests. Each
-test records its identity, source kind, sample flag, and descriptors for its
-available payloads. A descriptor contains a canonical path, SHA-256, and size.
-This is the current complete shape; it does not carry a speculative
-project-owned format or materializer version.
+`mode`, `pass_limit`, stable authored solution metadata, and the ordered tests.
+Each test records its identity, source kind, sample flag, and descriptors for
+its available payloads. A descriptor contains a canonical path, SHA-256, and
+size. Verification IDs, observed verdicts, and solution verdict summaries are
+not archive content. Readers validate the required current shape and ignore
+unknown fields, so older Packages that contain those extra fields remain
+readable. The manifest does not carry a speculative project-owned format or
+materializer version.
 
 When Verification skips a testcase because its generated-input artifact is
 identical to another testcase's artifact, materialization resolves the unique
 actually executed testcase with that artifact. The skipped testcase remains a
 separate ordered package testcase: its input and any available answer are
-copied from that owner, while each solution uses the owner's completed verdict.
-Statement-only sample overrides remain those of the skipped testcase. `SK` is
-never stored as a Native Package solution verdict.
+copied from that owner. Statement-only sample overrides remain those of the
+skipped testcase.
 
 Opening a Native Package checks the stored archive size and SHA, safe ZIP
 member paths and types, manifest identity, every declared payload, absence of
@@ -182,14 +188,21 @@ queued -> verifying -> packaging -> complete
 
 A Native job omits `packaging` because its result is the Native Package itself.
 
-For the frozen commit, the worker:
+For the frozen commit, the worker validates any existing Native Package before
+reuse. A normal Native request reuses a certified Package; an available but
+uncertified Package runs the missing full Verification and updates only its
+certification reference when every input and answer matches. The optional
+`Run standard solution only` mode reuses any valid Package or, when none exists,
+runs only input generation and the main correct solution to create one marked
+`not verified`. A later successful full Verification certifies it without
+rewriting its archive or cached external packages. Evidence mismatch leaves the
+Package unchanged and reports a diagnostic.
 
-1. reuses the Native Package when its complete integrity check succeeds;
-2. otherwise removes an unavailable or corrupt payload and its cached external
-   packages, runs one full Verification, and rebuilds the same materialization
-   identity;
-3. finishes immediately for a Native request, or runs the requested DOMjudge,
-   ICPC 2025-09, QOJ, or Nowcoder adapter (or reuses its cached package).
+An unavailable or corrupt payload and its cached external packages are removed
+before rebuilding the same materialization identity. External-package requests
+may use a valid uncertified Native Package; otherwise they prepare the missing
+Package through the normal full Verification path and then run or reuse the
+requested adapter.
 
 The problem Packages page accepts `native`, `domjudge`, `icpc-2025-09`, `qoj`,
 and `nowcoder`.

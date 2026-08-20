@@ -473,6 +473,7 @@ class PreviewService:
                     problem,
                     username,
                     sample_only=True,
+                    service_class="foreground",
                 )
                 sample_verification_id = verification_id
             statement_examples_attempted = True

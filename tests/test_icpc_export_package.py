@@ -329,7 +329,7 @@ class TestICPCExportPackage(unittest.TestCase):
                 short_name="A",
             )
 
-        self.assertIn("solutions/mixed.cpp", strict_warning)
+        self.assertIn("solutions/compile.cpp", strict_warning)
         self.assertEqual(domjudge_warning, "")
 
         self.assertTrue((strict / "statement" / "problem.en.pdf").is_file())
@@ -342,7 +342,7 @@ class TestICPCExportPackage(unittest.TestCase):
             strict_metadata["type"],
             ["pass-fail", "interactive", "multi-pass"],
         )
-        self.assertFalse((strict / "submissions" / "mixed_rejected" / "mixed.cpp").exists())
+        self.assertTrue((strict / "submissions" / "mixed_rejected" / "mixed.cpp").is_file())
         self.assertEqual((strict / "data" / "secret" / "001.ans").read_bytes(), b"")
 
         self.assertTrue((domjudge / "problem_statement" / "problem.pdf").is_file())
@@ -461,6 +461,14 @@ class TestICPCExportPackage(unittest.TestCase):
             "expected: rejected\n",
             encoding="utf-8",
         )
+        (package_root / "solutions" / "compile.cpp").write_text(
+            "int compile_error;\n",
+            encoding="utf-8",
+        )
+        (package_root / "solutions" / "compile.cpp.desc").write_text(
+            "expected: compile_error\n",
+            encoding="utf-8",
+        )
         (package_root / "attachments" / "readme.txt").write_text(
             "attachment\n",
             encoding="utf-8",
@@ -490,17 +498,18 @@ class TestICPCExportPackage(unittest.TestCase):
             "source_digest": materialization["source_digest"],
             "mode": mode,
             "pass_limit": pass_limit,
-            "verification": {"id": "ver-adapter", "source": "full"},
             "solutions": [
                 {
                     "source_path": "solutions/accepted.cpp",
                     "expected_behavior": "accepted",
-                    "verdicts": ["AC"],
+                },
+                {
+                    "source_path": "solutions/compile.cpp",
+                    "expected_behavior": "compile_error",
                 },
                 {
                     "source_path": "solutions/mixed.cpp",
                     "expected_behavior": "rejected",
-                    "verdicts": ["WA", "CE"],
                 },
             ],
             "tests": [

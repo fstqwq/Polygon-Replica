@@ -17,6 +17,7 @@ def _readiness(
     workspace_revision: int | None = 7,
     dirty: bool = False,
     needs_update: bool = False,
+    package_verified: bool | None = None,
 ) -> ProblemReadiness:
     return {
         "workspace": {
@@ -40,6 +41,11 @@ def _readiness(
         "package": {
             "state": package_state,
             "revision_number": package_revision,
+            "verified": (
+                package_state == "ready"
+                if package_verified is None
+                else package_verified
+            ),
             "tone": "normal",
             "reason": "",
             "native_package_id": "pm-presentation" if package_revision else None,
@@ -91,6 +97,11 @@ class TestProblemReadinessUnit(unittest.TestCase):
                 self.assertEqual(view["items"][-1]["note"], package_note)
                 self.assertIn("Verification: ok", view["aria_label"])
                 self.assertIn(f"Package: {package_display}", view["aria_label"])
+
+    def test_contest_problem_status_marks_uncertified_package(self) -> None:
+        view = contest_problem_status(_readiness(package_verified=False))
+
+        self.assertEqual(view["items"][-1]["display"], "ready (not verified)")
 
     def test_contest_problem_status_only_shows_actionable_workspace(self) -> None:
         current = contest_problem_status(_readiness())

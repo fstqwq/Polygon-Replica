@@ -85,15 +85,10 @@ class TestExportService(unittest.TestCase):
                 "source_digest": materialization["source_digest"],
                 "mode": "pass-fail",
                 "pass_limit": 1,
-                "verification": {
-                    "id": materialization["verification_id"],
-                    "source": "full-verification",
-                },
                 "solutions": [
                     {
                         "source_path": "solutions/accepted.cpp",
                         "expected_behavior": "accepted",
-                        "verdicts": ["AC"],
                     }
                 ],
                 "tests": [

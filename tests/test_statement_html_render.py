@@ -64,6 +64,54 @@ def _headings(fragment: str) -> list[tuple[str, dict[str, str | None], str]]:
 
 
 class TestStatementHtmlRender(BackendE2ETestBase):
+    def test_dynamic_statement_examples_use_foreground_verification(self) -> None:
+        workspace = Path(
+            runtime.workspace_service.workspace_context(
+                self.problem,
+                self.user,
+                include_recent=False,
+            )["workspace"]["path"]
+        )
+        manual_root = workspace / "tests" / "manual"
+        manual_root.mkdir(parents=True, exist_ok=True)
+        (manual_root / "001.in").write_text("1\n", encoding="utf-8")
+        (workspace / "tests" / "spec.json").write_text(
+            '{"tests":[{"id":"001","kind":"manual","sample":true}]}\n',
+            encoding="utf-8",
+        )
+        bundle: StatementExamplesBundle = {
+            "context": {"samples": []},
+            "resources": [],
+            "verification_id": "ver-foreground-preview",
+        }
+
+        with (
+            patch.object(
+                runtime.statement_preview_service._verification,
+                "run_workspace",
+                return_value="ver-foreground-preview",
+            ) as run_workspace,
+            patch.object(
+                runtime.statement_preview_service._examples,
+                "produce",
+                return_value=bundle,
+            ),
+            runtime.statement_preview_service.prepare_render_tree(
+                self.problem,
+                self.user,
+                source_kind="workspace",
+                language="english",
+            ) as prepared,
+        ):
+            self.assertTrue((prepared.root / "problem.tex").is_file())
+
+        run_workspace.assert_called_once_with(
+            self.problem,
+            self.user,
+            sample_only=True,
+            service_class="foreground",
+        )
+
     def test_problem_and_contest_html_reuse_source_identity_cache(self) -> None:
         workspace = Path(
             runtime.workspace_service.workspace_context(

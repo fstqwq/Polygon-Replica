@@ -570,10 +570,6 @@ class TestQOJExportPackage(unittest.TestCase):
             "source_digest": materialization["source_digest"],
             "mode": mode,
             "pass_limit": pass_limit,
-            "verification": {
-                "id": materialization["verification_id"],
-                "source": "full-verification",
-            },
             "solutions": [],
             "tests": tests,
         }
