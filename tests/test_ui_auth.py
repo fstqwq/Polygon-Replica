@@ -11,7 +11,7 @@ import app.impl.admin.panel as admin_panel_module
 from app.service.auth.password_hash import password_verifier_storage_hash
 from app.config import CONFIG_REGISTRY, ConfigKind
 from app.impl.auth.password_envelope import PasswordEnvelopeStore
-from app.impl.root.auth_pages import logout
+from app.impl.root.auth_pages import logout, register_email_check, setup_email_check
 from app.service.platform.maintenance.coordinator import MaintenanceStart
 from tests.common import E2ETestBase, override_config_values
 
@@ -649,6 +649,25 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             db_fetch_one("SELECT id FROM users WHERE username=?", [username])
         )
 
+    def test_registration_email_check_uses_configured_server_pattern(self) -> None:
+        self._replace_auth_constants(
+            AUTH_EMAIL_ALLOW_REGEX=r"^[a-z0-9._-]+@example\.org$",
+        )
+
+        allowed = register_email_check(
+            request=_post_request("/register/email-check"),
+            email="Member-1@Example.org",
+        )
+        rejected = register_email_check(
+            request=_post_request("/register/email-check"),
+            email="member@gmail.com",
+        )
+
+        self.assertEqual(allowed.status_code, 200)
+        self.assertTrue(json.loads(allowed.body)["allowed"])
+        self.assertEqual(rejected.status_code, 200)
+        self.assertFalse(json.loads(rejected.body)["allowed"])
+
     def test_register_uses_pending_email_verification_when_smtp_configured(
         self,
     ) -> None:
@@ -845,6 +864,9 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
     def test_setup_submit_creates_super_admin(self) -> None:
         username = self.random_id("boot")
         password = "StrongPass123"
+        email = f"{username}@operator.net"
+        registration_email = f"{username}@example.org"
+        email_allow_regex = r"^[a-z0-9._-]+@example\.org$"
 
         page = setup_page(_request("/setup"))
         self.assertEqual(page.status_code, 200)
@@ -865,9 +887,19 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             verifier=verifier,
         )
 
+        checked = setup_email_check(
+            request=_post_request("/setup/email-check"),
+            email=registration_email,
+            email_allow_regex=email_allow_regex,
+        )
+        self.assertEqual(checked.status_code, 200)
+        self.assertTrue(json.loads(checked.body)["allowed"])
+
         resp = setup_submit(
             request=_post_request("/setup"),
             username=username,
+            email=email,
+            email_allow_regex=email_allow_regex,
             password="",
             key_id=envelope["key_id"],
             envelope_token=envelope["envelope_token"],
@@ -884,14 +916,53 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertIn(f"{AUTH_COOKIE_NAME}=", set_cookie)
 
         row = db_fetch_one(
-            "SELECT is_system_admin,password_hash,password_salt,password_iters FROM users WHERE username=?",
+            """
+            SELECT email,email_normalized,email_verified_at,is_system_admin,
+                   password_hash,password_salt,password_iters
+            FROM users
+            WHERE username=?
+            """,
             [username],
         )
         self.assertIsNotNone(row)
+        self.assertEqual(str(row["email"]), email)
+        self.assertEqual(str(row["email_normalized"]), email)
+        self.assertTrue(str(row["email_verified_at"] or ""))
         self.assertEqual(int(row["is_system_admin"] or 0), 1)
         self.assertTrue(str(row["password_hash"] or ""))
         self.assertTrue(str(row["password_salt"] or ""))
         self.assertGreater(int(row["password_iters"] or 0), 0)
+        config_row = db_fetch_one(
+            "SELECT value_json,updated_by_user_id FROM system_config WHERE key=?",
+            ["AUTH_EMAIL_ALLOW_REGEX"],
+        )
+        self.assertIsNotNone(config_row)
+        self.assertEqual(json.loads(str(config_row["value_json"])), email_allow_regex)
+        self.assertEqual(
+            str(runtime.config_values.text("AUTH_EMAIL_ALLOW_REGEX")),
+            email_allow_regex,
+        )
+
+    def test_setup_rejects_invalid_email_pattern_without_creating_admin(self) -> None:
+        username = self.random_id("boot-invalid-regex")
+        response = _setup_with_password_envelope(
+            username,
+            "StrongPass123",
+            email=f"{username}@operator.net",
+            email_allow_regex="[",
+        )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers.get("location", ""), "/setup")
+        self.assertIsNone(
+            db_fetch_one("SELECT id FROM users WHERE username=?", [username])
+        )
+        self.assertIsNone(
+            db_fetch_one(
+                "SELECT key FROM system_config WHERE key=?",
+                ["AUTH_EMAIL_ALLOW_REGEX"],
+            )
+        )
 
     def test_setup_submit_requires_config_confirmation(self) -> None:
         username = self.random_id("boot")

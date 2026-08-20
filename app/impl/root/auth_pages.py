@@ -8,6 +8,7 @@ from fastapi import Form, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from urllib.parse import quote_plus
 
+from app.config import CONFIG_REGISTRY
 from app.service.platform.hashing import sha256_hex_text
 from app.impl.auth.shared import (
     bootstrap_super_admin_with_password_verifier,
@@ -97,19 +98,53 @@ def _is_system_admin_auth_row(row: dict[str, object] | None) -> bool:
     return runtime().access_query.is_system_admin(user_id)
 
 
-def _normalize_registration_email(value: str) -> tuple[str, str]:
+def _normalize_email_address(value: str) -> tuple[str, str]:
     email = form_text(value).strip()
-    if any(ch in email for ch in ("\x00", "\r", "\n")):
-        raise ValueError("registration failed; invalid email")
-    normalized = email.lower()
-    pattern = runtime().config_values.text("AUTH_EMAIL_ALLOW_REGEX").strip()
+    if (
+        len(email) > 320
+        or any(ch.isspace() or ord(ch) < 0x21 or ord(ch) == 0x7F for ch in email)
+        or email.count("@") != 1
+        or email.startswith("@")
+        or email.endswith("@")
+    ):
+        raise ValueError("invalid email address")
+    return email, email.lower()
+
+
+def _email_matches_pattern(email_normalized: str, pattern: str) -> bool:
     try:
         allowed = re.compile(pattern)
     except re.error as exc:
-        raise ValueError("registration failed; email allow regex is invalid") from exc
-    if not allowed.fullmatch(normalized):
+        raise ValueError("email allow regex is invalid") from exc
+    return allowed.fullmatch(email_normalized) is not None
+
+
+def _normalize_registration_email(value: str) -> tuple[str, str]:
+    try:
+        email, normalized = _normalize_email_address(value)
+    except ValueError as exc:
+        raise ValueError("registration failed; invalid email") from exc
+    pattern = runtime().config_values.text("AUTH_EMAIL_ALLOW_REGEX").strip()
+    if not _email_matches_pattern(normalized, pattern):
         raise ValueError("registration failed; email is not allowed")
     return email, normalized
+
+
+def _normalize_email_allow_regex(value: str) -> str:
+    preview = runtime().system_config_service.validate_patch(
+        {"AUTH_EMAIL_ALLOW_REGEX": form_text(value)}
+    )
+    pattern = preview["normalized"]["AUTH_EMAIL_ALLOW_REGEX"]
+    if not isinstance(pattern, str):
+        raise RuntimeError("normalized email allow regex is not text")
+    return pattern
+
+
+def _default_email_allow_regex() -> str:
+    default = CONFIG_REGISTRY.defaults()["AUTH_EMAIL_ALLOW_REGEX"]
+    if not isinstance(default, str):
+        raise RuntimeError("default email allow regex is not text")
+    return default
 
 
 def _hit_auth_rate_limit(bucket_key: str, *, limit: int, window_sec: int) -> dict[str, object]:
@@ -165,11 +200,63 @@ def setup_page(request: Request):
         return redirect_response(target, status_code=303)
     if has_registered_users():
         return redirect_response('/login', status_code=303, message='setup already completed')
-    return template_response(request, 'setup.html', {'next_path': next_path, 'password_csrf_token': issue_password_form_csrf_token('setup-password'), 'password_salt': secrets.token_hex(16), 'password_iters': runtime().config_values.integer("PASSWORD_HASH_ITERS"), 'config_rows': _setup_config_rows()})
+    return template_response(
+        request,
+        'setup.html',
+        {
+            'next_path': next_path,
+            'password_csrf_token': issue_password_form_csrf_token('setup-password'),
+            'password_salt': secrets.token_hex(16),
+            'password_iters': runtime().config_values.integer("PASSWORD_HASH_ITERS"),
+            'email_allow_regex': runtime().config_values.text(
+                "AUTH_EMAIL_ALLOW_REGEX"
+            ).strip(),
+            'config_rows': _setup_config_rows(),
+        },
+    )
+
+
+def setup_email_check(
+    request: Request,
+    email: str = Form(""),
+    email_allow_regex: str = Form(""),
+) -> JSONResponse:
+    enforce_same_origin_state_change(request)
+    if has_registered_users():
+        return JSONResponse(
+            {"allowed": False, "message": "System setup is already complete."},
+            status_code=409,
+        )
+    try:
+        _enforce_auth_rate_limit(
+            bucket_key=f"setup-email-check:ip:{_client_ip_for_auth_rate_limit(request)}",
+            limit=runtime().config_values.integer("AUTH_REGISTER_SUBMIT_MAX"),
+            window_sec=runtime().config_values.integer("AUTH_REGISTER_SUBMIT_WINDOW_SEC"),
+            message="too many email checks",
+        )
+    except ValueError as exc:
+        return JSONResponse(
+            {"allowed": False, "message": str(exc)},
+            status_code=429,
+        )
+    try:
+        pattern = _normalize_email_allow_regex(email_allow_regex)
+        _, normalized = _normalize_email_address(email)
+        allowed = _email_matches_pattern(normalized, pattern)
+    except ValueError as exc:
+        return JSONResponse({"allowed": False, "message": str(exc)})
+    message = (
+        "Email matches the allowed pattern."
+        if allowed
+        else "Email does not match the allowed pattern."
+    )
+    return JSONResponse({"allowed": allowed, "message": message})
 
 def setup_submit(
     request: Request,
     username: str=Form(...),
+    email: str=Form(''),
+    email_allow_regex: str=Form(''),
     password: str=Form(''),
     csrf_token: str=Form(''),
     key_id: str=Form(''),
@@ -187,6 +274,11 @@ def setup_submit(
         if str(confirm_config or '').strip() not in {'1', 'true', 'on', 'yes'}:
             raise ValueError('please confirm current system configuration paths')
         safe_user = normalize_username_required(form_text(username))
+        try:
+            safe_email, email_normalized = _normalize_email_address(email)
+        except ValueError as exc:
+            raise ValueError('setup failed; invalid administrator email') from exc
+        safe_email_allow_regex = _normalize_email_allow_regex(email_allow_regex)
         password_csrf = form_text(csrf_token).strip()
         salt_value = form_text(password_salt)
         iter_value = form_text(password_iters)
@@ -209,7 +301,17 @@ def setup_submit(
         iters = normalize_password_iters(iter_value)
         if iters != runtime().config_values.integer("PASSWORD_HASH_ITERS"):
             raise ValueError('setup failed; invalid password iterations')
-        user_id = bootstrap_super_admin_with_password_verifier(safe_user, verifier, salt_hex, iters)
+        user_id = bootstrap_super_admin_with_password_verifier(
+            safe_user,
+            safe_email,
+            email_normalized,
+            verifier,
+            salt_hex,
+            iters,
+            safe_email_allow_regex,
+            _default_email_allow_regex(),
+        )
+        runtime().reload_config()
         token = create_session_for_user(int(user_id))
     except ValueError as exc:
         return redirect_response('/setup', status_code=303, message=str(exc))
@@ -351,7 +453,50 @@ def register_page(request: Request):
     if user:
         target = next_path if next_path not in {'/', '/login', '/register'} else '/problems'
         return redirect_response(target, status_code=303)
-    return template_response(request, 'register.html', {'next_path': next_path, 'password_csrf_token': issue_password_form_csrf_token('register-password'), 'password_salt': secrets.token_hex(16), 'password_iters': runtime().config_values.integer("PASSWORD_HASH_ITERS")})
+    return template_response(
+        request,
+        'register.html',
+        {
+            'next_path': next_path,
+            'password_csrf_token': issue_password_form_csrf_token('register-password'),
+            'password_salt': secrets.token_hex(16),
+            'password_iters': runtime().config_values.integer("PASSWORD_HASH_ITERS"),
+            'email_allow_regex': runtime().config_values.text(
+                "AUTH_EMAIL_ALLOW_REGEX"
+            ).strip(),
+        },
+    )
+
+
+def register_email_check(
+    request: Request,
+    email: str = Form(""),
+) -> JSONResponse:
+    enforce_same_origin_state_change(request)
+    try:
+        _enforce_auth_rate_limit(
+            bucket_key=f"register-email-check:ip:{_client_ip_for_auth_rate_limit(request)}",
+            limit=runtime().config_values.integer("AUTH_REGISTER_SUBMIT_MAX"),
+            window_sec=runtime().config_values.integer("AUTH_REGISTER_SUBMIT_WINDOW_SEC"),
+            message="too many email checks",
+        )
+    except ValueError as exc:
+        return JSONResponse(
+            {"allowed": False, "message": str(exc)},
+            status_code=429,
+        )
+    try:
+        _normalize_registration_email(email)
+    except ValueError:
+        return JSONResponse(
+            {
+                "allowed": False,
+                "message": "Email does not match the allowed pattern.",
+            }
+        )
+    return JSONResponse(
+        {"allowed": True, "message": "Email matches the allowed pattern."}
+    )
 
 def register_submit(
     request: Request,

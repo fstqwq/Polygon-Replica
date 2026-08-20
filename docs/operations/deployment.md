@@ -144,7 +144,7 @@ not local.
 
 ## First use and Judgehost
 
-Open `https://<domain>/`, complete initial setup, and create the administrator.
+Open `https://<domain>/` and complete initial setup. Setup creates the administrator with a trusted email address and saves the email allow regex used by later public registrations. It also displays the effective storage paths for operator confirmation.
 In Settings configure and save:
 
 ```text

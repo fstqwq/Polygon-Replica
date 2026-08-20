@@ -489,12 +489,23 @@ def _login_with_password_envelope(username: str, password: str, *, next_path: st
         next=next_path,
     )
 
-def _setup_with_password_envelope(username: str, password: str, *, confirm_config: str = "1", next_path: str = "/"):
+def _setup_with_password_envelope(
+    username: str,
+    password: str,
+    *,
+    email: str | None = None,
+    email_allow_regex: str | None = None,
+    confirm_config: str = "1",
+    next_path: str = "/",
+):
     page = setup_page(_request("/setup"))
     html = page.body.decode("utf-8", errors="replace")
     csrf = _extract_hidden_input_value(html, "csrf_token")
     salt = _extract_hidden_input_value(html, "password_salt")
     iters = int(_extract_hidden_input_value(html, "password_iters") or "0")
+    rendered_email_allow_regex = _extract_hidden_input_value(
+        html, "email_allow_regex"
+    )
     verifier = _password_verifier_hex(password, salt, iters)
     envelope = _password_envelope_fields_direct(
         scope="setup-password",
@@ -506,6 +517,8 @@ def _setup_with_password_envelope(username: str, password: str, *, confirm_confi
     return setup_submit(
         request=_post_request("/setup"),
         username=username,
+        email=email or f"{username}@gmail.com",
+        email_allow_regex=email_allow_regex or rendered_email_allow_regex,
         password="",
         key_id=envelope["key_id"],
         envelope_token=envelope["envelope_token"],

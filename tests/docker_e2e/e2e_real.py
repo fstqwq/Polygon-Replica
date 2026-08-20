@@ -450,6 +450,7 @@ def _setup(client: httpx.Client) -> None:
     csrf_token = _required_field(fields, "csrf_token")
     salt = _required_field(fields, "password_salt")
     iterations = int(_required_field(fields, "password_iters"))
+    email_allow_regex = _required_field(fields, "email_allow_regex")
     verifier = _password_verifier(
         os.environ["POLYGON_REPLICA_E2E_ADMIN_PASSWORD"],
         salt,
@@ -468,6 +469,8 @@ def _setup(client: httpx.Client) -> None:
         "/setup",
         {
             "username": USERNAME,
+            "email": f"{USERNAME}@gmail.com",
+            "email_allow_regex": email_allow_regex,
             "password": "",
             "password_confirm": "",
             "csrf_token": csrf_token,

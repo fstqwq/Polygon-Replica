@@ -133,6 +133,68 @@ function bindRegister(id, scope, purpose) {
   });
 }
 
+function bindEmailPatternCheck({
+  emailId,
+  buttonId,
+  resultId,
+  endpoint,
+  patternId = "",
+}) {
+  const email = document.getElementById(emailId);
+  const button = document.getElementById(buttonId);
+  const result = document.getElementById(resultId);
+  const pattern = patternId ? document.getElementById(patternId) : null;
+  if (!email || !button || !result) return;
+
+  const clearResult = () => {
+    result.textContent = "";
+    result.classList.remove("ok", "danger");
+  };
+  email.addEventListener("input", clearResult);
+  pattern?.addEventListener("input", clearResult);
+
+  button.addEventListener("click", async () => {
+    const value = String(email.value || "").trim();
+    clearResult();
+    if (!value || !email.checkValidity()) {
+      result.textContent = "Enter a valid email address first.";
+      result.classList.add("danger");
+      return;
+    }
+    if (pattern && !String(pattern.value || "")) {
+      result.textContent = "Enter an allowed registration email pattern first.";
+      result.classList.add("danger");
+      return;
+    }
+
+    button.disabled = true;
+    result.textContent = "Checking…";
+    try {
+      const body = new URLSearchParams({ email: value });
+      if (pattern) body.set("email_allow_regex", String(pattern.value));
+      const response = await fetch(endpoint, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        },
+        body,
+      });
+      const payload = await response.json();
+      result.textContent = String(payload.message || "Email validation failed.");
+      result.classList.add(
+        response.ok && payload.allowed === true ? "ok" : "danger",
+      );
+    } catch (_error) {
+      result.textContent = "Email validation is unavailable.";
+      result.classList.add("danger");
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+
 function bindPasswordChange(form, options) {
   bindEnvelopeForm(form, async (activeForm) => {
     const next = String(field(activeForm, "new_password")?.value || "");
@@ -173,6 +235,19 @@ function bindSudo() {
 onReady(() => {
   bindLogin();
   bindRegister("register-form", "register-password", "register");
+  bindEmailPatternCheck({
+    emailId: "email",
+    buttonId: "email-check",
+    resultId: "email-check-result",
+    endpoint: "/register/email-check",
+  });
+  bindEmailPatternCheck({
+    emailId: "setup-email-test",
+    buttonId: "setup-email-check",
+    resultId: "setup-email-check-result",
+    endpoint: "/setup/email-check",
+    patternId: "auth-email-allow-regex",
+  });
   bindRegister("setup-form", "setup-password", "setup");
   bindPasswordChange(document.getElementById("settings-password-form"), {
     current: true,

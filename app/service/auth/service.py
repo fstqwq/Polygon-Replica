@@ -119,15 +119,23 @@ class AuthService:
     def bootstrap_super_admin_with_password_verifier(
         self,
         username: str,
+        email: str,
+        email_normalized: str,
         verifier_hex: str,
         salt_hex: str,
         iterations: int,
+        email_allow_regex: str,
+        email_allow_regex_default: str,
     ) -> int:
         return self._store.bootstrap_super_admin_with_password_verifier(
             username=username,
+            email=email,
+            email_normalized=email_normalized,
             verifier_hex=password_verifier_storage_hash(verifier_hex),
             salt_hex=salt_hex,
             iterations=int(iterations),
+            email_allow_regex=email_allow_regex,
+            email_allow_regex_default=email_allow_regex_default,
         )
 
     def create_session_for_user(self, user_id: int) -> str:

@@ -50,6 +50,8 @@ contains 95 settings, including `PROBLEM_ZIP_MAX_EXPANDED_BYTES`,
 values that differ from registry defaults. Bootstrap environment variables
 select resources needed before this registry can be loaded.
 
+Initial setup can set `AUTH_EMAIL_ALLOW_REGEX`. The selected value and the first trusted-email administrator are committed together, and the setting becomes active before the administrator session is issued.
+
 `app/main_constant.py` contains fixed protocol, path, regular-expression,
 template, and enumeration values. It does not contain admin-editable defaults.
 Fixed ZIP limits such as the per-problem 4096-entry ceiling and 4 MiB metadata

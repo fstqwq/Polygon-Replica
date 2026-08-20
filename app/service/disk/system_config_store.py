@@ -8,6 +8,36 @@ class SystemConfigStore:
     def __init__(self, db: DB):
         self.db = db
 
+    @staticmethod
+    def set_override_in_transaction(
+        conn: sqlite3.Connection,
+        *,
+        key: str,
+        value: object,
+        default: object,
+        actor_user_id: int,
+        updated_at: str,
+    ) -> None:
+        if value == default:
+            conn.execute("DELETE FROM system_config WHERE key=?", [key])
+            return
+        conn.execute(
+            """
+            INSERT INTO system_config(key, value_json, updated_at, updated_by_user_id)
+            VALUES(?,?,?,?)
+            ON CONFLICT(key) DO UPDATE SET
+                value_json=excluded.value_json,
+                updated_at=excluded.updated_at,
+                updated_by_user_id=excluded.updated_by_user_id
+            """,
+            [
+                key,
+                json.dumps(value, ensure_ascii=False, separators=(",", ":")),
+                updated_at,
+                int(actor_user_id),
+            ],
+        )
+
     def replace_overrides(
         self,
         *,
@@ -19,20 +49,13 @@ class SystemConfigStore:
     ) -> None:
         def _tx(conn) -> None:
             for key in keys:
-                value = values[key]
-                if value == defaults[key]:
-                    conn.execute("DELETE FROM system_config WHERE key=?", [key])
-                    continue
-                conn.execute(
-                    """
-                    INSERT INTO system_config(key, value_json, updated_at, updated_by_user_id)
-                    VALUES(?,?,?,?)
-                    ON CONFLICT(key) DO UPDATE SET
-                        value_json=excluded.value_json,
-                        updated_at=excluded.updated_at,
-                        updated_by_user_id=excluded.updated_by_user_id
-                    """,
-                    [key, json.dumps(value, ensure_ascii=False, separators=(",", ":")), updated_at, int(actor_user_id)],
+                self.set_override_in_transaction(
+                    conn,
+                    key=key,
+                    value=values[key],
+                    default=defaults[key],
+                    actor_user_id=actor_user_id,
+                    updated_at=updated_at,
                 )
             conn.execute(
                 "DELETE FROM system_config WHERE key NOT IN ({})".format(

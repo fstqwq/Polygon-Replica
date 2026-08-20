@@ -107,6 +107,30 @@ body.confirm-open {
   padding: var(--space-6);
 }
 
+.auth-email-pattern {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+  font-size: var(--font-size-ui-sm);
+}
+
+.auth-email-pattern code {
+  overflow-wrap: anywhere;
+}
+
+.auth-email-pattern > input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.auth-email-check-result {
+  min-height: 1.4em;
+  margin: 0;
+  font-size: var(--font-size-ui-sm);
+}
+
 .terms-consent {
   display: grid;
   grid-template-columns: auto 1fr;

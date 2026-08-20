@@ -8,10 +8,12 @@ from app.impl.root.auth_pages import (
     login_page,
     login_submit,
     logout,
+    register_email_check,
     register_page,
     register_submit,
     register_verify,
     register_verify_page,
+    setup_email_check,
     setup_page,
     setup_submit,
     sudo_page,
@@ -71,6 +73,12 @@ router.add_api_route(
 )
 
 router.add_api_route(
+    "/register/email-check",
+    register_email_check,
+    methods=["POST"],
+)
+
+router.add_api_route(
     "/register/verify",
     register_verify_page,
     methods=["GET"],
@@ -93,6 +101,12 @@ router.add_api_route(
 router.add_api_route(
     "/setup",
     setup_submit,
+    methods=["POST"],
+)
+
+router.add_api_route(
+    "/setup/email-check",
+    setup_email_check,
     methods=["POST"],
 )
 

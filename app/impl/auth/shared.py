@@ -495,9 +495,13 @@ def create_user_with_password_verifier(
 
 def bootstrap_super_admin_with_password_verifier(
     username: str,
+    email: str,
+    email_normalized: str,
     verifier_hex: str,
     salt_hex: str,
     iterations: int,
+    email_allow_regex: str,
+    email_allow_regex_default: str,
 ) -> int:
     safe_user = normalize_username_required(username)
     safe_verifier = normalize_password_verifier_hex(verifier_hex)
@@ -505,9 +509,13 @@ def bootstrap_super_admin_with_password_verifier(
     safe_iters = normalize_password_iters(iterations)
     return runtime().auth_service.bootstrap_super_admin_with_password_verifier(
         username=safe_user,
+        email=email,
+        email_normalized=email_normalized,
         verifier_hex=safe_verifier,
         salt_hex=safe_salt,
         iterations=safe_iters,
+        email_allow_regex=email_allow_regex,
+        email_allow_regex_default=email_allow_regex_default,
     )
 
 

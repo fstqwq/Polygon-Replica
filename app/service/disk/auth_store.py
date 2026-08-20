@@ -7,6 +7,7 @@ from app.db import DB, now_iso
 from app.config import ConfigValues
 from app.main_constant import SESSION_TOKEN_RE, USER_IDENT_RE
 from app.service.auth.model import AuthSessionIdentity, SudoSessionIdentity
+from app.service.disk.system_config_store import SystemConfigStore
 from app.service.platform.hashing import sha256_hex_text
 
 
@@ -428,9 +429,13 @@ class AuthStore:
         self,
         *,
         username: str,
+        email: str,
+        email_normalized: str,
         verifier_hex: str,
         salt_hex: str,
         iterations: int,
+        email_allow_regex: str,
+        email_allow_regex_default: str,
     ) -> int:
         now_text = now_iso()
 
@@ -444,25 +449,55 @@ class AuthStore:
             if has_registered_user:
                 raise ValueError("setup already completed")
             existing_cursor = conn.execute(
-                "SELECT id,username,password_hash FROM users WHERE LOWER(username)=LOWER(?) ORDER BY id ASC LIMIT 1",
+                """
+                SELECT id,username,password_hash
+                FROM users
+                WHERE LOWER(username)=LOWER(?)
+                ORDER BY id ASC
+                LIMIT 1
+                """,
                 [username],
             )
             existing = existing_cursor.fetchone()
+            email_owner = conn.execute(
+                "SELECT id FROM users WHERE email_normalized=? LIMIT 1",
+                [email_normalized],
+            ).fetchone()
+            if email_owner is not None and (
+                existing is None or int(email_owner["id"]) != int(existing["id"])
+            ):
+                raise ValueError("setup failed; administrator email is unavailable")
             if existing is None:
                 try:
                     cursor = conn.execute(
                         """
                         INSERT INTO users(
-                            username,password_hash,password_salt,password_iters,password_updated_at,created_at,is_system_admin
+                            username,email,email_normalized,email_verified_at,
+                            password_hash,password_salt,password_iters,password_updated_at,
+                            created_at,is_system_admin
                         )
-                        VALUES(?,?,?,?,?,?,1)
+                        VALUES(?,?,?,?,?,?,?,?,?,1)
                         """,
-                        [username, verifier_hex, salt_hex, int(iterations), now_text, now_text],
+                        [
+                            username,
+                            email,
+                            email_normalized,
+                            now_text,
+                            verifier_hex,
+                            salt_hex,
+                            int(iterations),
+                            now_text,
+                            now_text,
+                        ],
                     )
                 except sqlite3.IntegrityError as exc:
                     message = str(exc or "").strip().lower()
                     if "users.username" in message:
                         raise ValueError("setup failed; username is unavailable") from exc
+                    if "users.email_normalized" in message:
+                        raise ValueError(
+                            "setup failed; administrator email is unavailable"
+                        ) from exc
                     raise
                 user_id = _required_lastrowid(cursor)
             else:
@@ -473,12 +508,31 @@ class AuthStore:
                 conn.execute(
                     """
                     UPDATE users
-                    SET password_hash=?,password_salt=?,password_iters=?,password_updated_at=?,is_system_admin=1
+                    SET email=?,email_normalized=?,email_verified_at=?,
+                        password_hash=?,password_salt=?,password_iters=?,
+                        password_updated_at=?,is_system_admin=1
                     WHERE id=?
                     """,
-                    [verifier_hex, salt_hex, int(iterations), now_text, user_id],
+                    [
+                        email,
+                        email_normalized,
+                        now_text,
+                        verifier_hex,
+                        salt_hex,
+                        int(iterations),
+                        now_text,
+                        user_id,
+                    ],
                 )
             conn.execute("UPDATE users SET is_system_admin=0 WHERE id<>?", [user_id])
+            SystemConfigStore.set_override_in_transaction(
+                conn,
+                key="AUTH_EMAIL_ALLOW_REGEX",
+                value=email_allow_regex,
+                default=email_allow_regex_default,
+                actor_user_id=user_id,
+                updated_at=now_text,
+            )
             return user_id
 
         return int(self.db.write_transaction(_tx))

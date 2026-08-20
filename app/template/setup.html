@@ -1,15 +1,24 @@
 {% extends "auth_base.html" %}
 {% block auth_title %}System Setup{% endblock %}
-{% block auth_subtitle %}No registered users found. Create the first super administrator account.{% endblock %}
+{% block auth_subtitle %}Create the first super administrator and choose who can register.{% endblock %}
 
 {% block auth_form %}
 <form id="setup-form" class="form-stack" method="post" action="/setup">
   <label for="username">Super Admin Username</label>
   <input id="username" name="username" minlength="3" maxlength="16" placeholder="user-name" autofocus />
+  <label for="email">Super Admin Email</label>
+  <input id="email" name="email" type="email" autocomplete="email" placeholder="name@example.com" required />
   <label for="password">Password</label>
   <input id="password" name="password" type="password" autocomplete="new-password" placeholder="password (minimum 8 characters)" />
   <label for="password_confirm">Confirm Password</label>
   <input id="password_confirm" name="password_confirm" type="password" autocomplete="new-password" placeholder="confirm password" />
+  <label for="auth-email-allow-regex">Allowed Registration Email Pattern</label>
+  <input id="auth-email-allow-regex" name="email_allow_regex" type="text" value="{{ email_allow_regex }}" autocomplete="off" spellcheck="false" maxlength="512" required />
+  <div class="auth-email-pattern">
+    <input id="setup-email-test" type="email" placeholder="Test an address" aria-label="Email address to test against the registration pattern" aria-describedby="setup-email-check-result" />
+    <button id="setup-email-check" class="linkish-button" type="button">Test email</button>
+  </div>
+  <p id="setup-email-check-result" class="auth-email-check-result muted" aria-live="polite"></p>
   <label><input type="checkbox" name="confirm_config" value="1" /> I confirm the configuration paths below.</label>
   <input type="hidden" name="csrf_token" value="{{ password_csrf_token }}" />
   <input type="hidden" name="password_salt" value="{{ password_salt }}" />
