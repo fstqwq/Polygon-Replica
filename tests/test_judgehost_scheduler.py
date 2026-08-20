@@ -475,7 +475,11 @@ class TestJudgehostScheduler(unittest.TestCase):
         result = scheduler.case_result_for_task("task-lease-budget", "001.in")
         self.assertIsNotNone(result)
         assert result is not None
-        self.assertEqual((result.runresult, result.verdict), ("internal-error", "FL"))
+        self.assertEqual(result.verdict, "FL")
+        self.assertEqual(
+            result.outcome.error,
+            "Judgehost case lease deadline expired before a final result was accepted",
+        )
 
     def test_prefetched_deadlines_include_earlier_case_budgets(self) -> None:
         scheduler = JudgehostBatchRuntime(id_base=300)
