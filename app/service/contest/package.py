@@ -13,6 +13,7 @@ from app.service.export.adapters import (
     PackageAdapterRegistry,
     PackageFormat,
 )
+from app.service.platform.zip_process import create_zip_archive
 from app.service.problem_package.service import (
     NativePackageReader,
     ProblemPackageService,
@@ -44,14 +45,8 @@ class ContestPackageService:
 
     @staticmethod
     def _zip_directory(destination: Path, source_dir: Path) -> Path:
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        archive = shutil.make_archive(
-            str(destination.with_suffix("")),
-            "zip",
-            root_dir=source_dir,
-            base_dir=".",
-        )
-        return Path(archive).resolve()
+        create_zip_archive(source_dir, destination)
+        return destination.resolve()
 
     @staticmethod
     def _bundle_packages(destination: Path, packages: list[Path]) -> Path:

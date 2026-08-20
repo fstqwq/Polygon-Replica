@@ -50,7 +50,7 @@ jobs:
       if: matrix.group == 'service' || matrix.group == 'executor' || matrix.group == 'e2e'
       run: |
         sudo apt-get update
-        packages=(bubblewrap)
+        packages=(bubblewrap p7zip-full)
         if [ "${{ matrix.group }}" = "e2e" ]; then
           packages+=(pandoc poppler-utils librsvg2-bin)
         fi

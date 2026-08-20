@@ -26,6 +26,7 @@ from app.service.platform.fs.op import extract_git_archive
 from app.service.platform.git_process import run_git
 from app.service.platform.hashing import sha256_file
 from app.service.platform.runtime_blob_store import PayloadFile
+from app.service.platform.zip_process import create_zip_archive
 from app.service.problem.runtime_config import (
     ProblemConfig,
     parse_problem_config,
@@ -851,47 +852,7 @@ class ProblemPackageService:
 
     @staticmethod
     def _write_archive(source_root: Path, target: Path) -> None:
-        def _archive_info(name: str, mode: int, *, directory: bool) -> zipfile.ZipInfo:
-            info = zipfile.ZipInfo(
-                name.rstrip("/") + "/" if directory else name,
-                date_time=(1980, 1, 1, 0, 0, 0),
-            )
-            info.compress_type = zipfile.ZIP_DEFLATED
-            info.create_system = 3
-            file_type = stat.S_IFDIR if directory else stat.S_IFREG
-            info.external_attr = ((file_type | mode) & 0xFFFF) << 16
-            if directory:
-                info.external_attr |= 0x10
-            return info
-
-        target.parent.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            for dirpath, dirnames, filenames in os.walk(source_root, topdown=True, followlinks=False):
-                parent = Path(dirpath)
-                dirnames[:] = sorted(dirnames)
-                rel_parent = parent.relative_to(source_root)
-                if rel_parent.parts:
-                    archive.writestr(
-                        _archive_info(
-                            rel_parent.as_posix(),
-                            parent.stat().st_mode & 0o777,
-                            directory=True,
-                        ),
-                        b"",
-                    )
-                for filename in sorted(filenames):
-                    source = parent / filename
-                    if source.is_symlink() or not source.is_file():
-                        raise ValueError(
-                            f"Native Package archive source is not regular: {source}"
-                        )
-                    info = _archive_info(
-                        source.relative_to(source_root).as_posix(),
-                        source.stat().st_mode & 0o777,
-                        directory=False,
-                    )
-                    with source.open("rb") as source_file, archive.open(info, "w") as output:
-                        shutil.copyfileobj(source_file, output)
+        create_zip_archive(source_root, target)
 
     def _build_native_package(
         self,

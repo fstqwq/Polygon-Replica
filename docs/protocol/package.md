@@ -161,10 +161,14 @@ copied from that owner. Statement-only sample overrides remain those of the
 skipped testcase.
 
 Native Package construction validates the canonical source tree, manifest, and
-declared payloads before serialization. A later reader checks the archive's
-recorded SHA-256, safely extracts ZIP members, and parses the manifest required
-by the consumer. It does not rehash individual payloads, rebuild the source
-digest, or rescan the archive when the reader closes. A frozen consumer can
+declared payloads before serialization. Native and external Package writers
+validate their complete staging tree, then pass its root to a 7-Zip process in
+ZIP mode using fastest deflate. ZIP entry ordering, timestamps, compression
+streams, and complete archive bytes are not Package identity. A later reader
+checks the archive's recorded SHA-256, safely extracts ZIP members, and parses
+the manifest required by the consumer. It does not rehash individual payloads,
+rebuild the source digest, or rescan the archive when the reader closes. A
+frozen consumer can
 additionally require the checksum recorded at admission. The reader exposes
 only the extracted Package; it does not expose Git, a workspace, Verification
 rows, or runtime cache references.

@@ -146,6 +146,13 @@ is the contract. Pin a repeated surface once and use narrower behavioral checks
 elsewhere. Normalization removes genuine volatility; it must not erase the
 behavior the test claims to protect.
 
+Generated archives are not byte snapshots unless an external protocol explicitly
+defines their complete serialization. Package tests compare member paths, payloads,
+and required metadata rather than compression streams, entry order, timestamps,
+central-directory bytes, or whole-archive equality. Archive checksums are asserted
+only when the behavior under test is integrity validation or reuse of the same
+published artifact.
+
 When touching a brittle test, remove redundant implementation assertions and
 leave the smallest scenario that proves the intended behavior. Before keeping a
 new assertion, verify that breaking the named behavior makes it fail; an

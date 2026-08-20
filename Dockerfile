@@ -37,6 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         pandoc \
         poppler-utils \
         librsvg2-bin \
+        p7zip-full \
         libseccomp2 \
         tini \
     && mktexlsr >/dev/null \

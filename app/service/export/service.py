@@ -5,7 +5,6 @@ import re
 import shutil
 import threading
 import uuid
-import zipfile
 from pathlib import Path
 
 from app.config import ConfigValues
@@ -23,6 +22,7 @@ from app.service.export.adapters import (
 from app.service.platform.fs.layout import StorageLayout
 from app.service.platform.fs.op import extract_git_archive, remove_symlinks
 from app.service.platform.hashing import sha256_file
+from app.service.platform.zip_process import create_zip_archive
 from app.service.platform.workspace_path import (
     is_allowed_workspace_root_path,
     is_hidden_workspace_path,
@@ -260,35 +260,7 @@ class ExportService:
 
     @staticmethod
     def _make_archive(target: Path, root: Path) -> None:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        resolved_root = root.resolve()
-        with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            for directory, directories, filenames in os.walk(
-                root,
-                topdown=True,
-                followlinks=False,
-            ):
-                current = Path(directory)
-                current_resolved = current.resolve()
-                if (
-                    current_resolved != resolved_root
-                    and resolved_root not in current_resolved.parents
-                ):
-                    directories[:] = []
-                    continue
-                directories[:] = sorted(
-                    name for name in directories if not (current / name).is_symlink()
-                )
-                for filename in sorted(filenames):
-                    source = current / filename
-                    if source.is_symlink() or not source.is_file():
-                        raise ValueError(
-                            f"package adapter produced a special file: {source}"
-                        )
-                    resolved = source.resolve()
-                    if resolved_root not in resolved.parents:
-                        raise ValueError(f"package adapter escaped staging: {source}")
-                    archive.write(source, source.relative_to(root).as_posix())
+        create_zip_archive(root, target)
 
     def create_export(
         self,

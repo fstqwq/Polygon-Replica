@@ -50,6 +50,15 @@ from tests.db_helpers import (
 from tests.execution_result_helpers import execution_result
 
 
+def _archive_payloads(path: Path) -> list[tuple[str, bytes]]:
+    with zipfile.ZipFile(path, "r") as archive:
+        return sorted(
+            (info.filename, archive.read(info))
+            for info in archive.infolist()
+            if not info.is_dir()
+        )
+
+
 class TestPublishedRevisionExport(E2ETestBase):
     def test_native_package_reserves_the_configured_main_solution(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1016,7 +1025,7 @@ class TestPublishedRevisionExport(E2ETestBase):
                 ],
             )
 
-    def test_full_verification_certifies_existing_package_without_rewriting_it(
+    def test_full_verification_certifies_existing_package_and_keeps_cached_export(
         self,
     ) -> None:
         _workspace, problem_id, _commit = self._publish_problem()
@@ -1028,24 +1037,18 @@ class TestPublishedRevisionExport(E2ETestBase):
                 verification_kind="package",
             ),
         )
-        _stored, archive = runtime.problem_package_service.native_package_archive(
-            native_package["id"]
-        )
-        archive_bytes = archive.read_bytes()
         with patch.object(
             runtime.tex_compile_service,
             "compile_pdf",
             side_effect=self._compile_statement,
         ):
-            export_id, export_archive, _warning = (
+            export_id, _export_archive, _warning = (
                 runtime.export_service.create_export(
                     self.problem,
                     "domjudge",
                     native_package_id=native_package["id"],
                 )
             )
-        external_bytes = export_archive.read_bytes()
-
         certified = runtime.problem_package_service.ensure_native_package(
             revision,
             self._verification_builder(problem_id),
@@ -1059,16 +1062,14 @@ class TestPublishedRevisionExport(E2ETestBase):
         self.assertTrue(
             runtime.problem_package_service.native_package_verified(certified)
         )
-        self.assertEqual(archive.read_bytes(), archive_bytes)
         cached_export = db_fetch_one(
             "SELECT id,archive_rel_path FROM exports WHERE materialization_id=?",
             [native_package["id"]],
         )
         self.assertIsNotNone(cached_export)
         self.assertEqual(str(cached_export["id"]), export_id)
-        self.assertEqual(export_archive.read_bytes(), external_bytes)
 
-    def test_standard_only_and_full_verification_write_the_same_archive(self) -> None:
+    def test_standard_only_and_full_verification_write_the_same_payloads(self) -> None:
         _workspace, problem_id, _commit = self._publish_problem()
         revision = runtime.problem_package_service.published_revision(problem_id)
         standard_package = runtime.problem_package_service.ensure_native_package(
@@ -1081,8 +1082,8 @@ class TestPublishedRevisionExport(E2ETestBase):
         _stored, archive = runtime.problem_package_service.native_package_archive(
             standard_package["id"]
         )
-        standard_archive_bytes = archive.read_bytes()
-        archive.write_bytes(b"force a deterministic rebuild")
+        standard_payloads = _archive_payloads(archive)
+        archive.write_bytes(b"force a rebuild")
 
         full_package = runtime.problem_package_service.ensure_native_package(
             revision,
@@ -1097,7 +1098,7 @@ class TestPublishedRevisionExport(E2ETestBase):
         self.assertTrue(
             runtime.problem_package_service.native_package_verified(full_package)
         )
-        self.assertEqual(rebuilt_archive.read_bytes(), standard_archive_bytes)
+        self.assertEqual(_archive_payloads(rebuilt_archive), standard_payloads)
 
     def test_full_verification_evidence_mismatch_keeps_package_uncertified(
         self,

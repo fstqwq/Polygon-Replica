@@ -77,6 +77,7 @@ echo "[1/6] Installing system dependencies..."
   pandoc \
   poppler-utils \
   librsvg2-bin \
+  p7zip-full \
   util-linux \
   bubblewrap \
   libseccomp2
