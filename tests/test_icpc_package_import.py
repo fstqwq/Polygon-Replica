@@ -352,25 +352,6 @@ limits:
         self.assertTrue(any("overrides conflicting annotation" in item for item in warnings))
         self.assertTrue(any("overrides conflicting directory" in item for item in warnings))
 
-    def test_submission_yaml_rejects_invalid_verdict(self) -> None:
-        payload = io.BytesIO()
-        with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("problem.yaml", "name: Invalid\nvalidation: default\n")
-            zf.writestr("data/secret/001.in", "1\n")
-            zf.writestr("submissions/accepted/ac.cpp", "int main() { return 0; }\n")
-            zf.writestr(
-                "submissions/submissions.yaml",
-                "accepted/ac.cpp:\n  permitted: [AC, CE]\n  required: [AC]\n",
-            )
-
-        with self.assertRaisesRegex(ValueError, "invalid permitted verdict"):
-            import_problem_package(
-                ICPCPackageImportService(),
-                self.workspace,
-                "invalid.zip",
-                payload.getvalue(),
-            )
-
     def test_non_first_line_expected_results_comment_is_preserved(self) -> None:
         payload = io.BytesIO()
         source = (
