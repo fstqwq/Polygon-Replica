@@ -194,15 +194,19 @@ uncertified Package runs the missing full Verification and updates only its
 certification reference when every input and answer matches. The optional
 `Run standard solution only` mode reuses any valid Package or, when none exists,
 runs only input generation and the main correct solution to create one marked
-`not verified`. A later successful full Verification certifies it without
-rewriting its archive or cached external packages. Evidence mismatch leaves the
-Package unchanged and reports a diagnostic.
+`not verified`. The same option applies when the request also asks for an
+external package: the worker prepares the missing Native Package with only the
+main correct solution, then runs the selected adapter. A later successful full
+Verification certifies it without rewriting its archive or cached external
+packages. Evidence mismatch leaves the Package unchanged and reports a
+diagnostic.
 
 An unavailable or corrupt payload and its cached external packages are removed
 before rebuilding the same materialization identity. External-package requests
-may use a valid uncertified Native Package; otherwise they prepare the missing
-Package through the normal full Verification path and then run or reuse the
-requested adapter.
+may use a valid uncertified Native Package. When no Package exists, they prepare
+one through full Verification by default or through standard-solution-only
+Verification when explicitly requested, then run or reuse the requested
+adapter.
 
 The problem Packages page accepts `native`, `domjudge`, `icpc-2025-09`, `qoj`,
 and `nowcoder`.

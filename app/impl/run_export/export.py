@@ -360,6 +360,7 @@ def export_create(
     user: Annotated[str, Depends(require_session_user)],
     format: str = Form(...),  # pylint: disable=redefined-builtin
     standard_solution_only: str | None = Form(None),
+    create_native: str | None = Form(None),
 ):
     user_ctx = global_user_ctx(user)
     problem_row = runtime().contest_service.problem_by_slug(problem)
@@ -381,11 +382,13 @@ def export_create(
             message=access["package_create_block_reason"],
         )
     try:
-        package_format = runtime().export_service.require_job_format(format.lower())
-        run_standard_solution_only = bool(
-            package_format == NATIVE_PACKAGE_FORMAT
-            and standard_solution_only == "1"
+        requested_format = (
+            NATIVE_PACKAGE_FORMAT if create_native == "1" else format.lower()
         )
+        package_format = runtime().export_service.require_job_format(
+            requested_format
+        )
+        run_standard_solution_only = standard_solution_only == "1"
         existing_href = _existing_current_package_href(
             request,
             problem,

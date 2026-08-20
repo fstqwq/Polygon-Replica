@@ -3008,7 +3008,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
         start_export.assert_not_called()
 
-    def test_unverified_native_package_runs_full_or_reuses_standard_only(self) -> None:
+    def test_standard_only_controls_native_and_external_creation(self) -> None:
         context = workspace_service.workspace_context(
             "alice/sample",
             "alice",
@@ -3081,7 +3081,19 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 ),
                 "alice/sample",
                 "alice",
-                format="native",
+                format="domjudge",
+                standard_solution_only="1",
+                create_native="1",
+            )
+
+            external_response = export_create(
+                _request(
+                    "/problems/alice/sample/export/create",
+                    method="POST",
+                ),
+                "alice/sample",
+                "alice",
+                format="domjudge",
                 standard_solution_only="1",
             )
 
@@ -3090,7 +3102,10 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             standard_response.headers["location"],
             "/problems/alice/sample/native-packages/pm-unverified-package/download",
         )
-        start_export.assert_not_called()
+        start_export.assert_called_once()
+        self.assertEqual(start_export.call_args.kwargs["requested_format"], "domjudge")
+        self.assertTrue(start_export.call_args.kwargs["standard_solution_only"])
+        self.assertEqual(external_response.status_code, 303)
 
     def test_package_export_busy_returns_conflict(self) -> None:
         context = workspace_service.workspace_context(

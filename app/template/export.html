@@ -3,8 +3,8 @@
 <h1 class="page-title">Packages</h1>
 {% include "_flash_message.html" %}
 
-<div class="content-section package-create-section">
-  {% if current_package.published_display != 'none' %}
+{% if current_package.published_display != 'none' %}
+<form class="content-section package-create-section" method="post" action="{{ current_package.create_href }}">
   <div class="package-create-revision">
     <span class="muted">Published:</span> <strong>{{ current_package.published_display }}</strong>
     <span aria-hidden="true">&middot;</span>
@@ -15,21 +15,23 @@
     </strong>
     {% if current_package.package_state == 'none'
           or (current_package.package_state == 'ready' and not current_package.package_verified) %}
-    <form class="package-verify-form" method="post" action="{{ current_package.create_href }}">
-      <input type="hidden" name="format" value="native" />
       <span aria-hidden="true">(</span><button
         class="linkish-button"
         type="submit"
+        name="create_native"
+        value="1"
         {% if not ctx.access.can_create_packages %}disabled title="{{ ctx.access.package_create_block_reason }}"{% endif %}
       >{{ 'Create' if current_package.package_state == 'none' else 'Verify' }}</button><span aria-hidden="true">)</span>
-      <label>
-        <input type="checkbox" name="standard_solution_only" value="1" />
-        Run standard solution only
-      </label>
-    </form>
     {% endif %}
   </div>
-  <form class="form-row package-create-form" method="post" action="{{ current_package.create_href }}">
+  {% if current_package.package_state == 'none'
+        or (current_package.package_state == 'ready' and not current_package.package_verified) %}
+  <label class="package-standard-only">
+    <input type="checkbox" name="standard_solution_only" value="1" />
+    Run standard solution only
+  </label>
+  {% endif %}
+  <div class="form-row package-create-form">
     <label>
       External format
       <select name="format">
@@ -39,11 +41,13 @@
       </select>
     </label>
     <button class="btn primary-action" type="submit" {% if not ctx.access.can_create_packages %}disabled title="{{ ctx.access.package_create_block_reason }}"{% endif %}>Create</button>
-  </form>
-  {% else %}
+  </div>
+</form>
+{% else %}
+<div class="content-section package-create-section">
   <span class="muted">No published revision is available.</span>
-  {% endif %}
 </div>
+{% endif %}
 
 <section class="content-section">
   <h2>Revisions</h2>
