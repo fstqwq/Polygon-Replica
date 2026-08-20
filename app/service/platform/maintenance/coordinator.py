@@ -157,31 +157,63 @@ class MaintenanceCoordinator:
                 return MaintenanceStart(False, f"admission_failed: {exc}", {})
             if any(busy.values()):
                 return MaintenanceStart(False, "busy", busy)
-            self._gate.close_locked()
-            operation_id = f"restart-{uuid.uuid4().hex}"
-            started_at = now_iso()
-            self._snapshot = MaintenanceSnapshot(
-                status="running",
-                operation="restart",
-                stage="exiting",
-                operation_id=operation_id,
-                started_at=started_at,
-                actor_user_id=int(actor_user_id),
+            return self._schedule_restart_locked(
+                actor_user_id=actor_user_id,
+                forced=False,
             )
-            try:
-                restart_thread = threading.Thread(
-                    target=self._restart_after_response,
-                    daemon=True,
-                    name="application-restart",
-                )
-                restart_thread.start()
-            except Exception as exc:
-                self._snapshot.status = "failed"
-                self._snapshot.finished_at = now_iso()
-                self._snapshot.error = str(exc)
-                self._gate.drain_locked()
-                return MaintenanceStart(False, "restart_thread_failed", {})
-            return MaintenanceStart(True, "restarting", {})
+
+    def force_restart(self, *, actor_user_id: int) -> MaintenanceStart:
+        """Exit a deliberately drained runtime even when active work is stuck."""
+
+        with self._gate.locked():
+            if self._snapshot.status == "running":
+                return MaintenanceStart(False, "already_running", {})
+            if not self._gate.is_draining_locked():
+                return MaintenanceStart(False, "drain_required", {})
+            logger.warning(
+                "forcing application restart actor_user_id=%s",
+                int(actor_user_id),
+            )
+            return self._schedule_restart_locked(
+                actor_user_id=actor_user_id,
+                forced=True,
+            )
+
+    def _schedule_restart_locked(
+        self,
+        *,
+        actor_user_id: int,
+        forced: bool,
+    ) -> MaintenanceStart:
+        self._gate.close_locked()
+        operation_id = f"restart-{uuid.uuid4().hex}"
+        started_at = now_iso()
+        self._snapshot = MaintenanceSnapshot(
+            status="running",
+            operation="restart",
+            stage="force_exiting" if forced else "exiting",
+            operation_id=operation_id,
+            started_at=started_at,
+            actor_user_id=int(actor_user_id),
+        )
+        try:
+            restart_thread = threading.Thread(
+                target=self._restart_after_response,
+                daemon=True,
+                name="application-restart",
+            )
+            restart_thread.start()
+        except Exception as exc:
+            self._snapshot.status = "failed"
+            self._snapshot.finished_at = now_iso()
+            self._snapshot.error = str(exc)
+            self._gate.drain_locked()
+            return MaintenanceStart(False, "restart_thread_failed", {})
+        return MaintenanceStart(
+            True,
+            "force_restarting" if forced else "restarting",
+            {},
+        )
 
     def _restart_after_response(self) -> None:
         """Give the redirect time to leave the socket, then exit the process."""

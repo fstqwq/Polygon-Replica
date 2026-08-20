@@ -1158,6 +1158,19 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertEqual(restart.status_code, 409)
         self.assertIn(b'"worker_queued":1', restart.body)
 
+        with patch.object(
+            runtime.maintenance_service,
+            "force_restart",
+            return_value=MaintenanceStart(True, "force_restarting", {}),
+        ) as force_restart:
+            forced = admin_panel_module.admin_application_restart(
+                user="alice",
+                force="1",
+            )
+        self.assertEqual(forced.status_code, 303)
+        self.assertEqual(forced.headers.get("location"), "/maintenance")
+        force_restart.assert_called_once()
+
     def test_system_admin_can_grant_and_revoke_system_admin(self) -> None:
         target = self.random_id("adminuser")
         password = "StrongPass123"

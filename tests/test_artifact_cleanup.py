@@ -685,6 +685,37 @@ class TestArtifactCleanup(unittest.TestCase):
         self.assertEqual(self.maintenance_gate.state(), "closed")
         self.assertTrue(exited.wait(timeout=2))
 
+    def test_force_restart_requires_drain_but_ignores_active_work(self) -> None:
+        exited = threading.Event()
+        self.maintenance_gate = MaintenanceAdmissionGate()
+        coordinator = MaintenanceCoordinator(
+            admission_gate=self.maintenance_gate,
+            cleanup_service=self.cleanup,
+            source_backup_service=self.source_backup,
+            worker_queue_service=self.worker_queue,
+            judgehost_task_service=self.judgehost,
+            restart_process=exited.set,
+        )
+
+        not_drained = coordinator.force_restart(actor_user_id=self.actor_user_id)
+        self.assertEqual(not_drained.reason, "drain_required")
+
+        coordinator.begin_drain()
+        self.worker_queue.running = 1
+        self.judgehost.leased = 1
+        with patch.object(
+            self.worker_queue,
+            "active_counts",
+            side_effect=RuntimeError("stuck runtime counters"),
+        ):
+            started = coordinator.force_restart(actor_user_id=self.actor_user_id)
+
+        self.assertTrue(started.accepted)
+        self.assertEqual(started.reason, "force_restarting")
+        self.assertEqual(self.maintenance_gate.state(), "closed")
+        self.assertEqual(coordinator.snapshot()["stage"], "force_exiting")
+        self.assertTrue(exited.wait(timeout=2))
+
     def test_busy_count_failure_keeps_explicit_drain(self) -> None:
         coordinator = self._coordinator()
         self._begin_drain(coordinator)

@@ -7,7 +7,7 @@
 {% set backup_visible = maintenance.get('operation') == 'source_backup' %}
 {% set admission_state = maintenance.get('admission_state', 'open') %}
 {% set busy = maintenance.get('busy', {}) %}
-{% set busy_total = busy.get('worker_queued', 0) + busy.get('worker_running', 0) + busy.get('judgehost_queued', 0) + busy.get('judgehost_leased', 0) + busy.get('judgehost_reporting', 0) + busy.get('judgehost_callbacks', 0) + busy.get('inflight_requests', 0) %}
+{% set busy_total = busy.get('worker_queued', 0) + busy.get('worker_running', 0) + busy.get('judgehost_queued', 0) + busy.get('judgehost_leased', 0) + busy.get('judgehost_reporting', 0) + busy.get('judgehost_callbacks', 0) + busy.get('judgehost_cache_probes', 0) + busy.get('judgehost_materializations', 0) + busy.get('judgehost_finalizations', 0) + busy.get('inflight_requests', 0) %}
 <div class="admin-summary-grid">
   <a class="admin-summary-card" href="/admin/judgehosts">
     <span class="admin-summary-label">Judgehosts</span>
@@ -65,7 +65,7 @@
   </p>
   <div class="admin-metric-strip">
     <div><span>Worker</span><strong>{{ busy.get('worker_queued', 0) + busy.get('worker_running', 0) }}</strong></div>
-    <div><span>Judgehost</span><strong>{{ busy.get('judgehost_queued', 0) + busy.get('judgehost_leased', 0) + busy.get('judgehost_reporting', 0) }}</strong></div>
+    <div><span>Judgehost</span><strong>{{ busy.get('judgehost_queued', 0) + busy.get('judgehost_leased', 0) + busy.get('judgehost_reporting', 0) + busy.get('judgehost_cache_probes', 0) + busy.get('judgehost_materializations', 0) + busy.get('judgehost_finalizations', 0) }}</strong></div>
     <div><span>Callbacks</span><strong>{{ busy.get('judgehost_callbacks', 0) }}</strong></div>
     <div><span>Requests</span><strong>{{ busy.get('inflight_requests', 0) }}</strong></div>
   </div>
@@ -79,8 +79,11 @@
       </label>
       <span class="muted">Admission paused</span>
     </form>
-    <form class="inline-form" method="post" action="/admin/maintenance/restart" data-confirm-message="Restart the application now? Active work must be fully drained and the configured service supervisor must be running.">
-      <button class="btn danger-link" type="submit"{% if busy_total %} disabled{% endif %}>Restart application</button>
+    <form class="inline-form" method="post" action="/admin/maintenance/restart">
+      <button class="btn danger-link" type="submit" data-confirm-message="Restart the application now? Active work must be fully drained and the configured service supervisor must be running."{% if busy_total %} disabled{% endif %}>Restart application</button>
+      {% if busy_total %}
+      <button class="btn danger-link" type="submit" name="force" value="1" data-confirm-message="Force restart the application? Active work will be interrupted and recovered as failed after the configured service supervisor starts the new process.">Force restart</button>
+      {% endif %}
     </form>
   </div>
   {% elif admission_state == 'open' %}

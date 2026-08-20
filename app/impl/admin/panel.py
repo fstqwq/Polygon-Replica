@@ -524,13 +524,19 @@ def admin_maintenance_admission(
 
 def admin_application_restart(
     user: Annotated[str, Depends(require_session_user)],
+    force: str = Form(""),
 ):
-    """Exit after a completed drain and let the configured supervisor restart."""
+    """Exit after a drain and let the configured supervisor restart."""
 
     _ctx, actor_user_id = _admin_user_context(user)
-    started = runtime().maintenance_service.restart_when_idle(
-        actor_user_id=actor_user_id
-    )
+    if force == "1":
+        started = runtime().maintenance_service.force_restart(
+            actor_user_id=actor_user_id
+        )
+    else:
+        started = runtime().maintenance_service.restart_when_idle(
+            actor_user_id=actor_user_id
+        )
     if started.accepted:
         return RedirectResponse(
             "/maintenance",

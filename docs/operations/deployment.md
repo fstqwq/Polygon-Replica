@@ -349,8 +349,12 @@ and off host.
 The same drained state enables **Restart application**. That action exits the
 single process after sending the HTTP response; the installed systemd unit or
 the checked-in Compose restart policy starts a new process. Do not use it when
-running uvicorn without a supervisor. Use **Resume admission** to cancel a
-maintenance preparation without starting an operation.
+running uvicorn without a supervisor. If active work cannot drain because the
+runtime is stuck, **Force restart** is available beside the disabled normal
+restart action. It requires admission to be paused but deliberately ignores the
+active-work counts; unfinished process-local work is interrupted and startup
+reconciliation marks its durable jobs failed. Use **Resume admission** to
+cancel a maintenance preparation without starting an operation.
 
 ## Restore
 
