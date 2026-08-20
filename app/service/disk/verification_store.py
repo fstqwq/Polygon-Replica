@@ -127,21 +127,17 @@ class VerificationStore:
         problem_id: int,
         workspace_id: int,
         limit: int,
-        kinds: tuple[str, ...],
     ) -> list[VerificationRecordRow]:
-        kind_tokens = list(kinds) or [Kind.ALL.value, Kind.SAMPLE.value, Kind.CUSTOM.value]
-        placeholders = ",".join(("?" for _ in kind_tokens))
         rows = self.db.fetch_all(
-            f"""
+            """
             SELECT id,problem_id,workspace_id,signature,source_commit,kind,status,fail_reason,error,sanity_status,created_at,finished_at
             FROM verifications
             WHERE problem_id=?
               AND (workspace_id=? OR workspace_id IS NULL)
-              AND kind IN ({placeholders})
             ORDER BY created_at DESC
             LIMIT ?
             """,
-            [int(problem_id), int(workspace_id), *kind_tokens, max(1, int(limit))],
+            [int(problem_id), int(workspace_id), max(1, int(limit))],
         )
         return [self._record_row(dict(row)) for row in rows]
 

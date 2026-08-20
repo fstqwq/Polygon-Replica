@@ -734,13 +734,11 @@ class VerificationService:
         workspace_id: int,
         *,
         limit: int = 40,
-        kinds: tuple[str, ...] = (Kind.ALL, Kind.SAMPLE, Kind.CUSTOM),
     ) -> list[dict[str, object]]:
         rows = self._verification_store.list_visible_rows(
             problem_id=int(problem_id),
             workspace_id=int(workspace_id),
             limit=int(limit),
-            kinds=kinds,
         )
         return [dict(row) for row in rows]
 

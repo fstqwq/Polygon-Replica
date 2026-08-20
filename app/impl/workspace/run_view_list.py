@@ -171,7 +171,6 @@ def run_list_rows(problem_id: int, workspace_id: int, workspace: Path, limit: in
         int(problem_id),
         int(workspace_id),
         limit=max(limit_cap * 2, 80),
-        kinds=("all", "sample", "custom"),
     )
     problem_access = runtime().access_query.problem_context(problem_id, actor_user_id)
     access_contexts = runtime().access_query.verification_contexts(

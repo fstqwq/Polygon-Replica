@@ -54,6 +54,7 @@ from tests.ui_support import (
 )
 
 import app.impl.workspace.context_job as workspace_context_job
+from app.impl.workspace.run_view_list import run_list_rows
 import app.service.problem.readiness as problem_readiness_module
 import app.service.verification.workspace_fingerprint as workspace_fingerprint_module
 from app.service.problem.readiness import WorkspaceReadinessSubject
@@ -2110,6 +2111,35 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             runtime.verification_service.verification_record(foreign_id)["status"],
             "running",
         )
+
+    def test_verification_list_includes_package_runs(self) -> None:
+        ctx = workspace_service.workspace_context(
+            "alice/sample",
+            "alice",
+            include_recent=False,
+        )
+        package_verification_id = canonical_test_verification_id(
+            f"ver-package-visible-{uuid.uuid4().hex[:8]}"
+        )
+        self._insert_stage_verification(
+            verification_id=package_verification_id,
+            problem_id=int(ctx["problem"]["id"]),
+            workspace_id=None,
+            kind=Kind.PACKAGE,
+            source_commit=str(ctx["workspace"]["head_commit"] or ""),
+        )
+
+        rows = run_list_rows(
+            int(ctx["problem"]["id"]),
+            int(ctx["workspace"]["id"]),
+            Path(str(ctx["workspace"]["path"])),
+            actor_user_id=int(ctx["user"]["id"]),
+        )
+
+        package_row = next(
+            row for row in rows if row["id"] == package_verification_id
+        )
+        self.assertEqual(package_row["kind"], Kind.PACKAGE.value)
 
     def test_run_cancel_marks_running_verification_cancelled(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
