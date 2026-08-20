@@ -1,7 +1,13 @@
 from collections import deque
 from typing import TYPE_CHECKING
 
-from app.service.judgehost.batch.model import HostLeaseRelease, VerificationCancellation
+from app.service.judgehost.batch.model import (
+    CaseRecord,
+    ExecutionBatchRecord,
+    HostLeaseRelease,
+    VerificationCancellation,
+)
+from app.service.judgehost.domjudge.case_result import build_case_result
 
 if TYPE_CHECKING:
     from app.service.judgehost.batch.state import BatchState
@@ -15,6 +21,88 @@ class BatchMaintenance:
 
     def reset(self) -> None:
         self._state.reset()
+
+    def expire_leased_cases(
+        self,
+        *,
+        verification_id: str,
+        now_monotonic: float,
+        now_text: str,
+    ) -> tuple[HostLeaseRelease, ...]:
+        """Terminalize only leased cases whose private execution budget expired."""
+        if not verification_id:
+            return ()
+        expired: list[tuple[CaseRecord, ExecutionBatchRecord]] = []
+        with self._state._lock:
+            for case in tuple(self._state._cases.values()):
+                if (
+                    case.status != "leased"
+                    or case.callback_receipt_count
+                    or case.lease_deadline_monotonic is None
+                    or case.lease_deadline_monotonic > float(now_monotonic)
+                ):
+                    continue
+                batch = self._state._batches.get(case.batch_id)
+                if batch is None or batch.verification_id != verification_id:
+                    continue
+                message = (
+                    "Judgehost case lease deadline expired before a final result "
+                    "was accepted"
+                )
+                self._state._remove_case_from_host_telemetry_locked(case)
+                case.claim_generation += 1
+                case.cancel_requested = False
+                case.terminal_result = None
+                case.requeue_on_abort = False
+                case.result = build_case_result(
+                    test_name=case.test_name,
+                    runresult="internal-error",
+                    verdict="FL",
+                    runtime_sec=0.0,
+                    cpu_sec=0.0,
+                    wall_sec=0.0,
+                    memory_kb=0,
+                    score_text="",
+                    output_run_ref="",
+                    output_error_ref="",
+                    output_system_ref="",
+                    output_diff_ref="",
+                    metadata_ref="",
+                    compare_metadata_ref="",
+                    team_message_ref="",
+                    feedback_text=message,
+                    feedback_files=(),
+                    answer_correct=False,
+                )
+                self._state._transition_case_locked(
+                    case,
+                    "reported",
+                    lease_owner=None,
+                    updated_at=now_text,
+                    refresh_batch=False,
+                )
+                expired.append((case, batch))
+            if not expired:
+                return ()
+            batch_ids = {batch.batch_id for _case, batch in expired}
+            self._state._refresh_batches_locked(batch_ids, updated_at=now_text)
+
+            workdirs: set[tuple[int, int]] = set()
+            task_ids: set[str] = set()
+            for case, batch in expired:
+                task_ids.add(case.task_id)
+                submission = self._state._compile_submissions_by_key.get(batch.compile_key)
+                if submission is not None:
+                    workdirs.add((batch.job_id, submission.submit_id))
+            return (
+                HostLeaseRelease(
+                    affinity_count=0,
+                    lease_count=len(expired),
+                    terminal_batch_ids=tuple(sorted(batch_ids)),
+                    terminal_task_ids=tuple(sorted(task_ids)),
+                    workdirs=tuple(sorted(workdirs)),
+                ),
+            )
 
     def request_verification_cancel(
         self,

@@ -6,6 +6,9 @@ BatchState validates and applies its decision under the canonical lock.
 """
 
 import heapq
+import json
+import math
+import time
 from collections import deque
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
@@ -15,12 +18,12 @@ from app.service.judgehost.batch.model import (
     ExecutionBatchRecord,
     ExecutionBatchRow,
     ExecutionBatchSpec,
-    LeaseClaim,
     HostLeaseTelemetry,
     HostTelemetryRow,
-    MaterializationClaim,
     HostTelemetryState,
     JudgehostCaseRow,
+    LeaseClaim,
+    MaterializationClaim,
 )
 from app.service.judgehost.batch.policy import (
     SchedulingCandidate,
@@ -58,6 +61,72 @@ class BatchDispatch:
             return None
         self._dispatch_batch_locked(batch)
         return batch
+
+    @staticmethod
+    def _json_object(raw: str, *, label: str) -> dict[str, object]:
+        try:
+            value = json.loads(raw or "{}")
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(f"judgehost {label} config is invalid") from exc
+        if not isinstance(value, dict):
+            raise RuntimeError(f"judgehost {label} config must be an object")
+        return value
+
+    @staticmethod
+    def _budget_number(
+        config: dict[str, object],
+        key: str,
+        *,
+        default: float,
+    ) -> float:
+        value = config.get(key)
+        if value is None:
+            return default
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise RuntimeError(f"judgehost config {key} must be numeric")
+        number = float(value)
+        if not math.isfinite(number) or number < 0.0:
+            raise RuntimeError(f"judgehost config {key} must be finite and non-negative")
+        return number
+
+    @classmethod
+    def _execution_budget_sec(cls, batch: ExecutionBatchRecord) -> float:
+        run_config = cls._json_object(batch.run_config_json, label="run")
+        compare_config = cls._json_object(batch.compare_config_json, label="compare")
+
+        run_limit = cls._budget_number(run_config, "time_limit", default=0.0)
+        if run_limit <= 0.0:
+            run_limit = (
+                cls._budget_number(run_config, "time_limit_ms", default=0.0) / 1000.0
+            )
+        compare_limit = cls._budget_number(
+            compare_config,
+            "script_timelimit",
+            default=run_limit,
+        )
+        pass_limit_raw = run_config.get("pass_limit", 1)
+        if (
+            isinstance(pass_limit_raw, bool)
+            or not isinstance(pass_limit_raw, int)
+            or pass_limit_raw < 1
+        ):
+            raise RuntimeError("judgehost config pass_limit must be a positive integer")
+        pass_limit = pass_limit_raw
+        if batch.task_kind in {"main-correct", "solution-run"}:
+            return max(1.0, pass_limit * (run_limit + compare_limit))
+        # Generate-input and compile-only are single-round operations. Unknown
+        # task kinds retain the conservative one-round budget as well.
+        return max(1.0, run_limit + compare_limit)
+
+    @classmethod
+    def _compile_budget_sec(cls, batch: ExecutionBatchRecord) -> float:
+        if batch.compile_state != "unknown":
+            return 0.0
+        config = cls._json_object(batch.compile_config_json, label="compile")
+        return max(
+            1.0,
+            cls._budget_number(config, "script_timelimit", default=1.0),
+        )
 
     def _prune_host_context_locked(self, hostname: str) -> deque[int]:
         queue_ids = self._state._affinity_batches_by_host[hostname]
@@ -549,6 +618,7 @@ class BatchDispatch:
         hostname: str,
         limit: int,
         now_text: str,
+        lease_grace_sec: float = 0.0,
     ) -> LeaseClaim | None:
         cap = max(1, min(256, int(limit)))
         with self._state._lock:
@@ -563,6 +633,11 @@ class BatchDispatch:
             first = self._state._peek_case_heap_locked(batch.batch_id, status="pending")
             if first is None:
                 return None
+            grace_sec = float(lease_grace_sec)
+            if not math.isfinite(grace_sec) or grace_sec < 0.0:
+                raise RuntimeError("judgehost lease grace must be finite and non-negative")
+            compile_budget = self._compile_budget_sec(batch)
+            execution_budget = self._execution_budget_sec(batch)
             if (
                 self._state._scheduling_policy.single_compile_owner
                 and batch.compile_state == "unknown"
@@ -588,6 +663,8 @@ class BatchDispatch:
                     updated_at=now_text,
                     refresh_batch=False,
                 )
+                case.lease_budget_sec = execution_budget
+                case.lease_grace_sec = grace_sec
                 leased.append(case_snapshot(case))
             self._state._refresh_batches_locked({batch.batch_id})
             if not leased:
@@ -600,17 +677,41 @@ class BatchDispatch:
                     (row["id"], self._state._cases[row["id"]].claim_generation)
                     for row in leased
                 ),
+                compile_budget_sec=compile_budget,
+                execution_budget_sec=execution_budget,
+                lease_grace_sec=grace_sec,
             )
 
-    def commit_lease(self, claim: LeaseClaim) -> bool:
+    def commit_lease(
+        self,
+        claim: LeaseClaim,
+        *,
+        leased_monotonic: float | None = None,
+    ) -> bool:
         with self._state._lock:
-            return all(
+            if not all(
                 (case := self._state._cases.get(case_id)) is not None
                 and case.status == "leased"
                 and case.lease_owner == claim.hostname
                 and case.claim_generation == generation
                 for case_id, generation in claim.generations
+            ):
+                return False
+            lease_start = (
+                time.monotonic()
+                if leased_monotonic is None
+                else float(leased_monotonic)
             )
+            if not math.isfinite(lease_start):
+                raise RuntimeError("judgehost lease start must be finite")
+            elapsed_budget = claim.compile_budget_sec
+            for case_id, _generation in claim.generations:
+                case = self._state._cases[case_id]
+                elapsed_budget += claim.execution_budget_sec
+                case.lease_deadline_monotonic = (
+                    lease_start + elapsed_budget + claim.lease_grace_sec
+                )
+            return True
 
     def abort_lease(self, claim: LeaseClaim, *, now_text: str) -> bool:
         with self._state._lock:

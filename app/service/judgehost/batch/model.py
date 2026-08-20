@@ -273,6 +273,11 @@ class CaseRecord:
     claim_generation: int
     created_at: str
     updated_at: str
+    # Lease timing is process-local derived state. It is deliberately absent
+    # from the DOMjudge snapshot and all persisted task/public API shapes.
+    lease_deadline_monotonic: float | None = None
+    lease_budget_sec: float = 0.0
+    lease_grace_sec: float = 0.0
 
 
 @dataclass
@@ -335,6 +340,9 @@ class LeaseClaim:
     hostname: str
     cases: tuple[JudgehostCaseRow, ...]
     generations: tuple[tuple[int, int], ...]
+    compile_budget_sec: float
+    execution_budget_sec: float
+    lease_grace_sec: float
 
 
 @dataclass(frozen=True)

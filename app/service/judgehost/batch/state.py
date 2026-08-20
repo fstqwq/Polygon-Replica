@@ -455,6 +455,10 @@ class BatchState:
             case.last_callback_hostname = lease_owner
         case.heap_generation += 1
         case.updated_at = updated_at
+        if status not in {"leased", "reporting"}:
+            case.lease_deadline_monotonic = None
+            case.lease_budget_sec = 0.0
+            case.lease_grace_sec = 0.0
         if status in {"leased", "reporting"} and lease_owner:
             self._leased_case_ids_by_host[lease_owner].add(case.id)
         self._push_case_locked(case)
@@ -580,6 +584,19 @@ class BatchState:
         if not hostnames:
             self._telemetry_hosts_by_batch.pop(batch_id, None)
 
+    def _remove_case_from_host_telemetry_locked(self, case: CaseRecord) -> None:
+        """Remove an expired case without counting it as judged."""
+        owner = case.lease_owner
+        if not owner:
+            return
+        telemetry = self._host_telemetry.get(owner)
+        lease = None if telemetry is None else telemetry.active_batch
+        if lease is None or lease.batch_id != case.batch_id:
+            return
+        lease.pending_case_ids.discard(case.id)
+        if not lease.pending_case_ids:
+            self._drop_host_telemetry_batch_locked(owner)
+
     def _discard_batch_telemetry_locked(self, batch_id: int) -> None:
         for hostname in self._telemetry_hosts_by_batch.pop(int(batch_id), set()):
             telemetry = self._host_telemetry.get(hostname)
@@ -625,6 +642,17 @@ class BatchState:
             report.reported_monotonic,
         )
         if lease.pending_case_ids:
+            # A successful report is the only progress signal that may move
+            # the deadline of the remaining cases from this prefetch. Heartbeat
+            # and fetch traffic intentionally do not extend a case lease.
+            elapsed_budget = 0.0
+            for remaining in self._sorted_cases_locked(lease.pending_case_ids):
+                elapsed_budget += max(0.0, remaining.lease_budget_sec)
+                remaining.lease_deadline_monotonic = (
+                    report.reported_monotonic
+                    + max(0.0, remaining.lease_grace_sec)
+                    + elapsed_budget
+                )
             return
         elapsed = max(0.0, lease.latest_reported_monotonic - lease.leased_monotonic)
         telemetry.recent_batch_avg_sec.append(elapsed / lease.case_count)

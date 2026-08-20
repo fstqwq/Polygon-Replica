@@ -274,14 +274,32 @@ class JudgehostBatchRuntime:
         return self._admission.discard_staged_task_cases(task_id, batch_id=batch_id)
 
     def claim_lease(
-        self, batch_id: int, *, hostname: str, limit: int, now_text: str
+        self,
+        batch_id: int,
+        *,
+        hostname: str,
+        limit: int,
+        now_text: str,
+        lease_grace_sec: float = 0.0,
     ) -> LeaseClaim | None:
         return self._dispatch.claim_lease(
-            batch_id, hostname=hostname, limit=limit, now_text=now_text
+            batch_id,
+            hostname=hostname,
+            limit=limit,
+            now_text=now_text,
+            lease_grace_sec=lease_grace_sec,
         )
 
-    def commit_lease(self, claim: LeaseClaim) -> bool:
-        return self._dispatch.commit_lease(claim)
+    def commit_lease(
+        self,
+        claim: LeaseClaim,
+        *,
+        leased_monotonic: float | None = None,
+    ) -> bool:
+        return self._dispatch.commit_lease(
+            claim,
+            leased_monotonic=leased_monotonic,
+        )
 
     def abort_lease(self, claim: LeaseClaim, *, now_text: str) -> bool:
         return self._dispatch.abort_lease(claim, now_text=now_text)
@@ -565,6 +583,19 @@ class JudgehostBatchRuntime:
     ) -> HostLeaseRelease:
         return self._maintenance.release_host_leases(
             hostname, now_text=now_text, verification_id=verification_id
+        )
+
+    def expire_leased_cases(
+        self,
+        *,
+        verification_id: str,
+        now_monotonic: float,
+        now_text: str,
+    ) -> tuple[HostLeaseRelease, ...]:
+        return self._maintenance.expire_leased_cases(
+            verification_id=verification_id,
+            now_monotonic=now_monotonic,
+            now_text=now_text,
         )
 
     def forget_runs(self, run_ids: list[str]) -> int:

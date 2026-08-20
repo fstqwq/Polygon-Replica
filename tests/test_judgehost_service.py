@@ -232,7 +232,7 @@ class TestJudgehostService(E2ETestBase):
             )
         return Path(artifact_path).resolve()
 
-    def test_domjudge_add_judging_run_finalizes_matching_verification_task_immediately(
+    def test_domjudge_add_judging_run_survives_result_cache_publication_failure(
         self,
     ) -> None:
         service = runtime.judgehost_task_service
@@ -348,20 +348,26 @@ class TestJudgehostService(E2ETestBase):
                     "compile_metadata": "",
                 },
             )
-            service.domjudge_add_judging_run(
-                "judgehost-immediate-finalize",
-                case_id,
-                {
-                    "runresult": "correct",
-                    "runtime": "0.001",
-                    "output_run": base64.b64encode(b"ok\n").decode("ascii"),
-                    "output_diff": "",
-                    "output_error": "",
-                    "output_system": "",
-                    "metadata": base64.b64encode(metadata).decode("ascii"),
-                    "compare_metadata": "",
-                },
-            )
+            with patch.object(
+                CaseResultCache,
+                "try_store",
+                side_effect=OSError("result cache unavailable"),
+            ):
+                ack = service.domjudge_add_judging_run(
+                    "judgehost-immediate-finalize",
+                    case_id,
+                    {
+                        "runresult": "correct",
+                        "runtime": "0.001",
+                        "output_run": base64.b64encode(b"ok\n").decode("ascii"),
+                        "output_diff": "",
+                        "output_error": "",
+                        "output_system": "",
+                        "metadata": base64.b64encode(metadata).decode("ascii"),
+                        "compare_metadata": "",
+                    },
+                )
+            self.assertEqual(ack, 1)
 
             deadline = time.monotonic() + 2.0
             while time.monotonic() < deadline:

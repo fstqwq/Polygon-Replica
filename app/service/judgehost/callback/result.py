@@ -535,6 +535,7 @@ class JudgehostCallbackIngestion:
         batch_id = int(row["batch_id"])
         safe_task_id = row["task_id"]
         task_payload = self._task_payload(safe_task_id) if safe_task_id else {}
+        verification_id = decode_text(raw=task_payload.get("verification_id"))
         verification_source = self._verification_source(task_payload)
         canonical_task_kind = task_kind(
             task_payload, verification_source=verification_source
@@ -686,25 +687,6 @@ class JudgehostCallbackIngestion:
         if compile_only and verdict != "OK":
             shortcut_eligible = False
 
-        self._case_result_cache.store(
-            key_hash=case_key_hash,
-            signature=case_signature,
-            tags={
-                "source_hash": source_hash,
-                "testcase_hash": testcase_hash,
-                "verification_source": cache_verification_source,
-                "task_kind": canonical_task_kind,
-            },
-            runresult=runresult,
-            runtime_sec=runtime_sec,
-            cpu_sec=cpu_sec,
-            wall_sec=wall_sec,
-            memory_kb=memory_kb,
-            score_text=score_text,
-            result_json=execution_result_json(case_result),
-            files=captured_artifacts.payloads,
-            shortcut_eligible=shortcut_eligible,
-        )
         now_text = now_iso()
         outcome = self._batch_runtime.commit_case_result(
             case_id,
@@ -722,6 +704,44 @@ class JudgehostCallbackIngestion:
                 )
                 return 1
             raise RuntimeError("judgehost case result lost its completion claim")
+        try:
+            cache_outcome = self._case_result_cache.try_store(
+                key_hash=case_key_hash,
+                signature=case_signature,
+                tags={
+                    "source_hash": source_hash,
+                    "testcase_hash": testcase_hash,
+                    "verification_source": cache_verification_source,
+                    "task_kind": canonical_task_kind,
+                },
+                runresult=runresult,
+                runtime_sec=runtime_sec,
+                cpu_sec=cpu_sec,
+                wall_sec=wall_sec,
+                memory_kb=memory_kb,
+                score_text=score_text,
+                result_json=execution_result_json(case_result),
+                files=captured_artifacts.payloads,
+                shortcut_eligible=shortcut_eligible,
+            )
+            if cache_outcome.status == "conflict":
+                logger.warning(
+                    "judgehost result-cache publication conflict "
+                    "verification_id=%s batch_id=%s case_id=%s host=%s",
+                    verification_id,
+                    batch_id,
+                    case_id,
+                    safe_host,
+                )
+        except Exception:
+            logger.exception(
+                "judgehost result-cache publication failed "
+                "verification_id=%s batch_id=%s case_id=%s host=%s",
+                verification_id,
+                batch_id,
+                case_id,
+                safe_host,
+            )
         logger.debug(
             "domjudge add_judging_run host=%s batch_id=%s case_id=%s runresult=%s",
             safe_host,

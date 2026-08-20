@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Literal
 
 from app.service.execution.codec import execution_result_from_json
 from app.service.judgehost.batch.model import CaseResult
@@ -12,7 +13,18 @@ from app.service.judgehost.domjudge.result import (
     verdict_from_runresult,
 )
 from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
-from app.service.platform.runtime_cache_index import RuntimeCacheIndex
+from app.service.platform.runtime_cache_index import (
+    RuntimeCacheConflictError,
+    RuntimeCacheIndex,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class CaseResultStoreOutcome:
+    """Result of publishing an optional, first-writer-wins case cache entry."""
+
+    status: Literal["stored", "unchanged", "conflict"]
+    files: dict[str, PayloadFile]
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,3 +156,53 @@ class CaseResultCache:
             tags=tags,
         )
         return dict(entry.files)
+
+    def try_store(
+        self,
+        *,
+        key_hash: str,
+        signature: str,
+        tags: dict[str, object],
+        runresult: str,
+        runtime_sec: float,
+        cpu_sec: float,
+        wall_sec: float,
+        memory_kb: int,
+        score_text: str,
+        result_json: str,
+        files: Mapping[str, bytes | PayloadFile],
+        shortcut_eligible: bool,
+    ) -> CaseResultStoreOutcome:
+        """Publish a result cache entry without replacing the first writer.
+
+        Result-cache payloads contain volatile execution measurements, so an
+        identity collision is an expected race between equivalent executions.
+        The strict ``RuntimeCacheIndex`` invariant remains intact; this method
+        simply makes the result-cache publication boundary optional to callers.
+        """
+        existing = self._index.get(
+            namespace=RuntimeCacheIndex.RESULT,
+            key_hash=key_hash,
+            signature=signature,
+        )
+        try:
+            stored = self.store(
+                key_hash=key_hash,
+                signature=signature,
+                tags=tags,
+                runresult=runresult,
+                runtime_sec=runtime_sec,
+                cpu_sec=cpu_sec,
+                wall_sec=wall_sec,
+                memory_kb=memory_kb,
+                score_text=score_text,
+                result_json=result_json,
+                files=files,
+                shortcut_eligible=shortcut_eligible,
+            )
+        except RuntimeCacheConflictError:
+            return CaseResultStoreOutcome("conflict", {})
+        return CaseResultStoreOutcome(
+            "unchanged" if existing is not None else "stored",
+            stored,
+        )

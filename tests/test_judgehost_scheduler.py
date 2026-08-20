@@ -1,4 +1,5 @@
 import hashlib
+import json
 import tempfile
 import threading
 import unittest
@@ -8,22 +9,26 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.config import build_config_values
-from app.service.judgehost.maintenance.terminal_cleanup import JudgehostTerminalCleanup
-from app.service.judgehost.domjudge.case_result import build_case_result
-from app.service.judgehost.domjudge.identity import script_id
-from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
 from app.service.judgehost.batch.model import (
     CaseClaimBusy,
+    CaseReportTelemetry,
     CaseResult,
     CompileSubmission,
     ExecutionBatchSpec,
     JudgehostCaseRow,
 )
-from app.service.judgehost.domjudge.identity import submit_id
-from app.service.judgehost.task.registry import JudgehostTaskRegistry
+from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
+from app.service.judgehost.cache.case_result import CaseResultCache
 from app.service.judgehost.cache.executable import ExecutableCache
+from app.service.judgehost.domjudge.case_result import build_case_result
+from app.service.judgehost.domjudge.identity import script_id, submit_id
+from app.service.judgehost.maintenance.terminal_cleanup import JudgehostTerminalCleanup
+from app.service.judgehost.task.registry import JudgehostTaskRegistry
 from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
-from app.service.platform.runtime_cache_index import RuntimeCacheIndex
+from app.service.platform.runtime_cache_index import (
+    RuntimeCacheConflictError,
+    RuntimeCacheIndex,
+)
 
 
 def _case_result(test_name: str, *, runresult: str = "correct", verdict: str = "OK"):
@@ -134,16 +139,19 @@ def _lease_cases(
     hostname: str,
     limit: int,
     now_text: str,
+    leased_monotonic: float | None = None,
+    lease_grace_sec: float = 0.0,
 ) -> list[JudgehostCaseRow]:
     claim = scheduler.claim_lease(
         batch_id,
         hostname=hostname,
         limit=limit,
         now_text=now_text,
+        lease_grace_sec=lease_grace_sec,
     )
     if claim is None:
         return []
-    assert scheduler.commit_lease(claim)
+    assert scheduler.commit_lease(claim, leased_monotonic=leased_monotonic)
     return list(claim.cases)
 
 
@@ -204,6 +212,9 @@ def _create_staged_batch(
     execution_signature: str | None = None,
     verification_program_id: str | None = None,
     task_kind: str = "solution-run",
+    compile_config: dict[str, object] | None = None,
+    run_config: dict[str, object] | None = None,
+    compare_config: dict[str, object] | None = None,
 ) -> tuple[int, str]:
     now_text = datetime.now(timezone.utc).isoformat()
     signature = hashlib.sha256(
@@ -227,9 +238,9 @@ def _create_staged_batch(
         run_hash="2" * 32,
         compare_hash="3" * 32,
         source_hash="4" * 64,
-        compile_config_json="{}",
-        run_config_json="{}",
-        compare_config_json="{}",
+        compile_config_json=json.dumps(compile_config or {}),
+        run_config_json=json.dumps(run_config or {}),
+        compare_config_json=json.dumps(compare_config or {}),
         expected_behavior="accepted",
         verification_source="solution-run",
         bypass_case_result_cache=0,
@@ -258,6 +269,9 @@ def _create_ready_batch(
     case_rows: list[dict[str, object]] | None = None,
     execution_signature: str | None = None,
     verification_program_id: str | None = None,
+    compile_config: dict[str, object] | None = None,
+    run_config: dict[str, object] | None = None,
+    compare_config: dict[str, object] | None = None,
 ) -> int:
     batch_id, now_text = _create_staged_batch(
         scheduler,
@@ -271,6 +285,9 @@ def _create_ready_batch(
         case_rows=case_rows,
         execution_signature=execution_signature,
         verification_program_id=verification_program_id,
+        compile_config=compile_config,
+        run_config=run_config,
+        compare_config=compare_config,
     )
     scheduler.activate_task_cases(task_id, now_text=now_text)
     claims = scheduler.claim_cache_cases(
@@ -404,6 +421,282 @@ class TestJudgehostScheduler(unittest.TestCase):
         assert second is not None
         self.assertEqual(second.cases[0]["id"], first.cases[0]["id"])
         self.assertTrue(scheduler.commit_lease(second))
+
+    def test_lease_deadline_includes_compile_and_execution_budget(self) -> None:
+        scheduler = JudgehostBatchRuntime(id_base=200)
+        batch_id, now_text = _create_staged_batch(
+            scheduler,
+            task_id="task-lease-budget",
+            run_id="run-lease-budget",
+            ordinals=[1],
+            compile_config={"script_timelimit": 4},
+            run_config={"time_limit": 2, "pass_limit": 2},
+            compare_config={"script_timelimit": 1},
+        )
+        scheduler.activate_task_cases("task-lease-budget", now_text=now_text)
+        claims = scheduler.claim_cache_cases(
+            batch_id,
+            hostname="cache-setup",
+            limit=1,
+            now_text=now_text,
+        )
+        self.assertEqual(len(claims), 1)
+        scheduler.finish_cache_miss(
+            claims[0][0].case_id,
+            generation=claims[0][0].generation,
+            updated_at=now_text,
+        )
+        _materialize_batch(scheduler, batch_id, now_text=now_text)
+
+        rows = _lease_cases(
+            scheduler,
+            batch_id,
+            hostname="host-budget",
+            limit=1,
+            now_text=now_text,
+            leased_monotonic=100.0,
+            lease_grace_sec=5.0,
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(
+            scheduler.expire_leased_cases(
+                verification_id="ver-1",
+                now_monotonic=114.999,
+                now_text=now_text,
+            ),
+            (),
+        )
+        releases = scheduler.expire_leased_cases(
+            verification_id="ver-1",
+            now_monotonic=115.0,
+            now_text=now_text,
+        )
+        self.assertEqual(releases[0].lease_count, 1)
+        result = scheduler.case_result_for_task("task-lease-budget", "001.in")
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual((result.runresult, result.verdict), ("internal-error", "FL"))
+
+    def test_prefetched_deadlines_include_earlier_case_budgets(self) -> None:
+        scheduler = JudgehostBatchRuntime(id_base=300)
+        batch_id = _create_ready_batch(
+            scheduler,
+            task_id="task-prefetch-cumulative",
+            run_id="run-prefetch-cumulative",
+            ordinals=[1, 2],
+            run_config={"time_limit": 2, "pass_limit": 2},
+            compare_config={"script_timelimit": 1},
+        )
+        now_text = datetime.now(timezone.utc).isoformat()
+        rows = _lease_cases(
+            scheduler,
+            batch_id,
+            hostname="host-cumulative",
+            limit=2,
+            now_text=now_text,
+            leased_monotonic=100.0,
+            lease_grace_sec=5.0,
+        )
+        self.assertEqual(len(rows), 2)
+        first_release = scheduler.expire_leased_cases(
+            verification_id="ver-1",
+            now_monotonic=111.0,
+            now_text=now_text,
+        )
+        self.assertEqual(first_release[0].lease_count, 1)
+        self.assertEqual(
+            len(scheduler.cases_for_batch(batch_id, status="leased")),
+            1,
+        )
+        second_release = scheduler.expire_leased_cases(
+            verification_id="ver-1",
+            now_monotonic=117.0,
+            now_text=now_text,
+        )
+        self.assertEqual(second_release[0].lease_count, 1)
+
+    def test_successful_report_rebases_remaining_prefetched_deadline(self) -> None:
+        scheduler = JudgehostBatchRuntime(id_base=300)
+        batch_id = _create_ready_batch(
+            scheduler,
+            task_id="task-prefetch-budget",
+            run_id="run-prefetch-budget",
+            ordinals=[1, 2],
+            run_config={"time_limit": 2, "pass_limit": 2},
+            compare_config={"script_timelimit": 1},
+        )
+        now_text = datetime.now(timezone.utc).isoformat()
+        rows = _lease_cases(
+            scheduler,
+            batch_id,
+            hostname="host-prefetch",
+            limit=2,
+            now_text=now_text,
+            leased_monotonic=100.0,
+            lease_grace_sec=5.0,
+        )
+        case_ids = [int(row["id"]) for row in rows]
+        self.assertEqual(len(case_ids), 2)
+        scheduler.record_batch_leased(
+            "host-prefetch",
+            batch_id,
+            case_ids,
+            leased_monotonic=100.0,
+        )
+
+        receipt = scheduler.acquire_case_callback_receipt(case_ids[0])
+        self.assertIsNotNone(receipt)
+        assert receipt is not None
+        scheduler.release_case_callback_receipt(receipt.receipt_id)
+        claim = scheduler.claim_case_reporting(
+            case_ids[0],
+            hostname="host-prefetch",
+            receipt_generation=receipt.claim_generation,
+            now_text=now_text,
+        )
+        self.assertIsNotNone(claim)
+        assert claim is not None
+        self.assertEqual(
+            scheduler.commit_case_result(
+                case_ids[0],
+                generation=claim.generation,
+                result=_case_result("001.in"),
+                updated_at=now_text,
+                report_telemetry=CaseReportTelemetry(
+                    hostname="host-prefetch",
+                    reported_at=now_text,
+                    reported_monotonic=105.0,
+                    verification_id="ver-1",
+                    problem_slug="owner/problem",
+                    task_kind="solution-run",
+                    source_label="main.cpp",
+                    test_name="001.in",
+                ),
+            ),
+            "reported",
+        )
+        self.assertEqual(
+            scheduler.expire_leased_cases(
+                verification_id="ver-1",
+                now_monotonic=115.999,
+                now_text=now_text,
+            ),
+            (),
+        )
+        releases = scheduler.expire_leased_cases(
+            verification_id="ver-1",
+            now_monotonic=116.0,
+            now_text=now_text,
+        )
+        self.assertEqual(releases[0].lease_count, 1)
+        self.assertEqual(
+            scheduler.fetch_case(case_ids[1])["status"],
+            "reported",
+        )
+
+    def test_reporting_claim_and_callback_receipt_prevent_lease_expiry(self) -> None:
+        scheduler = JudgehostBatchRuntime(id_base=400)
+        batch_id = _create_ready_batch(
+            scheduler,
+            task_id="task-receipt-expiry",
+            run_id="run-receipt-expiry",
+            ordinals=[1],
+        )
+        now_text = datetime.now(timezone.utc).isoformat()
+        row = _lease_cases(
+            scheduler,
+            batch_id,
+            hostname="host-receipt",
+            limit=1,
+            now_text=now_text,
+            leased_monotonic=100.0,
+            lease_grace_sec=5.0,
+        )[0]
+        case_id = int(row["id"])
+        receipt = scheduler.acquire_case_callback_receipt(case_id)
+        self.assertIsNotNone(receipt)
+        assert receipt is not None
+        claim = scheduler.claim_case_reporting(
+            case_id,
+            hostname="host-receipt",
+            receipt_generation=receipt.claim_generation,
+            now_text=now_text,
+        )
+        self.assertIsNotNone(claim)
+        assert claim is not None
+        self.assertEqual(
+            scheduler.expire_leased_cases(
+                verification_id="ver-1",
+                now_monotonic=200.0,
+                now_text=now_text,
+            ),
+            (),
+        )
+        self.assertTrue(
+            scheduler.abort_case_claim(
+                case_id,
+                generation=claim.generation,
+                updated_at=now_text,
+            )
+        )
+        self.assertEqual(
+            scheduler.expire_leased_cases(
+                verification_id="ver-1",
+                now_monotonic=200.0,
+                now_text=now_text,
+            ),
+            (),
+        )
+        scheduler.release_case_callback_receipt(receipt.receipt_id)
+        releases = scheduler.expire_leased_cases(
+            verification_id="ver-1",
+            now_monotonic=200.0,
+            now_text=now_text,
+        )
+        self.assertEqual(releases[0].lease_count, 1)
+        late_receipt = scheduler.acquire_case_callback_receipt(case_id)
+        self.assertIsNotNone(late_receipt)
+        assert late_receipt is not None
+        self.assertEqual(late_receipt.status, "reported")
+        self.assertEqual(late_receipt.last_callback_hostname, "host-receipt")
+        scheduler.release_case_callback_receipt(late_receipt.receipt_id)
+
+    def test_generate_case_deadline_uses_one_round(self) -> None:
+        scheduler = JudgehostBatchRuntime(id_base=500)
+        batch_id = _create_ready_batch(
+            scheduler,
+            task_id="task-generate-expiry",
+            run_id="run-generate-expiry",
+            ordinals=[1],
+            task_kind="generate-input",
+            run_config={"time_limit": 2, "pass_limit": 4},
+            compare_config={"script_timelimit": 1},
+        )
+        now_text = datetime.now(timezone.utc).isoformat()
+        rows = _lease_cases(
+            scheduler,
+            batch_id,
+            hostname="host-generate",
+            limit=1,
+            now_text=now_text,
+            leased_monotonic=100.0,
+            lease_grace_sec=5.0,
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(
+            scheduler.expire_leased_cases(
+                verification_id="ver-1",
+                now_monotonic=107.999,
+                now_text=now_text,
+            ),
+            (),
+        )
+        releases = scheduler.expire_leased_cases(
+            verification_id="ver-1",
+            now_monotonic=108.0,
+            now_text=now_text,
+        )
+        self.assertEqual(releases[0].lease_count, 1)
 
     def test_default_entity_ids_use_nanosecond_base_and_survive_reset(self) -> None:
         with patch(
@@ -2105,6 +2398,65 @@ class TestJudgehostScheduler(unittest.TestCase):
                     signature="2" * 64,
                 )
             self.assertIsNotNone(entry)
+
+    def test_case_result_cache_keeps_first_execution_on_volatile_conflict(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="runtime-result-cache-") as temp_dir:
+            _executable_cache, blobs, cache = self._runtime_cache(Path(temp_dir))
+            results = CaseResultCache(cache, blobs)
+            common = {
+                "key_hash": "1" * 64,
+                "signature": "2" * 64,
+                "tags": {"task_kind": "main-correct"},
+                "runresult": "correct",
+                "memory_kb": 1024,
+                "score_text": "",
+                "shortcut_eligible": True,
+            }
+            first = results.try_store(
+                **common,
+                runtime_sec=0.1,
+                cpu_sec=0.1,
+                wall_sec=0.2,
+                result_json='{"runresult":"correct"}',
+                files={"program.out": b"first\n"},
+            )
+            second = results.try_store(
+                **common,
+                runtime_sec=0.3,
+                cpu_sec=0.25,
+                wall_sec=0.4,
+                result_json='{"runresult":"correct"}',
+                files={"program.out": b"second\n"},
+            )
+            self.assertEqual((first.status, second.status), ("stored", "conflict"))
+            entry = cache.get(
+                namespace=RuntimeCacheIndex.RESULT,
+                key_hash="1" * 64,
+                signature="2" * 64,
+            )
+            self.assertIsNotNone(entry)
+            assert entry is not None
+            self.assertEqual(entry.value["runtime_sec"], 0.1)
+            self.assertEqual(blobs.read(entry.files["program.out"]), b"first\n")
+
+    def test_executable_cache_identity_conflict_remains_strict(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="runtime-executable-conflict-") as temp_dir:
+            _executable_cache, _blobs, cache = self._runtime_cache(Path(temp_dir))
+            cache.put(
+                namespace=RuntimeCacheIndex.EXECUTABLE,
+                key_hash="3" * 64,
+                signature="4" * 64,
+                value={"kind": "run"},
+                files={"run": b"first"},
+            )
+            with self.assertRaises(RuntimeCacheConflictError):
+                cache.put(
+                    namespace=RuntimeCacheIndex.EXECUTABLE,
+                    key_hash="3" * 64,
+                    signature="4" * 64,
+                    value={"kind": "run"},
+                    files={"run": b"second"},
+                )
 
     def test_cache_deletion_keeps_referenced_blob(self) -> None:
         with tempfile.TemporaryDirectory(prefix="runtime-cache-delete-") as temp_dir:

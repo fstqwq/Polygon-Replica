@@ -14,6 +14,10 @@ _HEX_64_RE = re.compile(r"^[0-9a-f]{64}$")
 _FILE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
+class RuntimeCacheConflictError(RuntimeError):
+    """A cache identity was already published with different content."""
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeCacheEntry:
     namespace: str
@@ -93,7 +97,9 @@ class RuntimeCacheIndex:
                     for name, payload in current.files.items()
                 }
                 if current.value != value or current.tags != expected_tags or current_files != expected_files:
-                    raise RuntimeError("runtime cache identity maps to different content")
+                    raise RuntimeCacheConflictError(
+                        "runtime cache identity maps to different content"
+                    )
                 return current
             stored_files = {
                 name: (

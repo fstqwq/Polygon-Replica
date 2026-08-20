@@ -103,6 +103,23 @@ an injected `CaseLeaseSink`. Judgehost does not import or locate the
 verification coordinator. A missing process-local runtime is tolerated because
 lease state is an overlay and the durable task decision remains authoritative.
 
+Each leased case also receives a process-local monotonic deadline. Its budget
+contains any still-required compilation, the case's configured execution and
+comparison limits, and a final callback/transport grace period. Multi-pass
+solution cases multiply the run and comparison allowance by the pass limit.
+When one fetch returns several cases, each later deadline includes the budgets
+of the cases before it. A successful final report rebases the remaining cases
+from that report time; heartbeat, fetch traffic, and failed callback retries do
+not extend them.
+
+Maintenance checks case deadlines before host liveness. A leased case whose
+deadline has elapsed and which has no active callback receipt becomes a
+canonical infrastructure-failure (`FL`) result, allowing its task and
+Verification to reach a terminal state even while the daemon remains online.
+A reporting case is not expired. The old case identifier is never leased again;
+a later final callback receives the ordinary idempotent `1` ACK and cannot
+replace the terminal result.
+
 The internal verification-to-Judgehost boundary names the task's program
 identity `verification_program_id`; verification code uses the shorter
 `program_id`. The process-local batch runtime keys a program batch by

@@ -1,3 +1,4 @@
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -98,6 +99,16 @@ class JudgehostMaintenance:
     def reconcile_expired_leases(self, verification_id: str) -> LeaseReconciliationOutcome:
         if not verification_id:
             return LeaseReconciliationOutcome((), ())
+        now_text = now_iso()
+        # Case deadlines are checked before host liveness. An online daemon is
+        # not evidence that a particular leased case will ever report back.
+        releases: list[HostLeaseRelease] = list(
+            self._batch_runtime.expire_leased_cases(
+                verification_id=verification_id,
+                now_monotonic=time.monotonic(),
+                now_text=now_text,
+            )
+        )
         now = datetime.now(timezone.utc)
         online_window = self._configuration.snapshot().online_window_sec
         stale_hosts = tuple(
@@ -107,7 +118,6 @@ class JudgehostMaintenance:
             and (now - seen_at).total_seconds() > online_window
         )
         released_task_ids: dict[str, None] = {}
-        releases: list[HostLeaseRelease] = []
         for hostname in stale_hosts:
             selected_task_ids: dict[str, None] = {}
             for case in self._batch_runtime.cases_for_host(hostname):
@@ -122,7 +132,7 @@ class JudgehostMaintenance:
                 continue
             release = self._batch_runtime.release_host_leases(
                 hostname,
-                now_text=now_iso(),
+                now_text=now_text,
                 verification_id=verification_id,
             )
             releases.append(release)

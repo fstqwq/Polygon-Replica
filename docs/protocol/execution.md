@@ -222,12 +222,20 @@ only; they are not currently cache-key fields or consistency gates.
 An available cached result may be reused only for its matching identity. Cache
 availability is checked separately from durable verification status.
 
+Case-result cache publication is first-writer-wins. Equivalent executions may
+produce different timing measurements or captured bytes without changing their
+execution identity; the first valid entry remains the reusable shortcut. The
+executable cache retains its strict identity-to-content invariant.
+
 ## Results and cache payloads
 
 For a final `add-judging-run` callback, Judgehost first captures cache payloads
 and refs, then a dependency-light normalizer produces the canonical case
-`ExecutionResult` owned by `app.service.execution`. Compile failure arrives
-through `update-judging`, and a
+`ExecutionResult` owned by `app.service.execution`. The batch runtime commits
+that canonical case decision before attempting optional result-cache
+publication. A result-cache conflict or storage failure is logged and leaves
+the committed case, task finalization, and protocol ACK unchanged. Compile
+failure arrives through `update-judging`, and a
 missing case has no complete final callback. Pure task-result projection builds
 those failure results from stored compile/case evidence; finalization publishes
 and aggregates terminal case results into the task report. Verification preserves

@@ -291,6 +291,7 @@ class JudgehostDispatch:
                 hostname=hostname,
                 limit=int(cap),
                 now_text=now_text,
+                lease_grace_sec=self._configuration.snapshot().online_window_sec,
             )
         if claim is None:
             return []
@@ -329,13 +330,17 @@ class JudgehostDispatch:
                     raise RuntimeError("judgehost task rejected its Case lease")
                 if task_lease == "claimed":
                     leased_task_ids.append(case_task_id)
-            if not self._batch_runtime.commit_lease(claim):
+            lease_start = time.monotonic()
+            if not self._batch_runtime.commit_lease(
+                claim,
+                leased_monotonic=lease_start,
+            ):
                 raise RuntimeError("judgehost lease claim became stale")
             self._batch_runtime.record_batch_leased(
                 hostname,
                 int(batch_id),
                 [int(row["id"]) for row in rows],
-                leased_monotonic=time.monotonic(),
+                leased_monotonic=lease_start,
             )
             first_row = rows[0]
             self._hosts.record_event(
