@@ -7,7 +7,6 @@ from app.db import DB, now_iso
 from app.config import ConfigValues
 from app.main_constant import SESSION_TOKEN_RE, USER_IDENT_RE
 from app.service.auth.model import AuthSessionIdentity, SudoSessionIdentity
-from app.service.disk.system_config_store import SystemConfigStore
 from app.service.platform.hashing import sha256_hex_text
 
 
@@ -425,8 +424,9 @@ class AuthStore:
 
         return int(self.db.write_transaction(_tx))
 
-    def bootstrap_super_admin_with_password_verifier(
+    def bootstrap_super_admin_with_password_verifier_in_transaction(
         self,
+        conn: sqlite3.Connection,
         *,
         username: str,
         email: str,
@@ -434,108 +434,94 @@ class AuthStore:
         verifier_hex: str,
         salt_hex: str,
         iterations: int,
-        email_allow_regex: str,
-        email_allow_regex_default: str,
+        updated_at: str,
     ) -> int:
-        now_text = now_iso()
-
-        def _tx(conn: sqlite3.Connection) -> int:
-            has_registered_user = (
-                conn.execute(
-                    "SELECT 1 FROM users WHERE COALESCE(TRIM(password_hash), '') <> '' LIMIT 1"
-                ).fetchone()
-                is not None
-            )
-            if has_registered_user:
-                raise ValueError("setup already completed")
-            existing_cursor = conn.execute(
-                """
-                SELECT id,username,password_hash
-                FROM users
-                WHERE LOWER(username)=LOWER(?)
-                ORDER BY id ASC
-                LIMIT 1
-                """,
-                [username],
-            )
-            existing = existing_cursor.fetchone()
-            email_owner = conn.execute(
-                "SELECT id FROM users WHERE email_normalized=? LIMIT 1",
-                [email_normalized],
+        has_registered_user = (
+            conn.execute(
+                "SELECT 1 FROM users WHERE COALESCE(TRIM(password_hash), '') <> '' LIMIT 1"
             ).fetchone()
-            if email_owner is not None and (
-                existing is None or int(email_owner["id"]) != int(existing["id"])
-            ):
-                raise ValueError("setup failed; administrator email is unavailable")
-            if existing is None:
-                try:
-                    cursor = conn.execute(
-                        """
-                        INSERT INTO users(
-                            username,email,email_normalized,email_verified_at,
-                            password_hash,password_salt,password_iters,password_updated_at,
-                            created_at,is_system_admin
-                        )
-                        VALUES(?,?,?,?,?,?,?,?,?,1)
-                        """,
-                        [
-                            username,
-                            email,
-                            email_normalized,
-                            now_text,
-                            verifier_hex,
-                            salt_hex,
-                            int(iterations),
-                            now_text,
-                            now_text,
-                        ],
-                    )
-                except sqlite3.IntegrityError as exc:
-                    message = str(exc or "").strip().lower()
-                    if "users.username" in message:
-                        raise ValueError("setup failed; username is unavailable") from exc
-                    if "users.email_normalized" in message:
-                        raise ValueError(
-                            "setup failed; administrator email is unavailable"
-                        ) from exc
-                    raise
-                user_id = _required_lastrowid(cursor)
-            else:
-                current_hash = str(existing["password_hash"] or "").strip()
-                if current_hash:
-                    raise ValueError("setup failed; username is unavailable")
-                user_id = int(existing["id"])
-                conn.execute(
+            is not None
+        )
+        if has_registered_user:
+            raise ValueError("setup already completed")
+        existing_cursor = conn.execute(
+            """
+            SELECT id,username,password_hash
+            FROM users
+            WHERE LOWER(username)=LOWER(?)
+            ORDER BY id ASC
+            LIMIT 1
+            """,
+            [username],
+        )
+        existing = existing_cursor.fetchone()
+        email_owner = conn.execute(
+            "SELECT id FROM users WHERE email_normalized=? LIMIT 1",
+            [email_normalized],
+        ).fetchone()
+        if email_owner is not None and (
+            existing is None or int(email_owner["id"]) != int(existing["id"])
+        ):
+            raise ValueError("setup failed; administrator email is unavailable")
+        if existing is None:
+            try:
+                cursor = conn.execute(
                     """
-                    UPDATE users
-                    SET email=?,email_normalized=?,email_verified_at=?,
-                        password_hash=?,password_salt=?,password_iters=?,
-                        password_updated_at=?,is_system_admin=1
-                    WHERE id=?
+                    INSERT INTO users(
+                        username,email,email_normalized,email_verified_at,
+                        password_hash,password_salt,password_iters,password_updated_at,
+                        created_at,is_system_admin
+                    )
+                    VALUES(?,?,?,?,?,?,?,?,?,1)
                     """,
                     [
+                        username,
                         email,
                         email_normalized,
-                        now_text,
+                        updated_at,
                         verifier_hex,
                         salt_hex,
                         int(iterations),
-                        now_text,
-                        user_id,
+                        updated_at,
+                        updated_at,
                     ],
                 )
-            conn.execute("UPDATE users SET is_system_admin=0 WHERE id<>?", [user_id])
-            SystemConfigStore.set_override_in_transaction(
-                conn,
-                key="AUTH_EMAIL_ALLOW_REGEX",
-                value=email_allow_regex,
-                default=email_allow_regex_default,
-                actor_user_id=user_id,
-                updated_at=now_text,
+            except sqlite3.IntegrityError as exc:
+                message = str(exc or "").strip().lower()
+                if "users.username" in message:
+                    raise ValueError("setup failed; username is unavailable") from exc
+                if "users.email_normalized" in message:
+                    raise ValueError(
+                        "setup failed; administrator email is unavailable"
+                    ) from exc
+                raise
+            user_id = _required_lastrowid(cursor)
+        else:
+            current_hash = str(existing["password_hash"] or "").strip()
+            if current_hash:
+                raise ValueError("setup failed; username is unavailable")
+            user_id = int(existing["id"])
+            conn.execute(
+                """
+                UPDATE users
+                SET email=?,email_normalized=?,email_verified_at=?,
+                    password_hash=?,password_salt=?,password_iters=?,
+                    password_updated_at=?,is_system_admin=1
+                WHERE id=?
+                """,
+                [
+                    email,
+                    email_normalized,
+                    updated_at,
+                    verifier_hex,
+                    salt_hex,
+                    int(iterations),
+                    updated_at,
+                    user_id,
+                ],
             )
-            return user_id
-
-        return int(self.db.write_transaction(_tx))
+        conn.execute("UPDATE users SET is_system_admin=0 WHERE id<>?", [user_id])
+        return user_id
 
     def hit_rate_limit(self, bucket_key: str, *, limit: int, window_sec: int) -> RateLimitHit:
         safe_bucket = bucket_key.strip()

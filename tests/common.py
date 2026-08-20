@@ -351,6 +351,7 @@ class RuntimeDBTestBase(unittest.TestCase):
         runtime_binding.__enter__()
         self.addCleanup(runtime_binding.__exit__, None, None, None)
         _restore_database_template()
+        runtime.reload_config(include_restart_required=True)
         self.test_id = uuid.uuid4().hex[:8]
         self.user = self.random_id("alice")
         self.problem = f"{self.user}/{self.random_id('sample')}"

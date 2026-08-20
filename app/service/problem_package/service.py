@@ -749,6 +749,19 @@ class ProblemPackageService:
 
     @staticmethod
     def _write_archive(source_root: Path, target: Path) -> None:
+        def _archive_info(name: str, mode: int, *, directory: bool) -> zipfile.ZipInfo:
+            info = zipfile.ZipInfo(
+                name.rstrip("/") + "/" if directory else name,
+                date_time=(1980, 1, 1, 0, 0, 0),
+            )
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.create_system = 3
+            file_type = stat.S_IFDIR if directory else stat.S_IFREG
+            info.external_attr = ((file_type | mode) & 0xFFFF) << 16
+            if directory:
+                info.external_attr |= 0x10
+            return info
+
         target.parent.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for dirpath, dirnames, filenames in os.walk(source_root, topdown=True, followlinks=False):
@@ -756,14 +769,27 @@ class ProblemPackageService:
                 dirnames[:] = sorted(dirnames)
                 rel_parent = parent.relative_to(source_root)
                 if rel_parent.parts:
-                    archive.writestr(rel_parent.as_posix().rstrip("/") + "/", b"")
+                    archive.writestr(
+                        _archive_info(
+                            rel_parent.as_posix(),
+                            parent.stat().st_mode & 0o777,
+                            directory=True,
+                        ),
+                        b"",
+                    )
                 for filename in sorted(filenames):
                     source = parent / filename
                     if source.is_symlink() or not source.is_file():
                         raise ValueError(
                             f"Native Package archive source is not regular: {source}"
                         )
-                    archive.write(source, source.relative_to(source_root).as_posix())
+                    info = _archive_info(
+                        source.relative_to(source_root).as_posix(),
+                        source.stat().st_mode & 0o777,
+                        directory=False,
+                    )
+                    with source.open("rb") as source_file, archive.open(info, "w") as output:
+                        shutil.copyfileobj(source_file, output)
 
     def _build_native_package(
         self,

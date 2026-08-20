@@ -1,15 +1,20 @@
+import sqlite3
+
 from app.config import ConfigValues
+from app.db import now_iso
 from app.service.auth.model import AuthSessionIdentity, SudoSessionIdentity
 from app.service.disk.auth_store import (
     AuthStore,
     AuthUserRow,
 )
+from app.service.disk.system_config_store import SystemConfigStore
 from app.service.auth.password_hash import password_verifier_storage_hash
 
 
 class AuthService:
     def __init__(self, store: AuthStore, *, config_values: ConfigValues):
         self._store = store
+        self._system_config_store = SystemConfigStore(store.db)
         if config_values is not store.config_values:
             raise ValueError("auth service and store must share ConfigValues")
 
@@ -127,16 +132,30 @@ class AuthService:
         email_allow_regex: str,
         email_allow_regex_default: str,
     ) -> int:
-        return self._store.bootstrap_super_admin_with_password_verifier(
-            username=username,
-            email=email,
-            email_normalized=email_normalized,
-            verifier_hex=password_verifier_storage_hash(verifier_hex),
-            salt_hex=salt_hex,
-            iterations=int(iterations),
-            email_allow_regex=email_allow_regex,
-            email_allow_regex_default=email_allow_regex_default,
-        )
+        updated_at = now_iso()
+
+        def _tx(conn: sqlite3.Connection) -> int:
+            user_id = self._store.bootstrap_super_admin_with_password_verifier_in_transaction(
+                conn,
+                username=username,
+                email=email,
+                email_normalized=email_normalized,
+                verifier_hex=password_verifier_storage_hash(verifier_hex),
+                salt_hex=salt_hex,
+                iterations=int(iterations),
+                updated_at=updated_at,
+            )
+            self._system_config_store.set_override_in_transaction(
+                conn,
+                key="AUTH_EMAIL_ALLOW_REGEX",
+                value=email_allow_regex,
+                default=email_allow_regex_default,
+                actor_user_id=user_id,
+                updated_at=updated_at,
+            )
+            return user_id
+
+        return int(self._store.db.write_transaction(_tx))
 
     def create_session_for_user(self, user_id: int) -> str:
         return self._store.create_auth_session(int(user_id))

@@ -168,7 +168,7 @@ function bindEmailPatternCheck({
     }
 
     button.disabled = true;
-    result.textContent = "Checking…";
+    result.textContent = "Checking...";
     try {
       const body = new URLSearchParams({ email: value });
       if (pattern) body.set("email_allow_regex", String(pattern.value));
