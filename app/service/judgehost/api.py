@@ -636,13 +636,8 @@ class Judgehost:
                 outcome.terminal_batch_ids,
                 require_completion_ack=True,
             )
-        for event in outcome.host_events:
-            self._hosts.record_event(
-                hostname=event.hostname,
-                action=event.action,
-                task_id=event.task_id,
-                run_id=event.run_id,
-            )
+        for contact in outcome.host_contacts:
+            self._hosts.record_contact(hostname=contact.hostname)
         for verification_id in outcome.touched_verification_ids:
             self._terminal_cleanup.touch(verification_id)
         return outcome.acknowledgement

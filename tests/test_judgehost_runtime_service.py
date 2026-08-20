@@ -225,6 +225,7 @@ class TestJudgehostRuntimeService(DBTestBase):
             if item["hostname"] == "judgehost-shape-check"
         )
         self.assertFalse(after_host["enabled"])
+        self.assertEqual(after_host["last_seen_at"], before_host["last_seen_at"])
 
     def test_host_status_keeps_latest_peer_ip(self) -> None:
         host = "judgehost-peer-display"

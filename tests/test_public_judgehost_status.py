@@ -17,8 +17,6 @@ def _host(
         "online": online,
         "age_sec": 75,
         "last_seen_at": "2026-08-10T01:02:03+00:00",
-        "last_task_id": "secret-task",
-        "last_run_id": "secret-run",
         "active_leases": 1 if online else 0,
         "judged_case_count": 12,
         "recent_avg_per_case_sec": 0.125,
@@ -65,8 +63,6 @@ class PublicJudgehostStatusTests(unittest.TestCase):
         self.assertEqual(projected["hosts"][0]["activity"], "busy")
         self.assertNotIn("private-hostname", rendered)
         self.assertNotIn("203.0.113.10", rendered)
-        self.assertNotIn("secret-task", rendered)
-        self.assertNotIn("secret-run", rendered)
         self.assertNotIn("/usr/bin/g++", rendered)
         self.assertNotIn("/opt/toolchains", rendered)
         self.assertNotIn("/private/include", rendered)

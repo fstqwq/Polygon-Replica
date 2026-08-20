@@ -946,17 +946,6 @@ class TestJudgehostService(E2ETestBase):
         host_rows = service.domjudge_list_hosts()
         self.assertTrue(host_rows)
         self.assertEqual(str(host_rows[0].get("hostname") or ""), "judgehost-official")
-        status = service.status()
-        hosts = status.get("hosts") if isinstance(status, dict) else []
-        host = next(
-            (
-                item
-                for item in hosts
-                if str(item.get("hostname") or "") == "judgehost-official"
-            ),
-            {},
-        )
-        self.assertEqual(str(host.get("last_action") or ""), "debug")
 
     def test_domjudge_executable_files_require_live_job_memory(self) -> None:
         service = runtime.judgehost_task_service
@@ -1822,7 +1811,6 @@ class TestJudgehostService(E2ETestBase):
         self.assertEqual(len(first_rows), 1)
         case_id = int(first_rows[0]["judgetaskid"])
         self.assertTrue(_host_row().get("online"))
-        self.assertEqual(_host_row().get("last_action"), "lease")
 
         service.domjudge_check_versions(
             case_id,
@@ -1833,7 +1821,6 @@ class TestJudgehostService(E2ETestBase):
             runner="",
         )
         versions_row = _host_row()
-        self.assertEqual(versions_row.get("last_action"), "versions")
         self.assertEqual(
             versions_row.get("toolchains"),
             [
@@ -1854,7 +1841,6 @@ class TestJudgehostService(E2ETestBase):
             runner="",
         )
         self.assertNotIn("judgehost-version-not-owner", _hostnames())
-        self.assertEqual(_host_row().get("last_action"), "versions")
 
         _mark_host_stale()
         with self.assertRaisesRegex(
@@ -1875,7 +1861,6 @@ class TestJudgehostService(E2ETestBase):
             {"compile_success": "1", "output_compile": "", "compile_metadata": ""},
         )
         self.assertTrue(_host_row().get("online"))
-        self.assertEqual(_host_row().get("last_action"), "update")
 
         _mark_host_stale()
         meta_text = "cpu-time: 0.004\nwall-time: 0.005\nmemory-bytes: 4096\n"
@@ -1894,13 +1879,11 @@ class TestJudgehostService(E2ETestBase):
             },
         )
         self.assertTrue(_host_row().get("online"))
-        self.assertEqual(_host_row().get("last_action"), "report")
 
         _mark_host_stale()
         second_rows = service.domjudge_fetch_work(host, max_batchsize=1)
         self.assertEqual(second_rows, [])
         self.assertTrue(_host_row().get("online"))
-        self.assertEqual(_host_row().get("last_action"), "fetch")
 
     def test_enqueue_rejects_invalid_payload_before_scheduling(self) -> None:
         service = runtime.judgehost_task_service
@@ -3445,21 +3428,15 @@ class TestJudgehostService(E2ETestBase):
             before["compile_metadata_b64"],
         )
 
-        def _host_telemetry() -> tuple[object, ...]:
+        def _last_seen_at() -> object:
             row = next(
                 item
                 for item in service.status().get("hosts", [])
                 if item.get("hostname") == hostname
             )
-            return (
-                row["last_seen_at"],
-                row["last_action"],
-                row["last_task_id"],
-                row["last_run_id"],
-                row["update_count"],
-            )
+            return row["last_seen_at"]
 
-        before_host_telemetry = _host_telemetry()
+        before_last_seen_at = _last_seen_at()
 
         invalid_payloads = (
             {
@@ -3513,7 +3490,7 @@ class TestJudgehostService(E2ETestBase):
             self.assertIsNotNone(current_case)
             assert current_case is not None
             self.assertEqual(current_case["status"], "leased")
-            self.assertEqual(_host_telemetry(), before_host_telemetry)
+            self.assertEqual(_last_seen_at(), before_last_seen_at)
 
     def test_domjudge_compile_logs_are_truncated_before_state_storage(self) -> None:
         service = runtime.judgehost_task_service

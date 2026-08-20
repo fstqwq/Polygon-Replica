@@ -6,7 +6,10 @@ from app.service.judgehost.domjudge.codec import (
     decode_text,
     languages_payload,
 )
-from app.service.judgehost.host.model import JudgehostHostRow
+from app.service.judgehost.host.model import (
+    JudgehostHostRow,
+    judgehost_name_sort_key,
+)
 
 
 class DomjudgeWireProjector:
@@ -30,11 +33,9 @@ def _hosts_payload(
 ) -> list[dict[str, object]]:
     rows = sorted(
         (dict(row) for row in hosts),
-        key=lambda item: (
-            decode_text(raw=item.get("last_seen_at")),
-            decode_text(raw=item.get("hostname")),
+        key=lambda item: judgehost_name_sort_key(
+            decode_text(raw=item.get("hostname"))
         ),
-        reverse=True,
     )
     out: list[dict[str, object]] = []
     for row in rows:

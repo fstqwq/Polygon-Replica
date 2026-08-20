@@ -25,7 +25,7 @@ from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
 from app.service.judgehost.validation import normalize_judgehost_hostname
 from app.service.judgehost.cache.case_result import CaseCacheLookup, CaseResultCache
 from app.service.judgehost.callback.diagnostic_payload import parse_diagnostic_payload
-from app.service.judgehost.callback.model import CallbackOutcome, HostEvent
+from app.service.judgehost.callback.model import CallbackOutcome, HostContact
 from app.service.judgehost.domjudge.limits import (
     truncate_stored_log_bytes,
     upload_max_bytes,
@@ -94,7 +94,7 @@ class JudgehostCallbackIngestion:
         terminal_batch_ids: tuple[int, ...] = (),
         *,
         verification_ids: tuple[str, ...] = (),
-        host_events: tuple[HostEvent, ...] = (),
+        host_contacts: tuple[HostContact, ...] = (),
     ) -> CallbackOutcome[Acknowledgement]:
         return CallbackOutcome(
             acknowledgement=acknowledgement,
@@ -102,7 +102,7 @@ class JudgehostCallbackIngestion:
             touched_verification_ids=tuple(
                 dict.fromkeys(token for token in verification_ids if token)
             ),
-            host_events=host_events,
+            host_contacts=host_contacts,
         )
 
     def _task_payload(self, task_id: str) -> dict[str, object]:
@@ -214,7 +214,7 @@ class JudgehostCallbackIngestion:
             )
             return self._outcome(None)
         try:
-            host_event = self._process_judging_update(
+            host_contact = self._process_judging_update(
                 hostname,
                 judgetask_id,
                 payload,
@@ -227,7 +227,7 @@ class JudgehostCallbackIngestion:
             None,
             (receipt.batch_id,),
             verification_ids=(receipt.verification_id,),
-            host_events=() if host_event is None else (host_event,),
+            host_contacts=() if host_contact is None else (host_contact,),
         )
 
     def _process_judging_update(
@@ -238,7 +238,7 @@ class JudgehostCallbackIngestion:
         *,
         receipt_generation: int,
         settings: JudgehostSettings,
-    ) -> HostEvent | None:
+    ) -> HostContact | None:
         safe_host = normalize_judgehost_hostname(hostname)
         case_id = int(judgetask_id)
         case_row = self._batch_runtime.case_execution_row(case_id)
@@ -317,11 +317,8 @@ class JudgehostCallbackIngestion:
         if compile_success == 0:
             compile_output = _payload_blob_as_b64(payload.get("output_compile"))
             compile_meta = _payload_blob_as_b64(payload.get("compile_metadata"))
-        host_event = HostEvent(
+        host_contact = HostContact(
             hostname=safe_host,
-            action="update",
-            task_id=safe_task_id,
-            run_id=case_row["run_id"],
         )
         if compile_success is not None:
             updated_at = compile_updated_at or now_iso()
@@ -365,17 +362,17 @@ class JudgehostCallbackIngestion:
                         case_id,
                         claim.batch_id,
                     )
-                    return host_event
+                    return host_contact
                 if claim.outcome == "cancelled":
-                    return host_event
-                return host_event
+                    return host_contact
+                return host_contact
             if not compile_success_recorded:
                 if self._complete_terminal_callback_case(case_id, batch_id):
-                    return host_event
+                    return host_contact
                 raise RuntimeError(
                     "judgehost batch closed before compile success update"
                 )
-        return host_event
+        return host_contact
 
     def domjudge_add_judging_run(
         self, hostname: str, judgetask_id: int, payload: dict[str, object]
@@ -389,7 +386,7 @@ class JudgehostCallbackIngestion:
             )
             return self._outcome(1)
         try:
-            acknowledgement, host_event = self._add_judging_run_with_receipt(
+            acknowledgement, host_contact = self._add_judging_run_with_receipt(
                 receipt,
                 hostname,
                 judgetask_id,
@@ -402,7 +399,7 @@ class JudgehostCallbackIngestion:
             acknowledgement,
             (receipt.batch_id,),
             verification_ids=(receipt.verification_id,),
-            host_events=() if host_event is None else (host_event,),
+            host_contacts=() if host_contact is None else (host_contact,),
         )
 
     def _add_judging_run_with_receipt(
@@ -413,7 +410,7 @@ class JudgehostCallbackIngestion:
         payload: dict[str, object],
         *,
         settings: JudgehostSettings,
-    ) -> tuple[int, HostEvent | None]:
+    ) -> tuple[int, HostContact | None]:
         reported_monotonic = time.monotonic()
         reported_at = now_iso()
         safe_host = normalize_judgehost_hostname(hostname)
@@ -448,11 +445,8 @@ class JudgehostCallbackIngestion:
         )
         if claim is None:
             raise RuntimeError("judgehost case lease changed before result claim")
-        host_event = HostEvent(
+        host_contact = HostContact(
             hostname=safe_host,
-            action="report",
-            task_id=case_row["task_id"],
-            run_id=case_row["run_id"],
         )
         self._batch_runtime.observe_compile_success_from_case_claim(
             claim.case_id,
@@ -483,7 +477,7 @@ class JudgehostCallbackIngestion:
                 report=report_telemetry,
             ):
                 raise RuntimeError("judgehost cancellation receipt claim was lost")
-            return 1, host_event
+            return 1, host_contact
 
         def _abort_unfinished_claim() -> None:
             if self._batch_runtime.abort_case_claim(
@@ -508,7 +502,7 @@ class JudgehostCallbackIngestion:
         refreshed = self._batch_runtime.fetch_case(claim.case_id)
         if refreshed is not None and refreshed["status"] == "reporting":
             _abort_unfinished_claim()
-        return result_id, host_event
+        return result_id, host_contact
 
     def _process_judging_run(
         self,
@@ -815,15 +809,12 @@ class JudgehostCallbackIngestion:
                 raise RuntimeError(
                     "judgehost case lease changed before internal-error claim"
                 )
-            host_events = (
+            host_contacts = (
                 ()
                 if not safe_host
                 else (
-                    HostEvent(
+                    HostContact(
                         hostname=safe_host,
-                        action="internal-error",
-                        task_id=receipt.task_id,
-                        run_id=receipt.run_id,
                     ),
                 )
             )
@@ -839,20 +830,20 @@ class JudgehostCallbackIngestion:
                     case_id,
                     (receipt.batch_id,),
                     verification_ids=(receipt.verification_id,),
-                    host_events=host_events,
+                    host_contacts=host_contacts,
                 )
             if claim.outcome == "cancelled":
                 return self._outcome(
                     case_id,
                     (receipt.batch_id,),
                     verification_ids=(receipt.verification_id,),
-                    host_events=host_events,
+                    host_contacts=host_contacts,
                 )
             return self._outcome(
                 case_id,
                 (receipt.batch_id,),
                 verification_ids=(receipt.verification_id,),
-                host_events=host_events,
+                host_contacts=host_contacts,
             )
         finally:
             self._release_case_callback_receipt(receipt)
@@ -914,11 +905,8 @@ class JudgehostCallbackIngestion:
                         case_id,
                         receipt.batch_id,
                     )
-            host_event = HostEvent(
+            host_contact = HostContact(
                 hostname=safe_host,
-                action="debug",
-                task_id=receipt.task_id,
-                run_id=receipt.run_id,
             )
         finally:
             self._release_case_callback_receipt(receipt)
@@ -926,5 +914,5 @@ class JudgehostCallbackIngestion:
             None,
             (receipt.batch_id,),
             verification_ids=(receipt.verification_id,),
-            host_events=(host_event,),
+            host_contacts=(host_contact,),
         )

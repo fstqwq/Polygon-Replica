@@ -49,13 +49,8 @@ class JudgehostView(TypedDict):
     age_label: str
     last_seen_at: str
     first_seen_at: str
-    last_action: str
-    last_action_label: str
-    last_task_id: str
-    last_run_id: str
     toolchains: list[JudgehostToolchainView]
     active_leases: int
-    update_count: int
     judged_case_count: int
     last_judging_at: str
     last_judging: dict[str, object] | None
@@ -277,19 +272,6 @@ def _judgehost_status_view() -> dict[str, object]:
     raw_status = runtime().judgehost_task_service.status()
     raw_hosts = raw_status.get("hosts")
     hosts: list[JudgehostView] = []
-    action_labels = {
-        "register": "registered",
-        "fetch": "waiting for work",
-        "lease": "leased work",
-        "update": "reported progress",
-        "report": "reported result",
-        "versions": "reported toolchains",
-        "debug": "reported diagnostics",
-        "internal-error": "reported internal error",
-        "disabled": "polled while disabled",
-        "set-enabled": "enabled by admin",
-        "set-disabled": "disabled by admin",
-    }
     if isinstance(raw_hosts, list):
         for raw in raw_hosts:
             if not isinstance(raw, dict):
@@ -297,7 +279,6 @@ def _judgehost_status_view() -> dict[str, object]:
             enabled = bool(raw.get("enabled"))
             online = bool(raw.get("online"))
             state = "disabled" if not enabled else "online" if online else "offline"
-            last_action = str(raw.get("last_action") or "")
             raw_last_judging = raw.get("last_judging")
             last_judging = dict(raw_last_judging) if isinstance(raw_last_judging, dict) else None
             recent_avg_raw = raw.get("recent_avg_per_case_sec")
@@ -315,13 +296,8 @@ def _judgehost_status_view() -> dict[str, object]:
                     "age_label": _duration_label(raw.get("age_sec")),
                     "last_seen_at": str(raw.get("last_seen_at") or ""),
                     "first_seen_at": str(raw.get("first_seen_at") or ""),
-                    "last_action": last_action,
-                    "last_action_label": action_labels.get(last_action, last_action.replace("-", " ") or "unknown"),
-                    "last_task_id": str(raw.get("last_task_id") or ""),
-                    "last_run_id": str(raw.get("last_run_id") or ""),
                     "toolchains": _toolchain_views(raw.get("toolchains")),
                     "active_leases": active_leases,
-                    "update_count": int(raw.get("update_count") or 0),
                     "judged_case_count": int(raw.get("judged_case_count") or 0),
                     "last_judging_at": str(raw.get("last_judging_at") or ""),
                     "last_judging": last_judging,

@@ -2,15 +2,15 @@ from dataclasses import dataclass
 from typing import NotRequired, TypedDict
 
 
+def judgehost_name_sort_key(hostname: str) -> tuple[str, str]:
+    return (hostname.casefold(), hostname)
+
+
 class JudgehostHostRow(TypedDict):
     hostname: str
     enabled: bool
     first_seen_at: str
     last_seen_at: str
-    last_action: str
-    last_task_id: str
-    last_run_id: str
-    update_count: int
     peer_addr: NotRequired[str]
 
 

@@ -31,8 +31,6 @@ class ToolchainVersionReport:
     hostname: str
     compiler: str
     runner: str
-    task_id: str
-    run_id: str
 
 
 class ToolchainVersionCollector:
@@ -278,15 +276,10 @@ class ToolchainTelemetryHandler:
             return
         if recorded:
             try:
-                self._hosts.record_event(
-                    hostname=report.hostname,
-                    action="versions",
-                    task_id=report.task_id,
-                    run_id=report.run_id,
-                )
+                self._hosts.record_contact(hostname=report.hostname)
             except Exception:
                 logger.exception(
-                    "failed to record judgehost toolchain host event "
+                    "failed to record judgehost toolchain host contact "
                     "judgetask_id=%s hostname=%s",
                     report.judgetask_id,
                     report.hostname,

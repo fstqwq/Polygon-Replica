@@ -4,6 +4,7 @@ from app.db import now_iso
 from app.service.judgehost.batch.model import HostLeaseRelease
 from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
 from app.service.judgehost.configuration import JudgehostSettings
+from app.service.judgehost.host.model import judgehost_name_sort_key
 from app.service.judgehost.host.registry import JudgehostHostRegistry
 from app.service.judgehost.task.registry import JudgehostTaskRegistry
 from app.service.judgehost.task.time import parse_iso_utc
@@ -46,8 +47,7 @@ class JudgehostHostStatus:
         }
         host_rows = sorted(
             self._hosts.host_rows(),
-            key=lambda row: (row["last_seen_at"], row["hostname"]),
-            reverse=True,
+            key=lambda row: judgehost_name_sort_key(row["hostname"]),
         )
         rows: list[dict[str, object]] = []
         online_count = 0
@@ -72,12 +72,8 @@ class JudgehostHostStatus:
                     "age_sec": age_sec,
                     "last_seen_at": row["last_seen_at"],
                     "first_seen_at": row["first_seen_at"],
-                    "last_action": row["last_action"],
-                    "last_task_id": row["last_task_id"],
-                    "last_run_id": row["last_run_id"],
                     "toolchains": toolchains.get(hostname, []),
                     "active_leases": int(active_by_host.get(hostname, 0)),
-                    "update_count": row["update_count"],
                     "judged_case_count": 0 if telemetry is None else telemetry["judged_case_count"],
                     "last_judging_at": None if telemetry is None else telemetry["last_judging_at"],
                     "last_judging": None if telemetry is None else telemetry["last_judging"],

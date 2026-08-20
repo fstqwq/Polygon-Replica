@@ -164,7 +164,7 @@
 }
 
 .admin-host-table {
-  min-width: 1040px;
+  min-width: 1120px;
 }
 
 .admin-host-table td {
@@ -207,7 +207,7 @@
 
 .admin-host-detail-facts {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-3);
 }
 
@@ -221,9 +221,8 @@
   overflow-wrap: anywhere;
 }
 
-.admin-host-last-work {
-  display: grid;
-  gap: var(--space-1);
+.admin-host-last-judging {
+  min-width: 300px;
   overflow-wrap: anywhere;
 }
 

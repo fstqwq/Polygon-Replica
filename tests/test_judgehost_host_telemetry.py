@@ -7,22 +7,25 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.config import build_config_values
-from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
 from app.service.judgehost.batch.model import (
     CaseReportTelemetry,
     CompileSubmission,
     ExecutionBatchSpec,
     JudgehostCaseRow,
 )
-from app.service.judgehost.domjudge.case_result import build_case_result
+from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
 from app.service.judgehost.configuration import JudgehostConfiguration
+from app.service.judgehost.domjudge.case_result import build_case_result
 from app.service.judgehost.domjudge.identity import submit_id
+from app.service.judgehost.domjudge.wire import DomjudgeWireProjector
 from app.service.judgehost.host.registry import JudgehostHostRegistry
+from app.service.judgehost.host.status import JudgehostHostStatus
 from app.service.judgehost.host.toolchain_versions import (
     ToolchainTelemetryHandler,
     ToolchainVersionCollector,
     ToolchainVersionReport,
 )
+from app.service.judgehost.task.registry import JudgehostTaskRegistry
 from app.service.platform.hashing import compile_command_digest
 from app.service.platform.runtime_blob_store import PayloadFile
 
@@ -205,7 +208,7 @@ class TestToolchainVersionCollector(unittest.TestCase):
         self.assertEqual(toolchains["cpp"].compiler, "g++ 14")
         self.assertEqual(toolchains["java"].runner, "java 21")
 
-    def test_handler_records_versions_event_after_telemetry(self) -> None:
+    def test_handler_records_host_contact_after_telemetry(self) -> None:
         handler = ToolchainTelemetryHandler(
             self.scheduler,
             self.configuration,
@@ -218,16 +221,13 @@ class TestToolchainVersionCollector(unittest.TestCase):
                 hostname="judgehost-a",
                 compiler=self._encoded(b"g++ 14"),
                 runner="",
-                task_id="task-101",
-                run_id="run-101",
             )
         )
 
         host = self.hosts.host_rows()[0]
         self.assertEqual(host["hostname"], "judgehost-a")
-        self.assertEqual(host["last_action"], "versions")
-        self.assertEqual(host["last_task_id"], "task-101")
-        self.assertEqual(host["last_run_id"], "run-101")
+        self.assertTrue(host["first_seen_at"])
+        self.assertEqual(host["last_seen_at"], host["first_seen_at"])
 
     def test_handler_contains_optional_telemetry_failures(self) -> None:
         handler = ToolchainTelemetryHandler(
@@ -245,15 +245,13 @@ class TestToolchainVersionCollector(unittest.TestCase):
                 hostname="judgehost-a",
                 compiler=self._encoded(b"g++ 14"),
                 runner="",
-                task_id="task-101",
-                run_id="run-101",
             )
         )
 
         self.assertEqual(self.hosts.host_rows(), [])
         self.assertEqual(self.hosts.toolchain_rows(), {})
 
-    def test_handler_contains_host_event_sink_failure(self) -> None:
+    def test_handler_contains_host_contact_sink_failure(self) -> None:
         handler = ToolchainTelemetryHandler(
             self.scheduler,
             self.configuration,
@@ -262,8 +260,8 @@ class TestToolchainVersionCollector(unittest.TestCase):
 
         with patch.object(
             self.hosts,
-            "record_event",
-            side_effect=RuntimeError("host event store unavailable"),
+            "record_contact",
+            side_effect=RuntimeError("host contact store unavailable"),
         ):
             handler.record_report(
                 ToolchainVersionReport(
@@ -271,13 +269,35 @@ class TestToolchainVersionCollector(unittest.TestCase):
                     hostname="judgehost-a",
                     compiler=self._encoded(b"g++ 14"),
                     runner="",
-                    task_id="task-101",
-                    run_id="run-101",
                 )
             )
 
         telemetry = self.hosts.toolchain_rows()["judgehost-a"]["cpp"]
         self.assertEqual(telemetry.compiler, "g++ 14")
+
+
+class TestHostStatus(unittest.TestCase):
+    def test_host_projections_are_sorted_by_name(self) -> None:
+        hosts = JudgehostHostRegistry()
+        for hostname in ("judgehost-zeta", "judgehost-alpha", "judgehost-beta"):
+            hosts.record_contact(hostname=hostname)
+        status = JudgehostHostStatus(
+            hosts,
+            JudgehostTaskRegistry(),
+            JudgehostBatchRuntime(id_base=500),
+        ).status(JudgehostConfiguration(build_config_values()).snapshot())
+        rows = status["hosts"]
+        self.assertIsInstance(rows, list)
+        assert isinstance(rows, list)
+
+        self.assertEqual(
+            [row["hostname"] for row in rows],
+            ["judgehost-alpha", "judgehost-beta", "judgehost-zeta"],
+        )
+        self.assertEqual(
+            [row["hostname"] for row in DomjudgeWireProjector.hosts(hosts.host_rows())],
+            ["judgehost-alpha", "judgehost-beta", "judgehost-zeta"],
+        )
 
 
 def _result(test_name: str):

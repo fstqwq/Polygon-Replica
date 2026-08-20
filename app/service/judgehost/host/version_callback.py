@@ -57,8 +57,6 @@ class JudgehostVersionCallback:
                     hostname=safe_host,
                     compiler=compiler,
                     runner=runner,
-                    task_id=receipt.task_id,
-                    run_id=receipt.run_id,
                 )
             )
             return CallbackOutcome(

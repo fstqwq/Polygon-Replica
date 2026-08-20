@@ -97,11 +97,10 @@
         <tr>
           <th>Name</th>
           <th>Status</th>
-          <th>Last contact</th>
-          <th>Activity</th>
+          <th>Active</th>
+          <th>Last judging</th>
           <th>Judged cases</th>
           <th>Recent average</th>
-          <th>Last report</th>
           <th>Enabled</th>
         </tr>
       </thead>
@@ -119,25 +118,32 @@
               {% if host.peer_addr %}<code>{{ host.peer_addr }}</code>{% endif %}
             </div>
           </td>
-          <td><span class="{{ host.state_class }}">{{ host.state | status_label }}</span></td>
           <td>
             <div class="admin-host-cell-stack">
-              <span>{{ host.age_label }}</span>
-              {% if host.last_seen_at %}<span class="muted">{{ host.last_seen_at | local_time }}</span>{% endif %}
+              <span class="{{ host.state_class }}">{{ host.state | status_label }}</span>
+              <span class="muted">{{ host.age_label }}</span>
             </div>
           </td>
           <td>
-            {{ host.activity }}
-            {% if host.active_leases %}<span class="muted">({{ host.active_leases }} {{ 'lease' if host.active_leases == 1 else 'leases' }})</span>{% endif %}
+            <div class="admin-host-cell-stack">
+              <span>{{ host.activity }}</span>
+              <span class="muted">{{ host.active_leases }}</span>
+            </div>
+          </td>
+          <td class="admin-host-last-judging">
+            {% if host.last_judging %}
+            <div class="admin-host-cell-stack">
+              {% if host.last_judging_href %}<a href="{{ host.last_judging_href }}">{% endif %}
+                {{ host.last_judging.task_kind | replace('-', ' ') | title }} &middot; <code>{{ host.last_judging.problem_slug }}</code>
+              {% if host.last_judging_href %}</a>{% endif %}
+              <span class="muted">{{ host.last_judging.source_label }} / {{ host.last_judging.test_name }}{% if host.last_judging_at %} &middot; {{ host.last_judging_at | local_time }}{% endif %}</span>
+            </div>
+            {% else %}
+            <span class="muted">&mdash;</span>
+            {% endif %}
           </td>
           <td>{{ host.judged_case_count }}</td>
-          <td>{% if host.recent_avg_per_case_sec is not none %}{{ "%.3f s"|format(host.recent_avg_per_case_sec) }}{% else %}<span class="muted">none</span>{% endif %}</td>
-          <td>
-            <div class="admin-host-cell-stack">
-              <span>{{ host.last_action_label }}</span>
-              <span class="muted">{{ host.update_count }} contacts</span>
-            </div>
-          </td>
+          <td>{% if host.recent_avg_per_case_sec is not none %}{{ "%.3f s"|format(host.recent_avg_per_case_sec) }}{% else %}<span class="muted">&mdash;</span>{% endif %}</td>
           <td class="admin-host-control">
             <form
               class="inline-form admin-judgehost-toggle-form"
@@ -156,24 +162,14 @@
           </td>
         </tr>
         <tr class="admin-host-detail-row">
-          <td colspan="8">
+          <td colspan="7">
             <details class="admin-host-details">
               <summary>Details</summary>
               <div class="admin-host-detail-content">
                 <div class="admin-host-detail-facts">
                   <div><span>First contact</span><strong>{% if host.first_seen_at %}{{ host.first_seen_at | local_time }}{% else %}unknown{% endif %}</strong></div>
-                  <div><span>Last task</span><strong>{{ host.last_task_id or 'none' }}</strong></div>
-                  <div><span>Last run</span><strong>{{ host.last_run_id or 'none' }}</strong></div>
+                  <div><span>Last contact</span><strong>{% if host.last_seen_at %}{{ host.last_seen_at | local_time }}{% else %}unknown{% endif %}</strong></div>
                 </div>
-
-                {% if host.last_judging %}
-                <div class="admin-host-last-work">
-                  <span class="muted">Last judging</span>
-                  {% if host.last_judging_href %}<a href="{{ host.last_judging_href }}">{% endif %}
-                    {{ host.last_judging.task_kind | replace('-', ' ') | title }} &middot; <code>{{ host.last_judging.problem_slug }}</code> &middot; {{ host.last_judging.source_label }} / {{ host.last_judging.test_name }}
-                  {% if host.last_judging_href %}</a>{% endif %}
-                </div>
-                {% endif %}
 
                 <div class="admin-host-toolchains">
                   <h4>Reported toolchains</h4>

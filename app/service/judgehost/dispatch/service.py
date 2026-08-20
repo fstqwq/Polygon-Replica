@@ -72,7 +72,7 @@ class JudgehostDispatch:
 
     def domjudge_register_host(self, hostname: str) -> HostRegistrationOutcome:
         safe_host = normalize_judgehost_hostname(hostname)
-        self._hosts.record_event(hostname=safe_host, action="register")
+        self._hosts.record_contact(hostname=safe_host)
         release = self._batch_runtime.release_host_leases(
             safe_host,
             now_text=now_iso(),
@@ -342,13 +342,7 @@ class JudgehostDispatch:
                 [int(row["id"]) for row in rows],
                 leased_monotonic=lease_start,
             )
-            first_row = rows[0]
-            self._hosts.record_event(
-                hostname=hostname,
-                action="lease",
-                task_id=first_row["task_id"],
-                run_id=first_row["run_id"],
-            )
+            self._hosts.record_contact(hostname=hostname)
             return out
         except Exception:
             self._batch_runtime.abort_lease(claim, now_text=now_iso())
@@ -427,10 +421,7 @@ class JudgehostDispatch:
                 if not initialized:
                     initialized = True
                     if not self._hosts.enabled(safe_host):
-                        self._hosts.record_event(
-                            hostname=safe_host,
-                            action="disabled",
-                        )
+                        self._hosts.record_contact(hostname=safe_host)
                         return self._outcome((), affected_batch_ids)
                 batch_row = self._batch_runtime.select_ready_batch(safe_host)
 
@@ -489,10 +480,7 @@ class JudgehostDispatch:
                     admission_gate is not None and not admission_gate.allows_runtime_work_locked()
                 ):
                     return self._outcome((), affected_batch_ids)
-                self._hosts.record_event(
-                    hostname=safe_host,
-                    action="fetch",
-                )
+                self._hosts.record_contact(hostname=safe_host)
             return self._outcome((), affected_batch_ids)
         return self._outcome((), affected_batch_ids)
 
