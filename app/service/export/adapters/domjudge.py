@@ -8,6 +8,7 @@ import yaml
 
 from app.config import ConfigValues
 from app.service.export.adapters.shared import (
+    ContestPackagePlacement,
     PackageAdapterPlan,
     PackageAdapterSupport,
     PackageFormat,
@@ -78,27 +79,26 @@ class DOMjudgePackageAdapter(PackageAdapterSupport):
 
     format: PackageFormat = "domjudge"
     display_name = "DOMjudge"
-    accepts_short_name = True
 
     COLOR_PALETTE = (
-        "#e6194b",
-        "#3cb44b",
-        "#ffe119",
-        "#4363d8",
-        "#f58231",
-        "#911eb4",
-        "#46f0f0",
-        "#f032e6",
-        "#bcf60c",
-        "#fabebe",
-        "#008080",
-        "#e6beff",
-        "#9a6324",
-        "#fffac8",
-        "#800000",
-        "#aaffc3",
-        "#808000",
-        "#ffd8b1",
+        "#e6194b",  # A Red
+        "#4363d8",  # B Blue
+        "#ffe119",  # C Yellow
+        "#3cb44b",  # D Green
+        "#f58231",  # E Orange
+        "#6b2c91",  # F Purple
+        "#eeeeee",  # G White
+        "#9a6324",  # H Brown
+        "#46d9e6",  # I Cyan
+        "#303030",  # J Black
+        "#ff6f91",  # K Pink
+        "#9bdc28",  # L Lime
+        "#9e9e9e",  # M Silver
+        "#008080",  # N Teal
+        "#d4a017",  # O Gold
+        "#800000",  # P Burgundy
+        "#aaffc3",  # Q Mint
+        "#ffd8b1",  # R Peach
     )
 
     def __init__(
@@ -122,13 +122,20 @@ class DOMjudgePackageAdapter(PackageAdapterSupport):
         *,
         target: Path,
         canonical_problem_slug: str,
-        short_name: str | None = None,
+        placement: ContestPackagePlacement | None = None,
         plan: PackageAdapterPlan | None = None,
     ) -> str:
         adapter_plan = plan or self.plan(reader)
         if adapter_plan.package_format != self.format:
             raise ValueError("package adapter plan format does not match request")
-        resolved_short_name = self.short_name(short_name)
+        external_id = self.external_id(canonical_problem_slug)
+        resolved_short_name = self.short_name(
+            placement.idx if placement is not None else external_id
+        )
+        color = self.balloon_color(
+            external_id=external_id,
+            placement=placement,
+        )
         self.prepare_target(target)
 
         snapshot = reader.root
@@ -169,9 +176,10 @@ class DOMjudgePackageAdapter(PackageAdapterSupport):
         (target / "domjudge-problem.ini").write_text(
             self.problem_ini(
                 problem_name=problem_name,
-                external_id=self.external_id(canonical_problem_slug),
+                external_id=external_id,
                 short_name=resolved_short_name,
                 time_limit_ms=problem_config["time_limit_ms"],
+                color=color,
             ),
             encoding="utf-8",
             newline="\n",
@@ -222,6 +230,20 @@ class DOMjudgePackageAdapter(PackageAdapterSupport):
         return f'"{escaped}"'
 
     @classmethod
+    def balloon_color(
+        cls,
+        *,
+        external_id: str,
+        placement: ContestPackagePlacement | None,
+    ) -> str:
+        if placement is not None:
+            return cls.COLOR_PALETTE[
+                (placement.ordinal - 1) % len(cls.COLOR_PALETTE)
+            ]
+        digest = hashlib.sha256(external_id.encode("utf-8")).digest()
+        return cls.COLOR_PALETTE[digest[0] % len(cls.COLOR_PALETTE)]
+
+    @classmethod
     def problem_ini(
         cls,
         *,
@@ -229,10 +251,9 @@ class DOMjudgePackageAdapter(PackageAdapterSupport):
         external_id: str,
         short_name: str,
         time_limit_ms: int,
+        color: str,
     ) -> str:
         seconds = time_limit_ms / 1000.0
-        digest = hashlib.sha256(external_id.encode("utf-8")).digest()
-        color = cls.COLOR_PALETTE[digest[0] % len(cls.COLOR_PALETTE)]
         return (
             f"name = {cls.ini_value(problem_name)}\n"
             f"externalid = {cls.ini_value(external_id)}\n"

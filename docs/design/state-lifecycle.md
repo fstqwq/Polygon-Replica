@@ -134,7 +134,7 @@ position. A Contest package download requires every roster problem's current
 published revision to have a ready Native Package.
 
 The request rechecks readiness, opens each exact Native Package with its stored
-archive checksum, and invokes the selected DOMjudge or ICPC 2025-09 adapter in
+archive checksum, and invokes the selected registered external adapter in
 canonical Contest order. It never runs Verification, repairs a Native Package,
 or creates a problem-level external-package cache entry. Failure of any child
 package aborts the whole response.

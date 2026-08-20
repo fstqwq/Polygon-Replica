@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Literal
 
 from app.service.export.adapters.shared import (
+    ContestPackagePlacement,
     PackageAdapterPlan,
     PackageAdapterSupport,
     PackageFormat,
@@ -116,7 +117,6 @@ class QOJPackageAdapter(PackageAdapterSupport):
 
     format: PackageFormat = "qoj"
     display_name = "QOJ"
-    accepts_short_name = False
 
     def plan(self, reader: NativePackageReader) -> PackageAdapterPlan:
         """Validate QOJ support and report advisory source omissions."""
@@ -145,14 +145,12 @@ class QOJPackageAdapter(PackageAdapterSupport):
         *,
         target: Path,
         canonical_problem_slug: str,
-        short_name: str | None = None,
+        placement: ContestPackagePlacement | None = None,
         plan: PackageAdapterPlan | None = None,
     ) -> str:
         """Build one QOJ Sync Test Data source archive tree."""
 
-        del canonical_problem_slug
-        if short_name is not None:
-            raise ValueError("QOJ package does not accept a short-name")
+        del canonical_problem_slug, placement
         adapter_plan = plan or self.plan(reader)
         if adapter_plan.package_format != self.format:
             raise ValueError("package adapter plan format does not match request")

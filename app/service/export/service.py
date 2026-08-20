@@ -363,9 +363,6 @@ class ExportService:
                     reader,
                     target=package_root,
                     canonical_problem_slug=problem_row["slug"],
-                    short_name=(
-                        public_slug if adapter.accepts_short_name else None
-                    ),
                     plan=adapter_plan,
                 )
                 self._make_archive(archive_partial, package_root)

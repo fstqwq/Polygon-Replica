@@ -7,6 +7,7 @@ import yaml
 
 from app.config import ConfigValues
 from app.service.export.adapters.shared import (
+    ContestPackagePlacement,
     PackageAdapterPlan,
     PackageAdapterSupport,
     PackageFormat,
@@ -98,7 +99,6 @@ class ICPC2025PackageAdapter(PackageAdapterSupport):
 
     format: PackageFormat = "icpc-2025-09"
     display_name = "ICPC 2025-09"
-    accepts_short_name = False
 
     def __init__(
         self,
@@ -134,13 +134,10 @@ class ICPC2025PackageAdapter(PackageAdapterSupport):
         *,
         target: Path,
         canonical_problem_slug: str,
-        short_name: str | None = None,
+        placement: ContestPackagePlacement | None = None,
         plan: PackageAdapterPlan | None = None,
     ) -> str:
-        if short_name is not None:
-            raise ValueError(
-                "ICPC 2025-09 package does not accept a DOMjudge short-name"
-            )
+        del placement
         adapter_plan = plan or self.plan(reader)
         if adapter_plan.package_format != self.format:
             raise ValueError("package adapter plan format does not match request")

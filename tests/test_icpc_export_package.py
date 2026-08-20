@@ -1,4 +1,5 @@
 
+import hashlib
 import json
 import shutil
 import stat
@@ -13,12 +14,16 @@ import yaml
 
 from app.config import ConfigValues
 from app.service.export.adapters.shared import (
+    ContestPackagePlacement,
     SUBMISSION_RULES,
     annotated_submission,
     write_input_validator,
     write_output_validator,
 )
-from app.service.export.adapters.domjudge import render_domjudge_problem_yaml
+from app.service.export.adapters.domjudge import (
+    DOMjudgePackageAdapter,
+    render_domjudge_problem_yaml,
+)
 from app.service.export.adapters.icpc_2025 import (
     problem_uuid,
     render_problem_yaml,
@@ -129,6 +134,27 @@ class TestICPCExportPackage(unittest.TestCase):
                 self.assertEqual(metadata["type"], expected_type)
                 self.assertEqual(metadata["validation"], expected_validation)
                 self.assertEqual(metadata["name"], "Problem")
+
+    def test_domjudge_balloon_palette_follows_contest_ordinal(self) -> None:
+        palette = DOMjudgePackageAdapter.COLOR_PALETTE
+        colors = [
+            DOMjudgePackageAdapter.balloon_color(
+                external_id="ignored-in-contest",
+                placement=ContestPackagePlacement(idx=idx, ordinal=ordinal),
+            )
+            for idx, ordinal in (("A", 1), ("B", 2), ("R", 18), ("S", 19))
+        ]
+        self.assertEqual(colors, [palette[0], palette[1], palette[17], palette[0]])
+
+        external_id = "standalone-problem"
+        expected_index = hashlib.sha256(external_id.encode()).digest()[0] % len(palette)
+        self.assertEqual(
+            DOMjudgePackageAdapter.balloon_color(
+                external_id=external_id,
+                placement=None,
+            ),
+            palette[expected_index],
+        )
 
     def test_submissions_yaml_preserves_all_expected_result_sets(self) -> None:
         entries = {
@@ -326,7 +352,7 @@ class TestICPCExportPackage(unittest.TestCase):
                 reader,
                 target=domjudge,
                 canonical_problem_slug="owner/projected-problem",
-                short_name="A",
+                placement=ContestPackagePlacement(idx="A", ordinal=1),
             )
 
         self.assertIn("solutions/compile.cpp", strict_warning)
@@ -346,6 +372,8 @@ class TestICPCExportPackage(unittest.TestCase):
         self.assertEqual((strict / "data" / "secret" / "001.ans").read_bytes(), b"")
 
         self.assertTrue((domjudge / "problem_statement" / "problem.pdf").is_file())
+        domjudge_ini = (domjudge / "domjudge-problem.ini").read_text()
+        self.assertIn(f"color = {DOMjudgePackageAdapter.COLOR_PALETTE[0]}\n", domjudge_ini)
         self.assertTrue((domjudge / "domjudge-problem.ini").is_file())
         self.assertFalse((domjudge / "statement").exists())
         self.assertFalse((domjudge / "submissions" / "submissions.yaml").exists())

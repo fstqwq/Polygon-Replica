@@ -294,7 +294,17 @@ wrong-answer, time-limit, and runtime-error submissions use their conventional
 directories. Only the three mixed behaviors use a language-appropriate
 `@EXPECTED_RESULTS@` annotation in the copied source. Standalone export uses the
 public slug segment as the short name; a Contest download passes the current problem
-index to the adapter.
+index to the adapter. Standalone color is selected deterministically from the
+Problem external ID. Contest downloads instead assign the adapter's fixed
+18-color palette in canonical roster order and repeat it from the first color
+after the eighteenth problem.
+
+The Contest palette is, in order: `#e6194b` (red), `#4363d8` (blue),
+`#ffe119` (yellow), `#3cb44b` (green), `#f58231` (orange), `#6b2c91`
+(purple), `#eeeeee` (white), `#9a6324` (brown), `#46d9e6` (cyan),
+`#303030` (black), `#ff6f91` (pink), `#9bdc28` (lime), `#9e9e9e`
+(silver), `#008080` (teal), `#d4a017` (gold), `#800000` (burgundy),
+`#aaffc3` (mint), and `#ffd8b1` (peach).
 
 ### QOJ package
 
@@ -356,8 +366,9 @@ published. The adapter does not compile the checker.
 
 The Contest Problems page offers `Build All Packages` until every roster
 problem's current published revision has a ready Native Package. Once all are
-ready, that action becomes `Download Packages`. The download dialog selects one
-supported bundle format: DOMjudge or ICPC Problem Package 2025-09.
+ready, that action becomes `Download Packages`. The download dialog enumerates
+the registered external adapters in their stable order: DOMjudge, ICPC Problem
+Package 2025-09, QOJ, and Nowcoder.
 
 The POST request blocks until the selected bundle has been built. It reads the
 current roster in canonical `idx` order, rechecks published-package readiness,
@@ -365,11 +376,12 @@ and opens each exact Native Package with its recorded archive checksum. A stale
 or missing Package rejects the request; the service never falls back to an
 older Package, starts Verification, or repairs an unavailable Package.
 
-The bundle invokes the same adapters described above, using the Contest `idx`
-as the child package short name where the adapter accepts one. Child ZIP files
-exist only inside one temporary outer bundle and do not become problem-level
-external-package cache entries. Failure of any child package aborts the entire
-download.
+The bundle invokes the same adapters described above and supplies each adapter
+with the Contest `idx` and canonical ordinal. DOMjudge uses that placement for
+its short name and balloon color; strict ICPC, QOJ, and Nowcoder output does not
+embed it. Child ZIP files exist only inside one temporary outer bundle and do
+not become problem-level external-package cache entries. Failure of any child
+package aborts the entire download.
 
 The outer ZIP contains only `packages/<idx>-<problem>.zip` children. It does not
 add a manifest or expose Git commits, Native Package identities, or archive

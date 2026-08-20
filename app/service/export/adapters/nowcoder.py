@@ -4,6 +4,7 @@ import shutil
 from pathlib import Path
 
 from app.service.export.adapters.shared import (
+    ContestPackagePlacement,
     PackageAdapterPlan,
     PackageAdapterSupport,
     PackageFormat,
@@ -17,7 +18,6 @@ class NowcoderPackageAdapter:
 
     format: PackageFormat = "nowcoder"
     display_name = "Nowcoder"
-    accepts_short_name = False
 
     def plan(self, reader: NativePackageReader) -> PackageAdapterPlan:
         self._require_supported_problem(reader)
@@ -36,12 +36,10 @@ class NowcoderPackageAdapter:
         *,
         target: Path,
         canonical_problem_slug: str,
-        short_name: str | None = None,
+        placement: ContestPackagePlacement | None = None,
         plan: PackageAdapterPlan | None = None,
     ) -> str:
-        del canonical_problem_slug
-        if short_name is not None:
-            raise ValueError("Nowcoder package does not accept a short-name")
+        del canonical_problem_slug, placement
         adapter_plan = plan or self.plan(reader)
         if adapter_plan.package_format != self.format:
             raise ValueError("package adapter plan format does not match request")

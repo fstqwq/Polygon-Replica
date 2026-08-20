@@ -8,16 +8,14 @@ from pathlib import Path
 
 from app.service.contest.naming import problem_slug_file_token
 from app.service.contest.service import ContestService
-from app.service.export.adapters import PackageAdapterRegistry, PackageFormat
+from app.service.export.adapters import (
+    ContestPackagePlacement,
+    PackageAdapterRegistry,
+    PackageFormat,
+)
 from app.service.problem_package.service import (
     NativePackageReader,
     ProblemPackageService,
-)
-
-
-CONTEST_PACKAGE_DOWNLOAD_FORMATS: tuple[PackageFormat, ...] = (
-    "domjudge",
-    "icpc-2025-09",
 )
 
 
@@ -114,7 +112,10 @@ class ContestPackageService:
                         reader,
                         target=package_root,
                         canonical_problem_slug=problem_slug,
-                        short_name=idx if adapter.accepts_short_name else None,
+                        placement=ContestPackagePlacement(
+                            idx=idx,
+                            ordinal=int(str(entry["ordinal"])),
+                        ),
                     )
                     token = problem_slug_file_token(problem_slug)
                     filename = f"{idx}-{token}.zip" if idx else f"{token}.zip"
@@ -186,8 +187,6 @@ class ContestPackageService:
         package_format: str,
     ) -> ContestPackageDownload:
         safe_format = self._package_adapters.require_format(package_format)
-        if safe_format not in CONTEST_PACKAGE_DOWNLOAD_FORMATS:
-            raise ValueError("unsupported Contest package format")
 
         roster = self._contest.contest_problems(contest_id)
         if not roster:

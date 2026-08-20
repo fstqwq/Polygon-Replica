@@ -9,7 +9,10 @@ from typing import Iterator, cast
 
 from app.service.contest.package import ContestPackageService
 from app.service.contest.service import ContestService
-from app.service.export.adapters import PackageAdapterRegistry
+from app.service.export.adapters import (
+    ContestPackagePlacement,
+    PackageAdapterRegistry,
+)
 from app.service.problem_package.service import (
     NativePackageReader,
     ProblemPackageService,
@@ -99,8 +102,8 @@ class _ProblemPackageService:
 
 
 class _Adapter:
-    format = "domjudge"
-    accepts_short_name = True
+    def __init__(self, package_format: str) -> None:
+        self.format = package_format
 
     def build(
         self,
@@ -108,28 +111,32 @@ class _Adapter:
         *,
         target: Path,
         canonical_problem_slug: str,
-        short_name: str | None = None,
+        placement: ContestPackagePlacement | None = None,
         **_kwargs: object,
     ) -> str:
+        assert placement is not None
         (target / "problem.yaml").write_text(
-            f"name: {canonical_problem_slug}\nidx: {short_name}\n",
+            f"format: {self.format}\n"
+            f"name: {canonical_problem_slug}\n"
+            f"idx: {placement.idx}\n"
+            f"ordinal: {placement.ordinal}\n",
             encoding="utf-8",
         )
         return ""
 
 
 class _Registry:
+    formats = ("domjudge", "icpc-2025-09", "qoj", "nowcoder")
+
     @staticmethod
     def require_format(package_format: str) -> str:
-        if package_format != "domjudge":
+        if package_format not in _Registry.formats:
             raise ValueError(f"unsupported package format: {package_format}")
         return package_format
 
     @staticmethod
     def require(package_format: str) -> _Adapter:
-        if package_format != "domjudge":
-            raise ValueError(f"unsupported package format: {package_format}")
-        return _Adapter()
+        return _Adapter(_Registry.require_format(package_format))
 
 
 class TestContestPackageDownload(unittest.TestCase):
@@ -171,7 +178,10 @@ class TestContestPackageDownload(unittest.TestCase):
             with zipfile.ZipFile(io.BytesIO(archive.read(package_entries[0]))) as package:
                 self.assertEqual(
                     package.read("problem.yaml"),
-                    b"name: alice/alpha\nidx: A\n",
+                    b"format: domjudge\n"
+                    b"name: alice/alpha\n"
+                    b"idx: A\n"
+                    b"ordinal: 1\n",
                 )
         self.assertEqual(
             self.packages.opened,
@@ -195,12 +205,31 @@ class TestContestPackageDownload(unittest.TestCase):
         self.assertEqual(self.contest.download_root_calls, 0)
         self.assertEqual(self.packages.opened, [])
 
-    def test_download_rejects_non_contest_adapter(self) -> None:
-        with self.assertRaisesRegex(ValueError, "unsupported package format: qoj"):
+    def test_download_accepts_every_registered_adapter(self) -> None:
+        for package_format in ("icpc-2025-09", "qoj", "nowcoder"):
+            with self.subTest(package_format=package_format):
+                download = self.service.build_download(
+                    contest_id=7,
+                    contest_slug="example-contest",
+                    package_format=package_format,
+                )
+                with zipfile.ZipFile(download.path) as archive:
+                    first_package = io.BytesIO(
+                        archive.read("packages/A-alice-alpha.zip")
+                    )
+                    with zipfile.ZipFile(first_package) as package:
+                        self.assertIn(
+                            f"format: {package_format}\n".encode(),
+                            package.read("problem.yaml"),
+                        )
+                download.close()
+
+    def test_download_rejects_unregistered_format(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsupported package format: custom"):
             self.service.build_download(
                 contest_id=7,
                 contest_slug="example-contest",
-                package_format="qoj",
+                package_format="custom",
             )
 
         self.assertEqual(self.contest.download_root_calls, 0)

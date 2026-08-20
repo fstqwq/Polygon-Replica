@@ -21,7 +21,8 @@ authoritative registry. Callers enumerate `PackageAdapterRegistry.adapters` or
 string lists of their own. Each adapter owns the policy and output layout of
 exactly one external format; shared filesystem mechanics live in the same package.
 They receive an already validated `NativePackageReader`, canonical naming
-options, and a caller-owned empty staging directory. They may render
+options, an optional Contest `idx` and ordinal placement, and a caller-owned
+empty staging directory. They may render
 statements, but do not access SQLite, Git, workspaces, verification rows,
 runtime cache, or another adapter output. They do not create jobs or publish
 archives. Both single-problem Export and synchronous Contest package downloads

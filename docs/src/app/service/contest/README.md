@@ -21,18 +21,14 @@ A missing Native Package returns `not_ready` without a job, source snapshot,
 or Verification. Contest workers never prepare or repair a Native Package,
 call `ExportService`, or create problem-level export rows.
 
-A job may request DOMjudge bundle and ICPC 2025-09 bundle. Its
-`NativePackageReader` instances are opened once and shared across selected
-outputs. Package bundles invoke the common adapter for every problem; the
-DOMjudge adapter receives the frozen roster index as its short name. Temporary
-child ZIPs exist only inside the Contest job and never enter the problem
-external-package cache.
-
-Each bundle is all-or-nothing, while different output types are independent and
-can produce a `partial` job. Package-only work does not snapshot Contest source.
-Generated-data cleanup may remove jobs and products without deleting Contest
-metadata, membership, roster, or authored source. The exact lifecycle is owned
-by the [package protocol](../../../../protocol/package.md) and storage by the
+A synchronous Contest package download may request any registered external
+adapter. Its `NativePackageReader` instances are opened once and shared across
+all child builds. Every adapter receives the frozen roster `idx` and ordinal;
+DOMjudge uses them as its short name and balloon palette position. Temporary
+child ZIPs exist only inside the request and never enter the problem
+external-package cache. The bundle is all-or-nothing and is deleted after the
+response. The exact lifecycle is owned by the
+[package protocol](../../../../protocol/package.md) and storage by the
 [storage protocol](../../../../protocol/storage.md).
 
 `ContestStatementPreviewService` owns blocking HTML Review orchestration and

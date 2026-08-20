@@ -35,6 +35,12 @@ type PackageFormat = str
 
 
 @dataclass(frozen=True)
+class ContestPackagePlacement:
+    idx: str
+    ordinal: int
+
+
+@dataclass(frozen=True)
 class PackageAdapterPlan:
     package_format: PackageFormat
     solutions: tuple[NativePackageSolutionEntry, ...]
@@ -46,7 +52,6 @@ class PackageAdapter(Protocol):
 
     format: PackageFormat
     display_name: str
-    accepts_short_name: bool
 
     def plan(self, reader: NativePackageReader) -> PackageAdapterPlan: ...
 
@@ -56,7 +61,7 @@ class PackageAdapter(Protocol):
         *,
         target: Path,
         canonical_problem_slug: str,
-        short_name: str | None = None,
+        placement: ContestPackagePlacement | None = None,
         plan: PackageAdapterPlan | None = None,
     ) -> str: ...
 

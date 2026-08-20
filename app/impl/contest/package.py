@@ -7,7 +7,6 @@ from starlette.background import BackgroundTask
 from app.impl.auth.session import require_session_user
 from app.impl.contest.shared import _contest_ctx
 from app.impl.runtime.dependency import runtime
-from app.service.contest.package import CONTEST_PACKAGE_DOWNLOAD_FORMATS
 
 
 def contest_packages_download(
@@ -21,7 +20,7 @@ def contest_packages_download(
             status_code=403,
             detail=ctx["access"]["package_block_reason"],
         )
-    if package_format not in CONTEST_PACKAGE_DOWNLOAD_FORMATS:
+    if not runtime().export_service.package_adapters.supports(package_format):
         raise HTTPException(status_code=400, detail="unsupported Contest package format")
 
     try:
