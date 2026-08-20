@@ -160,13 +160,14 @@ separate ordered package testcase: its input and any available answer are
 copied from that owner. Statement-only sample overrides remain those of the
 skipped testcase.
 
-Opening a Native Package checks the stored archive size and SHA, safe ZIP
-member paths and types, manifest identity, every declared payload, absence of
-undeclared testcase payloads, canonical source shape, and committed-source
-digest. Both `test-data/` and `statement-build/` are excluded from that source
-digest. A frozen consumer can additionally require the checksum recorded at
-admission. The reader exposes only the extracted, validated revision; it does
-not expose Git, a workspace, verification rows, or runtime cache references.
+Native Package construction validates the canonical source tree, manifest, and
+declared payloads before serialization. A later reader checks the archive's
+recorded SHA-256, safely extracts ZIP members, and parses the manifest required
+by the consumer. It does not rehash individual payloads, rebuild the source
+digest, or rescan the archive when the reader closes. A frozen consumer can
+additionally require the checksum recorded at admission. The reader exposes
+only the extracted Package; it does not expose Git, a workspace, Verification
+rows, or runtime cache references.
 
 Availability, Git provenance, and current publication are separate facts. An
 older Native Package remains usable after `main` advances. A missing or corrupt

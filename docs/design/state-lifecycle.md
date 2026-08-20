@@ -101,11 +101,11 @@ unavailable.
 A Package Export request freezes the current official problem version. It never
 reads a user's changing workspace. For that version:
 
-1. An existing Native Package is fully integrity-checked and reused.
+1. An existing Native Package is checksum-checked and reused.
 2. If none exists, the service extracts the published source, runs one complete
    verification, and records the source snapshot, generated inputs, and
    official answers as a Native Package materialization.
-3. If the stored payload is unavailable or fails integrity checking, the
+3. If the stored payload is unavailable or fails checksum checking, the
    service invalidates it and its cached external packages, then repeats the
    full Verification in that same export job.
 4. A Native request finishes when the Native Package is ready. A DOMjudge,
@@ -115,7 +115,7 @@ reads a user's changing workspace. For that version:
 The Native Package is downloaded directly. A request that must first prepare it
 has a Package Export attempt, but it creates no `exports` row or second archive.
 Downloading an existing Native Package creates no job. An adapter consumes only
-an integrity-checked `NativePackageReader` and caller-owned staging; it
+a checksum-checked `NativePackageReader` and caller-owned staging; it
 cannot read Git, workspaces, Verification tables, runtime cache, or another
 adapter's output, and cannot start Verification.
 

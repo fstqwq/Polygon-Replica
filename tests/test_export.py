@@ -28,7 +28,6 @@ from app.service.problem.build_config import (
 )
 from app.service.problem_package.manifest import load_manifest, validate_manifest_files
 from app.service.problem_package.service import (
-    FrozenNativePackageMismatch,
     NativePackageOperationBusy,
     PublishedRevision,
 )
@@ -762,6 +761,22 @@ class TestPublishedRevisionExport(E2ETestBase):
         self.assertEqual(second["id"], first["id"])
         self.assertEqual(second["archive_sha256"], first["archive_sha256"])
 
+    def test_native_package_build_does_not_reopen_written_archive(self) -> None:
+        _workspace, problem_id, _commit = self._publish_problem()
+        revision = runtime.problem_package_service.published_revision(problem_id)
+
+        with patch.object(
+            runtime.problem_package_service,
+            "_safe_extract",
+            side_effect=AssertionError("Native Package build reopened its archive"),
+        ):
+            native_package = runtime.problem_package_service.ensure_native_package(
+                revision,
+                self._verification_builder(problem_id),
+            )
+
+        self.assertEqual(native_package["status"], "available")
+
     def test_corrupt_native_package_is_reverified_in_the_same_export_job(self) -> None:
         problem_id, commit, first = self._native_package()
         actor = db_fetch_one("SELECT id FROM users WHERE username=?", [self.user])
@@ -1355,12 +1370,24 @@ class TestPublishedRevisionExport(E2ETestBase):
             ), self.assertRaisesRegex(ValueError, message):
                 service._verification_test_owners("ver-test", source_tree)
 
-    def test_export_publication_holds_native_package_operation(self) -> None:
+    def test_export_publication_allows_readers_but_blocks_changes(self) -> None:
         _problem_id, _commit, verified = self._native_package()
         original_insert = runtime.export_service._store.insert_export_record
         competing_errors: list[Exception] = []
 
         def insert_while_rebuild_competes(**kwargs) -> None:
+            with runtime.problem_package_service.open_reader(
+                verified["id"]
+            ) as reader:
+                self.assertEqual(reader.native_package["id"], verified["id"])
+            download = runtime.problem_package_service.open_native_package_download(
+                verified["id"]
+            )
+            try:
+                self.assertTrue(download.stream.read(1))
+            finally:
+                download.close()
+
             def acquire_rebuild_operation() -> None:
                 try:
                     with runtime.problem_package_service.native_package_operation(
@@ -1390,8 +1417,14 @@ class TestPublishedRevisionExport(E2ETestBase):
                 "insert_export_record",
                 side_effect=insert_while_rebuild_competes,
             ),
+            patch(
+                "app.service.problem_package.service.validate_manifest_files",
+                side_effect=AssertionError(
+                    "external adapter repeated construction-time validation"
+                ),
+            ),
             patch.object(
-            runtime.tex_compile_service,
+                runtime.tex_compile_service,
                 "compile_pdf",
                 side_effect=self._compile_statement,
             ),
@@ -1461,7 +1494,7 @@ class TestPublishedRevisionExport(E2ETestBase):
             self.assertFalse((workspace / "statement-build").exists())
             self.assertFalse((workspace / "tests" / "answers").exists())
 
-    def test_native_package_reader_detects_extracted_payload_tampering(self) -> None:
+    def test_manifest_validation_detects_extracted_payload_tampering(self) -> None:
         _problem_id, _commit, verified = self._native_package()
         with runtime.problem_package_service.open_reader(verified["id"]) as reader:
             manifest = load_manifest(reader.root / "test-data" / "manifest.json")
@@ -1558,26 +1591,6 @@ class TestPublishedRevisionExport(E2ETestBase):
                                 runtime.config_values.STATEMENT_SAMPLE_MAX_BYTES
                             ),
                         )
-
-    def test_native_package_reader_detects_archive_change_during_read(self) -> None:
-        _problem_id, _commit, verified = self._native_package()
-        _stored, archive = runtime.problem_package_service.native_package_archive(
-            verified["id"]
-        )
-        original = archive.read_bytes()
-        try:
-            with self.assertRaisesRegex(
-                FrozenNativePackageMismatch,
-                "archive changed while it was being read",
-            ):
-                with runtime.problem_package_service.open_reader(verified["id"]):
-                    archive.write_bytes(original + b"changed during reader lifetime")
-        finally:
-            archive.write_bytes(original)
-
-        with runtime.problem_package_service.open_reader(verified["id"]):
-            pass
-
 
 if __name__ == "__main__":
     raise SystemExit("run through the Linux test suite")

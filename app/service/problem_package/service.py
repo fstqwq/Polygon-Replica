@@ -15,6 +15,7 @@ from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from types import TracebackType
 from typing import BinaryIO, Literal, TypedDict
 
 from app.db import DB, now_iso
@@ -132,7 +133,79 @@ class FrozenNativePackageMismatch(ValueError):
 
 
 class NativePackageOperationBusy(RuntimeError):
-    """The revision is already being validated, read, or rebuilt."""
+    """The revision cannot enter the requested operation."""
+
+
+class _RevisionReadWriteLock:
+    """A non-blocking lock for immutable Package reads and exclusive changes."""
+
+    def __init__(self) -> None:
+        self._guard = threading.Lock()
+        self._readers = 0
+        self._writer = False
+
+    def acquire_read(self) -> bool:
+        with self._guard:
+            if self._writer:
+                return False
+            self._readers += 1
+            return True
+
+    def release_read(self) -> None:
+        with self._guard:
+            if self._readers < 1:
+                raise RuntimeError("Native Package read operation is not active")
+            self._readers -= 1
+
+    def acquire_write(self) -> bool:
+        with self._guard:
+            if self._writer or self._readers:
+                return False
+            self._writer = True
+            return True
+
+    def release_write(self) -> None:
+        with self._guard:
+            if not self._writer:
+                raise RuntimeError("Native Package write operation is not active")
+            self._writer = False
+
+
+@dataclass
+class _NativePackageReadOperation(AbstractContextManager[NativePackage]):
+    native_package_id: str
+    store: ProblemPackageStore
+    lock: _RevisionReadWriteLock
+    active: bool = False
+
+    def __enter__(self) -> NativePackage:
+        if self.active:
+            raise RuntimeError("Native Package read operation is already active")
+        if not self.lock.acquire_read():
+            raise NativePackageOperationBusy(
+                "Native Package operation already running"
+            )
+        self.active = True
+        try:
+            native_package = self.store.materialization(self.native_package_id)
+            if native_package is None:
+                raise ValueError("Native Package not found")
+            return native_package
+        except BaseException:
+            self.lock.release_read()
+            self.active = False
+            raise
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        if not self.active:
+            return
+        self.lock.release_read()
+        self.active = False
 
 
 NativePackageStatus = Literal["ready", "queued", "stale", "none"]
@@ -167,12 +240,16 @@ class ProblemPackageService:
         self._verification_id_allocator = verification_id_allocator
         self._statement_examples_producer = statement_examples_producer
         self._locks_guard = threading.Lock()
-        self._build_locks: dict[tuple[int, str], threading.Lock] = {}
+        self._revision_locks: dict[tuple[int, str], _RevisionReadWriteLock] = {}
 
-    def _build_lock(self, problem_id: int, source_commit: str) -> threading.Lock:
+    def _revision_lock(
+        self,
+        problem_id: int,
+        source_commit: str,
+    ) -> _RevisionReadWriteLock:
         key = (int(problem_id), source_commit)
         with self._locks_guard:
-            return self._build_locks.setdefault(key, threading.Lock())
+            return self._revision_locks.setdefault(key, _RevisionReadWriteLock())
 
     @contextmanager
     def _revision_operation(
@@ -180,15 +257,15 @@ class ProblemPackageService:
         problem_id: int,
         source_commit: str,
     ) -> Iterator[None]:
-        lock = self._build_lock(int(problem_id), source_commit)
-        if not lock.acquire(blocking=False):
+        lock = self._revision_lock(int(problem_id), source_commit)
+        if not lock.acquire_write():
             raise NativePackageOperationBusy(
                 "Native Package operation already running"
             )
         try:
             yield
         finally:
-            lock.release()
+            lock.release_write()
 
     @contextmanager
     def native_package_operation(
@@ -203,6 +280,20 @@ class ProblemPackageService:
             if current is None:
                 raise ValueError("Native Package not found")
             yield current
+
+    def native_package_read_operation(
+        self,
+        native_package_id: str,
+    ) -> AbstractContextManager[NativePackage]:
+        row = self.store.materialization(native_package_id)
+        if row is None:
+            raise ValueError("Native Package not found")
+        lock = self._revision_lock(row["problem_id"], row["source_commit"])
+        return _NativePackageReadOperation(
+            native_package_id=native_package_id,
+            store=self.store,
+            lock=lock,
+        )
 
     def _bare_repo(self, problem: PublishedProblem) -> Path:
         bare_root = self.storage_layout.bare_root.resolve()
@@ -531,6 +622,17 @@ class ProblemPackageService:
             if export_error:
                 cleanup_errors.append(export_error)
         return "; ".join(cleanup_errors)
+
+    def _integrity_error(
+        self,
+        row: MaterializationRow,
+        error: Exception,
+    ) -> ValueError:
+        cleanup_error = self._invalidate_materialization(row, str(error))
+        detail = f"; cleanup failed: {cleanup_error}" if cleanup_error else ""
+        return ValueError(
+            f"Native Package integrity check failed: {error}{detail}"
+        )
 
     @staticmethod
     def _copy_source_tree(source: Path, target: Path) -> None:
@@ -886,7 +988,6 @@ class ProblemPackageService:
                 "checked_at": now,
                 "unavailable_reason": "",
             }
-            self._validate_materialization(staged_row, check_current=False)
             row: MaterializationRow = {
                 **staged_row,
                 "archive_rel_path": final_archive.relative_to(
@@ -1050,7 +1151,7 @@ class ProblemPackageService:
             return "Verification is not a successful full Verification"
         if materialization["verification_id"] == verification_id:
             return ""
-        with self._validated_reader(materialization) as reader:
+        with self._archive_reader(materialization) as reader:
             mismatch = self._verification_evidence_mismatch(
                 reader,
                 verification_id,
@@ -1146,7 +1247,7 @@ class ProblemPackageService:
             if existing is not None:
                 if existing["status"] == "available":
                     try:
-                        self._validate_materialization(existing)
+                        self._validate_archive_checksum(existing)
                     except Exception as exc:
                         self._invalidate_materialization(existing, str(exc))
                     else:
@@ -1208,14 +1309,12 @@ class ProblemPackageService:
                 if mode:
                     target.chmod(stat.S_IMODE(mode))
 
-    @contextmanager
-    def _validated_reader(
+    def _validate_archive_checksum(
         self,
         row: MaterializationRow,
         *,
         expected_archive_sha256: str | None = None,
-        check_current: bool = True,
-    ) -> Iterator[NativePackageReader]:
+    ) -> Path:
         if (
             expected_archive_sha256 is not None
             and row["archive_sha256"] != expected_archive_sha256
@@ -1226,10 +1325,21 @@ class ProblemPackageService:
         archive_path = self._archive_path(row)
         if archive_path.is_symlink() or not archive_path.is_file():
             raise ValueError("Native Package archive is missing")
-        if int(archive_path.stat().st_size) != row["archive_size_bytes"]:
-            raise ValueError("Native Package archive size changed")
         if sha256_file(archive_path) != row["archive_sha256"]:
             raise ValueError("Native Package archive checksum changed")
+        return archive_path
+
+    @contextmanager
+    def _archive_reader(
+        self,
+        row: MaterializationRow,
+        *,
+        expected_archive_sha256: str | None = None,
+    ) -> Iterator[NativePackageReader]:
+        archive_path = self._validate_archive_checksum(
+            row,
+            expected_archive_sha256=expected_archive_sha256,
+        )
         extraction = self.storage_layout.staging_directory(
             f"read-{uuid.uuid4().hex}"
         )
@@ -1238,90 +1348,13 @@ class ProblemPackageService:
             self._safe_extract(archive_path, extraction)
             manifest_path = extraction / TEST_DATA_DIR / "manifest.json"
             manifest = load_manifest(manifest_path)
-            if manifest["source_commit"] != row["source_commit"]:
-                raise ValueError("Native Package manifest commit does not match metadata")
-            if manifest["revision_number"] != row["revision_number"]:
-                raise ValueError("Native Package manifest number does not match metadata")
-            if manifest["source_digest"] != row["source_digest"]:
-                raise ValueError("Native Package source digest does not match metadata")
-            validate_manifest_files(
-                extraction,
-                manifest,
-                tests_spec_max_bytes=self.db.config_values.integer(
-                    "TEXTAREA_MAX_BYTES"
-                ),
-                statement_sample_max_bytes=self.db.config_values.integer(
-                    "STATEMENT_SAMPLE_MAX_BYTES"
-                ),
-            )
-            source_tree = load_problem_source_tree(
-                extraction,
-                problem_limits=problem_config_limits(self.db.config_values),
-                tests_spec_max_bytes=self.db.config_values.integer(
-                    "TEXTAREA_MAX_BYTES"
-                ),
-                statement_sample_max_bytes=self.db.config_values.integer(
-                    "STATEMENT_SAMPLE_MAX_BYTES"
-                ),
-                ignored_root_names=PACKAGE_DERIVED_ROOT_NAMES,
-            )
-            if source_tree.problem["mode"] != manifest["mode"]:
-                raise ValueError(
-                    "Native Package mode does not match config/problem.json"
-                )
-            if source_tree.problem["pass_limit"] != manifest["pass_limit"]:
-                raise ValueError(
-                    "Native Package pass limit does not match config/problem.json"
-                )
             yield NativePackageReader(
                 native_package=row,
                 root=extraction,
                 manifest=manifest,
             )
-            if check_current:
-                if archive_path.is_symlink() or not archive_path.is_file():
-                    raise FrozenNativePackageMismatch(
-                        "Native Package archive changed while it was being read"
-                    )
-                if (
-                    int(archive_path.stat().st_size) != row["archive_size_bytes"]
-                    or sha256_file(archive_path) != row["archive_sha256"]
-                ):
-                    raise FrozenNativePackageMismatch(
-                        "Native Package archive changed while it was being read"
-                    )
-                current = self.store.materialization(row["id"])
-                if (
-                    current is None
-                    or current["status"] != "available"
-                    or current["archive_sha256"] != row["archive_sha256"]
-                ):
-                    raise FrozenNativePackageMismatch(
-                        "Native Package changed while it was being read"
-                    )
-                if (
-                    expected_archive_sha256 is not None
-                    and current["archive_sha256"] != expected_archive_sha256
-                ):
-                    raise FrozenNativePackageMismatch(
-                        "frozen Native Package checksum no longer matches"
-                    )
         finally:
             shutil.rmtree(extraction, ignore_errors=True)
-
-    def _validate_materialization(
-        self,
-        row: MaterializationRow,
-        *,
-        expected_archive_sha256: str | None = None,
-        check_current: bool = True,
-    ) -> None:
-        with self._validated_reader(
-            row,
-            expected_archive_sha256=expected_archive_sha256,
-            check_current=check_current,
-        ):
-            pass
 
     @contextmanager
     def open_reader(
@@ -1330,10 +1363,11 @@ class ProblemPackageService:
         *,
         expected_archive_sha256: str | None = None,
     ) -> Iterator[NativePackageReader]:
-        with self.native_package_operation(native_package_id) as row:
+        validation_error: Exception | None = None
+        with self.native_package_read_operation(native_package_id) as row:
             if row["status"] != "available":
                 raise ValueError("Native Package is unavailable")
-            validation = self._validated_reader(
+            validation = self._archive_reader(
                 row,
                 expected_archive_sha256=expected_archive_sha256,
             )
@@ -1342,18 +1376,17 @@ class ProblemPackageService:
             except FrozenNativePackageMismatch:
                 raise
             except Exception as exc:
-                cleanup_error = self._invalidate_materialization(row, str(exc))
-                detail = f"; cleanup failed: {cleanup_error}" if cleanup_error else ""
-                raise ValueError(
-                    f"Native Package integrity check failed: {exc}{detail}"
-                ) from exc
-            try:
-                yield reader
-            except BaseException as exc:
-                validation.__exit__(type(exc), exc, exc.__traceback__)
-                raise
+                validation_error = exc
             else:
-                validation.__exit__(None, None, None)
+                try:
+                    yield reader
+                except BaseException as exc:
+                    validation.__exit__(type(exc), exc, exc.__traceback__)
+                    raise
+                else:
+                    validation.__exit__(None, None, None)
+        if validation_error is not None:
+            raise self._integrity_error(row, validation_error) from validation_error
 
     def native_package_archive(
         self,
@@ -1361,44 +1394,50 @@ class ProblemPackageService:
         *,
         expected_archive_sha256: str | None = None,
     ) -> tuple[NativePackage, Path]:
-        with self.native_package_operation(native_package_id) as row:
+        validation_error: Exception | None = None
+        archive_path: Path | None = None
+        with self.native_package_read_operation(native_package_id) as row:
             if row["status"] != "available":
                 raise ValueError("Native Package is unavailable")
             try:
-                self._validate_materialization(
+                archive_path = self._validate_archive_checksum(
                     row,
                     expected_archive_sha256=expected_archive_sha256,
                 )
             except FrozenNativePackageMismatch:
                 raise
             except Exception as exc:
-                cleanup_error = self._invalidate_materialization(row, str(exc))
-                detail = f"; cleanup failed: {cleanup_error}" if cleanup_error else ""
-                raise ValueError(
-                    f"Native Package integrity check failed: {exc}{detail}"
-                ) from exc
-            return row, self._archive_path(row)
+                validation_error = exc
+        if validation_error is not None:
+            raise self._integrity_error(row, validation_error) from validation_error
+        if archive_path is None:
+            raise RuntimeError("Native Package archive validation produced no path")
+        return row, archive_path
 
     def open_native_package_download(
         self,
         native_package_id: str,
     ) -> NativePackageDownload:
-        operation = self.native_package_operation(native_package_id)
+        operation: AbstractContextManager[NativePackage] = (
+            self.native_package_read_operation(native_package_id)
+        )
         row = operation.__enter__()
         try:
             if row["status"] != "available":
                 raise ValueError("Native Package is unavailable")
-            try:
-                self._validate_materialization(row)
-            except FrozenNativePackageMismatch:
-                raise
-            except Exception as exc:
-                cleanup_error = self._invalidate_materialization(row, str(exc))
-                detail = f"; cleanup failed: {cleanup_error}" if cleanup_error else ""
-                raise ValueError(
-                    f"Native Package integrity check failed: {exc}{detail}"
-                ) from exc
-            stream = self._archive_path(row).open("rb")
+        except BaseException as exc:
+            operation.__exit__(type(exc), exc, exc.__traceback__)
+            raise
+        try:
+            archive_path = self._validate_archive_checksum(row)
+        except FrozenNativePackageMismatch as exc:
+            operation.__exit__(type(exc), exc, exc.__traceback__)
+            raise
+        except Exception as exc:
+            operation.__exit__(type(exc), exc, exc.__traceback__)
+            raise self._integrity_error(row, exc) from exc
+        try:
+            stream = archive_path.open("rb")
         except BaseException as exc:
             operation.__exit__(type(exc), exc, exc.__traceback__)
             raise

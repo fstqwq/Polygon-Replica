@@ -108,8 +108,8 @@ execution even when it arrives concurrently with completion or cancellation.
 Legacy Preview, Package Export, Native Package build, and Contest-job rows
 survive normal restarts. Unfinished rows are moved to `failed` because their
 process-local work cannot resume. Startup does not open and validate every
-completed Native Package archive; integrity is checked when a consumer opens
-one. Administrative generated-data cleanup removes the
+completed Native Package archive; its recorded SHA-256 is checked when a
+consumer opens one. Administrative generated-data cleanup removes the
 execution/package/export/build subset described by the
 [storage protocol](storage.md#maintenance-cleanup), while identity, authoring,
 contest source, attachment, and configuration rows remain.

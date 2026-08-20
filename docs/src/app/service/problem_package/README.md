@@ -9,23 +9,24 @@ tree carried by the archive.
 
 The service keeps at most one Native Package materialization identity for each
 problem/source commit. Build and physical materialization rows live in SQLite;
-archives live below the cleanup-safe `artifacts_root`. Reuse validates archive
-size and SHA, safe ZIP shape, manifest identity, all declared payloads, source
-digest, and canonical problem source. A corrupt payload becomes unavailable and
-invalidates its cached external packages. Rebuilding the same Git revision
-keeps its materialization identity.
+archives live below the cleanup-safe `artifacts_root`. Construction validates
+the canonical problem source, manifest, and declared payloads before writing
+the archive. Reuse checks the recorded archive SHA-256; a checksum mismatch
+makes the Package unavailable and invalidates its cached external packages.
+Rebuilding the same Git revision keeps its materialization identity.
 
 The archive preserves authored `statement/` paths and renders each language to
 `statement-build/<language>/`. That build tree is reproducible, is excluded
 from the Git-source digest, and is not added to the Native Package manifest. In
-contrast, `test-data/` is consumed by adapters and therefore retains strict
-manifest and payload-integrity validation.
+contrast, `test-data/` is consumed by adapters and is validated before the
+Native Package is serialized.
 
 Startup removes staging and fails interrupted builds but does not traverse and
-open every completed archive. Integrity is checked at the actual read boundary.
-The reader holds extracted files only for its context lifetime and verifies that
-the stored archive identity did not change while it was open. A caller with a
-frozen checksum can require that exact value.
+open every completed archive. The reader checks the recorded SHA-256, safely
+extracts the archive for its context lifetime, and parses the manifest. It does
+not repeat construction-time payload and source validation or recheck the
+archive when the context closes. A caller with a frozen checksum can require
+that exact value.
 
 Package Export is the only orchestrator that may ask this service to prepare a
 missing or unavailable Native Package. Contest package downloads and adapters
