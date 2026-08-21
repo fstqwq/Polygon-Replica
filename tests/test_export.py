@@ -6,10 +6,13 @@ import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
+from urllib.parse import parse_qs, urlparse
 
 import yaml
 
-from app.main import runtime
+from app.impl.run_export.export import _revision_rows
+from app.impl.runtime.dependency import bind_application
+from app.main import app, runtime
 import app.impl.workspace.context_job as workspace_context_job
 from app.service.execution.codec import execution_result_json
 from app.service.execution.model import (
@@ -48,6 +51,7 @@ from tests.db_helpers import (
     db_fetch_one,
     verification_programs_for_tasks,
 )
+from tests.ui_support import _request
 from tests.execution_result_helpers import execution_result
 
 
@@ -511,6 +515,35 @@ class TestPublishedRevisionExport(E2ETestBase):
         )
         self.assertRegex(verified["verification_id"], r"^ver-[0-9a-f]+$")
         return problem_id, commit, verified
+
+    def test_package_revision_statement_links_select_exact_package(self) -> None:
+        _problem_id, commit, native_package = self._native_package()
+        with bind_application(app):
+            rows = _revision_rows(
+                _request(f"/problems/{self.problem}/export"),
+                self.problem,
+                commit,
+                [native_package],
+                {native_package["id"]: True},
+                {native_package["id"]: {}},
+            )
+
+        links = rows[0]["statement_preview_links"]
+        self.assertEqual(
+            [(link["output_kind"], link["label"]) for link in links],
+            [
+                ("html", "Statements (HTML, English)"),
+                ("pdf", "Statements (PDF, English)"),
+            ],
+        )
+        for link in links:
+            query = parse_qs(urlparse(link["href"]).query)
+            self.assertEqual(query["source"], ["native_package"])
+            self.assertEqual(
+                query["native_package_id"],
+                [native_package["id"]],
+            )
+            self.assertEqual(query["language"], ["english"])
 
     @staticmethod
     def _compile_statement(tex_path: Path) -> SimpleNamespace:

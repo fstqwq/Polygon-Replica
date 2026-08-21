@@ -56,7 +56,11 @@ from app.service.problem_package.store import (
     PublishedProblem,
 )
 from app.service.repository.revision import parse_verification_source
-from app.service.statement.context import normalize_statement_language, statement_languages
+from app.service.statement.context import (
+    normalize_statement_language,
+    statement_language_sort_key,
+    statement_languages,
+)
 from app.service.statement.examples import StatementExamplesProducer
 from app.service.statement.render import render_statement_offline_tree
 from app.service.verification.result_match import run_verdict_short
@@ -618,7 +622,10 @@ class ProblemPackageService:
                 languages.add(normalize_statement_language(middle))
             except ValueError:
                 continue
-        return sorted(language for language in languages if language)
+        return sorted(
+            (language for language in languages if language),
+            key=statement_language_sort_key,
+        )
 
     def extract_statement_render_tree(
         self,

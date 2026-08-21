@@ -62,7 +62,7 @@
       </td>
       <td>
         <a href="{{ row.package_download_href }}">Download</a>
-        {% for preview in row.statement_preview_links %}<br /><a href="{{ preview.href }}">Preview statement ({{ preview.language }})</a>{% endfor %}
+        {% for preview in row.statement_preview_links %}<br /><a href="{{ preview.href }}">{{ preview.label }}</a>{% endfor %}
       </td>
       <td>
         {% if row.external_packages %}

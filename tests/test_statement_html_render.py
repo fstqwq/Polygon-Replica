@@ -71,6 +71,56 @@ def _headings(fragment: str) -> list[tuple[str, dict[str, str | None], str]]:
 
 
 class TestStatementHtmlRender(BackendE2ETestBase):
+    def test_native_package_preview_rejects_package_from_another_problem(
+        self,
+    ) -> None:
+        problem_id = int(runtime.workspace_service.problem_row(self.problem)["id"])
+        foreign_package = {
+            "id": "pm-foreign",
+            "problem_id": problem_id + 1,
+            "status": "available",
+        }
+        with patch.object(
+            runtime.problem_package_service,
+            "native_package",
+            return_value=foreign_package,
+        ), patch.object(
+            runtime.statement_preview_service,
+            "build_problem",
+            side_effect=AssertionError("foreign Package reached the renderer"),
+        ), bind_application(app):
+            with self.assertRaises(HTTPException) as error:
+                problem_statement_html_page(
+                    _request(f"/problems/{self.problem}/statement/html"),
+                    self.problem,
+                    self.user,
+                    source="native_package",
+                    language="english",
+                    native_package_id="pm-foreign",
+                )
+
+        self.assertEqual(error.exception.status_code, 404)
+
+    def test_workspace_preview_ignores_native_package_id(self) -> None:
+        with patch.object(
+            runtime.problem_package_service,
+            "native_package",
+            side_effect=AssertionError("Workspace resolved a Native Package"),
+        ):
+            preview_input = runtime.statement_preview_service.problem_input(
+                self.problem,
+                self.user,
+                source_kind="workspace",
+                output_kind="html",
+                language="english",
+                native_package_id="pm-ignored",
+            )
+
+        self.assertEqual(
+            preview_input.problem_id,
+            int(runtime.workspace_service.problem_row(self.problem)["id"]),
+        )
+
     def test_native_package_publication_busy_is_reported_as_conflict(self) -> None:
         with patch.object(
             runtime.statement_preview_service,

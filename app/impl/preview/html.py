@@ -42,18 +42,44 @@ def _language(value: str) -> str:
     return language
 
 
+def _requested_native_package_id(
+    problem_id: int,
+    source_kind: StatementPreviewSource,
+    native_package_id: str,
+) -> str:
+    if source_kind != "native_package":
+        return ""
+    requested_id = str(native_package_id or "").strip()
+    if not requested_id:
+        return ""
+    native_package = runtime().problem_package_service.native_package(requested_id)
+    if (
+        native_package is None
+        or int(native_package["problem_id"]) != int(problem_id)
+        or native_package["status"] != "available"
+    ):
+        raise HTTPException(status_code=404, detail="package unavailable")
+    return requested_id
+
+
 def problem_statement_html_page(
     request: Request,
     problem: str,
     user: Annotated[str, Depends(require_session_user)],
     source: str = "workspace",
     language: str = "english",
+    native_package_id: str = "",
 ):
     problem_row, user_row, access = _problem_access(problem, user)
     if not access["can_read"]:
         raise HTTPException(status_code=403, detail=access["read_block_reason"])
     source_kind = _source(source)
     safe_language = _language(language)
+    selected_native_package_id = _requested_native_package_id(
+        int(problem_row["id"]),
+        source_kind,
+        native_package_id,
+    )
     allowed = access["can_write"] if source_kind == "workspace" else access["can_read"]
     if not allowed:
         reason = (
@@ -69,9 +95,14 @@ def problem_statement_html_page(
             source_kind=source_kind,
             output_kind="html",
             language=safe_language,
+            native_package_id=selected_native_package_id,
         )
     except NativePackageOperationBusy as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        if selected_native_package_id:
+            raise HTTPException(status_code=404, detail="package unavailable") from exc
+        raise
     fragment = ""
     pandoc_log = ""
     if row is not None and row["status"] == "ok":
@@ -115,11 +146,17 @@ def problem_statement_pdf_page(
     user: Annotated[str, Depends(require_session_user)],
     source: str = "workspace",
     language: str = "english",
+    native_package_id: str = "",
 ):
     problem_row, user_row, access = _problem_access(problem, user)
     if not access["can_read"]:
         raise HTTPException(status_code=403, detail=access["read_block_reason"])
     source_kind = _source(source)
+    selected_native_package_id = _requested_native_package_id(
+        int(problem_row["id"]),
+        source_kind,
+        native_package_id,
+    )
     allowed = access["can_write"] if source_kind == "workspace" else access["can_read"]
     if not allowed:
         reason = (
@@ -136,9 +173,14 @@ def problem_statement_pdf_page(
             source_kind=source_kind,
             output_kind="pdf",
             language=safe_language,
+            native_package_id=selected_native_package_id,
         )
     except NativePackageOperationBusy as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        if selected_native_package_id:
+            raise HTTPException(status_code=404, detail="package unavailable") from exc
+        raise
     if row["status"] != "ok":
         error = row["summary"].get("error")
         detail = (

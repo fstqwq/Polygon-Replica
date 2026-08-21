@@ -40,12 +40,28 @@ class CurrentPackageContext(TypedDict):
     external_formats: list[PackageFormatContext]
 
 
+class StatementPreviewLink(TypedDict):
+    language: str
+    output_kind: Literal["html", "pdf"]
+    label: str
+    href: str
+
+
+_STATEMENT_PREVIEW_OUTPUTS: tuple[
+    tuple[Literal["html", "pdf"], str],
+    ...,
+] = (
+    ("html", "problem_statement_html_page"),
+    ("pdf", "problem_statement_pdf_page"),
+)
+
+
 class PackageRevisionRow(TypedDict):
     revision_number: int
     current: bool
     verified: bool
     package_download_href: str
-    statement_preview_links: list[dict[str, str]]
+    statement_preview_links: list[StatementPreviewLink]
     external_packages: list[AvailablePackage]
 
 
@@ -109,11 +125,35 @@ def _revision_rows(
     rows: list[PackageRevisionRow] = []
     for native_package in native_packages:
         external_packages: list[AvailablePackage] = []
+        statement_preview_links: list[StatementPreviewLink] = []
         stored_packages = packages_by_revision[native_package["id"]]
         for adapter in runtime().export_service.package_adapters.adapters:
             package = stored_packages.get(adapter.format)
             if package is not None:
                 external_packages.append(package)
+        for language in runtime().problem_package_service.statement_languages(
+            native_package["id"]
+        ):
+            language_display = language.title()
+            for output_kind, route_name in _STATEMENT_PREVIEW_OUTPUTS:
+                statement_preview_links.append(
+                    {
+                        "language": language,
+                        "output_kind": output_kind,
+                        "label": (
+                            f"Statements ({output_kind.upper()}, "
+                            f"{language_display})"
+                        ),
+                        "href": href(
+                            route_name,
+                            query={
+                                "source": "native_package",
+                                "native_package_id": native_package["id"],
+                                "language": language,
+                            },
+                        ),
+                    }
+                )
         rows.append(
             {
                 "revision_number": native_package["revision_number"],
@@ -123,21 +163,7 @@ def _revision_rows(
                     "native_package_file",
                     native_package_id=native_package["id"],
                 ),
-                "statement_preview_links": [
-                    {
-                        "language": language,
-                        "href": href(
-                            "problem_statement_html_page",
-                            query={
-                                "source": "native_package",
-                                "language": language,
-                            },
-                        ),
-                    }
-                    for language in runtime().problem_package_service.statement_languages(
-                        native_package["id"]
-                    )
-                ],
+                "statement_preview_links": statement_preview_links,
                 "external_packages": external_packages,
             }
         )

@@ -7,6 +7,13 @@ _LANGUAGE_PRIORITY = ("english", "chinese")
 _LANGUAGE_TOKEN_RE = re.compile(r"[^a-z0-9-]+")
 
 
+def statement_language_sort_key(language: str) -> tuple[int, str]:
+    try:
+        return (_LANGUAGE_PRIORITY.index(language), language)
+    except ValueError:
+        return (len(_LANGUAGE_PRIORITY), language)
+
+
 def statement_languages(workspace: Path) -> list[str]:
     """Return available languages sorted by priority: english, chinese, then alphabetical."""
     root = workspace / STATEMENT_SECTIONS_DIR
@@ -23,13 +30,7 @@ def statement_languages(workspace: Path) -> list[str]:
     except OSError:
         return []
 
-    def _sort_key(lang: str) -> tuple[int, str]:
-        try:
-            return (_LANGUAGE_PRIORITY.index(lang), lang)
-        except ValueError:
-            return (len(_LANGUAGE_PRIORITY), lang)
-
-    return sorted(raw, key=_sort_key)
+    return sorted(raw, key=statement_language_sort_key)
 
 
 def normalize_statement_language(raw: object) -> str:
