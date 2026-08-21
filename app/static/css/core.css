@@ -1204,6 +1204,12 @@ textarea.textarea-md {
   text-decoration-thickness: 1px;
 }
 
+.linkish-button {
+  font: inherit;
+  line-height: inherit;
+  cursor: pointer;
+}
+
 .linkish:hover,
 .linkish-button:hover:not(:disabled) {
   background: transparent;
