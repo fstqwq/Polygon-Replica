@@ -17,6 +17,7 @@ from app.impl.workspace.artifact import (
 from app.impl.workspace.context_ui import page_ctx
 from app.impl.workspace.context import global_user_ctx
 from app.impl.workspace.access import workspace_access_context
+from app.service.problem_package.service import NativePackageOperationBusy
 
 
 def _browser_blob_response(file_path: Path, filename: str) -> FileResponse:
@@ -106,7 +107,7 @@ def native_package_file(
         download = runtime().problem_package_service.open_native_package_download(
             native_package_id
         )
-    except RuntimeError as exc:
+    except NativePackageOperationBusy as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="package unavailable") from exc

@@ -31,6 +31,7 @@ from app.service.problem_package.service import (
     NativePackageOperationBusy,
     PublishedRevision,
 )
+from app.service.problem_package.store import MaterializationRow
 from app.service.problem_package.workflow import (
     NativePackageWorkflow,
     build_full_verification_targets,
@@ -1069,6 +1070,125 @@ class TestPublishedRevisionExport(E2ETestBase):
         self.assertIsNotNone(cached_export)
         self.assertEqual(str(cached_export["id"]), export_id)
 
+    def test_full_verification_keeps_existing_package_readable(self) -> None:
+        _workspace, problem_id, _commit = self._publish_problem()
+        revision = runtime.problem_package_service.published_revision(problem_id)
+        native_package = runtime.problem_package_service.ensure_native_package(
+            revision,
+            self._verification_builder(
+                problem_id,
+                verification_kind="package",
+            ),
+        )
+        verification_started = threading.Event()
+        release_verification = threading.Event()
+        completed: list[MaterializationRow] = []
+        failures: list[BaseException] = []
+        full_builder = self._verification_builder(problem_id)
+
+        def blocking_builder(
+            snapshot: Path,
+            commit: str,
+            revision_number: int,
+            verification_id: str,
+        ) -> str:
+            verification_started.set()
+            if not release_verification.wait(timeout=5):
+                raise AssertionError("full Verification was not released")
+            return full_builder(
+                snapshot,
+                commit,
+                revision_number,
+                verification_id,
+            )
+
+        def verify() -> None:
+            try:
+                completed.append(
+                    runtime.problem_package_service.ensure_native_package(
+                        revision,
+                        blocking_builder,
+                    )
+                )
+            except BaseException as exc:
+                failures.append(exc)
+
+        worker = threading.Thread(target=verify, daemon=True)
+        worker.start()
+        self.assertTrue(verification_started.wait(timeout=5))
+        try:
+            with runtime.problem_package_service.open_reader(
+                native_package["id"]
+            ) as reader:
+                self.assertEqual(reader.native_package["id"], native_package["id"])
+            download = runtime.problem_package_service.open_native_package_download(
+                native_package["id"]
+            )
+            try:
+                self.assertTrue(download.stream.read(1))
+            finally:
+                download.close()
+            with self.assertRaises(NativePackageOperationBusy):
+                runtime.problem_package_service.rebuild_native_package(
+                    revision,
+                    self._verification_builder(problem_id),
+                )
+        finally:
+            release_verification.set()
+            worker.join(timeout=5)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(failures, [])
+        self.assertEqual(len(completed), 1)
+        certified = completed[0]
+        self.assertEqual(certified["id"], native_package["id"])
+        self.assertEqual(
+            certified["archive_rel_path"],
+            native_package["archive_rel_path"],
+        )
+        self.assertEqual(
+            certified["archive_sha256"],
+            native_package["archive_sha256"],
+        )
+        self.assertEqual(
+            certified["archive_size_bytes"],
+            native_package["archive_size_bytes"],
+        )
+        self.assertNotEqual(
+            certified["verification_id"],
+            native_package["verification_id"],
+        )
+
+    def test_archive_publication_waits_for_existing_reader(self) -> None:
+        _problem_id, _commit, native_package = self._native_package()
+        publication_started = threading.Event()
+        publication_entered = threading.Event()
+        failures: list[BaseException] = []
+
+        def publish() -> None:
+            try:
+                publication_started.set()
+                with runtime.problem_package_service._archive_publication(
+                    int(native_package["problem_id"]),
+                    native_package["source_commit"],
+                ):
+                    publication_entered.set()
+            except BaseException as exc:
+                failures.append(exc)
+
+        with runtime.problem_package_service.native_package_read_operation(
+            native_package["id"]
+        ):
+            worker = threading.Thread(target=publish, daemon=True)
+            worker.start()
+            self.assertTrue(publication_started.wait(timeout=5))
+            self.assertFalse(publication_entered.is_set())
+
+        worker.join(timeout=5)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(failures, [])
+        self.assertTrue(publication_entered.is_set())
+
     def test_standard_only_and_full_verification_write_the_same_payloads(self) -> None:
         _workspace, problem_id, _commit = self._publish_problem()
         revision = runtime.problem_package_service.published_revision(problem_id)
@@ -1371,12 +1491,11 @@ class TestPublishedRevisionExport(E2ETestBase):
             ), self.assertRaisesRegex(ValueError, message):
                 service._verification_test_owners("ver-test", source_tree)
 
-    def test_export_publication_allows_readers_but_blocks_changes(self) -> None:
+    def test_export_publication_allows_native_package_readers(self) -> None:
         _problem_id, _commit, verified = self._native_package()
         original_insert = runtime.export_service._store.insert_export_record
-        competing_errors: list[Exception] = []
 
-        def insert_while_rebuild_competes(**kwargs) -> None:
+        def insert_while_readers_are_open(**kwargs) -> None:
             with runtime.problem_package_service.open_reader(
                 verified["id"]
             ) as reader:
@@ -1388,35 +1507,13 @@ class TestPublishedRevisionExport(E2ETestBase):
                 self.assertTrue(download.stream.read(1))
             finally:
                 download.close()
-
-            def acquire_rebuild_operation() -> None:
-                try:
-                    with runtime.problem_package_service.native_package_operation(
-                        verified["id"]
-                    ):
-                        pass
-                except Exception as exc:  # capture the competing thread result
-                    competing_errors.append(exc)
-
-            competitor = threading.Thread(
-                target=acquire_rebuild_operation,
-                daemon=True,
-            )
-            competitor.start()
-            competitor.join(timeout=5)
-            self.assertFalse(competitor.is_alive())
-            self.assertEqual(len(competing_errors), 1)
-            self.assertIsInstance(
-                competing_errors[0],
-                NativePackageOperationBusy,
-            )
             original_insert(**kwargs)
 
         with (
             patch.object(
                 runtime.export_service._store,
                 "insert_export_record",
-                side_effect=insert_while_rebuild_competes,
+                side_effect=insert_while_readers_are_open,
             ),
             patch(
                 "app.service.problem_package.service.validate_manifest_files",

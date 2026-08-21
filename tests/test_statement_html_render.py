@@ -4,11 +4,17 @@ from html.parser import HTMLParser
 from pathlib import Path
 from unittest.mock import patch
 
-from app.impl.preview.html import problem_statement_pdf_page
+from fastapi import HTTPException
+
+from app.impl.preview.html import (
+    problem_statement_html_page,
+    problem_statement_pdf_page,
+)
 from app.impl.runtime.dependency import bind_application
 from app.main import app, runtime
 from app.service.disk.statement_preview_store import StatementPreviewStore
 from app.service.problem.runtime_config import problem_config_limits
+from app.service.problem_package.service import NativePackageOperationBusy
 from app.service.sandbox.base import ExecResult
 from app.service.statement.constant import DEFAULT_STATEMENT_PROBLEM_TEMPLATE
 from app.service.statement.examples import StatementExamplesBundle
@@ -18,6 +24,7 @@ from app.service.statement.tex_compile import TexCompileResult
 
 from tests.backend_e2e_fixture import BackendE2ETestBase
 from tests.common import suite_root
+from tests.ui_support import _request
 
 
 class _HeadingCollector(HTMLParser):
@@ -64,6 +71,33 @@ def _headings(fragment: str) -> list[tuple[str, dict[str, str | None], str]]:
 
 
 class TestStatementHtmlRender(BackendE2ETestBase):
+    def test_native_package_publication_busy_is_reported_as_conflict(self) -> None:
+        with patch.object(
+            runtime.statement_preview_service,
+            "build_problem",
+            side_effect=NativePackageOperationBusy(
+                "Native Package operation already running"
+            ),
+        ), bind_application(app):
+            with self.assertRaises(HTTPException) as html_error:
+                problem_statement_html_page(
+                    _request(f"/problems/{self.problem}/statement/html"),
+                    self.problem,
+                    self.user,
+                    source="native_package",
+                    language="english",
+                )
+            with self.assertRaises(HTTPException) as pdf_error:
+                problem_statement_pdf_page(
+                    self.problem,
+                    self.user,
+                    source="native_package",
+                    language="english",
+                )
+
+        self.assertEqual(html_error.exception.status_code, 409)
+        self.assertEqual(pdf_error.exception.status_code, 409)
+
     def test_dynamic_statement_examples_use_foreground_verification(self) -> None:
         workspace = Path(
             runtime.workspace_service.workspace_context(

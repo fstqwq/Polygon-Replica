@@ -138,38 +138,45 @@ class NativePackageOperationBusy(RuntimeError):
 
 
 class _RevisionReadWriteLock:
-    """A non-blocking lock for immutable Package reads and exclusive changes."""
+    """Coordinate immutable Package reads with the brief publication window."""
 
     def __init__(self) -> None:
-        self._guard = threading.Lock()
+        self._condition = threading.Condition()
         self._readers = 0
         self._writer = False
+        self._waiting_writers = 0
 
     def acquire_read(self) -> bool:
-        with self._guard:
-            if self._writer:
+        with self._condition:
+            if self._writer or self._waiting_writers:
                 return False
             self._readers += 1
             return True
 
     def release_read(self) -> None:
-        with self._guard:
+        with self._condition:
             if self._readers < 1:
                 raise RuntimeError("Native Package read operation is not active")
             self._readers -= 1
+            if not self._readers:
+                self._condition.notify_all()
 
-    def acquire_write(self) -> bool:
-        with self._guard:
-            if self._writer or self._readers:
-                return False
-            self._writer = True
-            return True
+    def acquire_write(self) -> None:
+        with self._condition:
+            self._waiting_writers += 1
+            try:
+                while self._writer or self._readers:
+                    self._condition.wait()
+                self._writer = True
+            finally:
+                self._waiting_writers -= 1
 
     def release_write(self) -> None:
-        with self._guard:
+        with self._condition:
             if not self._writer:
                 raise RuntimeError("Native Package write operation is not active")
             self._writer = False
+            self._condition.notify_all()
 
 
 @dataclass
@@ -242,6 +249,7 @@ class ProblemPackageService:
         self._statement_examples_producer = statement_examples_producer
         self._locks_guard = threading.Lock()
         self._revision_locks: dict[tuple[int, str], _RevisionReadWriteLock] = {}
+        self._workflow_locks: dict[tuple[int, str], threading.Lock] = {}
 
     def _revision_lock(
         self,
@@ -252,35 +260,43 @@ class ProblemPackageService:
         with self._locks_guard:
             return self._revision_locks.setdefault(key, _RevisionReadWriteLock())
 
+    def _workflow_lock(
+        self,
+        problem_id: int,
+        source_commit: str,
+    ) -> threading.Lock:
+        key = (int(problem_id), source_commit)
+        with self._locks_guard:
+            return self._workflow_locks.setdefault(key, threading.Lock())
+
     @contextmanager
-    def _revision_operation(
+    def _workflow_operation(
         self,
         problem_id: int,
         source_commit: str,
     ) -> Iterator[None]:
-        lock = self._revision_lock(int(problem_id), source_commit)
-        if not lock.acquire_write():
+        lock = self._workflow_lock(int(problem_id), source_commit)
+        if not lock.acquire(blocking=False):
             raise NativePackageOperationBusy(
                 "Native Package operation already running"
             )
         try:
             yield
         finally:
-            lock.release_write()
+            lock.release()
 
     @contextmanager
-    def native_package_operation(
+    def _archive_publication(
         self,
-        native_package_id: str,
-    ) -> Iterator[NativePackage]:
-        row = self.store.materialization(native_package_id)
-        if row is None:
-            raise ValueError("Native Package not found")
-        with self._revision_operation(row["problem_id"], row["source_commit"]):
-            current = self.store.materialization(native_package_id)
-            if current is None:
-                raise ValueError("Native Package not found")
-            yield current
+        problem_id: int,
+        source_commit: str,
+    ) -> Iterator[None]:
+        lock = self._revision_lock(int(problem_id), source_commit)
+        lock.acquire_write()
+        try:
+            yield
+        finally:
+            lock.release_write()
 
     def native_package_read_operation(
         self,
@@ -955,27 +971,33 @@ class ProblemPackageService:
                     self.storage_layout.artifacts_root
                 ).as_posix(),
             }
-            final_archive.parent.mkdir(parents=True, exist_ok=True)
-            had_previous_archive = final_archive.is_symlink() or final_archive.exists()
-            published_archive = False
-            try:
-                if had_previous_archive:
-                    os.replace(final_archive, previous_archive)
-                os.replace(archive_partial, final_archive)
-                published_archive = True
-                invalidated = self.store.insert_materialization(
-                    row,
-                    build_id=build_id,
-                    invalidate_exports=invalidate_exports,
+            with self._archive_publication(
+                int(revision.problem["id"]),
+                revision.source_commit,
+            ):
+                final_archive.parent.mkdir(parents=True, exist_ok=True)
+                had_previous_archive = (
+                    final_archive.is_symlink() or final_archive.exists()
                 )
-            except Exception:
-                if published_archive and (
-                    final_archive.is_symlink() or final_archive.is_file()
-                ):
-                    final_archive.unlink()
-                if had_previous_archive:
-                    os.replace(previous_archive, final_archive)
-                raise
+                published_archive = False
+                try:
+                    if had_previous_archive:
+                        os.replace(final_archive, previous_archive)
+                    os.replace(archive_partial, final_archive)
+                    published_archive = True
+                    invalidated = self.store.insert_materialization(
+                        row,
+                        build_id=build_id,
+                        invalidate_exports=invalidate_exports,
+                    )
+                except Exception:
+                    if published_archive and (
+                        final_archive.is_symlink() or final_archive.is_file()
+                    ):
+                        final_archive.unlink()
+                    if had_previous_archive:
+                        os.replace(previous_archive, final_archive)
+                    raise
             for export in invalidated:
                 self._remove_artifact_file(export["archive_rel_path"])
             return row
@@ -1135,7 +1157,7 @@ class ProblemPackageService:
         source_commit: str,
         verification_id: str,
     ) -> str:
-        with self._revision_operation(int(problem_id), source_commit):
+        with self._workflow_operation(int(problem_id), source_commit):
             materialization = self.store.materialization_for_revision(
                 int(problem_id),
                 source_commit,
@@ -1200,7 +1222,7 @@ class ProblemPackageService:
         reuse_unverified: bool = False,
     ) -> MaterializationRow:
         problem_id = int(revision.problem["id"])
-        with self._revision_operation(problem_id, revision.source_commit):
+        with self._workflow_operation(problem_id, revision.source_commit):
             existing = self.store.materialization_for_revision(
                 problem_id,
                 revision.source_commit,
@@ -1234,7 +1256,7 @@ class ProblemPackageService:
         verification_builder: VerificationBuilder,
     ) -> MaterializationRow:
         problem_id = int(revision.problem["id"])
-        with self._revision_operation(problem_id, revision.source_commit):
+        with self._workflow_operation(problem_id, revision.source_commit):
             existing = self.store.materialization_for_revision(
                 problem_id,
                 revision.source_commit,

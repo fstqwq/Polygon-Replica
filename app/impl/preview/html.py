@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from app.impl.auth.session import require_session_user
 from app.impl.auth.shared import template_response
 from app.impl.runtime.dependency import runtime
+from app.service.problem_package.service import NativePackageOperationBusy
 from app.service.statement.context import normalize_statement_language
 from app.service.statement.html_render import RESOURCE_PLACEHOLDER
 from app.service.statement.latex_error import latex_failure_text
@@ -61,13 +62,16 @@ def problem_statement_html_page(
             else access["read_block_reason"]
         )
         raise HTTPException(status_code=403, detail=reason)
-    row = runtime().statement_preview_service.build_problem(
-        problem,
-        user,
-        source_kind=source_kind,
-        output_kind="html",
-        language=safe_language,
-    )
+    try:
+        row = runtime().statement_preview_service.build_problem(
+            problem,
+            user,
+            source_kind=source_kind,
+            output_kind="html",
+            language=safe_language,
+        )
+    except NativePackageOperationBusy as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     fragment = ""
     pandoc_log = ""
     if row is not None and row["status"] == "ok":
@@ -125,13 +129,16 @@ def problem_statement_pdf_page(
         )
         raise HTTPException(status_code=403, detail=reason)
     safe_language = _language(language)
-    row = runtime().statement_preview_service.build_problem(
-        problem,
-        user,
-        source_kind=source_kind,
-        output_kind="pdf",
-        language=safe_language,
-    )
+    try:
+        row = runtime().statement_preview_service.build_problem(
+            problem,
+            user,
+            source_kind=source_kind,
+            output_kind="pdf",
+            language=safe_language,
+        )
+    except NativePackageOperationBusy as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if row["status"] != "ok":
         error = row["summary"].get("error")
         detail = (
