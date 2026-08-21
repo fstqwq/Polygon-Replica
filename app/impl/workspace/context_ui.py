@@ -180,15 +180,6 @@ def _current_domjudge_download(
         return None
     export_id = current_export["export_id"]
     filename = Path(current_export["filename"]).name
-    if (
-        runtime().export_service.export_archive_path(
-            problem_id,
-            export_id,
-            filename,
-        )
-        is None
-    ):
-        return None
     return {
         "export_id": export_id,
         "filename": filename,

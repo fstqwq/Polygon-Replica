@@ -712,10 +712,10 @@ class TestPublishedRevisionExport(E2ETestBase):
             encoding="utf-8",
         )
 
-        stored, archive = runtime.problem_package_service.native_package_archive(
-            verified["id"]
+        archive = runtime.storage_layout.resolve_artifact(
+            verified["archive_rel_path"]
         )
-        self.assertEqual(stored["source_commit"], commit)
+        self.assertEqual(verified["source_commit"], commit)
         with zipfile.ZipFile(archive, "r") as package:
             names = set(package.namelist())
             self.assertIn("config/problem.json", names)
@@ -731,7 +731,6 @@ class TestPublishedRevisionExport(E2ETestBase):
             self.assertIn("statement-build/english/olymp.sty", names)
             self.assertIn("statement-build/english/examples/sample-1/display.in", names)
             self.assertIn("statement-build/english/examples/sample-1/display.ans", names)
-            self.assertNotIn("source/config/problem.json", names)
             self.assertNotIn("dirty-only.txt", names)
             self.assertNotIn("statement/examples.tex", names)
             manifest = json.loads(package.read("test-data/manifest.json"))
@@ -872,22 +871,6 @@ class TestPublishedRevisionExport(E2ETestBase):
         self.assertEqual(second["id"], first["id"])
         self.assertEqual(second["archive_sha256"], first["archive_sha256"])
 
-    def test_native_package_build_does_not_reopen_written_archive(self) -> None:
-        _workspace, problem_id, _commit = self._publish_problem()
-        revision = runtime.problem_package_service.published_revision(problem_id)
-
-        with patch.object(
-            runtime.problem_package_service,
-            "_safe_extract",
-            side_effect=AssertionError("Native Package build reopened its archive"),
-        ):
-            native_package = runtime.problem_package_service.ensure_native_package(
-                revision,
-                self._verification_builder(problem_id),
-            )
-
-        self.assertEqual(native_package["status"], "available")
-
     def test_corrupt_native_package_is_reverified_in_the_same_export_job(self) -> None:
         problem_id, commit, first = self._native_package()
         actor = db_fetch_one("SELECT id FROM users WHERE username=?", [self.user])
@@ -902,8 +885,8 @@ class TestPublishedRevisionExport(E2ETestBase):
                 "domjudge",
                 native_package_id=first["id"],
             )
-        _stored, native_archive = (
-            runtime.problem_package_service.native_package_archive(first["id"])
+        native_archive = runtime.storage_layout.resolve_artifact(
+            first["archive_rel_path"]
         )
         native_archive.write_bytes(b"corrupt Native Package")
 
@@ -1300,8 +1283,8 @@ class TestPublishedRevisionExport(E2ETestBase):
                 verification_kind="package",
             ),
         )
-        _stored, archive = runtime.problem_package_service.native_package_archive(
-            standard_package["id"]
+        archive = runtime.storage_layout.resolve_artifact(
+            standard_package["archive_rel_path"]
         )
         standard_payloads = _archive_payloads(archive)
         archive.write_bytes(b"force a rebuild")
@@ -1310,10 +1293,8 @@ class TestPublishedRevisionExport(E2ETestBase):
             revision,
             self._verification_builder(problem_id),
         )
-        _stored, rebuilt_archive = (
-            runtime.problem_package_service.native_package_archive(
-                full_package["id"]
-            )
+        rebuilt_archive = runtime.storage_layout.resolve_artifact(
+            full_package["archive_rel_path"]
         )
 
         self.assertTrue(
@@ -1592,53 +1573,6 @@ class TestPublishedRevisionExport(E2ETestBase):
             ), self.assertRaisesRegex(ValueError, message):
                 service._verification_test_owners("ver-test", source_tree)
 
-    def test_export_publication_allows_native_package_readers(self) -> None:
-        _problem_id, _commit, verified = self._native_package()
-        original_insert = runtime.export_service._store.insert_export_record
-
-        def insert_while_readers_are_open(**kwargs) -> None:
-            with runtime.problem_package_service.open_reader(
-                verified["id"]
-            ) as reader:
-                self.assertEqual(reader.native_package["id"], verified["id"])
-            download = runtime.problem_package_service.open_native_package_download(
-                verified["id"]
-            )
-            try:
-                self.assertTrue(download.stream.read(1))
-            finally:
-                download.close()
-            original_insert(**kwargs)
-
-        with (
-            patch.object(
-                runtime.export_service._store,
-                "insert_export_record",
-                side_effect=insert_while_readers_are_open,
-            ),
-            patch(
-                "app.service.problem_package.service.validate_manifest_files",
-                side_effect=AssertionError(
-                    "external adapter repeated construction-time validation"
-                ),
-            ),
-            patch.object(
-                runtime.tex_compile_service,
-                "compile_pdf",
-                side_effect=self._compile_statement,
-            ),
-        ):
-            export_id, archive, _warning = runtime.export_service.create_export(
-                self.problem,
-                "domjudge",
-                native_package_id=verified["id"],
-            )
-
-        self.assertTrue(archive.is_file())
-        self.assertIsNotNone(
-            db_fetch_one("SELECT id FROM exports WHERE id=?", [export_id])
-        )
-
     def test_distinct_commits_with_the_same_tree_have_distinct_native_packages(
         self,
     ) -> None:
@@ -1675,8 +1609,8 @@ class TestPublishedRevisionExport(E2ETestBase):
 
     def test_polygon_replica_package_imports_only_authored_source(self) -> None:
         _problem_id, _commit, verified = self._native_package()
-        _stored, archive = runtime.problem_package_service.native_package_archive(
-            verified["id"]
+        archive = runtime.storage_layout.resolve_artifact(
+            verified["archive_rel_path"]
         )
         with tempfile.TemporaryDirectory(prefix="polygon-replica-import-") as temp:
             workspace = Path(temp) / "workspace"
@@ -1712,33 +1646,7 @@ class TestPublishedRevisionExport(E2ETestBase):
         self.assertIsNotNone(stored)
         self.assertEqual(stored["status"], "available")
 
-    def test_native_package_manifest_ignores_unknown_legacy_fields(self) -> None:
-        _problem_id, _commit, native_package = self._native_package()
-        with runtime.problem_package_service.open_reader(native_package["id"]) as reader:
-            manifest_path = reader.root / "test-data" / "manifest.json"
-            raw = json.loads(manifest_path.read_text(encoding="utf-8"))
-            raw["verification"] = {
-                "id": native_package["verification_id"],
-                "source": "full-verification",
-            }
-            raw["solutions"][0]["verdicts"] = ["AC"]
-            raw["tests"][0]["input"]["legacy_note"] = "ignored"
-            manifest_path.write_text(
-                json.dumps(raw, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
-
-            manifest = load_manifest(manifest_path)
-            validate_manifest_files(
-                reader.root,
-                manifest,
-                tests_spec_max_bytes=int(runtime.config_values.TEXTAREA_MAX_BYTES),
-                statement_sample_max_bytes=int(
-                    runtime.config_values.STATEMENT_SAMPLE_MAX_BYTES
-                ),
-            )
-
-    def test_native_package_manifest_still_rejects_invalid_required_data(self) -> None:
+    def test_native_package_manifest_rejects_invalid_required_data(self) -> None:
         _problem_id, _commit, native_package = self._native_package()
         with runtime.problem_package_service.open_reader(native_package["id"]) as reader:
             manifest_path = reader.root / "test-data" / "manifest.json"

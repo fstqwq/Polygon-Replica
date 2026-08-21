@@ -354,10 +354,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 )
             )
 
-    @staticmethod
-    def _verification_id_for_run(run_id: str) -> str:
-        return canonical_test_verification_id(f"run:{run_id}")
-
     def _admit_verification_fixture(
         self,
         *,
@@ -759,76 +755,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             "UPDATE verifications SET created_at=?, finished_at=? WHERE id=?",
             [created_at, finished_at, verification_id],
         )
-
-    def _insert_verification_run_row(
-        self,
-        *,
-        run_id: str,
-        problem_id: int,
-        workspace_id: int,
-        build_id: str,
-        mode: str,
-        status: str,
-        summary: dict[str, object] | None,
-        artifact_path: str,
-        created_at: str,
-        finished_at: str,
-        verification_id: str = "",
-        kind: str = "",
-        verification_summary_extra: dict[str, object] | None = None,
-    ) -> str:
-        summary_obj = dict(summary or {})
-        verification_obj = summary_obj.get("verification")
-        verification = verification_obj if isinstance(verification_obj, dict) else {}
-        verification_token = (
-            str(verification_id or "").strip()
-            or str(verification.get("id") or "").strip()
-            or self._verification_id_for_run(run_id)
-        )
-        verification_source = str(verification.get("source") or "").strip().lower()
-        inferred_kind = str(kind or "").strip().lower()
-        if not inferred_kind:
-            inferred_kind = Kind.ALL.value
-        expected_behavior = str(verification.get("expected_behavior") or "unknown").strip() or "unknown"
-        source_label = str(summary_obj.get("source") or run_id).strip() or run_id
-        summary_extra: dict[str, object] = {
-            "mode": str(mode or summary_obj.get("mode") or "pass-fail").strip() or "pass-fail",
-            "artifact_verification_id": str(
-                build_id
-                or summary_obj.get("artifact_verification_id")
-                or summary_obj.get("build_id")
-                or ""
-            ).strip(),
-            "status": str(status or "").strip().lower() or "running",
-            "error": str(summary_obj.get("error") or "").strip(),
-        }
-        if verification_source:
-            summary_extra["source"] = verification_source
-            summary_extra["verification_source"] = verification_source
-        if isinstance(verification_summary_extra, dict):
-            summary_extra.update(verification_summary_extra)
-        self._insert_verification_row(
-            verification_id=verification_token,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            build_id=build_id,
-            kind=inferred_kind,
-            status=str(summary_extra.get("status") or status or "").strip().lower() or "running",
-            created_at=created_at,
-            finished_at=finished_at,
-            runs=[
-                {
-                    "id": run_id,
-                    "status": status,
-                    "artifact_path": artifact_path,
-                    "source_label": source_label,
-                    "expected_behavior": expected_behavior,
-                    "summary": summary_obj,
-                }
-            ],
-            summary_extra=summary_extra,
-        )
-        return verification_token
 
     def test_tests_spec_crud_updates_spec_file_and_page(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -3012,11 +2938,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                         "filename": "sample-domjudge-v3.zip",
                     }
                 ],
-            ),
-            patch.object(
-                runtime.export_service,
-                "export_archive_path",
-                return_value=Path("/tmp/sample-domjudge-v3.zip"),
             ),
             patch(
                 "app.impl.run_export.export.start_export_job"

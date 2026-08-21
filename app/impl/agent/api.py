@@ -4,7 +4,7 @@ from typing import cast
 from urllib.parse import urlencode
 
 from fastapi import File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse, PlainTextResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 
 from app.impl.agent.shared import (
     require_agent_general,
@@ -827,17 +827,17 @@ async def agent_export_download(request: Request, job_id: str):
     filename = str(job.get("filename") or "")
     if not artifact_id or not filename:
         return json_error_response("export not ready", status_code=404)
-    archive_path = runtime().export_service.export_archive_path(
+    archive_path = runtime().export_service.verified_export_archive_path(
         int(identity.problem_id),
         artifact_id,
         filename,
     )
     if archive_path is None:
         return json_error_response("export not ready", status_code=404)
-    return Response(
-        content=archive_path.read_bytes(),
+    return FileResponse(
+        archive_path,
+        filename=Path(filename).name,
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{Path(filename).name}"'},
     )
 
 

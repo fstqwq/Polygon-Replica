@@ -165,17 +165,28 @@ Native Package construction validates the canonical source tree, manifest, and
 declared payloads before serialization. Native and external Package writers
 validate their complete staging tree, then pass its root to a 7-Zip process in
 ZIP mode using fastest deflate. ZIP entry ordering, timestamps, compression
-streams, and complete archive bytes are not Package identity. A later reader
-checks the materialization record's whole-archive SHA-256, safely extracts ZIP
-members, and parses the manifest shape required by the consumer. A validated
+streams, and complete archive bytes are not Package identity.
+
+SQLite materialization and export rows own package listings, readiness, and
+download links. Those metadata queries do not checksum archive payloads.
+Archive integrity belongs to the consumption boundary: a download, reader,
+adapter, Preview extraction, or Contest bundle verifies the recorded
+whole-archive SHA-256 before using the payload. The process caches a successful
+verification against the recorded checksum and current filesystem stat
+evidence. Unchanged archives are not read again for each consumer; changed
+evidence requires a new full verification. A writer registers the checksum it
+just calculated after atomic publication, so its first consumer does not
+repeat the same read. The cache is process-local and disposable.
+
+After archive-level integrity succeeds, a Native Package reader safely extracts
+ZIP members and parses the manifest shape required by its consumer. A validated
 `NativePackageReader` therefore means archive-level integrity and safe
 extraction have completed; it does not repeat construction-time inventory
-validation. It does not rehash individual payloads,
-rebuild the source digest, or rescan the archive when the reader closes. A
-frozen consumer can
-additionally require the checksum recorded at admission. The reader exposes
-only the extracted Package; it does not expose Git, a workspace, Verification
-rows, or runtime cache references.
+validation, rehash individual payloads, rebuild the source digest, or rescan
+the archive when the reader closes. A frozen consumer can additionally require
+the checksum recorded at admission. The reader exposes only the extracted
+Package; it does not expose Git, a workspace, Verification rows, or runtime
+cache references.
 
 Availability, Git provenance, and current publication are separate facts. An
 older Native Package remains usable after `main` advances. A missing or corrupt

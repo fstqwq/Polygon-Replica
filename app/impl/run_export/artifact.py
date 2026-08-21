@@ -72,7 +72,7 @@ def export_file(problem: str, user: Annotated[str, Depends(require_session_user)
     )
     if not export_access["can_download"]:
         raise HTTPException(status_code=404, detail="artifact file not found")
-    file_path = runtime().export_service.export_archive_path(
+    file_path = runtime().export_service.verified_export_archive_path(
         problem_id,
         export_id,
         filename,

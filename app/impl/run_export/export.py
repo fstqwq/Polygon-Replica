@@ -338,15 +338,7 @@ def _existing_current_package_href(
         [native_package["id"]],
     )
     for package in packages:
-        if (
-            package["export_type"] == package_format
-            and runtime().export_service.export_archive_path(
-                problem_id,
-                package["export_id"],
-                package["filename"],
-            )
-            is not None
-        ):
+        if package["export_type"] == package_format:
             return href(
                 "export_file",
                 export_id=package["export_id"],

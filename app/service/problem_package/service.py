@@ -21,6 +21,10 @@ from typing import BinaryIO, Literal, TypedDict
 from app.db import DB, now_iso
 from app.main_util import problem_slug_leaf
 from app.service.execution.codec import execution_result_from_json
+from app.service.platform.archive_integrity import (
+    ArchiveDescriptor,
+    ArchiveIntegrityVerifier,
+)
 from app.service.platform.fs.layout import StorageLayout
 from app.service.platform.fs.op import extract_git_archive
 from app.service.platform.git_process import run_git
@@ -28,8 +32,6 @@ from app.service.platform.hashing import sha256_file
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.platform.zip_process import create_zip_archive
 from app.service.problem.runtime_config import (
-    ProblemConfig,
-    parse_problem_config,
     problem_config_limits,
 )
 from app.service.problem.source_tree import ProblemSourceTree, load_problem_source_tree
@@ -245,12 +247,14 @@ class ProblemPackageService:
         self,
         db: DB,
         storage_layout: StorageLayout,
+        archive_integrity: ArchiveIntegrityVerifier,
         artifact_file_resolver: Callable[[str], PayloadFile | None],
         verification_id_allocator: Callable[[], str],
         statement_examples_producer: StatementExamplesProducer,
     ) -> None:
         self.db = db
         self.storage_layout = storage_layout
+        self._archive_integrity = archive_integrity
         self.store = ProblemPackageStore(db)
         self._artifact_file_resolver = artifact_file_resolver
         self._verification_id_allocator = verification_id_allocator
@@ -421,34 +425,6 @@ class ProblemPackageService:
             except (OSError, RuntimeError, ValueError):
                 errors[problem_id] = "no published Git revision"
         return revisions, errors
-
-    def revision_number(self, problem_id: int, source_commit: str) -> int | None:
-        problem = self.store.problem(int(problem_id))
-        if problem is None:
-            return None
-        bare_repo = self._bare_repo(problem)
-        reachable = run_git(
-            ["git", "-C", str(bare_repo), "merge-base", "--is-ancestor", source_commit, "refs/heads/main"],
-            timeout=120,
-        )
-        if reachable.returncode != 0:
-            return None
-        count = run_git(["git", "-C", str(bare_repo), "rev-list", "--count", source_commit], timeout=120)
-        if count.returncode != 0:
-            return None
-        return int(count.stdout.strip())
-
-    def published_config(self, revision: PublishedRevision) -> ProblemConfig:
-        result = run_git(
-            ["git", "-C", str(revision.bare_repo), "show", f"{revision.source_commit}:config/problem.json"],
-            timeout=120,
-        )
-        if result.returncode != 0:
-            raise ValueError("published problem config is unavailable")
-        return parse_problem_config(
-            result.stdout,
-            limits=problem_config_limits(self.db.config_values),
-        )
 
     @staticmethod
     def _published_readiness(
@@ -1125,6 +1101,13 @@ class ProblemPackageService:
                         os.replace(final_archive, previous_archive)
                     os.replace(archive_partial, final_archive)
                     published_archive = True
+                    self._archive_integrity.remember_published(
+                        ArchiveDescriptor(
+                            path=final_archive,
+                            expected_sha256=row["archive_sha256"],
+                            expected_size_bytes=row["archive_size_bytes"],
+                        )
+                    )
                     invalidated = self.store.insert_materialization(
                         row,
                         build_id=build_id,
@@ -1446,11 +1429,13 @@ class ProblemPackageService:
                 "frozen Native Package checksum no longer matches"
             )
         archive_path = self._archive_path(row)
-        if archive_path.is_symlink() or not archive_path.is_file():
-            raise ValueError("Native Package archive is missing")
-        if sha256_file(archive_path) != row["archive_sha256"]:
-            raise ValueError("Native Package archive checksum changed")
-        return archive_path
+        return self._archive_integrity.verify(
+            ArchiveDescriptor(
+                path=archive_path,
+                expected_sha256=row["archive_sha256"],
+                expected_size_bytes=row["archive_size_bytes"],
+            )
+        )
 
     @contextmanager
     def _archive_reader(
@@ -1510,32 +1495,6 @@ class ProblemPackageService:
                     validation.__exit__(None, None, None)
         if validation_error is not None:
             raise self._integrity_error(row, validation_error) from validation_error
-
-    def native_package_archive(
-        self,
-        native_package_id: str,
-        *,
-        expected_archive_sha256: str | None = None,
-    ) -> tuple[NativePackage, Path]:
-        validation_error: Exception | None = None
-        archive_path: Path | None = None
-        with self.native_package_read_operation(native_package_id) as row:
-            if row["status"] != "available":
-                raise ValueError("Native Package is unavailable")
-            try:
-                archive_path = self._validate_archive_checksum(
-                    row,
-                    expected_archive_sha256=expected_archive_sha256,
-                )
-            except FrozenNativePackageMismatch:
-                raise
-            except Exception as exc:
-                validation_error = exc
-        if validation_error is not None:
-            raise self._integrity_error(row, validation_error) from validation_error
-        if archive_path is None:
-            raise RuntimeError("Native Package archive validation produced no path")
-        return row, archive_path
 
     def open_native_package_download(
         self,

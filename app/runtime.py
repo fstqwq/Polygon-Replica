@@ -33,6 +33,7 @@ from app.service.problem.readiness import ProblemReadinessService
 from app.service.problem.query import ProblemSourceQueryService
 from app.service.repository.git import GitService
 from app.service.repository.merge import WorkspaceMergeService
+from app.service.platform.archive_integrity import ArchiveIntegrityVerifier
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
 from app.service.platform.static_assets import StaticAssetManifest
@@ -95,6 +96,7 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
     storage_layout: StorageLayout = field(init=False)
     runtime_blob_store: RuntimeBlobStore = field(init=False)
     runtime_cache_index: RuntimeCacheIndex = field(init=False)
+    archive_integrity: ArchiveIntegrityVerifier = field(init=False)
     tex_sandbox_backend: SandboxBackend = field(init=False)
     tex_compile_service: TexCompileService = field(init=False)
     verification_service: VerificationService = field(init=False)
@@ -249,6 +251,9 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
         self.runtime_blob_store = RuntimeBlobStore(
             self.storage_layout.runtime_blob_root
         )
+        self.archive_integrity = ArchiveIntegrityVerifier(
+            self.storage_layout.artifacts_root
+        )
         self.runtime_cache_index = RuntimeCacheIndex(self.runtime_blob_store)
         self.verification_runtime_registry = VerificationRuntimeRegistry()
         self.verification_task_completion_service = VerificationTaskCompletionService(
@@ -325,6 +330,7 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
         self.problem_package_service = ProblemPackageService(
             self.db,
             self.storage_layout,
+            archive_integrity=self.archive_integrity,
             artifact_file_resolver=self.runtime_blob_store.descriptor,
             verification_id_allocator=self.verification_service.allocate_verification_id,
             statement_examples_producer=self.statement_examples_producer,
@@ -369,6 +375,7 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
             self.db,
             self.storage_layout,
             self.tex_compile_service,
+            archive_integrity=self.archive_integrity,
             problem_package_service=self.problem_package_service,
             config_values=self.config_values,
         )

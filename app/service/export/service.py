@@ -10,6 +10,7 @@ from pathlib import Path
 from app.config import ConfigValues
 from app.db import DB
 from app.service.disk.export_store import (
+    ExportArchiveRow,
     ExportJobRow,
     ExportStore,
     MaterializationPackageRow,
@@ -18,6 +19,10 @@ from app.service.export.adapters import (
     PackageAdapter,
     PackageAdapterRegistry,
     PackageFormat,
+)
+from app.service.platform.archive_integrity import (
+    ArchiveDescriptor,
+    ArchiveIntegrityVerifier,
 )
 from app.service.platform.fs.layout import StorageLayout
 from app.service.platform.fs.op import extract_git_archive, remove_symlinks
@@ -46,10 +51,12 @@ class ExportService:
         db: DB,
         storage_layout: StorageLayout,
         tex_compile_service: TexCompileService,
+        archive_integrity: ArchiveIntegrityVerifier,
         problem_package_service: ProblemPackageService,
         config_values: ConfigValues,
     ) -> None:
         self.storage_layout = storage_layout
+        self._archive_integrity = archive_integrity
         self.problem_package_service = problem_package_service
         self.package_adapters = PackageAdapterRegistry(
             config_values,
@@ -90,7 +97,7 @@ class ExportService:
         with self._package_locks_guard:
             return self._package_locks.setdefault(key, threading.Lock())
 
-    def export_archive_path(
+    def verified_export_archive_path(
         self,
         problem_id: int,
         export_id: str,
@@ -102,21 +109,23 @@ class ExportService:
         stored_filename = Path(row["filename"]).name
         if not stored_filename or stored_filename != Path(filename).name:
             return None
+        return self._verified_archive_row(row)
+
+    def _verified_archive_row(
+        self,
+        row: ExportArchiveRow,
+    ) -> Path | None:
         try:
-            root = self.storage_layout.artifacts_root.resolve()
             candidate = self.storage_layout.resolve_artifact(row["archive_rel_path"])
-            if root not in candidate.parents:
-                return None
+            return self._archive_integrity.verify(
+                ArchiveDescriptor(
+                    path=candidate,
+                    expected_sha256=row["sha256"],
+                    expected_size_bytes=row["size_bytes"],
+                )
+            )
         except (OSError, ValueError):
             return None
-        if (
-            candidate.is_symlink()
-            or not candidate.is_file()
-            or int(candidate.stat().st_size) != row["size_bytes"]
-            or sha256_file(candidate) != row["sha256"]
-        ):
-            return None
-        return candidate
 
     def problem_export_jobs(
         self,
@@ -252,15 +261,11 @@ class ExportService:
             return None
         row = self._store.export_archive_row(problem_id, export_id)
         if row is not None:
-            path = self.export_archive_path(problem_id, export_id, row["filename"])
+            path = self._verified_archive_row(row)
             if path is not None:
                 return (export_id, path)
         self._store.delete_export(export_id)
         return None
-
-    @staticmethod
-    def _make_archive(target: Path, root: Path) -> None:
-        create_zip_archive(root, target)
 
     def create_export(
         self,
@@ -337,10 +342,12 @@ class ExportService:
                     canonical_problem_slug=problem_row["slug"],
                     plan=adapter_plan,
                 )
-                self._make_archive(archive_partial, package_root)
+                create_zip_archive(package_root, archive_partial)
                 output = self._export_path(problem_row["slug"], export_id, filename)
                 output.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(archive_partial, output)
+                archive_sha256 = sha256_file(output)
+                archive_size_bytes = int(output.stat().st_size)
                 self._store.insert_export_record(
                     export_id=export_id,
                     problem_id=problem_row["id"],
@@ -350,11 +357,18 @@ class ExportService:
                     archive_rel_path=output.relative_to(
                         self.storage_layout.artifacts_root
                     ).as_posix(),
-                    sha256=sha256_file(output),
-                    size_bytes=int(output.stat().st_size),
+                    sha256=archive_sha256,
+                    size_bytes=archive_size_bytes,
                     source_commit=native_package["source_commit"],
                 )
                 published = True
+                self._archive_integrity.remember_published(
+                    ArchiveDescriptor(
+                        path=output,
+                        expected_sha256=archive_sha256,
+                        expected_size_bytes=archive_size_bytes,
+                    )
+                )
             if output is None:
                 raise RuntimeError("package adapter did not publish an archive")
             return (export_id, output, adapter_plan.warning)
