@@ -17,7 +17,7 @@ be read:
 
 Root paths must obey the [storage protocol](../protocol/storage.md).
 
-`POLYGON_REPLICA_ENCRYPTION_KEY` supplies the 32-byte base64url key used to encrypt the SMTP password stored in SQLite. It must remain stable while that password is retained.
+`POLYGON_REPLICA_ENCRYPTION_KEY` supplies the 32-byte base64url key used to encrypt the SMTP password stored in SQLite. It must remain stable while that password is retained. See [SMTP deployment](deployment.md#smtp-optional) for setup and connection behavior.
 
 Launcher-only variables are not application storage configuration:
 
