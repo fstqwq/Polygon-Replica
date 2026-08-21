@@ -39,14 +39,14 @@ adding a problem also requires direct management of that problem.
 
 ## Authentication boundaries
 
-Browser sessions, Agent identities, and Judgehost credentials are separate
-actors. A connected Agent session has a user-selected general scope
+Browser sessions, agent identities, and judgehost credentials are separate
+actors. A connected agent session has a user-selected general scope
 and may also hold multiple independently expiring per-problem grants. The union
 of those declared scopes is capped by the connected user's current Problem
 role. Neither general scope nor a per-problem grant can retain access after the
 user loses all direct and Contest-derived access. Contest discovery additionally
 requires general scope and current Contest read access. Browser sudo is
 session-bound and is never
-inherited by an Agent. Judgehost authentication authorizes only the trusted
+inherited by an agent. Judgehost authentication authorizes only the trusted
 execution protocol under `/api/v4/*`; it does not create a user or problem
 role.

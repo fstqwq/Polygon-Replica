@@ -262,7 +262,7 @@ The caller owns atomic archive publication and persistence.
 
 A package adapter MUST NOT execute problem source or invoke a source compiler
 inside the application process or its local bubblewrap sandbox. Format-specific
-source compatibility checks MUST use the Judgehost compile-only workflow. A
+source compatibility checks MUST use the judgehost compile-only workflow. A
 failed compatibility check may become a package warning when the target format
 defines it as advisory; it does not authorize a local compiler fallback.
 

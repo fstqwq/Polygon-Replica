@@ -5,7 +5,7 @@
 The application runs as one FastAPI process under uvicorn. Routes delegate to
 implementation modules in `app/impl`, which coordinate domain services in
 `app/service`. The top-level `app.runtime.ApplicationRuntime` constructs the
-SQLite, Git, filesystem, sandbox, Judgehost, worker, and maintenance objects.
+SQLite, Git, filesystem, sandbox, judgehost, worker, and maintenance objects.
 `app.main.create_app()` installs that exact object on one FastAPI application;
 `app/runtime_lifecycle.py` receives it explicitly for startup and shutdown.
 Request implementation code uses the request-bound accessor in
@@ -32,11 +32,11 @@ layout is defined by the
 
 ## Trust boundaries
 
-Browser sessions, Agent identities, and Judgehost credentials are distinct.
+Browser sessions, agent identities, and judgehost credentials are distinct.
 Cross-resource capability decisions are owned by the access service and are
 described in the [access model](access.md). Agent identities cannot acquire,
 inherit, or present sudo authority. Sudo belongs only to the browser session
 that completed elevation and is not transferable.
 
 Judgehost trust, authentication, leases, callbacks, and version telemetry are
-owned by the [Judgehost wire protocol](../protocol/judgehost.md).
+owned by the [judgehost wire protocol](../protocol/judgehost.md).

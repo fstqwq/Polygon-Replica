@@ -5,10 +5,10 @@ workspace snapshot acquisition, execution plans, task persistence, DAG
 scheduling, result evaluation, expected-behavior matching, and read models. It
 consumes a workspace identity or an explicitly frozen published-revision
 snapshot, selected solutions/tests, canonical runtime configuration, and typed
-Judgehost terminal reports containing an
+judgehost terminal reports containing an
 [`ExecutionResult`](../execution/README.md). It
 produces durable verification/task rows and an indexed owner row for every
-runtime blob locator; it does not own the Judgehost wire protocol or blob
+runtime blob locator; it does not own the judgehost wire protocol or blob
 filesystem. Cache-payload authorization and virtual-path resolution query that
 owner index and then require a currently available runtime blob descriptor;
 they never reconstruct ownership by scanning result JSON.
@@ -17,7 +17,7 @@ they never reconstruct ownership by scanning result JSON.
 canonical execution plan. `VerificationWorkflow.run_workspace()` creates and
 owns the service snapshot before admission; all workflow entry points own
 activation, task publication, coordinator execution, sanity finalization, and
-process-local cleanup through injected Judgehost, workspace, storage,
+process-local cleanup through injected judgehost, workspace, storage,
 configuration, and blob ports. Pure graph construction and result summarization live in
 `workflow_policy`; HTTP implementation modules do not own or import these
 policies.
@@ -29,7 +29,7 @@ validates required generator and accepted-solution outputs, applies a checked
 solution's allowed verdicts per testcase, and applies its required verdicts only
 after all durable tasks for that program are terminal. It commits the task
 result, program-level mismatch, dependent locator, parent transition, and
-remaining-task cancellation together. It accepts Judgehost publication through
+remaining-task cancellation together. It accepts judgehost publication through
 narrow completion and diagnostic sinks and has explicit task-store and
 runtime-blob dependencies; it does not query global runtime configuration.
 
@@ -37,7 +37,7 @@ Planning models a program as `program_id`, kind, source path, and normalized
 compile specification; a task selects that program and a test. The generator,
 accepted solution, and every checked solution are programs, and all tasks under
 one program share its compilation. The durable task identity is
-`vt~<verification_id>~<program_id>~<test_name>`. At the Judgehost service
+`vt~<verification_id>~<program_id>~<test_name>`. At the judgehost service
 boundary `program_id` is passed as `verification_program_id`; the runtime
 `run_id` and content-addressed `compile_key` remain separate identities.
 
@@ -73,7 +73,7 @@ and testcase facts. Historical runtime limits and expected behavior come only
 from that snapshot; current workspace Source is not used to reinterpret an old
 Verification.
 
-The Judgehost-facing adapter reads selected test references and run
+The judgehost-facing adapter reads selected test references and run
 configuration from one SQLite snapshot, validates each opaque case binding
 against its durable task identity, and routes completion, diagnostics, and
 lease events to the owning Verification services.

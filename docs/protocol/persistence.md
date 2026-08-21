@@ -58,7 +58,7 @@ An already-terminal task is not rewritten. Completion returns its persisted
 result and locators as the effective state, so duplicate or conflicting
 callbacks cannot attach a new locator or failure reason.
 
-The Judgehost completion publisher marks an in-memory case acknowledged only
+The judgehost completion publisher marks an in-memory case acknowledged only
 after this transaction succeeds or reports the task already terminal. A failed
 transaction leaves the case unacknowledged so the callback receives non-2xx and
 can be retried. `all`, `sample`, `custom`, and internal `package` Verifications
@@ -76,7 +76,7 @@ Cancellation and failure compare-and-set a `queued` or `running` parent to
 `cancelled` and `failed`, respectively. Both preserve the first non-empty reason
 and cancel every open task in one transaction. Startup recovery always uses
 `failed`, because a process interruption is not a user cancellation, before
-runtime blobs and Judgehost state are cleared. Recovery failure aborts
+runtime blobs and judgehost state are cleared. Recovery failure aborts
 application startup.
 
 Verification detail is read as one SQLite snapshot containing parent, detail,
@@ -177,9 +177,9 @@ property type.
 ## Agent authorization rows
 
 `agent_sessions` owns the connected desktop identity and its non-expiring
-`none`, `readonly`, `workspace`, or `commit` general scope. Ordinary Agent API
+`none`, `readonly`, `workspace`, or `commit` general scope. Ordinary agent API
 authentication uses a random `polygon_agent_...` bearer credential. SQLite
-stores only its SHA-256 verifier; the raw credential exists only in the Agent
+stores only its SHA-256 verifier; the raw credential exists only in the agent
 state file and is returned only when a registration URL creates or reconnects
 a session. The identity hash describes stable client metadata and is used to
 validate an explicit reconnect, never as an authentication secret. A

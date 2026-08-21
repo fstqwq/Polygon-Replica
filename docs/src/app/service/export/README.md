@@ -30,8 +30,8 @@ invoke this boundary and own their respective atomic output.
 
 Adapters never execute authored source or start a compiler in the application
 process or the local bubblewrap sandbox. An adapter that needs a source
-compatibility result receives it through the Judgehost compile-only boundary.
-There is no local compiler fallback when Judgehost is unavailable. The
+compatibility result receives it through the judgehost compile-only boundary.
+There is no local compiler fallback when the judgehost is unavailable. The
 Nowcoder uses an older `testlib.h` and a C++14 compiler, but the adapter does
 not claim broad toolchain compatibility. It only warns on the literal
 `setTestCase`, which the project checker guideline recommends but the older

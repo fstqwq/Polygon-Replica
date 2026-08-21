@@ -3,7 +3,7 @@
 ## Trust and authentication
 
 Judgehost is an operator-controlled trusted deployment. Every `/api/v4/*`
-request passes Judgehost authentication before work, files, or result state is
+request passes judgehost authentication before work, files, or result state is
 exposed. Authenticated compile, executable-cache, runtime, and result reports are
 accepted as execution facts.
 
@@ -118,7 +118,7 @@ A reporting case is not expired. The old case identifier is never leased again;
 a later final callback receives the ordinary idempotent `1` ACK and cannot
 replace the terminal result.
 
-The internal verification-to-Judgehost boundary names the task's program
+The internal verification-to-judgehost boundary names the task's program
 identity `verification_program_id`; verification code uses the shorter
 `program_id`. The process-local batch runtime keys a program batch by
 `(verification_id, verification_program_id)`. Cases for additional tests join
@@ -208,9 +208,9 @@ typed executable downloads accept `compile`, `run`, or `compare`.
 Judgehost executable entries live in the per-key JudgeFS cache. They are runtime
 scoped and startup-cleared, not verification-scoped.
 
-The Judgehost language catalog advertises C++, Java, and Python. C is not a
+The judgehost language catalog advertises C++, Java, and Python. C is not a
 separate submission language: `.c` sources are rejected at the canonical
-problem-source boundary and are not assigned a Judgehost compile specification.
+problem-source boundary and are not assigned a judgehost compile specification.
 
 Compiler and runner version reports are accepted only for the current lease
 owner and stored as process-local, per-host/language telemetry. Missing,
@@ -220,11 +220,11 @@ identity.
 
 ## Callback admission, restart, and cancellation
 
-Startup cancels in-flight Judgehost work and clears runtime JudgeFS/blob state. Explicit cancellation first commits the Verification and all open tasks in one SQLite transaction, then closes Verification-level Judgehost admission and enqueues a process-local drain. The HTTP request does not walk its cases or publish a second cancellation for each task.
+Startup cancels in-flight judgehost work and clears runtime JudgeFS/blob state. Explicit cancellation first commits the Verification and all open tasks in one SQLite transaction, then closes Verification-level judgehost admission and enqueues a process-local drain. The HTTP request does not walk its cases or publish a second cancellation for each task.
 
 The drain processes bounded slices and releases the batch-state lock between them. Pending, staged, cache-probing, and unclaimed leased cases become acknowledged runtime cancellations directly. A reporting case or a case with an immutable callback receipt receives `cancel_requested`; the callback releases that receipt while converging the case to the same terminal state. Registry tasks are retired through the Verification index, and cancelled batches use a runtime-only finalization path. A failed slice is retried while admission remains closed.
 
-An already leased or reporting case may remain in the current process for callback and workdir cleanup, but its ordinary result cannot amend the terminal decision or populate the result cache after cancellation wins. Late and repeated final callbacks receive `1`; they do not invoke strict durable completion or trigger Judgehost retries. Runtime tombstones remain until the ordinary quiet cleanup window, and startup recovery may discard them because SQLite already holds the authoritative cancellation.
+An already leased or reporting case may remain in the current process for callback and workdir cleanup, but its ordinary result cannot amend the terminal decision or populate the result cache after cancellation wins. Late and repeated final callbacks receive `1`; they do not invoke strict durable completion or trigger judgehost retries. Runtime tombstones remain until the ordinary quiet cleanup window, and startup recovery may discard them because SQLite already holds the authoritative cancellation.
 
 Every state-writing `/api/v4` callback first enters a service-level admission
 gate. Administrative cleanup closes that gate and proceeds only when the active
@@ -243,7 +243,7 @@ waits for completion, while cleanup-first makes a later callback an ACK/no-op;
 no callback holds the runtime lock while writing SQLite.
 
 Startup has no receipt window to recover. It atomically terminalizes unfinished
-verification and task rows before deleting runtime blobs and Judgehost state;
+verification and task rows before deleting runtime blobs and judgehost state;
 failure of that durable step aborts startup. Callbacks for state absent after a
 restart are acknowledged idempotently so the daemon does not retry forever and
 do not create persistent receipt records.

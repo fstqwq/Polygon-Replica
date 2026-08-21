@@ -10,11 +10,11 @@ One published source identity connects the three layers: Verification records ev
 
 ### Execution tools
 
-The execution layer turns authored source into evidence. Verification checks the intended behavior on remote DOMjudge Judgehosts, while statement rendering presents the same structured samples in the UI, TeX, and HTML. Interactive and multi-pass problems keep their complete pass structure throughout this process.
+The execution layer turns authored source into evidence. Verification checks the intended behavior on remote DOMjudge judgehosts, while statement rendering presents the same structured samples in the UI, TeX, and HTML. Interactive and multi-pass problems keep their complete pass structure throughout this process.
 
 ### Collaboration
 
-The collaboration layer makes that evidence authoritative for a team. Git records the official problem history, while isolated workspaces hold changes until they are reviewed and published. People and Agents use the same Problem and Contest capability decisions, and Agent scopes can only narrow the connected user's current authority. [Polygon-Skills](https://github.com/fstqwq/Polygon-Skills) gives Agents the project context and working conventions needed to exercise good taste within their granted authority.
+The collaboration layer makes that evidence authoritative for a team. Git records the official problem history, while isolated workspaces hold changes until they are reviewed and published. People and agents use the same Problem and Contest capability decisions, and agent scopes can only narrow the connected user's current authority. [Polygon-Skills](https://github.com/fstqwq/Polygon-Skills) gives agents the project context and working conventions needed to exercise good taste within their granted authority.
 
 ### Ecosystem contracts
 

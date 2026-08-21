@@ -14,7 +14,7 @@ Add or retain a test only when all of the following are true:
 - the test would fail if that behavior were broken; and
 - the regression risk justifies the maintenance cost.
 
-High-value subjects are external HTTP, Judgehost, package, storage, and security
+High-value subjects are external HTTP, judgehost, package, storage, and security
 contracts; durable state; user-visible side effects; failure, ordering,
 concurrency, and cleanup invariants; and composition through a real entry path
 where a narrower test can remain green while the product is broken.
@@ -174,7 +174,7 @@ that the TeX backend itself unshares the network.
 
 The mock exercises registration, work lease, file download,
 version report, compile report, and final-result exchange without executing
-untrusted programs or starting a real Judgehost. Its fixture covers successful
+untrusted programs or starting a real judgehost. Its fixture covers successful
 results, CE through `update-judging`, RE, active internal-error, idempotent final
 ACKs, and retry-deduplicated late debug/internal diagnostics. Application, mock,
 and result runner share an internal-only Compose network and publish no host
@@ -188,13 +188,13 @@ approve an upstream source tree.
 
 `tests/scripts/e2e-real.sh` runs the deployed authoring journey against the
 official `domjudge/judgehost:9.0.0` image. CI does not compile DOMjudge. The
-journey performs first-run setup, Judgehost configuration, problem creation,
+journey performs first-run setup, judgehost configuration, problem creation,
 and every fixture file save through public HTTP and the latest Polygon Agent
 CLI checkout. Before execution, it installs the previous
 `build.json` shape through the CLI, opens the authoring workspace, and requires a
 Review and Publish warning plus a canonical file that preserves the current
 selections. It then sends a generated input larger than one MiB through the real
-Judgehost multipart callback twice: the rejected form must retain the
+judgehost multipart callback twice: the rejected form must retain the
 validator's explicit diagnostic on the Verification details page, and the
 corrected form must persist the complete input. Before the successful run, the
 journey cancels one active Verification and runs an all-AC `tle_or_re` solution
@@ -222,13 +222,13 @@ of Alice's revision. The assertions cover Git ancestry, workspace isolation,
 and selected file bytes rather than merge-page presentation.
 
 `tests/scripts/e2e-domserver-900.sh` is a separate package-consumer journey. It
-starts MariaDB 10.11, `domjudge/domserver:9.0.0`, one official Judgehost for
-Polygon Replica, and one official Judgehost for DOMserver. The latest Agent CLI
+starts MariaDB 10.11, `domjudge/domserver:9.0.0`, one official judgehost for
+Polygon Replica, and one official judgehost for DOMserver. The latest Agent CLI
 creates and publishes pass-fail, interactive-only, and multi-pass-only fixtures.
 Polygon Replica verifies each published revision and exports a DOMjudge ZIP.
 The controller imports each ZIP through the DOMjudge API while the admin user is
 bound to a jury team. DOMserver therefore creates the package's jury submissions
-itself; its Judgehost executes them, and the controller checks the real results
+itself; its judgehost executes them, and the controller checks the real results
 and runs DOMjudge's Judging verifier. The only accepted import danger messages
 are the three exact 9.0.0 mixed-directory annotation mismatches.
 

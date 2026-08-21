@@ -13,7 +13,7 @@ diagnostics; they are cleared at startup and do not recover work after restart.
 Durable job summary rows are reconciled to failed states during startup.
 
 A custom run is represented as a verification with the custom kind. It uses the
-same task storage, Judgehost dispatch, results, and cache-payload model.
+same task storage, judgehost dispatch, results, and cache-payload model.
 
 ## Verification lifecycle and DAG
 
@@ -63,7 +63,7 @@ VerificationTask
 A `VerificationProgram` means one source program under one normalized compile
 specification. The generator is a program, the accepted solution is a program,
 and every checked solution is a separate program. Multiple test tasks may
-reference the same program and therefore share its one Judgehost compilation.
+reference the same program and therefore share its one judgehost compilation.
 Generator parameters remain part of each task's input payload: they change the
 invocation and result-cache identity, but not the generator program identity.
 If compilation or an active internal error has already failed that program,
@@ -82,7 +82,7 @@ A task also carries its task kind, source, expected behavior, optional
 predecessor, final status, and serialized execution result. An empty
 `final_status` is the only durable open state; `done`, `failed`, and `cancelled`
 are terminal. Pending, queued, and leased are process-local task overlays used
-by read models; reporting is a Judgehost case phase rather than a task row
+by read models; reporting is a judgehost case phase rather than a task row
 state.
 
 The durable task ID is the path-safe natural key
@@ -92,7 +92,7 @@ definition. It rejects inconsistent or duplicate plan members instead of
 allocating another identity.
 
 Within verification code this identity is `program_id`. At the boundary into
-Judgehost scheduling it is named `verification_program_id`, so it cannot be
+judgehost scheduling it is named `verification_program_id`, so it cannot be
 confused with the per-execution `run_id`. Judgehost uses
 `(verification_id, verification_program_id)` to collect the test cases that
 share a compilation. `compile_key` is a separate content-addressed compile-cache
@@ -121,18 +121,18 @@ Prepared Verification payloads carry the canonical `problem_mode` read from `con
 Component payloads follow the same task boundary. A generator task receives the configured validator and the required `testlib.h`. A pass-fail solution task receives the configured checker and `testlib.h`; an interactive solution task receives the configured interactor and `testlib.h`. Compile-only receives only its submitted source and explicit extra sources, so it never loads a checker, validator, or interactor from the Problem.
 
 The DAG scheduler publishes runnable tasks in bounded batches and polls
-Judgehost case-cache misses. Full Verification and Package preparation use the
-background Judgehost service class. Sample-only Verification started for
+judgehost case-cache misses. Full Verification and Package preparation use the
+background judgehost service class. Sample-only Verification started for
 Problem or Contest HTML/PDF Preview uses the foreground service class; a valid
 Preview cache hit submits no work. Foreground changes the order of cases that
 have not started and does not preempt a running case. Judgehost terminal
 reports, cache hits, and
 terminal reconciliation all pass through the same completion service. The
 coordinator receives the effective persisted completions and advances
-dependants from that state; it does not receive an uncommitted Judgehost result.
+dependants from that state; it does not receive an uncommitted judgehost result.
 Predecessor failure or cancellation skips or cancels dependants. Compile-only,
-pass-fail, interactive, and multi-pass execution are mapped to Judgehost batches
-and case results by the verification and Judgehost services.
+pass-fail, interactive, and multi-pass execution are mapped to judgehost batches
+and case results by the verification and judgehost services.
 
 Each Verification has at most one active process-local coordinator. Persisted
 task decisions are durable authority and are committed before the coordinator
@@ -154,14 +154,14 @@ Skipped duplicate-input tasks contribute no verdict. A missing required verdict
 does not rewrite the completed testcase tasks, but it stores the verification's
 first failure reason. Independent solution tasks continue, and once no task
 remains open that stored mismatch makes the parent `failed`. Thus an expected CE
-is a successful task and can satisfy a program requirement even when Judgehost
+is a successful task and can satisfy a program requirement even when the judgehost
 reports the batch as failed. Generator, `main-correct`, and unexpected task
 cancellation failures are hard failures: they fail the parent and cancel all
 remaining open tasks immediately in the same transaction.
 
-Explicit user cancellation atomically changes the parent to `cancelled` and every open task to `cancelled`. The request then closes process-local Judgehost admission, notifies the coordinator, and enqueues a deduplicated process-local cancellation drain before returning. A dedicated drain thread retires cases, batches, and task-registry entries in slices of `VERIFICATION_RUNTIME_BATCH_SIZE = 256` without publishing per-case cancellation back to SQLite. Repeating cancellation for an already terminal parent still closes admission and ensures that its drain remains queued.
+Explicit user cancellation atomically changes the parent to `cancelled` and every open task to `cancelled`. The request then closes process-local judgehost admission, notifies the coordinator, and enqueues a deduplicated process-local cancellation drain before returning. A dedicated drain thread retires cases, batches, and task-registry entries in slices of `VERIFICATION_RUNTIME_BATCH_SIZE = 256` without publishing per-case cancellation back to SQLite. Repeating cancellation for an already terminal parent still closes admission and ensures that its drain remains queued.
 
-Already leased or reporting cases may remain in process-local Judgehost state while a callback receipt is active, but their ordinary results cannot change the durable decision. A callback that observes cancellation discards its result and cache candidate, completes runtime cancellation, and receives the protocol ACK. A callback that linearized before cancellation is likewise absorbed by the background drain rather than reopening the task. The drain requeues its own unfinished or failed slice while admission remains closed; periodic Judgehost maintenance does not own this queue.
+Already leased or reporting cases may remain in process-local judgehost state while a callback receipt is active, but their ordinary results cannot change the durable decision. A callback that observes cancellation discards its result and cache candidate, completes runtime cancellation, and receives the protocol ACK. A callback that linearized before cancellation is likewise absorbed by the background drain rather than reopening the task. The drain requeues its own unfinished or failed slice while admission remains closed; periodic judgehost maintenance does not own this queue.
 
 Scheduler failure uses `failed`; user cancellation uses `cancelled`. A failed in-memory cancellation notification falls back to a closed event, and idle coordinators reconcile task rows with the durable parent state. A synchronous hard failure stops the current publish slice before another independent ready task can be exposed. A runtime verification moves through dormant, active, draining, and retired phases independently of the parent status. Terminal runtime records remain available for idempotent callbacks until the verification has been quiet for 60 seconds.
 
@@ -196,7 +196,7 @@ executable cache retains its strict identity-to-content invariant.
 
 ## Results and cache payloads
 
-For a final `add-judging-run` callback, Judgehost first captures cache payloads
+For a final `add-judging-run` callback, the judgehost service first captures cache payloads
 and refs, then a dependency-light normalizer produces the canonical case
 `ExecutionResult` owned by `app.service.execution`. The batch runtime commits
 that canonical case decision before attempting optional result-cache
@@ -233,7 +233,7 @@ coordinator exists or a notification is repeated.
 
 Compile failure reported through `update-judging`, the first final run report,
 and an internal error received while a case is active can create the canonical
-terminal result. Their first decision claim is serialized under the Judgehost
+terminal result. Their first decision claim is serialized under the judgehost
 batch-runtime lock; a program failure can finish unclaimed cases but cannot replace
 a final result whose case is already reporting. SQLite first-wins completion is
 the second durable guard. Evidence received after that decision does not amend it.

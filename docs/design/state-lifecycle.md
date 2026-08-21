@@ -97,7 +97,7 @@ cache locators belong to that verification and are not mutable evidence for a
 later source snapshot. Program input, output, answer, feedback, transcript,
 compile log, and execution log payloads are all cache.
 
-A process restart cannot resume the in-memory batch runtime, Judgehost leases, or
+A process restart cannot resume the in-memory batch runtime, judgehost leases, or
 worker queue. Startup marks interrupted work failed and clears verification
 cache. Completed result rows may remain for display, while their downloadable
 program input, output, answer, feedback, transcript, and logs become

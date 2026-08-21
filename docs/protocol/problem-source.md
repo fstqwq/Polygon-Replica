@@ -50,7 +50,7 @@ selection, and pass-fail source rejects an interactor selection. External import
 adapters may infer a best-effort selection, but they write the result into this
 object before any authored-source consumer runs.
 
-Saving a checker, validator, interactor, or generator in the Problem editor validates write access, the normalized component path, the UTF-8 source-size limit, and the resulting source selection before persisting the edit. Saving does not compile the source or contact a Judgehost. Syntax and toolchain errors are reported by Verification, Package construction, or an explicit compatibility check that actually requests compilation.
+Saving a checker, validator, interactor, or generator in the Problem editor validates write access, the normalized component path, the UTF-8 source-size limit, and the resulting source selection before persisting the edit. Saving does not compile the source or contact a judgehost. Syntax and toolchain errors are reported by Verification, Package construction, or an explicit compatibility check that actually requests compilation.
 
 An authoring read recognizes the removed build fields from the previous source
 shape. For a writable workspace it deletes those obsolete fields and preserves

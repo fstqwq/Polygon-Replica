@@ -10,16 +10,15 @@ Run one application process. The batch/task runtime, host registry, runtime cach
 authentication throttling, and worker queue contain process-local state, so
 multiple uvicorn workers or application replicas are not supported.
 
-Production places a TLS proxy in front of the loopback uvicorn listener.
-Judgehost traffic reaches the same process through authenticated `/api/v4/*`
-routes. The systemd and Compose launchers bind host port `8001` to loopback and
-configure uvicorn to accept forwarded headers from any direct peer. Keeping that
-listener private is therefore part of the deployment security boundary.
-The generated Judgehost command currently uses `domjudge/judgehost:latest`;
-operators therefore control image pinning and upgrades outside the application.
-The [Judgehost image choice](deployment.md#judgehost-image-choice) runbook
-compares that public image with the pinned source-built fork used for long-lived
-hosts and owns the reproducible build procedure.
+Production terminates HTTPS at a TLS proxy and exposes uvicorn only on loopback.
+The browser password flow requires Web Crypto, which is available only over
+HTTPS or on localhost, and `AUTH_COOKIE_SECURE` defaults to `true`. The systemd
+and Compose launchers bind host port `8001` to loopback and configure uvicorn to
+accept forwarded headers from its direct peer, making that listener a trusted
+internal boundary.
+The generated judgehost command uses `domjudge/judgehost:latest`. The
+[Judgehost image choice](deployment.md#judgehost-image-choice) runbook documents
+the source-built fork used for long-lived hosts.
 
 ## Host installation
 
@@ -93,24 +92,24 @@ model.
 
 ## Operations
 
-Admin operations include Judgehost status and enablement, users, SMTP/system
+Admin operations include judgehost status and enablement, users, SMTP/system
 configuration, exclusive generated-data cleanup, and exclusive recovery backup.
 The backup publishes one archive containing a consistent SQLite snapshot plus
 the bare Git, workspace, and Contest source roots. It excludes generated
 artifacts, caches, deployment configuration, and secrets outside SQLite. Do not
 manually delete active cache subtrees while the process is running. Observe
-process health, worker capacity, Judgehost leases, domain job status,
+process health, worker capacity, judgehost leases, domain job status,
 derived-product integrity, disk space, and backup age as separate signals.
 
 Maintenance admission has three process-local states. `open` admits normal
 requests and jobs. `draining` rejects new business work while admitted workers,
 Judgehost dispatch, callbacks, and counted Admin reads finish; Admin pages stay
-available and an empty Judgehost fetch skips long polling. `closed` is used only
+available and an empty judgehost fetch skips long polling. `closed` is used only
 while cleanup, backup, or a supervised restart owns the process. Cleanup removes
 the configured derived and cache roots plus their cleanup-safe SQLite rows; Git,
 workspaces, Contest source, and backup roots are outside that inventory.
 
-Both exclusive operations close Judgehost callback admission as well as
+Both exclusive operations close judgehost callback admission as well as
 ordinary work admission. They remain busy until in-flight callbacks have
 released their receipts; callbacks arriving after the gate closes are
 acknowledged without touching batch runtime, database, or blob state.

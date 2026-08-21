@@ -102,18 +102,23 @@ If SMTP is used, add the stable encryption key to `.env` and explicitly pass
 
 ## TLS proxy
 
-Install nginx and certbot:
+A TLS certificate, including a locally trusted self-signed certificate, is
+strongly recommended. Outside localhost, it is also required by the browser
+password flow. Password verifiers are derived and encrypted with Web Crypto,
+which browsers expose only in secure contexts such as HTTPS or localhost.
+`AUTH_COOKIE_SECURE` also defaults to `true`, so authentication cookies are sent
+only over HTTPS. nginx terminates TLS and forwards requests to the loopback
+application listener.
 
-```bash
-sudo apt-get update
-sudo apt-get install -y nginx certbot python3-certbot-nginx
-```
-
-Create `/etc/nginx/sites-available/polygon-replica`:
+Configure nginx or another TLS proxy with the deployment's certificate. The
+nginx server block requires:
 
 ```nginx
 server {
+    listen 443 ssl;
     server_name <domain>;
+    ssl_certificate <certificate-path>;
+    ssl_certificate_key <private-key-path>;
     client_max_body_size 1024m;
 
     location / {
@@ -129,20 +134,11 @@ server {
 }
 ```
 
-Enable it and issue the certificate:
+Keep port 8001 private because uvicorn trusts forwarded headers from its direct
+peer. A same-host judgehost may use the private HTTP listener; remote judgehosts
+must use the HTTPS endpoint.
 
-```bash
-sudo ln -sf /etc/nginx/sites-available/polygon-replica \
-  /etc/nginx/sites-enabled/polygon-replica
-sudo nginx -t
-sudo systemctl reload nginx
-sudo certbot --nginx -d <domain>
-```
-
-Do not expose port 8001 publicly. Review trusted proxy headers if the proxy is
-not local.
-
-## First use and Judgehost
+## First use and judgehost
 
 Open `https://<domain>/` and complete initial setup. Setup creates the administrator with a trusted email address and saves the email allow regex used by later public registrations. It also displays the effective storage paths for operator confirmation.
 In Settings configure and save:
@@ -153,46 +149,34 @@ JUDGEHOST_API_USERNAME = judgehost
 JUDGEHOST_API_TOKEN = <strong random secret>
 ```
 
-Use the Settings-generated Judgehost command. Each daemon needs a unique
+Use the Settings-generated judgehost command. Each daemon needs a unique
 hostname, daemon id, CPU assignment, and unused `RUN_USER_UID_GID`. Verify ids
-with `getent passwd <id>` and `getent group <id>`. A same-host Docker Judgehost
+with `getent passwd <id>` and `getent group <id>`. A same-host Docker judgehost
 normally reaches `http://host.docker.internal:8001/` through the configured host
 gateway. The generated command also maps each container hostname to `127.0.1.1`
 so local tools such as `sudo` can resolve it.
 
 ### Judgehost image choice
 
-The generated command ends with `domjudge/judgehost:latest`. This is the
-simplest installation path: Docker downloads a public, maintained image and no
-Judgehost toolchain needs to be built locally. `latest` is a moving tag,
-however, so record the image digest used by a production deployment and roll a
-new digest through one Judgehost before replacing the rest of a fleet.
+The generated command uses `domjudge/judgehost:latest`.
 
-For long-lived Judgehosts, the currently recommended source-built alternative
-is [`fstqwq/domjudge`](https://github.com/fstqwq/domjudge) at commit
-`6eb5e99d352c4f1ef70f540378b6cf069abef6be`. It contains the corresponding
-upstream 10.0 development line plus these two operational fixes:
+For long-lived judgehosts, the recommended source-built image is
+[`fstqwq/domjudge`](https://github.com/fstqwq/domjudge) at commit
+`6eb5e99d352c4f1ef70f540378b6cf069abef6be`. It tracks the upstream 10.0
+development line and adds:
 
 - [`b52a97af`](https://github.com/fstqwq/domjudge/commit/b52a97af01f96cbe39267a917503393c548e9701)
-  resets a testcase result directory before a retry. A task fetched again by
-  the same daemon therefore cannot consume output, feedback, or hardlinks left
-  by an interrupted attempt.
+  resets a testcase result directory before a retry, removing artifacts left by
+  an interrupted attempt.
 - [`6eb5e99d`](https://github.com/fstqwq/domjudge/commit/6eb5e99d352c4f1ef70f540378b6cf069abef6be)
   reclaims the downloaded testcase cache when ordinary judging-directory
-  cleanup cannot restore the configured free-space threshold. The cache is
-  retained during normal operation; under disk pressure, cache misses and
-  re-downloads are preferred to disabling the Judgehost.
+  cleanup cannot restore the configured free-space threshold.
 
-That source also includes performance-oriented upstream changes from the 10.0
-development line, including removing shell and subprocess work from frequently
-used judgedaemon paths. This improves throughput for workloads with many short
-testcases. The operator must build and distribute the image, test updates,
-rebuild it for security fixes, and deliberately advance both source revisions.
-The development-line source changes more frequently than a public release.
+The fork also includes upstream 10.0 development-line throughput improvements
+for workloads with many short testcases.
 
-Build the pinned source with DOMjudge's separate packaging repository on a
-Linux Docker host. The packaging build starts a temporary privileged container
-to construct the Judgehost chroot:
+Build the pinned source with DOMjudge's packaging repository on a Linux Docker
+host. The build starts a temporary privileged container:
 
 ```bash
 build_root="$(mktemp -d)"
@@ -216,14 +200,8 @@ cd "$build_root/domjudge-packaging/docker"
 ./build-judgehost.sh polygon-judgehost:10.0-dev-6eb5e99
 ```
 
-Keep the credentials, mounts, resource limits, cgroup settings, hostname, and
-daemon identity from the command generated by Settings; replace only its final
-image reference with `polygon-judgehost:10.0-dev-6eb5e99`. A tag built on one
-machine is local to that Docker daemon. Push it to a private registry or transfer
-it with `docker save` and `docker load` before using it on another host, and pin
-the distributed digest in production. Start one daemon first and confirm task
-fetch, compilation, judging, retry behavior, disk cleanup, and callback delivery
-before scaling the image to the full fleet.
+Keep the command generated by Settings and replace its final image reference
+with `polygon-judgehost:10.0-dev-6eb5e99`.
 
 ## Upgrade
 
@@ -233,7 +211,7 @@ at a time.
 Application startup does not alter an existing SQLite schema. Before installing
 a revision that changes required tables, columns, or named indexes, compare the
 canonical schema in `app/db.py` at the deployed commit with the target commit.
-Stop the Web process, workers, and Judgehosts, back up SQLite together with its
+Stop the Web process, workers, and judgehosts, back up SQLite together with its
 WAL/SHM files, and apply a one-off offline migration for that exact diff. Keep
 IDs and relationships intact, then require `foreign_key_check`,
 `integrity_check`, and application schema admission to pass before reopening
@@ -244,8 +222,8 @@ The latest breaking database change is
 Deployments whose current commit predates it must upgrade the database for the
 complete schema diff between their deployed revision and the target revision.
 
-The bearer credential is replayable by design. Keep the application data root
-and database private to the runtime user. The host installer applies mode
+Keep the application data root and database private to the runtime user. The
+host installer applies mode
 `0700` to `/var/lib/polygon-replica`, and the systemd unit uses `UMask=0077` so
 new database, WAL, and SHM files are not readable by other local users.
 
@@ -273,61 +251,33 @@ sudo docker compose logs --tail=200 app
 
 Do not run old and new application revisions against the same writable roots.
 
+## Restart
+
+Enable **Pause admission** and wait for active work to drain before using
+**Restart application**. The action exits the process and requires systemd,
+Compose, or another supervisor to start it again. If work cannot drain, **Force
+restart** interrupts process-local work; startup reconciliation marks the
+affected durable jobs failed. **Resume admission** cancels the maintenance
+preparation.
+
 ## Backup
 
-Open Admin and enable **Pause admission**. New business requests and top-level
-jobs receive a temporary maintenance response while already admitted worker and
-Judgehost work finishes. Admin reads remain available, and idle Judgehosts get
-an immediate empty fetch response instead of long-polling. When the displayed
-active counts reach zero, use **Create source backup**. The operation closes the
-remaining runtime boundary and archives a transactionally consistent SQLite
-snapshot together with the complete bare Git, workspace, and Contest source
-roots. `/maintenance` shows progress.
-
-After it succeeds, use **Download latest backup**. The application retains one
-published file at `backup_root/source-backup/latest.tar.gz`; a later successful
-run atomically replaces it. Move the downloaded file to independent off-host
-storage if it must survive loss of the application host.
-
-The archive contains `database/metadata.db`, committed problem history, every
-workspace including uncommitted files, and Contest statement sources and
-attachments. SQLite is copied with its online backup API, so transactions
-committed in WAL are included without copying `-wal` or `-shm` files. Derived
-data, caches, other backup-root content, application code, the encryption key,
-and TLS/proxy configuration are excluded. Keep secrets and deployment
-configuration under the operator's separate secret/configuration backup policy.
-The archive itself is sensitive because SQLite contains authentication,
-session, access-control, and encrypted configuration records; store it encrypted
-and off host.
-
-The same drained state enables **Restart application**. That action exits the
-single process after sending the HTTP response; the installed systemd unit or
-the checked-in Compose restart policy starts a new process. Do not use it when
-running uvicorn without a supervisor. If active work cannot drain because the
-runtime is stuck, **Force restart** is available beside the disabled normal
-restart action. It requires admission to be paused but deliberately ignores the
-active-work counts; unfinished process-local work is interrupted and startup
-reconciliation marks its durable jobs failed. Use **Resume admission** to
-cancel a maintenance preparation without starting an operation.
+Enable **Pause admission**, wait for active work to drain, then use **Create
+source backup** and **Download latest backup**. The archive is one point-in-time
+recovery set containing SQLite and the complete bare Git, workspace, and Contest
+source roots. Derived data, caches, application code, the encryption key, and
+deployment configuration are excluded. The exact archive layout is defined by
+the [storage protocol](../protocol/storage.md#source-backup).
 
 ## Restore
 
-Restore is an operator-managed recovery procedure:
+1. Stop the application and judgehosts.
+2. Extract the archive into an isolated staging directory.
+3. Restore `database/metadata.db`, `bare/`, `workspaces/`, and
+   `contest-sources/` as one set, without archive `-wal` or `-shm` files, then
+   restore runtime ownership and modes.
+4. Start the application revision and deployment configuration retained
+   alongside the backup, then validate them before reopening traffic.
 
-1. Stop the application and Judgehosts.
-2. Inspect `manifest.json` and the member paths before extraction.
-3. Extract into an isolated staging directory, not over live roots.
-4. Replace the configured bare Git, workspace, and Contest source roots from the
-   staged `bare/`, `workspaces/`, and `contest-sources/` trees, then restore
-   runtime ownership.
-5. Replace the configured SQLite database with `database/metadata.db`; do not
-   restore archive `-wal` or `-shm` files. Restore database ownership and mode.
-6. Start one application process and validate schema startup, repository
-   history, workspaces, Contest statement sources, and authentication before
-   reopening traffic.
-
-The archive is manual disaster-recovery material rather than a versioned import
-format. Retain the application revision and deployment configuration used to
-create it, inspect its contents before restore, and adapt the offline restore
-procedure when application storage changes. Do not mix source roots with an
-unrelated database.
+The archive is manual disaster-recovery material, not a versioned import
+format. Never combine its database with source roots from another recovery set.

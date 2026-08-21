@@ -89,7 +89,7 @@ Before the worker queue starts, the application:
 2. in one durable recovery transaction, fails unfinished verifications and
    cancels all of their open tasks; startup stops if that transaction fails;
 3. invalidates all Statement Preview cache records and cancels other unfinished
-   preview and Judgehost runtime work;
+   preview and judgehost runtime work;
 4. resets worker history in memory and removes its JSONL;
 5. clears the process-local runtime cache index;
 6. deletes every child of `cache_root` and recreates the empty root.
@@ -101,9 +101,9 @@ are cleared. Cache deletion failure aborts startup before workers begin.
 
 ## Maintenance cleanup
 
-Administrative cleanup closes both ordinary work admission and the Judgehost
+Administrative cleanup closes both ordinary work admission and the judgehost
 callback admission gate. It refuses to start while requests, callbacks, worker
-jobs, or queued/leased/reporting Judgehost work is active. It recreates
+jobs, or queued/leased/reporting judgehost work is active. It recreates
 the Statement Preview, legacy preview, Verification, Native Package materialization,
 external-package-cache, and export-job metadata tables;
 empties the entire `artifacts_root` and `cache_root`; resets process-local execution
@@ -126,8 +126,8 @@ at a deliberately deleted payload. The failed cleanup remains retryable.
 ## Source backup
 
 The system-admin source-backup action uses the same exclusive maintenance gate
-as generated-data cleanup. It starts only after ordinary requests, Judgehost
-callbacks, worker jobs, and queued, leased, or reporting Judgehost work have
+as generated-data cleanup. It starts only after ordinary requests, judgehost
+callbacks, worker jobs, and queued, leased, or reporting judgehost work have
 drained. The gate stays closed while the archive is built and published.
 
 The current backup operation writes these top-level members:
