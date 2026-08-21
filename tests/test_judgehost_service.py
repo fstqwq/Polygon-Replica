@@ -103,6 +103,29 @@ class TestJudgehostService(E2ETestBase):
             1,
         )
 
+    def test_cancel_keeps_admission_closed_when_queue_notification_fails(
+        self,
+    ) -> None:
+        service = self._fresh_judgehost_service()
+        verification_id = _canonical_verification_id(
+            f"cancel-notification-{uuid.uuid4().hex[:8]}"
+        )
+
+        with patch.object(
+            service._cancellation_drain,
+            "schedule",
+            side_effect=RuntimeError("notification unavailable"),
+        ):
+            service.request_verification_cancel(
+                verification_id,
+                "verification cancelled by user",
+            )
+
+        self.assertIn(
+            verification_id,
+            service._batch_runtime.cancelled_verification_ids(),
+        )
+
     @staticmethod
     def _work_rows_for_task(
         service: Judgehost,

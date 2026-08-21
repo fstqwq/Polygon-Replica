@@ -222,11 +222,11 @@ identity.
 
 ## Callback admission, restart, and cancellation
 
-Startup cancels in-flight Judgehost work and clears runtime JudgeFS/blob state.
-Durable verification/task cancellation commits before Judgehost runtime drain.
-An already leased or reporting case may remain in the current process for
-callback and workdir cleanup, but its ordinary result cannot amend the terminal
-decision.
+Startup cancels in-flight Judgehost work and clears runtime JudgeFS/blob state. Explicit cancellation first commits the Verification and all open tasks in one SQLite transaction, then closes Verification-level Judgehost admission and enqueues a process-local drain. The HTTP request does not walk its cases or publish a second cancellation for each task.
+
+The drain processes bounded slices and releases the batch-state lock between them. Pending, staged, cache-probing, and unclaimed leased cases become acknowledged runtime cancellations directly. A reporting case or a case with an immutable callback receipt receives `cancel_requested`; the callback releases that receipt while converging the case to the same terminal state. Registry tasks are retired through the Verification index, and cancelled batches use a runtime-only finalization path. A failed slice is retried while admission remains closed.
+
+An already leased or reporting case may remain in the current process for callback and workdir cleanup, but its ordinary result cannot amend the terminal decision or populate the result cache after cancellation wins. Late and repeated final callbacks receive `1`; they do not invoke strict durable completion or trigger Judgehost retries. Runtime tombstones remain until the ordinary quiet cleanup window, and startup recovery may discard them because SQLite already holds the authoritative cancellation.
 
 Every state-writing `/api/v4` callback first enters a service-level admission
 gate. Administrative cleanup closes that gate and proceeds only when the active

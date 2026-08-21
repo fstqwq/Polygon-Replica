@@ -222,6 +222,34 @@ class TestJudgehostBatchRuntimeLifecycle(unittest.TestCase):
     def setUp(self) -> None:
         self.store = JudgehostBatchRuntime(id_base=100)
 
+    def test_closed_verification_rejects_new_lease_before_drain(self) -> None:
+        batch_id = _create_batch(
+            self.store,
+            task_id="task-close-admission",
+            run_id="run-close-admission",
+            case_rows=[
+                _case_row(
+                    "task-close-admission",
+                    "run-close-admission",
+                    "001.in",
+                    1,
+                )
+            ],
+        )
+
+        self.store.close_verification_admission("ver-1")
+
+        self.assertEqual(
+            _lease_cases(
+                self.store,
+                batch_id,
+                hostname="host-a",
+                limit=1,
+                now_text=_NOW,
+            ),
+            [],
+        )
+
     def test_verification_cancel_preserves_leased_case_until_receipt(self) -> None:
         batch_id = _create_batch(
             self.store,
@@ -248,8 +276,14 @@ class TestJudgehostBatchRuntimeLifecycle(unittest.TestCase):
             leased_monotonic=10.0,
         )
 
-        cancellation = self.store.request_verification_cancel("ver-1", now_text=_NOW)
-        self.assertEqual(cancellation.cancelled_case_count, 1)
+        receipt = self.store.acquire_case_callback_receipt(leased_case_id)
+        self.assertIsNotNone(receipt)
+        assert receipt is not None
+        self.store.close_verification_admission("ver-1")
+        cancellation = self.store.drain_verification_cancel_slice(
+            "ver-1", now_text=_NOW, limit=16
+        )
+        self.assertEqual(cancellation.processed_case_count, 2)
         self.assertEqual(cancellation.awaiting_receipt_count, 1)
         rows = {
             str(row["test_name"]): row for row in self.store.cases_for_batch(batch_id)
@@ -268,10 +302,7 @@ class TestJudgehostBatchRuntimeLifecycle(unittest.TestCase):
         claim = self.store.claim_case_reporting(
             leased_case_id,
             hostname="host-a",
-            receipt_generation=_receipt_generation(
-                self.store,
-                leased_case_id,
-            ),
+            receipt_generation=receipt.claim_generation,
             now_text=_NOW,
         )
         self.assertIsNotNone(claim)
@@ -291,6 +322,7 @@ class TestJudgehostBatchRuntimeLifecycle(unittest.TestCase):
             ),
         )
         self.assertTrue(accepted)
+        self.store.release_case_callback_receipt(receipt.receipt_id)
         self.assertEqual(self.store.fetch_case(leased_case_id)["status"], "cancelled")
         telemetry = self.store.host_telemetry_snapshot()["host-a"]
         self.assertEqual(telemetry["judged_case_count"], 1)
@@ -795,8 +827,15 @@ class TestJudgehostBatchRuntimeLifecycle(unittest.TestCase):
                 )
             )
 
-        cancellation = self.store.request_verification_cancel("ver-1", now_text=_NOW)
-        self.assertEqual(list(cancellation.batch_ids), batch_ids)
+        self.store.close_verification_admission("ver-1")
+        cancellation = self.store.drain_verification_cancel_slice(
+            "ver-1", now_text=_NOW, limit=16
+        )
+        self.assertEqual(cancellation.processed_case_count, 2)
+        self.assertEqual(
+            list(cancellation.terminal_batch_ids),
+            batch_ids,
+        )
         self.assertEqual(
             [
                 self.store.cases_for_batch(batch_id)[0]["status"]

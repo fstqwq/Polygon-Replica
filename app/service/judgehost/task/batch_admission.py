@@ -12,7 +12,7 @@ from app.service.judgehost.domjudge.identity import submit_id
 from app.service.judgehost.domjudge.result import parse_bool
 from app.service.judgehost.domjudge.task_plan import task_kind
 from app.service.judgehost.task.registry import JudgehostTaskRegistry
-from app.service.judgehost.task.retention import compact_task_row_payload
+from app.service.judgehost.task.retention import compact_payload_for_retention
 from app.service.platform.runtime_blob_store import PayloadFile
 
 
@@ -76,7 +76,7 @@ class TaskBatchAdmission:
         row = self._tasks.get(task_id)
         if row is None:
             return
-        compact_task_row_payload(row)
+        row["payload"] = compact_payload_for_retention(row["payload"])
         self._tasks.update(task_id, {"payload": row["payload"]})
 
     def _case_rows(

@@ -188,6 +188,7 @@ class BatchCompletion:
                 case.cancel_requested = False
                 case.requeue_on_abort = False
                 case.result = None
+                case.pending_diagnostics.clear()
                 self._state._transition_case_locked(
                     case,
                     "cancelled",
@@ -195,6 +196,7 @@ class BatchCompletion:
                     updated_at=updated_at,
                     refresh_batch=False,
                 )
+                case.completion_acknowledged = True
                 continue
             case_feedback = batch.failure_text
             if case.debug_text:
@@ -364,12 +366,14 @@ class BatchCompletion:
                 case.terminal_result = None
                 case.requeue_on_abort = False
                 case.result = None
+                case.pending_diagnostics.clear()
                 self._state._transition_case_locked(
                     case,
                     "cancelled",
                     lease_owner=None,
                     updated_at=updated_at,
                 )
+                case.completion_acknowledged = True
                 return self._program_terminal_claim(
                     "cancelled",
                     case_id=case.id,
@@ -553,12 +557,14 @@ class BatchCompletion:
                 case.terminal_result = None
                 case.requeue_on_abort = False
                 case.result = None
+                case.pending_diagnostics.clear()
                 self._state._transition_case_locked(
                     case,
                     "cancelled",
                     lease_owner=None,
                     updated_at=updated_at,
                 )
+                case.completion_acknowledged = True
                 return self._program_terminal_claim(
                     "cancelled",
                     case_id=case.id,
@@ -861,9 +867,11 @@ class BatchCompletion:
         case.requeue_on_abort = False
         if cancel_requested:
             case.result = None
+            case.pending_diagnostics.clear()
             self._state._transition_case_locked(
                 case, "cancelled", lease_owner=None, updated_at=updated_at
             )
+            case.completion_acknowledged = True
             return "cancelled"
         case.result = terminal_result or result
         result_owner = case.lease_owner if case.status == "reporting" else None
@@ -924,12 +932,14 @@ class BatchCompletion:
             case.terminal_result = None
             case.requeue_on_abort = False
             case.result = None
+            case.pending_diagnostics.clear()
             self._state._transition_case_locked(
                 case,
                 "cancelled",
                 lease_owner=None,
                 updated_at=updated_at,
             )
+            case.completion_acknowledged = True
             return True
 
     def finish_cache_miss(
@@ -952,12 +962,15 @@ class BatchCompletion:
             case.cancel_requested = False
             case.terminal_result = None
             if cancel_requested:
+                case.result = None
+                case.pending_diagnostics.clear()
                 self._state._transition_case_locked(
                     case,
                     "cancelled",
                     lease_owner=None,
                     updated_at=updated_at,
                 )
+                case.completion_acknowledged = True
             elif terminal_result is not None:
                 case.result = terminal_result
                 self._state._transition_case_locked(
@@ -1000,6 +1013,7 @@ class BatchCompletion:
                 case.requeue_on_abort = False
                 if cancel_requested:
                     case.result = None
+                    case.pending_diagnostics.clear()
                     status = "cancelled"
                 elif terminal_result is not None:
                     case.result = terminal_result
@@ -1017,6 +1031,8 @@ class BatchCompletion:
                     updated_at=updated_at,
                     refresh_batch=False,
                 )
+                if status == "cancelled":
+                    case.completion_acknowledged = True
                 finished[case.id] = status
                 affected_batch_ids.add(case.batch_id)
             self._state._refresh_batches_locked(
@@ -1045,12 +1061,15 @@ class BatchCompletion:
             case.cancel_requested = False
             case.terminal_result = None
             if cancel_requested:
+                case.result = None
+                case.pending_diagnostics.clear()
                 self._state._transition_case_locked(
                     case,
                     "cancelled",
                     lease_owner=None,
                     updated_at=updated_at,
                 )
+                case.completion_acknowledged = True
             elif terminal_result is not None:
                 case.result = terminal_result
                 self._state._transition_case_locked(
@@ -1108,6 +1127,7 @@ class BatchCompletion:
                 if cancel_requested:
                     status = "cancelled"
                     case.result = None
+                    case.pending_diagnostics.clear()
                 elif terminal_result is not None:
                     status = "reported"
                     case.result = terminal_result
@@ -1120,6 +1140,8 @@ class BatchCompletion:
                     updated_at=updated_at,
                     refresh_batch=False,
                 )
+                if status == "cancelled":
+                    case.completion_acknowledged = True
                 affected_batch_ids.add(case.batch_id)
                 aborted += 1
             self._state._refresh_batches_locked(

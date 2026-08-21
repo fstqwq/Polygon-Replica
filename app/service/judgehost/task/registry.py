@@ -1,7 +1,9 @@
 import threading
 from collections import defaultdict
+from itertools import islice
 from typing import Literal, NotRequired, TypedDict
 
+from app.service.judgehost.task.retention import compact_payload_for_retention
 from app.service.platform.rwlock import WriterPriorityRWLock
 
 
@@ -61,6 +63,7 @@ class JudgehostTaskRegistry:
         self._task_id_by_run: dict[str, str] = {}
         self._tasks_by_problem: dict[str, set[str]] = defaultdict(set)
         self._tasks_by_verification: dict[str, set[str]] = defaultdict(set)
+        self._active_tasks_by_verification: dict[str, set[str]] = defaultdict(set)
         self._status_counts: dict[str, int] = defaultdict(int)
         self._changed = threading.Condition(threading.Lock())
         self._change_generation = 0
@@ -97,6 +100,13 @@ class JudgehostTaskRegistry:
         self._status_counts[previous] -= 1
         self._status_counts[status] += 1
         row["status"] = status
+        verification_id = row["verification_id"]
+        if verification_id and status in self.TERMINAL_STATUSES:
+            active = self._active_tasks_by_verification.get(verification_id)
+            if active is not None:
+                active.discard(row["id"])
+                if not active:
+                    self._active_tasks_by_verification.pop(verification_id, None)
 
     def insert(self, row: JudgehostTaskRow) -> None:
         task_id = row["id"]
@@ -111,6 +121,8 @@ class JudgehostTaskRegistry:
             verification_id = stored["verification_id"]
             if verification_id:
                 self._tasks_by_verification[verification_id].add(task_id)
+                if stored["status"] in self.ACTIVE_STATUSES:
+                    self._active_tasks_by_verification[verification_id].add(task_id)
             self._status_counts[str(stored["status"])] += 1
         self._notify()
 
@@ -170,6 +182,53 @@ class JudgehostTaskRegistry:
             snapshot = self._copy(row)
         self._notify()
         return snapshot
+
+    def cancel_verification_tasks(
+        self,
+        verification_id: str,
+        *,
+        reason: str,
+        now_text: str,
+        limit: int,
+    ) -> tuple[int, int]:
+        """Terminalize a bounded process-local task slice without publishing results."""
+
+        safe_limit = max(1, int(limit))
+        changed = 0
+        remaining_count = 0
+        with self._lock.write_lock():
+            task_ids = tuple(
+                islice(
+                    self._active_tasks_by_verification.get(verification_id, ()),
+                    safe_limit,
+                )
+            )
+            for task_id in task_ids:
+                row = self._tasks.get(task_id)
+                if row is None or row["status"] in self.TERMINAL_STATUSES:
+                    continue
+                self._set_status(row, "failed")
+                row.update(
+                    {
+                        "payload": compact_payload_for_retention(row["payload"]),
+                        "result": {
+                            "cancelled": True,
+                            "reason": reason,
+                            "error": reason,
+                        },
+                        "run_status": "failed",
+                        "error_text": reason,
+                        "updated_at": now_text,
+                        "completed_at": now_text,
+                    }
+                )
+                changed += 1
+            remaining_count = len(
+                self._active_tasks_by_verification.get(verification_id, ())
+            )
+        if changed:
+            self._notify()
+        return (changed, remaining_count)
 
     def mark_leased(
         self,
@@ -267,6 +326,13 @@ class JudgehostTaskRegistry:
                 verification_tasks.discard(task_id)
                 if not verification_tasks:
                     self._tasks_by_verification.pop(verification_id, None)
+                active = self._active_tasks_by_verification.get(verification_id)
+                if active is not None:
+                    active.discard(task_id)
+                    if not active:
+                        self._active_tasks_by_verification.pop(
+                            verification_id, None
+                        )
             self._status_counts[str(row["status"])] -= 1
             snapshot = self._copy(row)
         self._notify()
@@ -293,5 +359,6 @@ class JudgehostTaskRegistry:
             self._task_id_by_run.clear()
             self._tasks_by_problem.clear()
             self._tasks_by_verification.clear()
+            self._active_tasks_by_verification.clear()
             self._status_counts.clear()
         self._notify()

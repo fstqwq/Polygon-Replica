@@ -22,7 +22,7 @@ from app.service.judgehost.batch.model import (
     JudgehostCaseRow,
     PendingCaseDiagnostic,
     ProgramTerminalClaim,
-    VerificationCancellation,
+    VerificationCancellationSlice,
 )
 from app.service.judgehost.batch.policy import SchedulingPolicy
 from app.service.judgehost.batch.state import BatchState
@@ -117,6 +117,12 @@ class JudgehostBatchRuntime:
     def fetch_batch(self, batch_id: int) -> ExecutionBatchRow | None:
         return self._state.fetch_batch(batch_id)
 
+    def batch_requires_completion_ack(self, batch_id: int) -> bool:
+        return self._finalization.requires_completion_ack(batch_id)
+
+    def batch_verification_cancellation_requested(self, batch_id: int) -> bool:
+        return self._finalization.verification_cancellation_requested(batch_id)
+
     def scope_sequence(self, verification_id: str) -> int:
         return self._admission.scope_sequence(verification_id)
 
@@ -130,11 +136,23 @@ class JudgehostBatchRuntime:
             verification_id, now_text=now_text
         )
 
-    def request_verification_cancel(
-        self, verification_id: str, *, now_text: str
-    ) -> VerificationCancellation:
-        return self._maintenance.request_verification_cancel(
-            verification_id, now_text=now_text
+    def close_verification_admission(self, verification_id: str) -> None:
+        self._maintenance.close_verification_admission(verification_id)
+
+    def cancelled_verification_ids(self) -> tuple[str, ...]:
+        return self._maintenance.cancelled_verification_ids()
+
+    def drain_verification_cancel_slice(
+        self,
+        verification_id: str,
+        *,
+        now_text: str,
+        limit: int,
+    ) -> VerificationCancellationSlice:
+        return self._maintenance.drain_verification_cancel_slice(
+            verification_id,
+            now_text=now_text,
+            limit=limit,
         )
 
     def finish_programs(

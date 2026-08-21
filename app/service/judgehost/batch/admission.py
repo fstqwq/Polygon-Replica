@@ -40,6 +40,7 @@ class BatchAdmission:
             self._state._scope_sequence_by_verification.pop(token, None)
             if not self._state._batch_ids_by_verification.get(token):
                 self._state._closed_verification_ids.discard(token)
+                self._state._cancelled_verification_ids.discard(token)
                 self._state._closed_program_keys = {
                     key for key in self._state._closed_program_keys if key[0] != token
                 }
@@ -495,6 +496,7 @@ class BatchAdmission:
                     if case.cancel_requested:
                         case.result = None
                         case.terminal_result = None
+                        case.pending_diagnostics.clear()
                         next_status = "cancelled"
                     elif inherited_result is not None:
                         case.result = inherited_result
@@ -510,6 +512,8 @@ class BatchAdmission:
                         updated_at=now_text,
                         refresh_batch=False,
                     )
+                    if next_status == "cancelled":
+                        case.completion_acknowledged = True
                     affected_batch_ids.add(case.batch_id)
             self._state._refresh_batches_locked(affected_batch_ids)
             return True

@@ -280,6 +280,10 @@ class JudgehostBatchFinalizer:
         error_text: str = "",
     ) -> bool:
         safe_task_id = task_id
+        if self._batch_runtime.batch_verification_cancellation_requested(
+            int(batch_row["batch_id"])
+        ):
+            return False
         if not self._batch_runtime.task_cases_terminal(safe_task_id):
             return False
         case_results = self._batch_runtime.task_case_results(safe_task_id)
@@ -444,7 +448,58 @@ class JudgehostBatchFinalizer:
 
     def retry_due_finalizations(self, *, limit: int = 1) -> None:
         for batch_id in self._batch_runtime.due_batch_finalizations(limit=limit):
+            if self._batch_runtime.batch_verification_cancellation_requested(
+                batch_id
+            ):
+                continue
             self.finalize_batch_if_ready(batch_id)
+
+    def retire_cancelled_batch(self, batch_id: int) -> bool:
+        """Finish runtime-only cancellation without publishing Case completions."""
+
+        current = self._batch_runtime.fetch_batch(int(batch_id))
+        if current is None or current["status"] in {"completed", "failed"}:
+            return True
+        claim = self._batch_runtime.claim_batch_finalization(
+            int(batch_id),
+            now_text=now_iso(),
+        )
+        if claim is None:
+            return False
+        if not claim.terminal_transition:
+            self._batch_runtime.complete_batch_finalization(claim)
+            return False
+        cases = claim.cases
+        if any(
+            row["status"] not in {"reported", "cancelled"}
+            or not bool(row["completion_acknowledged"])
+            for row in cases
+        ):
+            self._batch_runtime.abort_batch_finalization(
+                claim,
+                now_text=now_iso(),
+                delay_sec=0.0,
+            )
+            return False
+        task_ids = {row["task_id"] for row in cases if row["task_id"]}
+        if any(
+            (task := self._tasks.get(task_id)) is None
+            or task["status"] not in {"completed", "failed"}
+            for task_id in task_ids
+        ):
+            self._batch_runtime.abort_batch_finalization(
+                claim,
+                now_text=now_iso(),
+                delay_sec=0.0,
+            )
+            return False
+        completed_at = now_iso()
+        return self._batch_runtime.set_batch_terminal_status(
+            claim,
+            status="failed",
+            completed_at=completed_at,
+            updated_at=completed_at,
+        )
 
     def finalize_batch_if_ready(
         self,
@@ -457,6 +512,10 @@ class JudgehostBatchFinalizer:
         display_limit = self._display_text_limit_bytes()
         current = self._batch_runtime.fetch_batch(int(batch_id))
         if current is None:
+            return
+        if self._batch_runtime.batch_verification_cancellation_requested(
+            int(batch_id)
+        ):
             return
         if force_failed:
             self._request_batch_failure(
@@ -488,6 +547,15 @@ class JudgehostBatchFinalizer:
                 )
             return
         try:
+            if self._batch_runtime.batch_verification_cancellation_requested(
+                claim.batch_id
+            ):
+                self._batch_runtime.abort_batch_finalization(
+                    claim,
+                    now_text=now_iso(),
+                    delay_sec=0.0,
+                )
+                return
             batch_row = claim.batch
             cases = claim.cases
             if not self._publish_and_finalize_ready_tasks(

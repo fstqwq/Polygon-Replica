@@ -1,7 +1,6 @@
 from app.db import now_iso
 from app.service.judgehost.task.registry import JudgehostTaskRegistry
 from app.service.judgehost.task.retention import compact_payload_for_retention
-from app.service.judgehost.task.retention import compact_task_row_payload
 from app.service.judgehost.task.summary import load_run_summary
 from app.service.judgehost.task.summary import summary_error_text
 from app.service.judgehost.task.summary import summary_mapping
@@ -23,7 +22,7 @@ class JudgehostTaskTerminalization:
         row = self._tasks.get(task_id)
         if row is None:
             return
-        compact_task_row_payload(row)
+        row["payload"] = compact_payload_for_retention(row["payload"])
         self._tasks.update(task_id, {"payload": row["payload"]})
 
     def finalize_task(

@@ -4,6 +4,7 @@ import time
 from contextlib import nullcontext
 
 from app.db import now_iso
+from app.service.execution.limits import VERIFICATION_RUNTIME_BATCH_SIZE
 from app.service.judgehost.domjudge.identity import script_id
 from app.service.judgehost.ports.case_binding import CaseBinding
 from app.service.judgehost.domjudge.identity import submit_id
@@ -12,7 +13,6 @@ from app.service.judgehost.domjudge.result import (
     parse_bool,
 )
 from app.service.judgehost.domjudge.scripts import DomjudgeScriptCatalog
-from app.service.judgehost.domjudge.limits import VERIFICATION_CASE_DISPATCH_BATCH_SIZE
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
 from app.service.platform.maintenance.admission import MaintenanceAdmissionGate
 
@@ -431,7 +431,7 @@ class JudgehostDispatch:
                 processed = self._apply_cache_shortcuts_for_batch(
                     batch_id,
                     hostname=safe_host,
-                    limit=VERIFICATION_CASE_DISPATCH_BATCH_SIZE,
+                    limit=VERIFICATION_RUNTIME_BATCH_SIZE,
                     deadline=deadline,
                     admission_gate=admission_gate,
                     settings=policy,
@@ -496,7 +496,7 @@ class JudgehostDispatch:
 
     def probe_task_case_cache(self, task_ids: list[str]) -> CacheProbeOutcome:
         settings = self._configuration.snapshot()
-        remaining = VERIFICATION_CASE_DISPATCH_BATCH_SIZE
+        remaining = VERIFICATION_RUNTIME_BATCH_SIZE
         ordered_task_ids = list(dict.fromkeys(task_ids))
         batch_ids: dict[int, None] = {}
         for task_id in ordered_task_ids:

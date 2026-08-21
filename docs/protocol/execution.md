@@ -180,23 +180,11 @@ reports the batch as failed. Generator, `main-correct`, and unexpected task
 cancellation failures are hard failures: they fail the parent and cancel all
 remaining open tasks immediately in the same transaction.
 
-Explicit user cancellation atomically changes the parent to `cancelled` and
-every open task to `cancelled`. Already leased or reporting cases then drain in process-local
-Judgehost state, but their late ordinary results cannot change the durable
-decision. User cancellation and scheduler failure always order their side
-effects as the SQLite parent/task transition, then the coordinator event, then
-Judgehost drain. Scheduler failure uses `failed`; user cancellation uses
-`cancelled`. Drain is attempted even when the in-memory cancellation notification
-fails; a failed cancel notification falls back to a closed event, and idle
-coordinators reconcile task rows and compare the durable parent state. Drain
-has one immediate
-retry, and a later cancel/fail request retries it even when the parent is already
-closed. A synchronous hard failure stops the current publish slice before
-another independent ready task can be exposed. A runtime
-verification moves through dormant, active, draining, and retired phases
-independently of the parent status. Draining state is retained for the current
-process until all work and callback receipts are terminal and the verification
-has been quiet for 60 seconds.
+Explicit user cancellation atomically changes the parent to `cancelled` and every open task to `cancelled`. The request then closes process-local Judgehost admission, notifies the coordinator, and enqueues a deduplicated runtime drain before returning. The drain runs in bounded maintenance slices and retires cases, batches, and task-registry entries without publishing per-case cancellation back to SQLite. Repeating cancellation for an already terminal parent still closes admission and ensures that its drain remains queued.
+
+Already leased or reporting cases may remain in process-local Judgehost state while a callback receipt is active, but their ordinary results cannot change the durable decision. A callback that observes cancellation discards its result and cache candidate, completes runtime cancellation, and receives the protocol ACK. A callback that linearized before cancellation is likewise absorbed by the background drain rather than reopening the task. A failed drain slice leaves admission closed and is retried by later maintenance.
+
+Scheduler failure uses `failed`; user cancellation uses `cancelled`. A failed in-memory cancellation notification falls back to a closed event, and idle coordinators reconcile task rows with the durable parent state. A synchronous hard failure stops the current publish slice before another independent ready task can be exposed. A runtime verification moves through dormant, active, draining, and retired phases independently of the parent status. Terminal runtime records remain available for idempotent callbacks until the verification has been quiet for 60 seconds.
 
 Verification planning preserves the canonical authored memory limit. Judgehost
 dispatch converts it exactly from MiB to KiB by multiplying by 1024; it does not

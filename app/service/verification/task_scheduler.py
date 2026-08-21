@@ -3,13 +3,13 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Callable, cast
 
+from app.service.execution.limits import VERIFICATION_RUNTIME_BATCH_SIZE
 from app.service.verification.completion import VerificationTaskCompletionService
 from app.service.verification.task_completion import CompletionCommit, TaskCompletion
 from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
 from app.service.verification.types import VerificationTaskStatus
 
 
-_PUBLISH_SLICE_SIZE = 256
 _IDLE_RECONCILIATION_SEC = 10.0
 
 
@@ -433,9 +433,9 @@ class VerificationRuntimeCoordinator:
         changed = False
         published_count = 0
         while (
-            published_count < _PUBLISH_SLICE_SIZE
+            published_count < VERIFICATION_RUNTIME_BATCH_SIZE
             and len(self._cache_probe_task_ids)
-            < _PUBLISH_SLICE_SIZE
+            < VERIFICATION_RUNTIME_BATCH_SIZE
         ):
             row = self._dag.pop_ready()
             if row is None:
@@ -469,7 +469,7 @@ class VerificationRuntimeCoordinator:
                 return changed
         if self._cache_probe_task_ids:
             selected = list(self._cache_probe_task_ids)[
-                :_PUBLISH_SLICE_SIZE
+                :VERIFICATION_RUNTIME_BATCH_SIZE
             ]
             pending = self._callbacks.probe_task_case_cache(selected)
             for judgehost_task_id in selected:
@@ -482,7 +482,7 @@ class VerificationRuntimeCoordinator:
                 # unbounded ready graph in one coordinator turn.
                 self.enqueue_bootstrap()
         if (
-            published_count == _PUBLISH_SLICE_SIZE
+            published_count == VERIFICATION_RUNTIME_BATCH_SIZE
             and self._events.empty()
         ):
             self.enqueue_bootstrap()

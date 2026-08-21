@@ -392,12 +392,11 @@ class CaseClaimBusy(RuntimeError):
 
 
 @dataclass(frozen=True)
-class VerificationCancellation:
-    batch_ids: tuple[int, ...]
-    task_ids: tuple[str, ...]
-    awaiting_task_ids: tuple[str, ...]
-    cancelled_case_count: int
+class VerificationCancellationSlice:
+    processed_case_count: int
     awaiting_receipt_count: int
+    terminal_batch_ids: tuple[int, ...]
+    has_remaining_runtime: bool
 
 
 @dataclass(frozen=True)

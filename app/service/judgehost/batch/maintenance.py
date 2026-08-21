@@ -1,4 +1,3 @@
-from collections import deque
 from typing import TYPE_CHECKING
 
 from app.service.execution.policy import normalize_execution_result
@@ -6,7 +5,7 @@ from app.service.judgehost.batch.model import (
     CaseRecord,
     ExecutionBatchRecord,
     HostLeaseRelease,
-    VerificationCancellation,
+    VerificationCancellationSlice,
 )
 
 if TYPE_CHECKING:
@@ -88,56 +87,84 @@ class BatchMaintenance:
                 ),
             )
 
-    def request_verification_cancel(
+    def close_verification_admission(self, verification_id: str) -> None:
+        token = verification_id or "__direct__"
+        with self._state._lock:
+            self._state._closed_verification_ids.add(token)
+            self._state._cancelled_verification_ids.add(token)
+
+    def cancelled_verification_ids(self) -> tuple[str, ...]:
+        with self._state._lock:
+            return tuple(self._state._cancelled_verification_ids)
+
+    def drain_verification_cancel_slice(
         self,
         verification_id: str,
         *,
         now_text: str,
-    ) -> VerificationCancellation:
-        """Close admission and cancel every not-yet-running Case in one operation."""
+        limit: int,
+    ) -> VerificationCancellationSlice:
+        """Cancel a bounded slice after the durable Verification decision commits."""
+
         token = verification_id or "__direct__"
+        safe_limit = max(1, int(limit))
         with self._state._lock:
             self._state._closed_verification_ids.add(token)
             batch_ids = tuple(
                 sorted(self._state._batch_ids_by_verification.get(token, ()))
             )
-            batch_id_set = set(batch_ids)
-            task_ids: set[str] = set()
-            awaiting_task_ids: set[str] = set()
-            cancelled_count = 0
-            awaiting_receipt_count = 0
-
-            for hostname, queue_ids in tuple(
-                self._state._affinity_batches_by_host.items()
-            ):
-                retained = deque(
-                    batch_id for batch_id in queue_ids if batch_id not in batch_id_set
-                )
-                if retained:
-                    self._state._affinity_batches_by_host[hostname] = retained
-                else:
-                    self._state._affinity_batches_by_host.pop(hostname, None)
+            processed_count = 0
+            affected_batch_ids: set[int] = set()
             for batch_id in batch_ids:
+                if processed_count >= safe_limit:
+                    break
                 batch = self._state._batches[batch_id]
                 self._state._closed_program_keys.add(
                     (token, batch.verification_program_id)
                 )
+                if batch_id in self._state._active_finalization_generation_by_batch:
+                    continue
                 for case_id in tuple(self._state._case_ids_by_batch.get(batch_id, ())):
+                    if processed_count >= safe_limit:
+                        break
                     case = self._state._cases[case_id]
-                    task_ids.add(case.task_id)
-                    if case.status in self._state._TERMINAL_CASE_STATUSES:
+                    if case.status == "reported":
+                        if not case.completion_acknowledged:
+                            case.result = None
+                            case.pending_diagnostics.clear()
+                            self._state._transition_case_locked(
+                                case,
+                                "cancelled",
+                                lease_owner=None,
+                                updated_at=now_text,
+                                refresh_batch=False,
+                            )
+                            case.completion_acknowledged = True
+                            affected_batch_ids.add(batch_id)
+                            processed_count += 1
+                        elif case.pending_diagnostics:
+                            case.pending_diagnostics.clear()
+                            processed_count += 1
                         continue
-                    if case.status == "staged":
-                        case.cancel_requested = True
+                    if case.status == "cancelled":
+                        if not case.completion_acknowledged or case.pending_diagnostics:
+                            case.completion_acknowledged = True
+                            case.pending_diagnostics.clear()
+                            affected_batch_ids.add(batch_id)
+                            processed_count += 1
+                        continue
+                    if case.status == "reporting" or case.callback_receipt_count:
+                        if not case.cancel_requested:
+                            case.cancel_requested = True
+                            processed_count += 1
                         case.terminal_result = None
                         continue
-                    if case.status in {"leased", "reporting", "cache-probing"}:
-                        case.cancel_requested = True
-                        case.terminal_result = None
-                        awaiting_task_ids.add(case.task_id)
-                        awaiting_receipt_count += 1
-                        continue
+                    case.claim_generation += 1
+                    case.cancel_requested = False
+                    case.terminal_result = None
+                    case.requeue_on_abort = False
                     case.result = None
+                    case.pending_diagnostics.clear()
                     self._state._transition_case_locked(
                         case,
                         "cancelled",
@@ -145,14 +172,40 @@ class BatchMaintenance:
                         updated_at=now_text,
                         refresh_batch=False,
                     )
-                    cancelled_count += 1
-            self._state._refresh_batches_locked(batch_id_set, updated_at=now_text)
-            return VerificationCancellation(
-                batch_ids=batch_ids,
-                task_ids=tuple(sorted(task_ids)),
-                awaiting_task_ids=tuple(sorted(awaiting_task_ids)),
-                cancelled_case_count=cancelled_count,
+                    case.completion_acknowledged = True
+                    affected_batch_ids.add(batch_id)
+                    processed_count += 1
+            if affected_batch_ids:
+                self._state._refresh_batches_locked(
+                    affected_batch_ids,
+                    updated_at=now_text,
+                )
+
+            terminal_batch_ids: list[int] = []
+            has_remaining_runtime = False
+            awaiting_receipt_count = 0
+            for batch_id in batch_ids:
+                current_batch = self._state._batches.get(batch_id)
+                if current_batch is None:
+                    continue
+                if current_batch.status == "finalize-pending":
+                    terminal_batch_ids.append(batch_id)
+                elif current_batch.status in {"open", "finalizing"}:
+                    has_remaining_runtime = True
+                for case_id in self._state._case_ids_by_batch.get(batch_id, ()):
+                    case = self._state._cases[case_id]
+                    if (
+                        case.status not in self._state._TERMINAL_CASE_STATUSES
+                        or not case.completion_acknowledged
+                    ):
+                        has_remaining_runtime = True
+                    awaiting_receipt_count += int(case.callback_receipt_count > 0)
+
+            return VerificationCancellationSlice(
+                processed_case_count=processed_count,
                 awaiting_receipt_count=awaiting_receipt_count,
+                terminal_batch_ids=tuple(terminal_batch_ids),
+                has_remaining_runtime=has_remaining_runtime,
             )
 
     def release_host_leases(
@@ -222,6 +275,7 @@ class BatchMaintenance:
                     case.requeue_on_abort = False
                     if cancelled:
                         case.result = None
+                        case.pending_diagnostics.clear()
                         status = "cancelled"
                     elif terminal_result is not None:
                         case.result = terminal_result
@@ -236,6 +290,8 @@ class BatchMaintenance:
                         updated_at=now_text,
                         refresh_batch=False,
                     )
+                    if status == "cancelled":
+                        case.completion_acknowledged = True
                     if (
                         status in self._state._TERMINAL_CASE_STATUSES
                         and self._state._task_case_counts[case.task_id].remaining == 0

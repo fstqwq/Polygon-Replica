@@ -923,29 +923,30 @@ class VerificationTaskStore:
                     raise RuntimeError("task completion batch crosses verifications")
                 verification_id = next(iter(verification_ids))
                 owner_by_output_ref: dict[str, tuple[str, str]] = {}
-                owner_rows = conn.execute(
-                    """
-                    SELECT id,test_name,result_json
-                    FROM verification_tasks
-                    WHERE verification_id=? AND task_kind='generate-input'
-                      AND final_status=?
-                    ORDER BY finished_at ASC,id ASC
-                    """,
-                    [verification_id, VerificationTaskStatus.DONE.value],
-                ).fetchall()
-                for owner_row in owner_rows:
-                    owner_result = execution_result_from_json(
-                        str(owner_row["result_json"] or "{}")
-                    )
-                    output_ref = owner_result.output_run_ref
-                    if output_ref and owner_result.verdict.upper() != "SK":
-                        owner_by_output_ref.setdefault(
-                            output_ref,
-                            (
-                                str(owner_row["id"]),
-                                str(owner_row["test_name"] or ""),
-                            ),
+                if any(not str(row["final_status"] or "") for row in rows):
+                    owner_rows = conn.execute(
+                        """
+                        SELECT id,test_name,result_json
+                        FROM verification_tasks
+                        WHERE verification_id=? AND task_kind='generate-input'
+                          AND final_status=?
+                        ORDER BY finished_at ASC,id ASC
+                        """,
+                        [verification_id, VerificationTaskStatus.DONE.value],
+                    ).fetchall()
+                    for owner_row in owner_rows:
+                        owner_result = execution_result_from_json(
+                            str(owner_row["result_json"] or "{}")
                         )
+                        output_ref = owner_result.output_run_ref
+                        if output_ref and owner_result.verdict.upper() != "SK":
+                            owner_by_output_ref.setdefault(
+                                output_ref,
+                                (
+                                    str(owner_row["id"]),
+                                    str(owner_row["test_name"] or ""),
+                                ),
+                            )
 
                 effective: list[TaskCompletion] = []
                 committed_task_ids: set[str] = set()

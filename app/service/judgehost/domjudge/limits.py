@@ -2,8 +2,6 @@ from collections.abc import Mapping
 
 from app.service.platform.truncation import STORED_LOG_TRUNCATED_MARKER
 
-VERIFICATION_CASE_DISPATCH_BATCH_SIZE = 256
-
 
 def config_int(values: Mapping[str, object], key: str) -> int:
     value = values[key]

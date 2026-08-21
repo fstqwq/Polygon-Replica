@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.config import build_config_values
+from app.service.execution.limits import VERIFICATION_RUNTIME_BATCH_SIZE
 from app.service.judgehost.batch.model import (
     CaseClaimBusy,
     CaseReportTelemetry,
@@ -16,12 +17,14 @@ from app.service.judgehost.batch.model import (
     CompileSubmission,
     ExecutionBatchSpec,
     JudgehostCaseRow,
+    VerificationCancellationSlice,
 )
 from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
 from app.service.judgehost.cache.case_result import CaseResultCache
 from app.service.judgehost.cache.executable import ExecutableCache
 from app.service.judgehost.domjudge.case_result import build_case_result
 from app.service.judgehost.domjudge.identity import script_id, submit_id
+from app.service.judgehost.cancellation import JudgehostCancellationDrain
 from app.service.judgehost.maintenance.terminal_cleanup import JudgehostTerminalCleanup
 from app.service.judgehost.task.registry import JudgehostTaskRegistry
 from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
@@ -1267,9 +1270,9 @@ class TestJudgehostScheduler(unittest.TestCase):
             limit=1,
             now_text="2026-08-05T00:00:00+00:00",
         )[0]
-        scheduler.request_verification_cancel(
-            "ver-1",
-            now_text="2026-08-05T00:00:01+00:00",
+        scheduler.close_verification_admission("ver-1")
+        scheduler.drain_verification_cancel_slice(
+            "ver-1", now_text="2026-08-05T00:00:01+00:00", limit=16
         )
 
         release = scheduler.release_host_leases(
@@ -1277,7 +1280,7 @@ class TestJudgehostScheduler(unittest.TestCase):
             now_text="2026-08-05T00:00:02+00:00",
         )
 
-        self.assertEqual(release.terminal_task_ids, ("released-cancelled",))
+        self.assertEqual(release.terminal_task_ids, ())
         self.assertEqual(scheduler.fetch_case(int(case["id"]))["status"], "cancelled")
         self.assertEqual(scheduler.batch_case_count(batch_id, status="pending"), 0)
         self.assertEqual(
@@ -1309,9 +1312,9 @@ class TestJudgehostScheduler(unittest.TestCase):
             now_text="2026-08-05T00:00:01+00:00",
         )
         assert claim is not None
-        scheduler.request_verification_cancel(
-            "ver-1",
-            now_text="2026-08-05T00:00:02+00:00",
+        scheduler.close_verification_admission("ver-1")
+        scheduler.drain_verification_cancel_slice(
+            "ver-1", now_text="2026-08-05T00:00:02+00:00", limit=16
         )
         scheduler.release_host_leases(
             "host-a",
@@ -1456,15 +1459,18 @@ class TestJudgehostScheduler(unittest.TestCase):
             limit=1,
             now_text="2026-08-11T00:00:00+00:00",
         )[0]
-        scheduler.request_verification_cancel(
-            "ver-1",
-            now_text="2026-08-11T00:00:01+00:00",
+        receipt = scheduler.acquire_case_callback_receipt(int(case["id"]))
+        self.assertIsNotNone(receipt)
+        assert receipt is not None
+        scheduler.close_verification_admission("ver-1")
+        scheduler.drain_verification_cancel_slice(
+            "ver-1", now_text="2026-08-11T00:00:01+00:00", limit=16
         )
 
         claim = scheduler.claim_compile_failure(
             int(case["id"]),
             hostname="host-a",
-            receipt_generation=_receipt_generation(scheduler, int(case["id"])),
+            receipt_generation=receipt.claim_generation,
             compile_output_b64="",
             compile_metadata_b64="",
             failure_text="contradictory compiler failure",
@@ -1472,6 +1478,7 @@ class TestJudgehostScheduler(unittest.TestCase):
             compile_diagnostics=(),
             updated_at="2026-08-11T00:00:02+00:00",
         )
+        scheduler.release_case_callback_receipt(receipt.receipt_id)
 
         self.assertEqual(claim.outcome, "cancelled")
         self.assertEqual(scheduler.fetch_case(int(case["id"]))["status"], "cancelled")
@@ -2007,11 +2014,11 @@ class TestJudgehostScheduler(unittest.TestCase):
                 receipt_generation=_receipt_generation(scheduler, case_id),
                 now_text="2026-08-03T00:00:02+00:00",
             )
-        cancellation = scheduler.request_verification_cancel(
-            "ver-1",
-            now_text="2026-08-03T00:00:03+00:00",
+        scheduler.close_verification_admission("ver-1")
+        cancellation = scheduler.drain_verification_cancel_slice(
+            "ver-1", now_text="2026-08-03T00:00:03+00:00", limit=16
         )
-        self.assertEqual(list(cancellation.batch_ids), [batch_id])
+        self.assertEqual(cancellation.processed_case_count, 1)
         self.assertFalse(scheduler.task_cases_terminal("reporting"))
         release = scheduler.release_host_leases(
             "host-a",
@@ -2603,6 +2610,140 @@ class TestJudgehostScheduler(unittest.TestCase):
             [("verification-task-1", "task-1")],
         )
         self.assertIsNone(registry.get("task-1"))
+
+
+class TestJudgehostCancellationDrain(unittest.TestCase):
+    def test_deduplicated_request_retries_bounded_slices(self) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+        completed = threading.Event()
+
+        class _BatchRuntime:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def drain_verification_cancel_slice(
+                self,
+                verification_id: str,
+                *,
+                now_text: str,
+                limit: int,
+            ) -> VerificationCancellationSlice:
+                del verification_id, now_text, limit
+                self.calls += 1
+                if self.calls == 1:
+                    entered.set()
+                    self.assert_released()
+                    return VerificationCancellationSlice(1, 0, (), True)
+                return VerificationCancellationSlice(1, 0, (41,), False)
+
+            @staticmethod
+            def assert_released() -> None:
+                if not release.wait(timeout=2.0):
+                    raise AssertionError("cancellation drain was not released")
+
+            @staticmethod
+            def cancelled_verification_ids() -> tuple[str, ...]:
+                return ()
+
+        class _Tasks:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def cancel_verification_tasks(
+                self,
+                verification_id: str,
+                *,
+                reason: str,
+                now_text: str,
+                limit: int,
+            ) -> tuple[int, int]:
+                del verification_id, reason, now_text, limit
+                self.calls += 1
+                return (1, int(self.calls == 1))
+
+        class _Finalizer:
+            def __init__(self) -> None:
+                self.retired: list[int] = []
+
+            def retire_cancelled_batch(self, batch_id: int) -> bool:
+                self.retired.append(batch_id)
+                return True
+
+        class _Cleanup:
+            def __init__(self) -> None:
+                self.scheduled: list[str] = []
+
+            def schedule(self, verification_id: str) -> None:
+                self.scheduled.append(verification_id)
+                completed.set()
+
+        batches = _BatchRuntime()
+        tasks = _Tasks()
+        finalizer = _Finalizer()
+        cleanup = _Cleanup()
+        drain = JudgehostCancellationDrain(
+            batches,  # type: ignore[arg-type]
+            tasks,  # type: ignore[arg-type]
+            finalizer,  # type: ignore[arg-type]
+            cleanup,  # type: ignore[arg-type]
+        )
+
+        drain.schedule("ver-cancel", reason="cancelled by user")
+        self.assertTrue(entered.wait(timeout=2.0))
+        drain.schedule("ver-cancel", reason="cancelled by user")
+        release.set()
+        self.assertTrue(completed.wait(timeout=2.0))
+
+        self.assertEqual(batches.calls, 2)
+        self.assertEqual(tasks.calls, 2)
+        self.assertEqual(finalizer.retired, [41])
+        self.assertEqual(cleanup.scheduled, ["ver-cancel"])
+
+    def test_task_registry_cancels_large_verification_in_slices(self) -> None:
+        registry = JudgehostTaskRegistry()
+        verification_id = "ver-large-cancel"
+        for ordinal in range(6000):
+            task_id = f"task-{ordinal:04d}"
+            registry.insert(
+                {
+                    "id": task_id,
+                    "run_id": f"run-{ordinal:04d}",
+                    "problem_slug": "owner/problem",
+                    "username": "owner",
+                    "artifact_verification_id": "",
+                    "mode": "pass-fail",
+                    "verification_id": verification_id,
+                    "verification_task_id": f"verification-task-{ordinal:04d}",
+                    "status": "queued",
+                    "payload": {"large": "payload"},
+                    "result": {},
+                    "persist_verification_run": True,
+                    "error_text": "",
+                    "created_at": "2026-08-21T00:00:00+00:00",
+                    "updated_at": "2026-08-21T00:00:00+00:00",
+                    "completed_at": "",
+                    "summary": {},
+                    "enqueue_fingerprint": f"fingerprint-{ordinal:04d}",
+                }
+            )
+
+        changed = 0
+        slices = 0
+        remaining = 1
+        while remaining > 0:
+            count, remaining = registry.cancel_verification_tasks(
+                verification_id,
+                reason="cancelled by user",
+                now_text="2026-08-21T00:00:01+00:00",
+                limit=VERIFICATION_RUNTIME_BATCH_SIZE,
+            )
+            changed += count
+            slices += 1
+
+        self.assertEqual(changed, 6000)
+        self.assertGreater(slices, 1)
+        self.assertEqual(registry.status_counts()["failed"], 6000)
 
 
 if __name__ == "__main__":

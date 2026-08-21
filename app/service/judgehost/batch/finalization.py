@@ -171,6 +171,7 @@ class BatchFinalization:
             self._state._active_finalization_generation_by_batch.pop(
                 claim.batch_id, None
             )
+
             if self._needs_another_finalization_locked(batch.batch_id):
                 # The claim contains an immutable snapshot. A callback or cache
                 # probe can publish another terminal Case while the snapshot is
@@ -180,6 +181,25 @@ class BatchFinalization:
             else:
                 self._state._finalization_retry_deadlines.pop(claim.batch_id, None)
             return True
+
+    def requires_completion_ack(self, batch_id: int) -> bool:
+        with self._state._lock:
+            batch = self._state._batches.get(int(batch_id))
+            return bool(
+                batch is not None
+                and batch.status == "open"
+                and batch.verification_id
+                not in self._state._closed_verification_ids
+            )
+
+    def verification_cancellation_requested(self, batch_id: int) -> bool:
+        with self._state._lock:
+            batch = self._state._batches.get(int(batch_id))
+            return bool(
+                batch is not None
+                and batch.verification_id
+                in self._state._cancelled_verification_ids
+            )
 
     def schedule_batch_finalization_retry(
         self,

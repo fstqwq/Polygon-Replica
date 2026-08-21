@@ -1,8 +1,9 @@
 import logging
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol, TypedDict
+from typing import Protocol
 
 from app.service.verification.completion import VerificationTaskCompletionService
 from app.service.verification.lifecycle import (
@@ -20,13 +21,6 @@ from app.service.verification.task_scheduler import (
 )
 from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
 from app.service.verification.types import VerificationStatus
-
-
-class VerificationDrainSummary(TypedDict):
-    cancelled_cases: int
-    awaiting_receipts: int
-    affected_tasks: int
-    affected_batches: int
 
 
 class VerificationLifecycle(Protocol):
@@ -55,7 +49,7 @@ class VerificationExecutionDrainer(Protocol):
         self,
         verification_id: str,
         reason: str,
-    ) -> dict[str, int]: ...
+    ) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -69,29 +63,13 @@ class VerificationExecutionCallbacks:
 @dataclass(frozen=True)
 class VerificationExecutionTransition:
     transition: VerificationTransitionCommit
-    drain: VerificationDrainSummary
 
 
 class VerificationCoordinatorFailure(RuntimeError):
     pass
 
 
-class VerificationRuntimeDrainFailure(RuntimeError):
-    def __init__(self, reason: str, cause: Exception) -> None:
-        self.reason = reason
-        super().__init__(f"Judgehost drain failed: {cause}")
-
-
 logger = logging.getLogger(__name__)
-
-
-def _empty_drain_summary() -> VerificationDrainSummary:
-    return {
-        "cancelled_cases": 0,
-        "awaiting_receipts": 0,
-        "affected_tasks": 0,
-        "affected_batches": 0,
-    }
 
 
 class VerificationExecutionService:
@@ -109,32 +87,11 @@ class VerificationExecutionService:
         self._registry = registry
         self._drainer = drainer
 
-    def _drain(self, verification_id: str, reason: str) -> VerificationDrainSummary:
-        result = self._drainer.request_verification_cancel(
+    def _request_runtime_cancel(self, verification_id: str, reason: str) -> None:
+        self._drainer.request_verification_cancel(
             verification_id,
             reason,
         )
-        return {
-            "cancelled_cases": int(result["cancelled_cases"]),
-            "awaiting_receipts": int(result["awaiting_receipts"]),
-            "affected_tasks": int(result["affected_tasks"]),
-            "affected_batches": int(result["affected_batches"]),
-        }
-
-    def _drain_with_retry(
-        self,
-        verification_id: str,
-        reason: str,
-    ) -> VerificationDrainSummary:
-        try:
-            return self._drain(verification_id, reason)
-        except Exception:
-            logger.warning(
-                "retrying Judgehost drain verification_id=%s",
-                verification_id,
-                exc_info=True,
-            )
-            return self._drain(verification_id, reason)
 
     def _transition_runtime(
         self,
@@ -147,11 +104,8 @@ class VerificationExecutionService:
         if transition.outcome == "missing" or (
             transition.outcome == "closed" and not drain_closed
         ):
-            return VerificationExecutionTransition(
-                transition=transition,
-                drain=_empty_drain_summary(),
-            )
-        event_error: Exception | None = None
+            return VerificationExecutionTransition(transition=transition)
+        self._request_runtime_cancel(transition.verification_id, reason)
         if transition.outcome == "transitioned" and cancellation:
             try:
                 self._registry.cancelled(transition.verification_id, reason)
@@ -159,9 +113,12 @@ class VerificationExecutionService:
                 try:
                     self._registry.closed(transition.verification_id)
                 except Exception as closed_exc:
-                    event_error = RuntimeError(
-                        "verification runtime cancellation and closed-event "
-                        f"delivery failed: {exc}; {closed_exc}"
+                    logger.error(
+                        "verification runtime cancellation and closed-event delivery "
+                        "failed verification_id=%s cancellation_error=%s closed_error=%s",
+                        transition.verification_id,
+                        exc,
+                        closed_exc,
                     )
                 else:
                     logger.warning(
@@ -173,26 +130,13 @@ class VerificationExecutionService:
         else:
             try:
                 self._registry.closed(transition.verification_id)
-            except Exception as exc:
-                event_error = exc
-        try:
-            drain = self._drain_with_retry(
-                transition.verification_id,
-                reason,
-            )
-        except Exception as drain_error:
-            if event_error is not None:
-                raise RuntimeError(
-                    "verification runtime event delivery failed and "
-                    f"Judgehost drain failed: {event_error}; {drain_error}"
-                ) from event_error
-            raise
-        if event_error is not None:
-            raise event_error
-        return VerificationExecutionTransition(
-            transition=transition,
-            drain=drain,
-        )
+            except Exception:
+                logger.exception(
+                    "verification runtime closed-event delivery failed "
+                    "verification_id=%s",
+                    transition.verification_id,
+                )
+        return VerificationExecutionTransition(transition=transition)
 
     def cancel_verification(
         self,
@@ -200,9 +144,17 @@ class VerificationExecutionService:
         *,
         reason: str,
     ) -> VerificationExecutionTransition:
+        started = time.monotonic()
         transition = self._lifecycle.cancel_verification(
             verification_id,
             reason=reason,
+        )
+        logger.info(
+            "verification durable cancellation committed "
+            "verification_id=%s outcome=%s elapsed_sec=%.3f",
+            verification_id,
+            transition.outcome,
+            time.monotonic() - started,
         )
         return self._transition_runtime(
             transition,
@@ -236,10 +188,7 @@ class VerificationExecutionService:
         edges: list[tuple[str, str]],
     ) -> None:
         def _cancel_execution(reason: str) -> None:
-            try:
-                self._drain(verification_id, reason)
-            except Exception as exc:
-                raise VerificationRuntimeDrainFailure(reason, exc) from exc
+            self._request_runtime_cancel(verification_id, reason)
 
         runtime_callbacks = VerificationRuntimeCallbacks(
             publish_task=callbacks.publish_task,
@@ -277,11 +226,7 @@ class VerificationExecutionService:
                 coordinator.enqueue_closed()
             coordinator.run()
         except Exception as exc:
-            reason = (
-                exc.reason
-                if isinstance(exc, VerificationRuntimeDrainFailure)
-                else str(exc) or "verification scheduler failed"
-            )
+            reason = str(exc) or "verification scheduler failed"
             try:
                 transition = self._lifecycle.fail_verification(
                     verification_id,

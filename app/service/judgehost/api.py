@@ -1,3 +1,4 @@
+import logging
 import secrets
 import threading
 from typing import BinaryIO, TypeVar
@@ -9,8 +10,9 @@ from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStor
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
 from app.service.repository.workspace import WorkspaceService
 
-from app.service.judgehost.maintenance.terminal_cleanup import JudgehostTerminalCleanup
+from app.service.judgehost.cancellation import JudgehostCancellationDrain
 from app.service.judgehost.maintenance.service import JudgehostMaintenance
+from app.service.judgehost.maintenance.terminal_cleanup import JudgehostTerminalCleanup
 from app.service.judgehost.ports.execution_port import JudgehostExecutionPort
 from app.service.judgehost.configuration import JudgehostConfiguration
 from app.service.judgehost.host.registry import JudgehostHostRegistry
@@ -47,6 +49,7 @@ from app.service.judgehost.domjudge.wire import DomjudgeWireProjector
 from app.service.judgehost.domjudge.scripts import DomjudgeScriptCatalog
 
 Acknowledgement = TypeVar("Acknowledgement")
+logger = logging.getLogger(__name__)
 
 
 class Judgehost:
@@ -128,6 +131,13 @@ class Judgehost:
             self._task_terminalization,
             completion_publisher,
         )
+        self._cancellation_drain = JudgehostCancellationDrain(
+            self._batch_runtime,
+            self._tasks,
+            self._batch_finalizer,
+            self._terminal_cleanup,
+        )
+        self._cancellation_drain.start()
         self._result = JudgehostCallbackIngestion(
             self._batch_runtime,
             self._tasks,
@@ -473,34 +483,20 @@ class Judgehost:
 
     def request_verification_cancel(
         self, verification_id: str, reason: str
-    ) -> dict[str, int]:
+    ) -> None:
         if not verification_id:
             raise RuntimeError("verification id is required")
         if not reason:
             raise RuntimeError("judgehost cancellation reason is required")
-        cancellation = self._batch_runtime.request_verification_cancel(
-            verification_id,
-            now_text=now_iso(),
-        )
-        unbatched_count = self._maintenance.cancel_unbatched_verification_tasks(
-            verification_id,
-            reason=reason,
-        )
-        for task_id in cancellation.task_ids:
-            batch_row = self._batch_runtime.batch_for_task(task_id)
-            if batch_row is not None:
-                self._batch_finalizer.finalize_task_if_ready(
-                    task_id,
-                    batch_row=batch_row,
-                )
-        for batch_id in cancellation.batch_ids:
-            self._batch_finalizer.finalize_batch_if_ready(batch_id)
-        return {
-            "cancelled_cases": cancellation.cancelled_case_count,
-            "awaiting_receipts": cancellation.awaiting_receipt_count,
-            "affected_tasks": len(cancellation.task_ids) + unbatched_count,
-            "affected_batches": len(cancellation.batch_ids),
-        }
+        self._batch_runtime.close_verification_admission(verification_id)
+        try:
+            self._cancellation_drain.schedule(verification_id, reason=reason)
+        except Exception:
+            logger.exception(
+                "Judgehost cancellation drain notification failed; "
+                "periodic discovery will retry verification_id=%s",
+                verification_id,
+            )
 
     def startup_cancel_inflight_tasks(self, *, reason: str) -> list[dict[str, str]]:
         return self._maintenance.startup_cancel_inflight_tasks(reason=reason)
@@ -622,9 +618,14 @@ class Judgehost:
     ) -> None:
         self._batch_finalizer.retry_due_finalizations(limit=1)
         for batch_id in batch_ids:
+            if self._batch_runtime.batch_verification_cancellation_requested(batch_id):
+                continue
             self._batch_finalizer.finalize_batch_if_ready(
                 batch_id,
-                require_completion_ack=require_completion_ack,
+                require_completion_ack=(
+                    require_completion_ack
+                    and self._batch_runtime.batch_requires_completion_ack(batch_id)
+                ),
             )
 
     def _complete_callback(
@@ -865,7 +866,11 @@ class Judgehost:
         return self.resolve_artifact_blob(output_diff_ref)
 
     def reset_runtime_state(self) -> None:
-        self._terminal_cleanup.reset()
-        self._tasks.reset()
-        self._hosts.clear()
-        self._batch_runtime.reset()
+        self._cancellation_drain.pause()
+        try:
+            self._terminal_cleanup.reset()
+            self._tasks.reset()
+            self._hosts.clear()
+            self._batch_runtime.reset()
+        finally:
+            self._cancellation_drain.resume()

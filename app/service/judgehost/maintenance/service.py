@@ -33,30 +33,6 @@ class JudgehostMaintenance:
         self._hosts = hosts
         self._configuration = configuration
 
-    def cancel_unbatched_verification_tasks(self, verification_id: str, *, reason: str) -> int:
-        affected = 0
-        now_text = now_iso()
-        for row in self._tasks.snapshots():
-            if row["verification_id"] != verification_id:
-                continue
-            task_id = row["id"]
-            if self._batch_runtime.batch_for_task(task_id) is not None:
-                continue
-            updated = self._tasks.transition(
-                task_id,
-                expected={"enqueuing", "queued", "leased"},
-                status="failed",
-                updates={
-                    "payload": compact_payload_for_retention(row["payload"]),
-                    "result": {"cancelled": True, "reason": reason, "error": reason},
-                    "error_text": reason,
-                    "updated_at": now_text,
-                    "completed_at": now_text,
-                },
-            )
-            affected += int(updated is not None)
-        return affected
-
     def startup_cancel_inflight_tasks(self, *, reason: str) -> list[dict[str, str]]:
         reason = reason.strip()
         if not reason:

@@ -43,13 +43,18 @@ class BatchDispatch:
         self._state = state
 
     def _peek_ready_batch_locked(self) -> ExecutionBatchRecord | None:
-        entry = self._state._ready_batches.first()
-        if entry is None:
-            return None
-        batch = self._state._batches.get(entry[-1])
-        if batch is None or self._state._batch_heap_key_locked(batch) != entry:
-            raise RuntimeError("ready Batch index is inconsistent")
-        return batch
+        while (entry := self._state._ready_batches.first()) is not None:
+            batch = self._state._batches.get(entry[-1])
+            if (
+                batch is not None
+                and batch.verification_id
+                not in self._state._closed_verification_ids
+            ):
+                if self._state._batch_heap_key_locked(batch) != entry:
+                    raise RuntimeError("ready Batch index is inconsistent")
+                return batch
+            self._state._ready_batches.remove(entry[-1])
+        return None
 
     def _dispatch_batch_locked(self, batch: ExecutionBatchRecord) -> None:
         batch.dispatch_count += 1
@@ -135,6 +140,7 @@ class BatchDispatch:
             for batch_id in queue_ids
             if (batch := self._state._batches.get(batch_id)) is not None
             and batch.status == "open"
+            and batch.verification_id not in self._state._closed_verification_ids
         )
         if retained:
             self._state._affinity_batches_by_host[hostname] = retained
@@ -626,6 +632,7 @@ class BatchDispatch:
             if (
                 batch is None
                 or batch.status != "open"
+                or batch.verification_id in self._state._closed_verification_ids
                 or batch.materialization_state != "ready"
                 or batch.compile_state == "failed"
             ):
@@ -727,6 +734,9 @@ class BatchDispatch:
                     continue
                 status = "cancelled" if case.cancel_requested else "pending"
                 case.cancel_requested = False
+                if status == "cancelled":
+                    case.result = None
+                    case.pending_diagnostics.clear()
                 self._state._transition_case_locked(
                     case,
                     status,
@@ -734,6 +744,8 @@ class BatchDispatch:
                     updated_at=now_text,
                     refresh_batch=False,
                 )
+                if status == "cancelled":
+                    case.completion_acknowledged = True
                 affected.add(case.batch_id)
             self._state._refresh_batches_locked(affected, updated_at=now_text)
             return bool(affected)

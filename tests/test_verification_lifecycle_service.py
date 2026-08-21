@@ -40,16 +40,10 @@ class _RecordingDrainer:
         self,
         verification_id: str,
         reason: str,
-    ) -> dict[str, int]:
+    ) -> None:
         if self._before_record is not None:
             self._before_record()
         self.calls.append((verification_id, reason))
-        return {
-            "cancelled_cases": 1,
-            "awaiting_receipts": 2,
-            "affected_tasks": 3,
-            "affected_batches": 4,
-        }
 
 
 class _CancellationHandle(VerificationRuntimeHandle):
@@ -1226,12 +1220,11 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
         )
 
         self.assertEqual(result.transition.outcome, "transitioned")
-        self.assertEqual(event_order, ["event", "drain"])
+        self.assertEqual(event_order, ["drain", "event"])
         self.assertEqual(
             drainer.calls,
             [(verification_id, "cancelled in test")],
         )
-        self.assertEqual(result.drain["awaiting_receipts"], 2)
         self.assertTrue(registry.unregister(verification_id, handle))
 
     def test_execution_observes_cancellation_before_runtime_registration(
@@ -1451,16 +1444,10 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
                 self,
                 runtime_verification_id: str,
                 reason: str,
-            ) -> dict[str, int]:
+            ) -> None:
                 drain_calls.append((runtime_verification_id, reason))
-                if len(drain_calls) <= 2:
+                if len(drain_calls) == 1:
                     raise RuntimeError("Judgehost drain unavailable")
-                return {
-                    "cancelled_cases": 1,
-                    "awaiting_receipts": 0,
-                    "affected_tasks": 1,
-                    "affected_batches": 1,
-                }
 
         execution_service = VerificationExecutionService(
             self.verification_service,
@@ -1481,11 +1468,9 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
         )
 
         self.assertEqual(retry.transition.outcome, "closed")
-        self.assertEqual(retry.drain["cancelled_cases"], 1)
         self.assertEqual(
             drain_calls,
             [
-                (verification_id, "cancelled in test"),
                 (verification_id, "cancelled in test"),
                 (verification_id, "cancelled in test"),
             ],
@@ -1593,7 +1578,7 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
 
         self.assertEqual(drainer.calls, [(verification_id, "publisher failed")])
 
-    def test_scheduler_failure_retries_drain_after_parent_is_terminal(self) -> None:
+    def test_scheduler_failure_schedules_drain_after_parent_is_terminal(self) -> None:
         verification_id = canonical_test_verification_id(
             f"execution-drain-retry:{self.test_id}"
         )
@@ -1609,16 +1594,8 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
                 self,
                 runtime_verification_id: str,
                 reason: str,
-            ) -> dict[str, int]:
+            ) -> None:
                 drain_calls.append((runtime_verification_id, reason))
-                if len(drain_calls) == 1:
-                    raise RuntimeError("temporary drain failure")
-                return {
-                    "cancelled_cases": 1,
-                    "awaiting_receipts": 0,
-                    "affected_tasks": 1,
-                    "affected_batches": 1,
-                }
 
         execution_service = VerificationExecutionService(
             self.verification_service,
@@ -1647,26 +1624,19 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
                 ),
             )
 
-        with self.assertRaisesRegex(
-            VerificationCoordinatorFailure,
-            "source payload is unavailable",
-        ):
-            execution_service.run(
-                verification_id,
-                callbacks=VerificationExecutionCallbacks(
-                    publish_task=_terminal_failure,
-                    probe_task_case_cache=lambda _task_ids: set(),
-                    close_programs=lambda _program_ids: None,
-                ),
-                edges=[],
-            )
+        execution_service.run(
+            verification_id,
+            callbacks=VerificationExecutionCallbacks(
+                publish_task=_terminal_failure,
+                probe_task_case_cache=lambda _task_ids: set(),
+                close_programs=lambda _program_ids: None,
+            ),
+            edges=[],
+        )
 
         self.assertEqual(
             drain_calls,
-            [
-                (verification_id, "source payload is unavailable"),
-                (verification_id, "source payload is unavailable"),
-            ],
+            [(verification_id, "source payload is unavailable")],
         )
         snapshot = self.verification_service.verification_snapshot(
             verification_id

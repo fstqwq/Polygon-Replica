@@ -101,6 +101,7 @@ class BatchState:
         self._batch_id_by_verification_program: dict[tuple[str, str], int] = {}
         self._closed_program_keys: set[tuple[str, str]] = set()
         self._closed_verification_ids: set[str] = set()
+        self._cancelled_verification_ids: set[str] = set()
         self._script_hash_refcounts: dict[tuple[str, int, str], int] = defaultdict(int)
         self._script_hashes_by_id: dict[tuple[str, int], set[str]] = defaultdict(set)
         self._leased_case_ids_by_host: dict[str, set[int]] = defaultdict(set)
@@ -172,6 +173,7 @@ class BatchState:
             self._batch_id_by_verification_program.clear()
             self._closed_program_keys.clear()
             self._closed_verification_ids.clear()
+            self._cancelled_verification_ids.clear()
             self._script_hash_refcounts.clear()
             self._script_hashes_by_id.clear()
             self._leased_case_ids_by_host.clear()
@@ -303,7 +305,10 @@ class BatchState:
     def _batch_next_case_locked(
         self, batch: ExecutionBatchRecord, *, hostname: str = ""
     ) -> CaseRecord | None:
-        if batch.status != "open":
+        if (
+            batch.status != "open"
+            or batch.verification_id in self._closed_verification_ids
+        ):
             return None
         cached = self._peek_case_heap_locked(batch.batch_id, status="cache-pending")
         if cached is not None:

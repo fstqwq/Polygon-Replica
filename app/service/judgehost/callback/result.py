@@ -201,6 +201,13 @@ class JudgehostCallbackIngestion:
         )
         if not accepted:
             return False
+        logger.info(
+            "acknowledged Judgehost callback after cancellation "
+            "batch_id=%s case_id=%s task_id=%s",
+            batch_id,
+            case_id,
+            task_id,
+        )
         return True
 
     def domjudge_update_judging(
@@ -698,6 +705,8 @@ class JudgehostCallbackIngestion:
                 )
                 return 1
             raise RuntimeError("judgehost case result lost its completion claim")
+        if self._batch_runtime.batch_verification_cancellation_requested(batch_id):
+            return 1
         try:
             cache_outcome = self._case_result_cache.try_store(
                 key_hash=case_key_hash,

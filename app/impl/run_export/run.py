@@ -455,13 +455,11 @@ def run_cancel(problem: str, user: Annotated[str, Depends(require_session_user)]
             status_code=303,
             message="verification already finished",
         )
-    cancellation = cancellation_result.drain
-    awaiting_receipts = int(cancellation["awaiting_receipts"])
-    if awaiting_receipts > 0:
-        msg = f"verification cancelled ({awaiting_receipts} running cases awaiting receipt)"
-    else:
-        msg = "verification cancelled"
-    return redirect_response(details_url, status_code=303, message=msg)
+    return redirect_response(
+        details_url,
+        status_code=303,
+        message="verification cancelled",
+    )
 
 
 def _build_dag_targets(
