@@ -16,7 +16,10 @@ from app.service.platform.error_text import sanitize_log_text_for_ui
 from app.service.platform.fs.layout import StorageLayout
 from app.service.platform.hashing import sha256_hex_json
 from app.service.problem.runtime_config import problem_config_limits
-from app.service.problem_package.service import ProblemPackageService
+from app.service.problem_package.service import (
+    NativePackage,
+    ProblemPackageService,
+)
 from app.service.repository.workspace import WorkspaceService
 from app.service.statement.context import normalize_statement_language
 from app.service.statement.examples import (
@@ -126,6 +129,7 @@ class StatementPreviewService:
         source_kind: StatementPreviewSource,
         output_kind: StatementPreviewOutput,
         language: str,
+        native_package_id: str = "",
     ) -> StatementPreviewRow:
         safe_language = self._language(language)
         actor_user_id = int(self._workspaces.user_row(username)["id"])
@@ -135,6 +139,7 @@ class StatementPreviewService:
             source_kind=source_kind,
             output_kind=output_kind,
             language=safe_language,
+            native_package_id=native_package_id,
         )
         cached = self._cached_problem(
             preview_input.problem_id,
@@ -151,6 +156,7 @@ class StatementPreviewService:
             username,
             source_kind=source_kind,
             language=safe_language,
+            native_package_id=native_package_id,
         ) as prepared:
             identity = self._preview_identity(
                 prepared.problem_id,
@@ -204,6 +210,7 @@ class StatementPreviewService:
         source_kind: StatementPreviewSource,
         output_kind: StatementPreviewOutput,
         language: str,
+        native_package_id: str = "",
     ) -> StatementPreviewInput:
         """Return the cache identity without materializing a render tree."""
 
@@ -225,9 +232,14 @@ class StatementPreviewService:
                 )
         elif source_kind == "native_package":
             problem_id = int(self._workspaces.problem_row(problem)["id"])
+            native_package = self._native_package_for_problem(
+                problem_id,
+                native_package_id=native_package_id,
+            )
             source_identity = self._native_source_identity(
                 problem_id,
                 language=safe_language,
+                native_package=native_package,
             )
         else:
             raise ValueError("unsupported statement preview source")
@@ -251,6 +263,7 @@ class StatementPreviewService:
         *,
         source_kind: StatementPreviewSource,
         language: str,
+        native_package_id: str = "",
     ) -> Iterator[PreparedStatementRender]:
         """Prepare the canonical render tree without creating a Preview row."""
 
@@ -267,6 +280,7 @@ class StatementPreviewService:
             with self._prepare_native_render_tree(
                 problem,
                 language=safe_language,
+                native_package_id=native_package_id,
             ) as prepared:
                 yield prepared
             return
@@ -431,26 +445,29 @@ class StatementPreviewService:
         problem: str,
         *,
         language: str,
+        native_package_id: str = "",
     ) -> Iterator[PreparedStatementRender]:
         problem_id = int(self._workspaces.problem_row(problem)["id"])
-        source_identity = self._native_source_identity(
+        native_package = self._native_package_for_problem(
             problem_id,
-            language=language,
+            native_package_id=native_package_id,
         )
-        readiness = self._packages.published_readiness(problem_id)
-        native_package_id = readiness["native_package_id"]
-        if not native_package_id:
-            raise ValueError("current Native Package is unavailable")
         staging_parent = Path(
             tempfile.mkdtemp(prefix="statement-native-", dir=self._snapshot_parent())
         )
         try:
             render_root = staging_parent / "rendered-statement"
-            with self._packages.open_reader(native_package_id) as reader:
-                source = reader.root / "statement-build" / language
-                if not source.is_dir() or source.is_symlink():
-                    raise ValueError(f"Native Package has no {language} statement")
-                shutil.copytree(source, render_root)
+            render_root.mkdir()
+            extracted_package = self._packages.extract_statement_render_tree(
+                native_package["id"],
+                language,
+                render_root,
+            )
+            source_identity = self._native_source_identity(
+                problem_id,
+                language=language,
+                native_package=extracted_package,
+            )
             yield PreparedStatementRender(
                 problem_id=problem_id,
                 root=render_root,
@@ -635,17 +652,44 @@ class StatementPreviewService:
             ensure_ascii=True,
         )
 
-    def _native_source_identity(self, problem_id: int, *, language: str) -> str:
-        readiness = self._packages.published_readiness(problem_id)
-        native_package_id = readiness["native_package_id"]
-        if readiness["status"] != "ready" or not native_package_id:
-            raise ValueError("current Native Package is unavailable")
+    def _native_package_for_problem(
+        self,
+        problem_id: int,
+        *,
+        native_package_id: str,
+    ) -> NativePackage:
+        requested_id = str(native_package_id or "").strip()
+        if requested_id:
+            native_package = self._packages.native_package(requested_id)
+        else:
+            readiness = self._packages.published_readiness(problem_id)
+            if readiness["status"] != "ready" or not readiness["native_package_id"]:
+                raise ValueError("current Native Package is unavailable")
+            native_package = self._packages.native_package(
+                readiness["native_package_id"]
+            )
+        if (
+            native_package is None
+            or int(native_package["problem_id"]) != int(problem_id)
+            or native_package["status"] != "available"
+        ):
+            raise ValueError("Native Package is unavailable")
+        return native_package
+
+    @staticmethod
+    def _native_source_identity(
+        problem_id: int,
+        *,
+        language: str,
+        native_package: NativePackage,
+    ) -> str:
         return sha256_hex_json(
             {
                 "subject": "problem",
                 "problem_id": problem_id,
                 "source": "native_package",
-                "native_package_id": native_package_id,
+                "native_package_id": native_package["id"],
+                "archive_sha256": native_package["archive_sha256"],
                 "language": language,
             },
             ensure_ascii=True,

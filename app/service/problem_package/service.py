@@ -137,6 +137,10 @@ class NativePackageOperationBusy(RuntimeError):
     """The revision cannot enter the requested operation."""
 
 
+class _NativePackageStatementUnavailable(ValueError):
+    """The requested statement tree is not present in an available Package."""
+
+
 class _RevisionReadWriteLock:
     """Coordinate immutable Package reads with the brief publication window."""
 
@@ -587,14 +591,19 @@ class ProblemPackageService:
 
     def statement_languages(self, native_package_id: str) -> list[str]:
         """List rendered statement languages without validating or mutating a Package."""
-        row = self.store.materialization(native_package_id)
-        if row is None or row["status"] != "available":
-            return []
         try:
-            archive = self._archive_path(row)
-            with zipfile.ZipFile(archive, "r") as package:
-                names = set(package.namelist())
-        except (OSError, ValueError, zipfile.BadZipFile):
+            with self.native_package_read_operation(native_package_id) as row:
+                if row["status"] != "available":
+                    return []
+                archive = self._archive_path(row)
+                with zipfile.ZipFile(archive, "r") as package:
+                    names = set(package.namelist())
+        except (
+            NativePackageOperationBusy,
+            OSError,
+            ValueError,
+            zipfile.BadZipFile,
+        ):
             return []
         prefix = f"{STATEMENT_BUILD_DIR}/"
         suffix = "/problem.tex"
@@ -610,6 +619,130 @@ class ProblemPackageService:
             except ValueError:
                 continue
         return sorted(language for language in languages if language)
+
+    def extract_statement_render_tree(
+        self,
+        native_package_id: str,
+        language: str,
+        destination: Path,
+        *,
+        expected_archive_sha256: str | None = None,
+    ) -> NativePackage:
+        """Extract one rendered statement tree from a Native Package."""
+
+        safe_language = normalize_statement_language(language)
+        if not safe_language:
+            raise ValueError("statement language is required")
+        if (
+            destination.is_symlink()
+            or not destination.is_dir()
+            or any(destination.iterdir())
+        ):
+            raise ValueError("statement destination must be an empty directory")
+
+        validation_error: Exception | None = None
+        selected_row: NativePackage | None = None
+        operation = self.native_package_read_operation(native_package_id)
+        try:
+            with operation as row:
+                selected_row = row
+                if row["status"] != "available":
+                    raise _NativePackageStatementUnavailable(
+                        "Native Package is unavailable"
+                    )
+                archive_path = self._validate_archive_checksum(
+                    row,
+                    expected_archive_sha256=expected_archive_sha256,
+                )
+                prefix = (STATEMENT_BUILD_DIR.as_posix(), safe_language)
+                with zipfile.ZipFile(archive_path, "r") as archive:
+                    selected: list[tuple[zipfile.ZipInfo, PurePosixPath]] = []
+                    targets: set[PurePosixPath] = set()
+                    has_problem_tex = False
+                    for info in archive.infolist():
+                        if "\\" in info.filename:
+                            if info.filename.startswith(
+                                f"{STATEMENT_BUILD_DIR}/{safe_language}/"
+                            ):
+                                raise ValueError(
+                                    "Native Package statement contains an unsafe path"
+                                )
+                            continue
+                        archive_path_parts = PurePosixPath(info.filename)
+                        if archive_path_parts.parts[:2] != prefix:
+                            continue
+                        relative = PurePosixPath(*archive_path_parts.parts[2:])
+                        if not relative.parts:
+                            continue
+                        if relative.is_absolute() or any(
+                            part in {"", ".", ".."} for part in relative.parts
+                        ):
+                            raise ValueError(
+                                "Native Package statement contains an unsafe path"
+                            )
+                        if relative in targets:
+                            raise ValueError(
+                                "Native Package statement contains a duplicate path"
+                            )
+                        targets.add(relative)
+                        mode = info.external_attr >> 16
+                        if mode and stat.S_ISLNK(mode):
+                            raise ValueError(
+                                "Native Package statement contains a symbolic link"
+                            )
+                        file_type = stat.S_IFMT(mode)
+                        if file_type and not (
+                            stat.S_ISDIR(mode)
+                            if info.is_dir()
+                            else stat.S_ISREG(mode)
+                        ):
+                            raise ValueError(
+                                "Native Package statement contains a special file"
+                            )
+                        if relative == PurePosixPath("problem.tex"):
+                            if info.is_dir():
+                                raise ValueError(
+                                    "Native Package statement problem.tex is not a file"
+                                )
+                            has_problem_tex = True
+                        selected.append((info, relative))
+                    if not has_problem_tex:
+                        raise _NativePackageStatementUnavailable(
+                            f"Native Package has no {safe_language} statement"
+                        )
+                    destination_root = destination.resolve()
+                    for info, relative in selected:
+                        target = destination / Path(*relative.parts)
+                        resolved_target = target.resolve(strict=False)
+                        if destination_root not in resolved_target.parents:
+                            raise ValueError(
+                                "Native Package statement path escapes destination"
+                            )
+                        if info.is_dir():
+                            target.mkdir(parents=True, exist_ok=False)
+                            continue
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        with archive.open(info, "r") as source, target.open(
+                            "xb"
+                        ) as output:
+                            shutil.copyfileobj(source, output)
+        except (
+            FrozenNativePackageMismatch,
+            NativePackageOperationBusy,
+            _NativePackageStatementUnavailable,
+        ):
+            raise
+        except Exception as exc:
+            validation_error = exc
+
+        if selected_row is None:
+            raise RuntimeError("Native Package statement extraction selected no Package")
+        if validation_error is not None:
+            raise self._integrity_error(
+                selected_row,
+                validation_error,
+            ) from validation_error
+        return selected_row
 
     def _remove_artifact_file(self, rel_path: str) -> str:
         try:

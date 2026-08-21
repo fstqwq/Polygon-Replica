@@ -756,6 +756,74 @@ class TestPublishedRevisionExport(E2ETestBase):
             )
         self.assertEqual(english_input, chinese_input)
 
+    def test_native_package_statement_extraction_opens_only_selected_language(
+        self,
+    ) -> None:
+        workspace = Path(self._workspace_path())
+        shutil.copytree(
+            workspace / "statement-sections" / "english",
+            workspace / "statement-sections" / "chinese",
+        )
+        _workspace, problem_id, _commit = self._publish_problem()
+        revision = runtime.problem_package_service.published_revision(problem_id)
+        native_package = runtime.problem_package_service.ensure_native_package(
+            revision,
+            self._verification_builder(problem_id),
+        )
+        opened: list[str] = []
+        original_open = zipfile.ZipFile.open
+
+        def tracking_open(package, member, *args, **kwargs):
+            opened.append(
+                member.filename if isinstance(member, zipfile.ZipInfo) else member
+            )
+            return original_open(package, member, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory(prefix="statement-extract-test-") as temp:
+            destination = Path(temp) / "render"
+            destination.mkdir()
+            with patch.object(zipfile.ZipFile, "open", new=tracking_open):
+                extracted = (
+                    runtime.problem_package_service.extract_statement_render_tree(
+                        native_package["id"],
+                        "english",
+                        destination,
+                    )
+                )
+
+            self.assertEqual(extracted["id"], native_package["id"])
+            self.assertTrue((destination / "problem.tex").is_file())
+            self.assertTrue((destination / "examples.tex").is_file())
+            self.assertFalse((destination / "test-data").exists())
+            self.assertFalse((destination / "statement-build").exists())
+            self.assertTrue(opened)
+            self.assertTrue(
+                all(name.startswith("statement-build/english/") for name in opened)
+            )
+
+    def test_missing_statement_language_does_not_invalidate_native_package(
+        self,
+    ) -> None:
+        _problem_id, _commit, native_package = self._native_package()
+        with tempfile.TemporaryDirectory(prefix="statement-extract-test-") as temp:
+            destination = Path(temp) / "render"
+            destination.mkdir()
+            with self.assertRaisesRegex(
+                ValueError,
+                "has no chinese statement",
+            ):
+                runtime.problem_package_service.extract_statement_render_tree(
+                    native_package["id"],
+                    "chinese",
+                    destination,
+                )
+
+        current = runtime.problem_package_service.native_package(
+            native_package["id"]
+        )
+        self.assertIsNotNone(current)
+        self.assertEqual(current["status"], "available")
+
     def test_valid_native_package_is_reused_without_verification(self) -> None:
         problem_id, _commit, first = self._native_package()
         revision = runtime.problem_package_service.published_revision(problem_id)
