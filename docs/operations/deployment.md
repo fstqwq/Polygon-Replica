@@ -29,15 +29,7 @@ cd /opt/polygon-replica
 sudo POLYGON_REPLICA_RUNTIME_USER=polygon ./scripts/install_host.sh
 ```
 
-The installer verifies CPython 3.14, installs host packages, configures user
-namespaces, creates runtime roots, probes bubblewrap and TeX as `polygon`, builds
-`.venv` as that account, writes `/etc/polygon-replica.env`, renders and verifies
-the systemd unit, and starts it. Direct root runtime is rejected. The environment
-file is owned by root with mode `0600`; rerunning the installer refreshes its
-managed paths while preserving valid operator-managed assignments and `#` or
-`;` comments. Shell-style input assignments with an optional `export` prefix
-are accepted during migration and rewritten as systemd `NAME=VALUE` records;
-unbalanced quotes and multiline continuations are rejected before replacement.
+The installer prepares dependencies, storage, user namespaces, bubblewrap, TeX, `.venv`, `/etc/polygon-replica.env`, and the systemd unit. The application runs as the selected non-root account. The environment file is owned by root with mode `0600`; rerunning the installer preserves valid operator-managed assignments.
 
 Inspect the result:
 
@@ -61,10 +53,7 @@ sudoedit /etc/polygon-replica.env
 sudo systemctl restart polygon-replica.service
 ```
 
-Losing or changing the key makes the stored SMTP password unreadable. Installer
-reruns preserve this operator-owned assignment. Duplicate keys or records that
-are not single-line environment assignments make the installer stop before
-replacing the active file.
+Losing or changing the key makes the stored SMTP password unreadable.
 
 ## Docker Compose installation
 
@@ -82,8 +71,7 @@ fi
 sudo sysctl --system
 ```
 
-Create the permanent backup bind and start Compose. The following creates a new
-private `.env`; edit an existing file instead of overwriting it:
+Create the permanent backup bind and start Compose. For a new deployment:
 
 ```bash
 sudo install -d -o 1000 -g 1000 -m 0700 /var/backups/polygon-replica
@@ -102,13 +90,7 @@ If SMTP is used, add the stable encryption key to `.env` and explicitly pass
 
 ## TLS proxy
 
-A TLS certificate, including a locally trusted self-signed certificate, is
-strongly recommended. Outside localhost, it is also required by the browser
-password flow. Password verifiers are derived and encrypted with Web Crypto,
-which browsers expose only in secure contexts such as HTTPS or localhost.
-`AUTH_COOKIE_SECURE` also defaults to `true`, so authentication cookies are sent
-only over HTTPS. nginx terminates TLS and forwards requests to the loopback
-application listener.
+A TLS certificate, including a locally trusted self-signed certificate, is strongly recommended. Outside localhost, the browser password flow requires HTTPS because it uses Web Crypto. `AUTH_COOKIE_SECURE` also defaults to `true`, so authentication cookies are sent only over HTTPS.
 
 Configure nginx or another TLS proxy with the deployment's certificate. The
 nginx server block requires:
@@ -140,7 +122,7 @@ must use the HTTPS endpoint.
 
 ## First use and judgehost
 
-Open `https://<domain>/` and complete initial setup. Setup creates the administrator with a trusted email address and saves the email allow regex used by later public registrations. It also displays the effective storage paths for operator confirmation.
+Open `https://<domain>/` and complete initial setup. Setup creates the administrator, saves the public-registration email regex, and displays effective storage paths.
 In Settings configure and save:
 
 ```text
@@ -149,12 +131,7 @@ JUDGEHOST_API_USERNAME = judgehost
 JUDGEHOST_API_TOKEN = <strong random secret>
 ```
 
-Use the Settings-generated judgehost command. Each daemon needs a unique
-hostname, daemon id, CPU assignment, and unused `RUN_USER_UID_GID`. Verify ids
-with `getent passwd <id>` and `getent group <id>`. A same-host Docker judgehost
-normally reaches `http://host.docker.internal:8001/` through the configured host
-gateway. The generated command also maps each container hostname to `127.0.1.1`
-so local tools such as `sudo` can resolve it.
+Use the Settings-generated judgehost command. Each daemon needs a unique hostname, daemon ID, CPU assignment, and unused `RUN_USER_UID_GID`. Verify IDs with `getent passwd <id>` and `getent group <id>`. A same-host container normally reaches `http://host.docker.internal:8001/`.
 
 ### Judgehost image choice
 
@@ -172,8 +149,7 @@ development line and adds:
   reclaims the downloaded testcase cache when ordinary judging-directory
   cleanup cannot restore the configured free-space threshold.
 
-The fork also includes upstream 10.0 development-line throughput improvements
-for workloads with many short testcases.
+The fork includes upstream 10.0 development-line throughput improvements for workloads with many short testcases.
 
 Build the pinned source with DOMjudge's packaging repository on a Linux Docker
 host. The build starts a temporary privileged container:
@@ -208,24 +184,14 @@ with `polygon-judgehost:10.0-dev-6eb5e99`.
 Create and download a source backup from Admin first. Then update one deployment
 at a time.
 
-Application startup does not alter an existing SQLite schema. Before installing
-a revision that changes required tables, columns, or named indexes, compare the
-canonical schema in `app/db.py` at the deployed commit with the target commit.
-Stop the Web process, workers, and judgehosts, back up SQLite together with its
-WAL/SHM files, and apply a one-off offline migration for that exact diff. Keep
-IDs and relationships intact, then require `foreign_key_check`,
-`integrity_check`, and application schema admission to pass before reopening
-traffic. The migration is an operator procedure and does not belong in Git.
+Application startup does not alter an existing SQLite schema. Before installing a revision with schema changes, compare `app/db.py` at the deployed and target commits. Stop the application and judgehosts, back up SQLite with its WAL/SHM files, and apply the complete diff offline. Preserve IDs and relationships; require `foreign_key_check`, `integrity_check`, and application schema admission to pass before reopening traffic.
 
 The latest breaking database change is
 [`b16617c` (`Simplify Contest authoring workflows`)](https://github.com/fstqwq/Polygon-Replica/commit/b16617c98579c60a2ad8e6e449d131539bc0ed18).
 Deployments whose current commit predates it must upgrade the database for the
 complete schema diff between their deployed revision and the target revision.
 
-Keep the application data root and database private to the runtime user. The
-host installer applies mode
-`0700` to `/var/lib/polygon-replica`, and the systemd unit uses `UMask=0077` so
-new database, WAL, and SHM files are not readable by other local users.
+Keep the application data root and database private to the runtime user. The installer applies mode `0700` to `/var/lib/polygon-replica`, and systemd uses `UMask=0077`.
 
 Systemd:
 
@@ -264,7 +230,7 @@ preparation.
 
 Enable **Pause admission**, wait for active work to drain, then use **Create
 source backup** and **Download latest backup**. The archive is one point-in-time
-recovery set containing SQLite and the complete bare Git, workspace, and Contest
+recovery set containing SQLite and the complete bare Git, workspace, and contest
 source roots. Derived data, caches, application code, the encryption key, and
 deployment configuration are excluded. The exact archive layout is defined by
 the [storage protocol](../protocol/storage.md#source-backup).
@@ -279,5 +245,4 @@ the [storage protocol](../protocol/storage.md#source-backup).
 4. Start the application revision and deployment configuration retained
    alongside the backup, then validate them before reopening traffic.
 
-The archive is manual disaster-recovery material, not a versioned import
-format. Never combine its database with source roots from another recovery set.
+Restore the database and source roots only as one recovery set.

@@ -2,41 +2,16 @@
 
 ## Runtime
 
-The application runs as one FastAPI process under uvicorn. Routes delegate to
-implementation modules in `app/impl`, which coordinate domain services in
-`app/service`. The top-level `app.runtime.ApplicationRuntime` constructs the
-SQLite, Git, filesystem, sandbox, judgehost, worker, and maintenance objects.
-`app.main.create_app()` installs that exact object on one FastAPI application;
-`app/runtime_lifecycle.py` receives it explicitly for startup and shutdown.
-Request implementation code uses the request-bound accessor in
-`app/impl/runtime/dependency.py`; services and background work receive their
-dependencies directly.
+The application runs as one FastAPI process under uvicorn. Routes handle transport, implementation modules coordinate use cases, and services own domain behavior. One application runtime provides SQLite, Git, filesystem, sandbox, judgehost, worker, and maintenance dependencies.
 
-Request-path and queued work, restart reconciliation, and execution identity are
-owned by the [execution protocol](../protocol/execution.md). Filesystem cleanup
-and availability are owned by the [storage protocol](../protocol/storage.md).
-The process topology and launcher constraints are described in
-[runtime operations](../operations/runtime.md).
+The [execution protocol](../protocol/execution.md) defines queued work, restart reconciliation, and execution identity. The [storage protocol](../protocol/storage.md) defines filesystem ownership and cleanup. Supported process topology is documented in [runtime operations](../operations/runtime.md).
 
 ## State model
 
-Workspaces publish official problem versions. Package delivery then follows the
-single boundary `published source -> Native Package -> external packages`.
-External adapters and Contest package downloads consume Native Packages rather
-than a workspace or one another. Contest Statement Preview can render either
-Workspace source or a Native Package, as selected by the request. Their inputs,
-freeze points, invalidation rules, and cleanup behavior are described in
-[state derivation and lifecycle](state-lifecycle.md). The authored workspace
-layout is defined by the
-[problem source protocol](../protocol/problem-source.md).
+Workspaces publish official problem versions. Delivery follows `published source -> native package -> external packages`; adapters never use a workspace or another adapter's output. Statement preview can render workspace or native package source. The [state lifecycle](state-lifecycle.md) defines freeze and invalidation points, and the [problem source protocol](../protocol/problem-source.md) defines authored layout.
 
 ## Trust boundaries
 
-Browser sessions, agent identities, and judgehost credentials are distinct.
-Cross-resource capability decisions are owned by the access service and are
-described in the [access model](access.md). Agent identities cannot acquire,
-inherit, or present sudo authority. Sudo belongs only to the browser session
-that completed elevation and is not transferable.
+Browser sessions, agent credentials, and judgehost credentials are separate. The [access model](access.md) defines resource capabilities. Agent scopes can narrow a user's authority but cannot carry browser sudo.
 
-Judgehost trust, authentication, leases, callbacks, and version telemetry are
-owned by the [judgehost wire protocol](../protocol/judgehost.md).
+The [judgehost wire protocol](../protocol/judgehost.md) defines judgehost trust, authentication, leases, callbacks, and version telemetry.

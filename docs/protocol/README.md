@@ -10,10 +10,9 @@
   with filesystem roots, locator consistency, and cleanup.
 - [Persistence](persistence.md) describes durable SQLite state and row
   lifecycles.
-- [Package](package.md) defines Polygon import plus Native Package and external
-  package adapter boundaries.
-- [Statement Preview](statement-preview.md) defines Workspace/Native Package
-  HTML Preview, Contest Review, and transient full-Contest PDF behavior.
+- [Package](package.md) defines package import, native package identity, external formats, and contest bundles.
+- [Statement preview](statement-preview.md) defines workspace/native package
+  HTML preview, contest review, and transient full-contest PDF behavior.
 
 Python module placement is documented in the
 [application package map](../src/README.md).

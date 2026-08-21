@@ -6,7 +6,7 @@ with a random `polygon_agent_...` bearer credential; SQLite stores only its
 SHA-256 verifier. `session_id` identifies the session. `identity_hash` validates
 registration and reconnect metadata and is not an authentication secret. The
 service combines general scope with active per-problem grants, then caps that
-declared scope by the connected user's current effective Problem role. Browser
+declared scope by the connected user's current effective problem role. Browser
 sudo is never transferred to an agent.
 
 Registration codes, sessions, approval requests, and grants are durable in the
@@ -16,12 +16,8 @@ or explicit forever lifetime. Disconnecting deletes the session and all of its
 requests and grants. No ordinary agent API uses a per-problem bearer token.
 
 Contest roster discovery requires general `readonly` permission and current
-Contest read access. It returns only a SQLite roster snapshot. The per-problem
-Contest snapshot route rechecks the roster generation before provisioning a
-workspace; Contest identity is not persisted as an authorization credential.
+contest read access. It returns only a SQLite roster snapshot. The per-problem
+contest snapshot route rechecks the roster generation before provisioning a
+workspace; contest identity is not persisted as an authorization credential.
 
-HTTP transport remains under `app/impl/agent` and `app/route/agent_route.py`;
-credential separation and the no-sudo invariant are owned by the
-[system trust boundary](../../../../design/system.md#trust-boundaries), and
-table ownership by the
-[persistence protocol](../../../../protocol/persistence.md).
+HTTP transport remains outside this service. The [system trust boundary](../../../../design/system.md#trust-boundaries) owns credential separation and the no-sudo invariant. The [persistence protocol](../../../../protocol/persistence.md) owns table authority.

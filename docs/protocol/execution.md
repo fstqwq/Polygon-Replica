@@ -1,271 +1,84 @@
 # Execution and verification protocol
 
-## Job model
+## Work model
 
-Preview compilation is synchronous in the HTTP request. Contest HTML Review
-uses a bounded worker pool but the POST remains blocked until every Problem has
-reached a terminal result; it does not poll fragments or embed iframes. Contest
-PDF Preview runs the full, single-document Contest TeX pipeline in that request
-and writes only to Preview cache. Contest package downloads likewise build the
-selected bundle synchronously in the request. Verification, custom run, and
-export jobs are submitted to one bounded process-local worker queue. Queue records and `worker-queue-events.jsonl` are runtime
-diagnostics; they are cleared at startup and do not recover work after restart.
-Durable job summary rows are reconciled to failed states during startup.
+| Work | Execution |
+| --- | --- |
+| Problem statement HTML/PDF | Synchronous request with preview-cache reuse. |
+| Contest statement HTML/PDF | Synchronous request; HTML may render problems through a bounded pool. |
+| Contest package bundle | Synchronous request. |
+| Verification, custom run, and package export | Bounded process-local worker queue with durable summary state. |
 
-A custom run is represented as a verification with the custom kind. It uses the
-same task storage, judgehost dispatch, results, and cache-payload model.
+Process-local work does not resume after restart. Startup reconciles interrupted durable records to terminal failure before accepting new work.
 
-## Verification lifecycle and DAG
+## Verification lifecycle
 
-User-facing Verification kinds are `all`, `sample`, and `custom`. Package
-preparation also uses an internal `package` kind that runs input generation and
-the main correct solution without claiming full Verification. Their reachable
-durable state transitions are:
+| Kind | Scope |
+| --- | --- |
+| `all` | Full verification. |
+| `sample` | Sample-only evidence, including statement preview preparation. |
+| `custom` | User-selected program and tests. |
+| `package` | Internal input generation and main-correct execution for a `not verified` native package. |
 
 ```text
 absent -> queued -> running -> ok | failed | cancelled
-          |  \---------------> failed | cancelled
 ```
 
-Admission inserts a `queued` verification with its request identity and no task
-rows. Planning uses a frozen workspace snapshot. Activation changes that row
-from `queued` to `running` and writes the complete detail and complete task graph
-in one transaction. A plan is installed once: it is never deleted, replaced, or
-partially extended. Explicit user cancellation changes an active verification
-to `cancelled`; planning, queue, infrastructure, and startup interruption
-change it to `failed`. Reason text never determines the lifecycle state.
+Admission creates a taskless `queued` record for a frozen workspace snapshot. Activation atomically installs the complete task graph and changes the parent to `running`. A plan is installed once. User cancellation produces `cancelled`; planning, queue, infrastructure, and startup failures produce `failed`. Terminal status never reopens, and terminalization cancels every remaining open task without rewriting completed evidence.
 
-`pending` is a task-derived display state, not a persisted verification
-lifecycle state. An `ok` verification has a complete graph, terminal tasks, and
-completed sanity processing. A sanity warning or failure remains attention
-detail on an `ok` verification; it does not reopen or fail the task decision.
-A `failed` verification may have no graph when it failed before activation. A
-`cancelled` verification records an explicit user action. Either terminal
-transition atomically cancels remaining open tasks without rewriting completed
-task evidence. A terminal verification cannot return to an active state.
-Startup fails all verification work left in `queued` or `running`;
-coordinators and leases are not reconstructed.
+`pending` is a display projection, not a persisted parent state. An `ok` verification has terminal tasks and completed sanity processing. Sanity warnings remain attached to an otherwise successful verification. A pre-activation failure may have no task graph.
 
-A verification plan has two related identities:
+## Task graph
 
-```text
-VerificationProgram
-  - program_id
-  - kind
-  - source_path
-  - compile_spec
+| Task | Behavior |
+| --- | --- |
+| `generate-input` | Use authored input or run the selected generator, then validate generated output when a validator is configured. |
+| `main-correct` | Run the accepted solution after input is ready and retain its output as the official answer. |
+| `solution-run` | Run another authored solution after the same test's main-correct task succeeds. |
 
-VerificationTask
-  - program_id
-  - test_name
-```
+Tasks for the same source program and compile specification share one judgehost compilation. Generator parameters belong to the invocation and result-cache identity, while program identity remains tied to source and compile configuration. Identical generator invocations share generated evidence; duplicate tasks remain ordered but do not execute twice.
 
-A `VerificationProgram` means one source program under one normalized compile
-specification. The generator is a program, the accepted solution is a program,
-and every checked solution is a separate program. Multiple test tasks may
-reference the same program and therefore share its one judgehost compilation.
-Generator parameters remain part of each task's input payload: they change the
-invocation and result-cache identity, but not the generator program identity.
-If compilation or an active internal error has already failed that program,
-test tasks that become runnable later inherit the same canonical program
-failure and finish without waiting for another compile.
+Prepared payloads carry canonical `problem_mode`. Execution mode is derived from the task:
 
-The accepted program uses `accepted`. Distinct logical generator definitions
-receive `generator-<first-seen-index>`, and checked solutions receive
-`solution-<plan-index>` in the verification's deterministic target order.
-Generator paths remain distinct programs even
-when their current content and compile specification are equal. These names
-identify role and deterministic position in this verification plan; they are
-not global source or cache identities.
+| Task | Execution mode | Components |
+| --- | --- | --- |
+| `compile-only` | `pass-fail` | Submitted source and explicit extra sources. |
+| `generate-input` | `pass-fail` | Generator, validator, and required `testlib.h`. |
+| `main-correct`, `solution-run` for pass-fail | `pass-fail` | Solution, checker, and required `testlib.h`. |
+| `main-correct`, `solution-run` for interactive | `interactive` | Solution, interactor, and required `testlib.h`. |
 
-A task also carries its task kind, source, expected behavior, optional
-predecessor, final status, and serialized execution result. An empty
-`final_status` is the only durable open state; `done`, `failed`, and `cancelled`
-are terminal. Pending, queued, and leased are process-local task overlays used
-by read models; reporting is a judgehost case phase rather than a task row
-state.
+A missing or invalid `problem_mode` rejects a non-compile task. The canonical authored memory limit is dispatched exactly in KiB. Full verification and package work use the background judgehost class; preview sample evidence uses foreground priority. Priority affects only work that has not started.
 
-The durable task ID is the path-safe natural key
-`vt~<verification_id>~<program_id>~<test_name>`. Activation recomputes every
-task key and requires all tasks in one program to retain one consistent program
-definition. It rejects inconsistent or duplicate plan members instead of
-allocating another identity.
+## Verdict and completion
 
-Within verification code this identity is `program_id`. At the boundary into
-judgehost scheduling it is named `verification_program_id`, so it cannot be
-confused with the per-execution `run_id`. Judgehost uses
-`(verification_id, verification_program_id)` to collect the test cases that
-share a compilation. `compile_key` is a separate content-addressed compile-cache
-identity; two different programs may have the same `compile_key` and reuse the
-same cached compilation.
+AC, WA, TL, RE, and CE are complete testcase decisions. A solution task succeeds when its verdict belongs to the expected behavior's `allowed` set. After all tasks for one solution are terminal, its combined verdicts must also satisfy the solution-level `required` set. Skipped duplicate-input tasks contribute no verdict.
 
-The graph has exactly three task kinds:
+FL, missing or incomplete evidence, and disallowed verdicts fail the task. Generator, main-correct, infrastructure, and unexpected cancellation failures fail the verification immediately and cancel remaining work. A solution mismatch records the first failure reason while independent solution tasks continue; the parent becomes `failed` when no open task remains. Expected CE can therefore be a successful solution decision even when the underlying batch reports compile failure.
 
-- `generate-input` materializes one testcase input. Manual tests use a trivial
-  program over the authored input payload; generated tests execute the selected
-  generator.
-- `main-correct` runs the accepted solution after that test's input is ready.
-- `solution-run` runs another solution after the same test's `main-correct`
-  task succeeds.
+Each task accepts one durable completion. Repeated or conflicting callbacks receive the persisted result and cannot amend status, locators, or failure reason. Durable task decisions are committed before process-local coordination is notified; reconciliation reads SQLite when notification is lost.
 
-Thus accepted-solution execution gates the other expected-behavior checks per
-test. Identical generator invocations share one generated result; duplicate
-generation tasks depend on the owning invocation and finish as skipped.
+The canonical task result contains `outcome`, compile evidence, ordered passes, and warnings. Each pass records its number, capture status, run result, verdict, score, answer flag, resource usage, feedback, and cache locators. Pass numbers start at one and are contiguous; output and transcript locators are mutually exclusive.
 
-Generator-backed tests execute their generator payload, including parameters.
-The configured validator runs as the generator task's checker between
-generation and solution execution.
+## Cancellation
 
-Prepared Verification payloads carry the canonical `problem_mode` read from `config/problem.json`. Judgehost preparation derives the separate execution `mode` from the task kind: `compile-only` and `generate-input` always use the non-interactive `pass-fail` topology, while `main-correct` and `solution-run` use `problem_mode`. A non-compile task with a missing or invalid `problem_mode` is rejected; callers do not choose execution mode independently.
+Cancellation atomically marks the verification and every open task `cancelled`, closes judgehost admission for that verification, and returns before runtime cleanup finishes. A process-local drain retires its cases, batches, and registry entries without publishing per-case cancellation to SQLite.
 
-Component payloads follow the same task boundary. A generator task receives the configured validator and the required `testlib.h`. A pass-fail solution task receives the configured checker and `testlib.h`; an interactive solution task receives the configured interactor and `testlib.h`. Compile-only receives only its submitted source and explicit extra sources, so it never loads a checker, validator, or interactor from the Problem.
-
-The DAG scheduler publishes runnable tasks in bounded batches and polls
-judgehost case-cache misses. Full Verification and Package preparation use the
-background judgehost service class. Sample-only Verification started for
-Problem or Contest HTML/PDF Preview uses the foreground service class; a valid
-Preview cache hit submits no work. Foreground changes the order of cases that
-have not started and does not preempt a running case. Judgehost terminal
-reports, cache hits, and
-terminal reconciliation all pass through the same completion service. The
-coordinator receives the effective persisted completions and advances
-dependants from that state; it does not receive an uncommitted judgehost result.
-Predecessor failure or cancellation skips or cancels dependants. Compile-only,
-pass-fail, interactive, and multi-pass execution are mapped to judgehost batches
-and case results by the verification and judgehost services.
-
-Each Verification has at most one active process-local coordinator. Persisted
-task decisions are durable authority and are committed before the coordinator
-is notified. If notification is lost, the coordinator reconciles from SQLite.
-Registration races also reread the persisted parent state, so a process-local
-event cannot reopen a terminal Verification.
-
-Completion evaluates each `solution-run` from its canonical `ExecutionResult`,
-not the batch transport status or summary. At the testcase boundary, AC, WA, TL,
-RE, and CE are complete decisions and only the expected behavior's `allowed`
-set applies. An FL, missing, incomplete, or disallowed decision fails that task
-and stores the first failure reason. The `required` set belongs to the program:
-after every durable task for one `program_id` is terminal without a case-level
-failure, the completion transaction aggregates its testcase verdicts and checks
-`required` once. These testcase rules are distinct from package-level final
-result sets: `tle_or_re`, for example, allows AC, TL, and RE testcases but
-requires at least one TL or RE across the complete program.
-Skipped duplicate-input tasks contribute no verdict. A missing required verdict
-does not rewrite the completed testcase tasks, but it stores the verification's
-first failure reason. Independent solution tasks continue, and once no task
-remains open that stored mismatch makes the parent `failed`. Thus an expected CE
-is a successful task and can satisfy a program requirement even when the judgehost
-reports the batch as failed. Generator, `main-correct`, and unexpected task
-cancellation failures are hard failures: they fail the parent and cancel all
-remaining open tasks immediately in the same transaction.
-
-Explicit user cancellation atomically changes the parent to `cancelled` and every open task to `cancelled`. The request then closes process-local judgehost admission, notifies the coordinator, and enqueues a deduplicated process-local cancellation drain before returning. A dedicated drain thread retires cases, batches, and task-registry entries in slices of `VERIFICATION_RUNTIME_BATCH_SIZE = 256` without publishing per-case cancellation back to SQLite. Repeating cancellation for an already terminal parent still closes admission and ensures that its drain remains queued.
-
-Already leased or reporting cases may remain in process-local judgehost state while a callback receipt is active, but their ordinary results cannot change the durable decision. A callback that observes cancellation discards its result and cache candidate, completes runtime cancellation, and receives the protocol ACK. A callback that linearized before cancellation is likewise absorbed by the background drain rather than reopening the task. The drain requeues its own unfinished or failed slice while admission remains closed; periodic judgehost maintenance does not own this queue.
-
-Scheduler failure uses `failed`; user cancellation uses `cancelled`. A failed in-memory cancellation notification falls back to a closed event, and idle coordinators reconcile task rows with the durable parent state. A synchronous hard failure stops the current publish slice before another independent ready task can be exposed. A runtime verification moves through dormant, active, draining, and retired phases independently of the parent status. Terminal runtime records remain available for idempotent callbacks until the verification has been quiet for 60 seconds.
-
-Verification planning preserves the canonical authored memory limit. Judgehost
-dispatch converts it exactly from MiB to KiB by multiplying by 1024; it does not
-apply a separate execution minimum. An internal dispatch payload containing a
-non-integer memory limit or a value below 1 is invalid and fails before work is
-sent to a host.
+A callback that loses the race to cancellation discards its result and cache candidate and receives the idempotent judgehost ACK. Leased or reporting cases may remain temporarily for callback and workdir cleanup, but they cannot change the durable decision. Repeating cancellation is safe. Startup may discard unfinished runtime drain state because SQLite already contains the authoritative cancellation.
 
 ## Identity and cache
 
-Verification staleness/signature input consists of `config/problem.json`,
-`config/build.json`, `tests/spec.json`, and regular files below `generators/`,
-`validators/`, `checkers/`, `interactors/`, `solutions/`, `tests/manual/`,
-`tests/generator/`, and `third_party/testlib/`. Missing roots and files are also
-represented in the signature. Statement-only changes do not stale a
-verification.
+Verification staleness is derived from `config/problem.json`, `config/build.json`, `tests/spec.json`, and regular files below `generators/`, `validators/`, `checkers/`, `interactors/`, `solutions/`, `tests/manual/`, `tests/generator/`, and `third_party/testlib/`. Missing roots and files participate in the signature. Statement-only changes do not stale verification.
 
-Each dispatched execution then uses content-addressed source, extra-source, and
-input payloads plus its canonical run configuration. Generator parameters are
-part of the generator input payload and therefore its invocation and cache
-identity. Judgehost compiler and runner versions are recorded as telemetry
-only; they are not currently cache-key fields or consistency gates.
+Execution cache identity contains source, extra sources, input, generator parameters, and canonical run configuration. Compiler and runner versions are telemetry only. A cached result is reusable only for the same identity.
 
-An available cached result may be reused only for its matching identity. Cache
-availability is checked separately from durable verification status.
+Case-result cache publication is first-writer-wins because equivalent executions may report different timing or captured bytes. The first valid result remains reusable. Executable-cache identity remains strict.
 
-Case-result cache publication is first-writer-wins. Equivalent executions may
-produce different timing measurements or captured bytes without changing their
-execution identity; the first valid entry remains the reusable shortcut. The
-executable cache retains its strict identity-to-content invariant.
+## Evidence and diagnostics
 
-## Results and cache payloads
+Generator success requires an available untruncated output payload and records it as input evidence. Main-correct success requires an available output payload and records it as answer evidence. Verification task results and their input, output, answer, feedback, transcript, and log locators are committed through the [SQLite persistence contract](persistence.md#execution-rows).
 
-For a final `add-judging-run` callback, the judgehost service first captures cache payloads
-and refs, then a dependency-light normalizer produces the canonical case
-`ExecutionResult` owned by `app.service.execution`. The batch runtime commits
-that canonical case decision before attempting optional result-cache
-publication. A result-cache conflict or storage failure is logged and leaves
-the committed case, task finalization, and protocol ACK unchanged. Compile
-failure arrives through `update-judging`, and a
-missing case has no complete final callback. Pure task-result projection builds
-those failure results from stored compile/case evidence; finalization publishes
-and aggregates terminal case results into the task report. Verification preserves
-that report instead of rebuilding compile data, passes, warnings, or payload
-evidence from summary fields.
+These payloads are cache. Durable summaries may outlive them; downloads resolve locators through the owning store and report unavailable payloads. Artifact ownership is indexed by verification, task, test, pass, and role for authorization.
 
-Task results are serialized in `verification_tasks.result_json` only through
-the strict execution codec. The canonical shape has `outcome`, `compile`,
-ordered `passes`, and `warnings`; missing, additional, or incorrectly typed
-fields are invalid. Each pass
-records its number, capture status, run result, verdict, score, answer flag,
-resource usage, feedback, and cache locators. Pass numbers are contiguous
-from one; an output locator and transcript locator are mutually exclusive.
+Debug and internal-error reports received after a task decision become bounded, retry-deduplicated late diagnostics. They do not change task status, verdict, canonical result, locators, parent status, or dependency readiness.
 
-Verification converts a terminal report into one `TaskCompletion`. Generator
-success requires an available, untruncated output blob and carries that locator
-as `input_ref`; `main-correct` success requires an available output blob and
-carries it as `answer_ref`. Task terminal state, result, the applicable locator,
-and the verification's first failure reason are committed together as described
-by the [SQLite persistence contract](persistence.md#execution-rows).
-
-Only a task without a terminal status accepts its first completion. A repeated
-or conflicting completion yields the already-persisted result and locators and
-does not amend them. Generator content deduplication and the resulting skipped
-dependants are part of the same commit. The process-local coordinator consumes
-the returned lifecycle commit; SQLite remains authoritative when no
-coordinator exists or a notification is repeated.
-
-Compile failure reported through `update-judging`, the first final run report,
-and an internal error received while a case is active can create the canonical
-terminal result. Their first decision claim is serialized under the judgehost
-batch-runtime lock; a program failure can finish unclaimed cases but cannot replace
-a final result whose case is already reporting. SQLite first-wins completion is
-the second durable guard. Evidence received after that decision does not amend it.
-Terminal `add-debug-info` and `internal-error` callbacks append normalized
-`debug-info` or `internal-error` items to the task's late-diagnostic snapshot.
-Each item records hostname, bounded text, receipt time, and a content digest for
-retry deduplication. The digest covers kind, hostname, and bounded text.
-Snapshot size is bounded by the auxiliary display limit; oldest items are
-removed first when necessary.
-
-Late diagnostics do not change task or verification status, verdict, canonical
-result, input/answer locators, first failure reason, or DAG readiness. Detail
-reads compose them with the immutable result for display. An ordinary duplicate
-compile or final-result callback is an idempotent retry, not diagnostic
-evidence.
-
-The canonical serialized result carries pass evidence. Every non-empty pass ref,
-plus per-test generated input and accepted answer refs, is indexed in the
-currently named `verification_task_artifacts` table by owning task, test, pass,
-and role. These refs all identify cache payloads. Downloads use the ownership
-index for authorization and locator lookup.
-
-Locators point into cache storage. A durable terminal result may remain after
-startup while one or more payloads are unavailable. Downloads MUST resolve the
-locator through the owning store and fail as unavailable when the cache entry is
-missing. Verification detail downloads use
-`/problems/{problem:path}/artifacts/{verification_id}/{rel_path:path}`.
-
-Interactive transcript detail reads retain the first 100 events and scan at most
-1000 protocol events. A transcript that ends within that scan window reports its
-exact event total. If more data remains after the 1000th event, parsing stops and
-the UI reports only that it is showing the first 100 events; it does not claim an
-exact total. Statement sample and sample JSON projection use the same bounded
-parser and reject a scan-limited transcript instead of deriving partial authored
-sample content.
+Interactive transcript display retains the first 100 events and scans at most 1000. A transcript ending inside that window reports its exact total. If more data remains, display reports `Showing first 100 events.` Statement sample projection rejects scan-limited transcripts instead of deriving partial samples.

@@ -5,11 +5,11 @@ admits prepared cases, leases them to authenticated hosts, serves their files,
 normalizes callbacks into structured execution results, records host and
 toolchain telemetry, and cleans process-local runtime state.
 
-Its inputs are prepared Verification payloads, runtime blobs, and authenticated
+Its inputs are prepared verification payloads, runtime blobs, and authenticated
 `/api/v4/*` requests. Its outputs are work descriptions, file payloads,
 terminal decisions, and late diagnostics. Durable publication crosses the
-injected judgehost execution port; this package does not import Verification
-services or query Verification tables.
+injected judgehost execution port; this package does not import verification
+services or query verification tables.
 
 The lifecycle is:
 
@@ -24,7 +24,7 @@ stored below the disposable cache root. Missing final callbacks and compile
 failures are converted into typed terminal outcomes before publication; they do
 not create a second persistence boundary inside the judgehost service.
 
-Prepared work keeps Verification program identity separate from per-execution
+Prepared work keeps verification program identity separate from per-execution
 run identity and content-addressed compile identity. The injected execution
 port validates durable task bindings before cases become fetchable and before
 lease, diagnostic, or completion events are published.

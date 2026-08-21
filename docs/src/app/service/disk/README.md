@@ -5,21 +5,10 @@ contests, previews, verifications, exports, runtime reconciliation, system
 configuration, and SMTP configuration. Despite its package name, it does not
 own the derived/cache filesystem layout.
 
-The stores accept canonical service identifiers and typed row values, execute
-queries or transactions through `app.db.DB`, and return typed records or decoded
-JSON projections. Filesystem locators are persisted as data for their owning
-domain service; locator validation and file lifecycle remain outside this
-package. The table and locator contracts are documented in the
+Stores accept canonical identifiers and typed values and return typed records or decoded JSON projections. Filesystem locator validation and lifecycle remain with the owning domain service. The table and locator contracts are documented in the
 [persistence](../../../../protocol/persistence.md) and
 [storage](../../../../protocol/storage.md) protocols.
 
-Store instances are process-lived wrappers around short-lived SQLite
-connections and retain no task lifecycle of their own. A coordinating domain
-service owns any workflow that spans stores; configured filesystem paths are
-resolved by the platform storage layout rather than by these adapters.
+Stores retain no domain task lifecycle. A coordinating service owns workflows spanning multiple stores.
 
-Before these stores are used, an existing SQLite database is checked read-only
-for every current required table, column, and named index. Missing objects block
-runtime; the application has no runtime schema mutation owner and does not
-change an existing schema during startup. Extra extension objects and rows are
-tolerated.
+Existing databases are validated read-only before use. Missing required objects block runtime; extra schema objects are tolerated.

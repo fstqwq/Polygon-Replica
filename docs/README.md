@@ -18,7 +18,7 @@ This index covers the design, protocols, engineering rules, and operations of Po
 - [Storage roots and cleanup](protocol/storage.md)
 - [SQLite persistence](protocol/persistence.md)
 - [Package import and export](protocol/package.md)
-- [Statement Preview](protocol/statement-preview.md)
+- [Statement preview](protocol/statement-preview.md)
 
 ## Engineering
 

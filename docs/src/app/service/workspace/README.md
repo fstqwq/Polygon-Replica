@@ -5,11 +5,4 @@ validation, bounded file list/read/write/upload/delete, snapshot ZIP creation,
 archive comparison/application, and read/write mutation locking. It returns
 typed file views, archive diffs, snapshot bytes, and refreshed workspace status.
 
-Checkout files are the package's only direct persistent state; workspace
-identity/status remain in SQLite through `repository.WorkspaceService`.
-Snapshots are returned to the caller rather than retained here. Archive input
-is validated before replacement, and write-locked operations refresh the status
-projection after mutation. Repository merge replacement uses a recoverable
-filesystem journal; archive application uses an in-process rollback copy. A
-process interruption may require the user to reapply the archive. Published
-source remains the Git `main` commit.
+Checkout files are the package's direct persistent state; workspace identity and status remain in SQLite. Snapshots are returned to the caller. Archive replacement validates input and uses recoverable mutation steps, though process interruption may require reapplying the archive. Published source remains the Git `main` commit.

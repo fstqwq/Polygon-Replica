@@ -1,8 +1,6 @@
 # Application package map
 
-This tree mirrors the current `app/` package. It explains responsibility,
-inputs, outputs, state, and lifecycle; exchanged and persisted shapes remain in
-the [protocol index](../protocol/README.md).
+This tree maps the current `app/` package by responsibility. Exchanged and persisted shapes remain in the [protocol index](../protocol/README.md).
 
 - [`app/`](app/README.md): application entry points and package boundaries
 - [`app/impl`](app/impl/README.md): HTTP-facing use-case orchestration
@@ -10,6 +8,3 @@ the [protocol index](../protocol/README.md).
 - [`app/service`](app/service/README.md): domain and platform services
 - [`app/static`](app/static/README.md): browser assets
 - [`app/template`](app/template/README.md): server-rendered HTML templates
-
-The map follows the implementation. `app/` is not treated as a temporary
-mapping to a proposed package tree.

@@ -38,6 +38,6 @@ Avoid generic buckets such as `helpers.py`, `common.py`, or `deps.py` when the c
 - Services receive dependencies from the composition root; they do not locate the running application or import `app.impl`.
 - Filesystem layout and path safety belong to `app/service/platform/fs/`. Domain services own the meaning and lifecycle of the locators they request from that boundary.
 - Verification owns execution evidence and artifact authorization. HTTP implementation code translates its typed outcomes into responses without taking ownership of the stored evidence.
-- Statement language discovery, rendering, Preview caching, Native Package statement materialization, and external-package adaptation remain separate responsibilities. A caller passes one normalized language into the render workflow rather than rediscovering it in downstream modules.
+- Statement language discovery, rendering, preview caching, native package statement materialization, and external-package adaptation remain separate responsibilities. A caller passes one normalized language into the render workflow rather than rediscovering it in downstream modules.
 
 When a boundary changes, update this taxonomy only if the stable layer or role changed. Exact routes, SQL columns, class names, and source-file inventories belong to their owning protocol or package documentation.

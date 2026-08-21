@@ -1,10 +1,6 @@
 # `app/service/sandbox`
 
-Owns the local `ExecSpec`/`ExecResult` boundary and the bubblewrap-backed process
-runner used by TeX compilation and supporting local operations. Inputs include
-command, working directory, mounts, environment, stdio paths, timeout, memory,
-process, and output limits. The result contains backend/status, return code,
-elapsed time, resource observations, and bounded output.
+Owns the bubblewrap-backed local process boundary used by TeX compilation and supporting operations. Inputs define command, working directory, mounts, environment, stdio, and resource limits; outputs contain status, return code, usage observations, and bounded output.
 
 The backend validates mounts, creates a per-call isolated process, and retains
 no durable state. The per-call process limit is applied inside the bubblewrap

@@ -1,17 +1,8 @@
 # `app/service`
 
-Services own reusable domain behavior and infrastructure adapters. Their inputs
-are canonical values prepared at HTTP/archive boundaries; their outputs are
-domain records, locators, and execution results consumed by `app/impl`. They may
-use SQLite, Git, filesystem, sandbox, and process mechanisms through the current
-composition, but do not depend on templates or route registration.
+Services own reusable domain behavior and infrastructure adapters. They consume canonical boundary values and return domain records, locators, execution results, and read models. They do not depend on templates or route registration.
 
-Package delivery follows the service boundary `published source -> Native
-Package -> external packages`. `problem_package` owns Native Package
-materialization and the internal `NativePackageReader`; `export` owns the
-external-package adapters and Package Export orchestration; and `contest`
-consumes frozen readers without starting Verification or routing through
-problem-level exports.
+Package delivery follows `published source -> native package -> external packages`. `problem_package` owns native packages, `export` owns adapters and export orchestration, and `contest` builds request-scoped bundles from available native packages.
 
 Current packages:
 

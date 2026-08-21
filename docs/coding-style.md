@@ -1,21 +1,13 @@
 # Python coding and import policy
 
-The [PEP 8 import guidance](https://peps.python.org/pep-0008/#imports) is the
-baseline when this repository does not define a narrower rule. Repository
-dependency boundaries take precedence over general style guidance.
+The [PEP 8 import guidance](https://peps.python.org/pep-0008/#imports) is the baseline unless this repository defines a narrower rule.
 
 Application code targets CPython 3.14 exclusively and uses its native deferred
 annotation semantics.
 
 ## Incomplete and legacy data
 
-An authoring system must remain usable when source is incomplete or was written
-by an older application revision. Do not turn one invalid configuration file
-into an Internal Server Error that prevents the author from opening and fixing
-the problem. Also do not carry a partly interpreted value through the program
-and add `try`/`except`, fallback values, or legacy branches to every consumer.
-
-Handle the condition once at the boundary that owns it:
+Authoring reads must remain usable with incomplete source. Normalize or diagnose the condition once at its owning boundary:
 
 - authoring reads return diagnostics and a complete page model, using neutral
   defaults only for display and editing;
@@ -23,61 +15,35 @@ Handle the condition once at the boundary that owns it:
   field and does not infer user intent;
 - ambiguous data stays unchanged and is shown as a warning under Review and
   Publish;
-- Verification, Package Export, Native Package construction, and Contest
+- Verification, package export, native package construction, and contest
   builds validate the complete canonical source before doing work, then pass
   only that canonical shape internally;
 - a consumer may reject, explicitly upgrade, or use a defined fallback at its
   entrance, but code behind that entrance does not see incomplete or legacy
   shapes.
 
-Automatic repair is deliberately narrow. Removing fields whose behavior was
-deleted is safe; selecting a main solution from filenames or `.desc` files is
-not. A repair is an ordinary workspace change that the author reviews and
-publishes. Do not add hidden compatibility state or a parallel runtime model.
+Automatic repair is limited to changes that preserve current authored intent. A repair remains an ordinary workspace change for review and publication. Ambiguous source stays unchanged.
 
 ## Import layout
 
-Imports normally stay at module scope after the module docstring. Separate them
-into standard-library, third-party, and repository-local groups with one blank
-line between groups. Put separate `import module` statements on separate lines;
-a parenthesized `from` import may list several names vertically.
+Imports stay at module scope after the docstring and are grouped as standard-library, third-party, and repository-local. Separate `import module` statements; parenthesized `from` imports may list names vertically.
 
-Use absolute imports for repository modules. A function-local import is
-reserved for a real initialization cycle, an optional dependency, or behavior
-whose import timing is intentional; leave the reason visible at the import
-site. Do not use a local import merely to conceal a dependency.
+Use absolute imports for repository modules. A local import requires an initialization cycle, optional dependency, or intentional import timing, with the reason visible at the import site.
 
-Aliases are acceptable for established external conventions such as
-`import numpy as np`, or where a module-name collision would otherwise make the
-code unclear. The repository does not permit renaming a symbol in a `from`
-import.
+Aliases are reserved for established external conventions or module-name collisions. Symbols in `from` imports are never renamed.
 
 Every import has a visible consumer. Prefer an explicit registration call over
 an otherwise-unused import whose only purpose is an import-time side effect.
 
 ## Public boundaries
 
-A leading underscore marks a non-public name. Code outside the owning package
-imports its public service or implementation boundary instead of reaching into
-underscore-prefixed helpers. If no suitable public operation exists, promote
-or move the operation rather than creating chains of private imports.
+A leading underscore marks a non-public name. Cross-package callers use the owning public boundary. Promote or move a needed operation instead of chaining private imports.
 
-The static check permits a private import within the same package and between
-an ancestor and descendant package. It rejects an absolute `from app...`
-import of an underscore-prefixed name across unrelated application packages.
-Do not add a forwarding module whose only purpose is to wrap such a private
-import.
+Private imports are allowed within one package hierarchy and rejected across unrelated application packages. Forwarding modules do not bypass this rule.
 
-An imported name does not become a public API merely because it is available
-as a module attribute. Re-exports are explicit and intentional; application
-packages do not synthesize exports through `globals()`, `dir()`, or import
-loops. Wildcard imports are not used.
+Re-exports are explicit. Application packages do not synthesize exports through `globals()`, `dir()`, import loops, or wildcards.
 
-The persistence implementations under `app.service.disk` and
-`app.service.memory` are private storage boundaries. Only the explicitly
-allowed service owners import them; other modules consume the corresponding
-public service API. The allowlist is enforced by the public-contract check and
-should shrink when ownership is improved, not grow to bypass the boundary.
+Persistence implementations under `app.service.disk` and `app.service.memory` are private storage boundaries. Their import allowlist records current owners and should shrink as boundaries improve.
 
 ## What the checks enforce
 
@@ -100,32 +66,7 @@ forwarding an arbitrary argument sequence. Ordinary facades, services, and
 handlers do not use variadic parameters to absorb misspelled or obsolete
 inputs.
 
-The broader static check also rejects cross-package private imports and simple
-forwarding shims in `app/`. The full public-contract suite enforces the
-allowlist for direct imports of `app.service.disk` and `app.service.memory`.
-CI also runs pyflakes over `app/`, `tests/`, and `scripts/`, and pylint over
-`app/`; unused or unresolved imports are lint failures.
-
-The checker discovers every Python file below `app/`, `tests/`, and `scripts/`
-without a module list or boundary configuration. It derives application layers
-from the canonical `app.route`, `app.impl`, and `app.service` package locations
-and enforces the normal `route` to `impl` to `service` direction. The dependency-light
-`app.config` package owns typed configuration definitions and immutable active
-snapshots; implementation and service modules may depend on that foundation.
-The application composition root is `app.runtime.ApplicationRuntime`.
-`app.main.create_app()` installs one explicit instance in application state;
-request implementation code reaches it only through the implementation
-boundary accessor, while lifecycle and background work receive or capture it
-explicitly. Verification workflow policy and execution are owned by
-`app.service.verification`; service code must not import implementation
-modules.
-
-Cycle analysis covers every discovered module below `app/`. Any cycle fails the
-gate, and newly added modules are included automatically.
-
-Import grouping, placement, and the preference for absolute imports are
-authoring and review rules. The repository does not currently run an import
-sorter, so passing the static gate alone does not prove that layout is correct.
+Static checks scan every Python file below `app/`, `tests/`, and `scripts/`. They enforce cross-package privacy, persistence allowlists, the `route -> impl -> service` dependency direction, and an acyclic `app` graph. CI also runs pyflakes, pylint, and mypy. Import grouping and placement remain review rules because no import sorter is configured.
 
 On the configured Linux test environment, run:
 
@@ -134,13 +75,4 @@ python -m pip install -r requirements.txt -r requirements-static.txt
 bash tests/scripts/check-import-policy.sh
 ```
 
-The same check is included in `tests/scripts/check.sh`, which also runs the
-private-import and forwarding-shim checks. When an enforced rule changes,
-update the checker and this document together. Do not add a UI or unit test
-that merely restates the static import checker.
-
-That shared static check also runs mypy against the complete `app/` tree with
-Linux as the target platform. Third-party packages that do not publish usable
-typing metadata have explicit stub-package dependencies in
-`requirements-static.txt`; application code does not maintain shadow copies of
-their interfaces.
+The same gate is included in `tests/scripts/check.sh`. Update the checker and this document together when an enforced rule changes; do not duplicate a static rule in a UI or unit test.

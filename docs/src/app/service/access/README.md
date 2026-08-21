@@ -8,11 +8,7 @@ block reasons.
 The user-visible role and capability semantics are owned by the
 [access model](../../../../design/access.md).
 
-`model.py` defines actors, resources, capabilities, decisions, and UI-facing
-contexts. `policy.py` contains pure role and agent-scope rules. `store.py` owns
-the access-specific SQLite queries. `query.py` composes persisted facts with the
-policy. HTTP handlers translate the returned decisions; they do not reconstruct
-roles or broaden an agent identity's declared scope.
+The package combines persisted access facts with role and agent-scope policy and returns typed decisions. HTTP handlers translate those decisions without reconstructing roles or broadening declared agent scope.
 
 Problem access derived from a contest never grants problem ownership. A problem
 reader may view and rejudge a visible verification, but only the workspace that

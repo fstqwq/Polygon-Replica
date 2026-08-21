@@ -1,16 +1,8 @@
 # `app/service/runtime`
 
-Owns runtime metadata initialization and startup reconciliation of interrupted
-summary rows through `RuntimeStateService`. It receives the configured SQLite
-store and startup reason/time, then records metadata and returns reconciliation
-warnings. It owns no independent persistent store.
+Owns runtime metadata initialization and startup reconciliation of interrupted summary rows. It records startup metadata and returns reconciliation warnings without owning a separate persistent store.
 
-Typed compiler and runner settings belong to `app/config`; judgehost toolchain
-telemetry belongs to the judgehost service. Application-wide dependency
-construction occurs in the top-level `app.runtime.ApplicationRuntime`.
-`app/runtime_lifecycle.py` receives that object explicitly for startup and
-shutdown; this service package does not locate the application or construct
-other services.
+Typed execution settings belong to `app/config`, toolchain telemetry belongs to judgehost, and application-wide construction belongs to the composition root.
 Restart behavior is owned by the
 [execution](../../../../protocol/execution.md) and
 [storage](../../../../protocol/storage.md) protocols.
