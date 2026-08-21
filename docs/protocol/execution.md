@@ -116,6 +116,10 @@ Generator-backed tests execute their generator payload, including parameters.
 The configured validator runs as the generator task's checker between
 generation and solution execution.
 
+Prepared Verification payloads carry the canonical `problem_mode` read from `config/problem.json`. Judgehost preparation derives the separate execution `mode` from the task kind: `compile-only` and `generate-input` always use the non-interactive `pass-fail` topology, while `main-correct` and `solution-run` use `problem_mode`. A non-compile task with a missing or invalid `problem_mode` is rejected; callers do not choose execution mode independently.
+
+Component payloads follow the same task boundary. A generator task receives the configured validator and the required `testlib.h`. A pass-fail solution task receives the configured checker and `testlib.h`; an interactive solution task receives the configured interactor and `testlib.h`. Compile-only receives only its submitted source and explicit extra sources, so it never loads a checker, validator, or interactor from the Problem.
+
 The DAG scheduler publishes runnable tasks in bounded batches and polls
 Judgehost case-cache misses. Full Verification and Package preparation use the
 background Judgehost service class. Sample-only Verification started for

@@ -72,7 +72,6 @@ class TestPreview(E2ETestBase):
                 problem="alice/sample",
                 user="alice",
                 verification_id=verification_id,
-                mode="pass-fail",
                 logs_dir=logs_root,
                 test_plans=[plan],
             )
@@ -176,7 +175,6 @@ class TestPreview(E2ETestBase):
                 problem="alice/sample",
                 user="alice",
                 verification_id=verification_id,
-                mode="pass-fail",
                 logs_dir=logs_root,
                 test_plans=[plan],
                 accepted_source_label="solutions/std.cpp",
@@ -313,7 +311,6 @@ class TestPreview(E2ETestBase):
                 problem="alice/sample",
                 user="alice",
                 verification_id=verification_id,
-                mode="pass-fail",
                 logs_dir=logs_root,
                 test_plans=plans,
                 accepted_source_label="solutions/std.cpp",

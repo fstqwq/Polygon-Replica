@@ -81,6 +81,26 @@ def execution_modes(
     )
 
 
+def execution_mode(payload: dict[str, object]) -> str:
+    kind = task_kind(payload)
+    if kind == TASK_KIND_COMPILE_ONLY:
+        return "pass-fail"
+    verification_payload = payload.get("verification_payload")
+    if not isinstance(verification_payload, dict):
+        raise RuntimeError("verification payload is required for execution mode")
+    problem_mode = verification_payload.get("problem_mode")
+    if not isinstance(problem_mode, str) or problem_mode not in {
+        "pass-fail",
+        "interactive",
+    }:
+        raise RuntimeError(
+            "verification payload problem_mode must be 'pass-fail' or 'interactive'"
+        )
+    if kind == TASK_KIND_GENERATE_INPUT:
+        return "pass-fail"
+    return problem_mode
+
+
 def execution_signature(payload: dict[str, object]) -> str:
     precomputed = payload.get("precomputed")
     if not isinstance(precomputed, dict):

@@ -8,7 +8,6 @@ from fastapi import Form, HTTPException, Request, Depends
 
 from app.impl.auth.shared import json_error_response, json_redirect_response, redirect_response, template_response
 from app.impl.contest.workspace_scope import contest_workspace_context_from_request
-from app.impl.problem.compile_check import judgehost_compile_check_error
 from app.impl.runtime.dependency import runtime
 from app.impl.problem.shared import _normalize_component_create_path, rename_component_source
 from app.impl.workspace.context_operation import (
@@ -140,19 +139,6 @@ def generator_save_source(
                     generator_sources.append(target)
                 build_cfg['generator_sources'] = generator_sources
                 write_build_config(cfg_path, build_cfg)
-                compile_check_error = judgehost_compile_check_error(
-                    application_runtime=runtime(),
-                    problem=problem,
-                    user=user,
-                    workspace=workspace,
-                    source_path=target,
-                    source_content=safe_content,
-                    verification_source='problem.generator.save_source',
-                )
-                if compile_check_error:
-                    raise ValueError(
-                        f'compile check failed: {compile_check_error}'
-                    )
             except (HTTPException, OSError, ValueError):
                 if target_existed_before:
                     target_abs.write_bytes(target_previous_bytes)

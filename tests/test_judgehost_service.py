@@ -314,7 +314,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=build_verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -517,7 +516,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=artifact_verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -575,7 +573,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=artifact_verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -808,7 +805,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -854,7 +850,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -990,7 +985,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -1035,7 +1029,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -1082,7 +1075,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -1139,7 +1131,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -1233,6 +1224,7 @@ class TestJudgehostService(E2ETestBase):
             input_file=input_file,
             answer_file=answer_file,
             verification_payload_base={
+                "problem_mode": "pass-fail",
                 "run_config_json": json.dumps(
                     {
                         "checker_mode": "testlib",
@@ -1261,7 +1253,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path=None,
             upload_content=b"int main(int argc,char**argv){return 0;}\n",
             upload_filename="gen.cpp",
@@ -1315,7 +1306,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -1372,7 +1362,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -1387,7 +1376,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -1489,7 +1477,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -1608,7 +1595,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -1684,7 +1670,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -1793,7 +1778,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -1928,7 +1912,6 @@ class TestJudgehostService(E2ETestBase):
                 problem=self.problem,
                 username=self.user,
                 artifact_verification_id=build_bad,
-                mode="pass-fail",
                 submission_path="solutions/ac.cpp",
                 upload_content=None,
                 upload_filename=None,
@@ -1949,7 +1932,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=build_good,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -1995,7 +1977,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=build_a,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -2026,7 +2007,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=build_b,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -2074,7 +2054,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=build_a,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -2096,7 +2075,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=build_b,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -2160,7 +2138,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="interactive",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -2199,7 +2176,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -2256,7 +2232,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="interactive",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -2268,6 +2243,10 @@ class TestJudgehostService(E2ETestBase):
             verification_source="run.execute",
             compile_only=False,
         )
+
+        task_snapshot = service.task_snapshot_for_run(run_id)
+        self.assertIsNotNone(task_snapshot)
+        self.assertEqual(task_snapshot["mode"], "interactive")
 
         host = "judgehost-interactor-source"
         service.domjudge_register_host(host)
@@ -2305,7 +2284,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path=None,
             upload_content=(
                 b"public class TranslateMain {\n"
@@ -2366,7 +2344,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -2406,6 +2383,8 @@ class TestJudgehostService(E2ETestBase):
         self.assertTrue(
             "validator" in compare_names or "validator.cpp" in compare_names
         )
+        self.assertNotIn("checker.cpp", compare_names)
+        self.assertNotIn("interactor.cpp", compare_names)
 
     def test_domjudge_generate_verification_interactive_mode_does_not_require_interactor_payload(
         self,
@@ -2452,7 +2431,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="interactive",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -2464,6 +2442,9 @@ class TestJudgehostService(E2ETestBase):
             verification_source="build.generate-input",
             compile_only=False,
         )
+        task_snapshot = service.task_snapshot_for_run(run_id)
+        self.assertIsNotNone(task_snapshot)
+        self.assertEqual(task_snapshot["mode"], "pass-fail")
         host = "judgehost-generate-interactive"
         service.domjudge_register_host(host)
         tasks = service.domjudge_fetch_work(host, max_batchsize=8)
@@ -2488,6 +2469,10 @@ class TestJudgehostService(E2ETestBase):
             "validator" in compare_names or "validator.cpp" in compare_names
         )
 
+        self.assertIn("testlib.h", compare_names)
+        self.assertNotIn("checker.cpp", compare_names)
+        self.assertNotIn("interactor.cpp", compare_names)
+
     def test_domjudge_compile_only_uses_single_virtual_case_even_with_build_tests(
         self,
     ) -> None:
@@ -2509,7 +2494,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path=None,
             upload_content=b"int main(){return 0;}\n",
             upload_filename="checker.cpp",
@@ -2589,17 +2573,17 @@ class TestJudgehostService(E2ETestBase):
         )
         run_id = f"r-jh-compile-only-multipass-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(verification_id)
-        artifact_root = self._verification_artifact_root(verification_id)
-        interactor_bin = artifact_root / "bin" / "interactor"
-        interactor_bin.parent.mkdir(parents=True, exist_ok=True)
-        interactor_bin.write_bytes(b"#!/bin/sh\nexit 0\n")
-        os.chmod(interactor_bin, 0o755)
+        configure_interactive_workspace(
+            Path(self._workspace_path()),
+            time_limit_ms=2000,
+            memory_limit_mb=1024,
+            pass_limit=7,
+        )
 
         task_id = service.enqueue_task(
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path=None,
             upload_content=b"int main(){return 0;}\n",
             upload_filename="checker.cpp",
@@ -2612,6 +2596,9 @@ class TestJudgehostService(E2ETestBase):
             bypass_case_result_cache=True,
             compile_only=True,
         )
+        task_snapshot = service.task_snapshot_for_run(run_id)
+        self.assertIsNotNone(task_snapshot)
+        self.assertEqual(task_snapshot["mode"], "pass-fail")
         host = "judgehost-compile-only-multipass"
         service.domjudge_register_host(host)
         tasks = service.domjudge_fetch_work(host, max_batchsize=8)
@@ -2623,6 +2610,17 @@ class TestJudgehostService(E2ETestBase):
 
         run_files = service.domjudge_get_executable_files(
             "run", str(task_row.get("run_script_id") or "")
+        )
+        compare_files = service.domjudge_get_executable_files(
+            "compare", str(task_row.get("compare_script_id") or "")
+        )
+        execution_file_names = {
+            item.filename for item in (*run_files, *compare_files)
+        }
+        self.assertTrue(
+            execution_file_names.isdisjoint(
+                {"checker.cpp", "validator.cpp", "interactor.cpp", "testlib.h"}
+            )
         )
         run_item = next((item for item in run_files if item.filename == "run"), {})
         run_text = run_item.payload.path.read_text(encoding="utf-8", errors="replace")
@@ -2676,7 +2674,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path=None,
             upload_content=b"int main(){return 0;}\n",
             upload_filename="checker.cpp",
@@ -2694,7 +2691,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path=None,
             upload_content=b"int main(){return 0;}\n",
             upload_filename="checker.cpp",
@@ -2748,7 +2744,6 @@ class TestJudgehostService(E2ETestBase):
                 problem=self.problem,
                 username=self.user,
                 artifact_verification_id=verification_id,
-                mode="pass-fail",
                 submission_path=None,
                 upload_content=b"int main(){return 0;}\n",
                 upload_filename="checker.cpp",
@@ -2791,7 +2786,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path=None,
             upload_content=b"int main(){return 0;}\n",
             upload_filename="tmp.cpp",
@@ -2837,7 +2831,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path=None,
             upload_content=b"int main(){return 0;}\n",
             upload_filename="tmp.cpp",
@@ -2879,7 +2872,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path=None,
             upload_content=b'#include "testlib.h"\nint main(){return 0;}\n',
             upload_filename="gen.cpp",
@@ -2897,7 +2889,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path=None,
             upload_content=b'#include "testlib.h"\nint main(){return 0;}\n',
             upload_filename="gen.cpp",
@@ -2975,7 +2966,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path=None,
             upload_content=b"int main(){return 0;}\n",
             upload_filename="checker.cpp",
@@ -3051,7 +3041,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path=None,
             upload_content=b"int main(){return 0;}\n",
             upload_filename="checker.cpp",
@@ -3129,7 +3118,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path=None,
             upload_content=b"int main(){ return syntax_error }\n",
             upload_filename="checker.cpp",
@@ -3215,7 +3203,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path=None,
             upload_content=b'#include "testlib.h"\nint main(){return 0;}\n',
             upload_filename="gen.cpp",
@@ -3228,6 +3215,7 @@ class TestJudgehostService(E2ETestBase):
             task_kind="generate",
             prepared_payload={
                 "verification_payload": {
+                    "problem_mode": "pass-fail",
                     "tests": [
                         {
                             "name": "001.in",
@@ -3303,7 +3291,6 @@ class TestJudgehostService(E2ETestBase):
                 problem=self.problem,
                 username=self.user,
                 artifact_verification_id=verification_id,
-                mode="pass-fail",
                 submission_path="solutions/ac.cpp",
                 upload_content=None,
                 upload_filename=None,
@@ -3421,7 +3408,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -3534,7 +3520,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -3888,7 +3873,6 @@ class TestJudgehostService(E2ETestBase):
                 problem=self.problem,
                 username=self.user,
                 artifact_verification_id=verification_id,
-                mode="pass-fail",
                 submission_path="solutions/ac.cpp",
                 upload_content=None,
                 upload_filename=None,
@@ -3961,7 +3945,6 @@ class TestJudgehostService(E2ETestBase):
                 problem=self.problem,
                 username=self.user,
                 artifact_verification_id=verification_id,
-                mode="pass-fail",
                 submission_path="solutions/ac.cpp",
                 upload_content=None,
                 upload_filename=None,
@@ -4014,7 +3997,6 @@ class TestJudgehostService(E2ETestBase):
                 problem=self.problem,
                 username=self.user,
                 artifact_verification_id=verification_id,
-                mode="pass-fail",
                 submission_path="solutions/ac.cpp",
                 upload_content=None,
                 upload_filename=None,
@@ -4098,7 +4080,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="interactive",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -4202,7 +4183,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -4271,7 +4251,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -4329,7 +4308,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="interactive",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -4378,7 +4356,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -4424,7 +4401,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -4446,7 +4422,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -4516,7 +4491,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -4572,7 +4546,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -4610,7 +4583,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -4699,7 +4671,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -4796,7 +4767,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -4883,7 +4853,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -4945,7 +4914,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -5012,7 +4980,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -5077,7 +5044,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -5136,7 +5102,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -5210,7 +5175,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -5295,7 +5259,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -5354,7 +5317,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -5392,7 +5354,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -5447,7 +5408,6 @@ class TestJudgehostService(E2ETestBase):
                 problem=self.problem,
                 username=self.user,
                 artifact_verification_id=verification_id,
-                mode="pass-fail",
                 submission_path="solutions/ac.cpp",
                 upload_content=None,
                 upload_filename=None,
@@ -5498,7 +5458,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -5575,7 +5534,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -5599,7 +5557,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path=None,
             upload_content=b"#include <bits/stdc++.h>\nint main(){return 0;}\n",
             upload_filename="gen.cpp",
@@ -5707,7 +5664,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=build_verification_id,
-            mode="pass-fail",
             submission_path="solutions/ac.cpp",
             upload_content=None,
             upload_filename=None,
@@ -5826,6 +5782,7 @@ class TestJudgehostService(E2ETestBase):
         extra_testlib = runtime.runtime_blob_store.put_bytes(b"")
         empty_file = extra_testlib
         payload_base = {
+            "problem_mode": "pass-fail",
             "run_config_json": json.dumps(
                 {
                     "checker_mode": "testlib",
@@ -5898,7 +5855,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path=None,
             upload_content=generator_source,
             upload_filename="gen.cpp",
@@ -5949,7 +5905,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path=None,
             upload_content=generator_source,
             upload_filename="gen.cpp",
@@ -6059,6 +6014,7 @@ class TestJudgehostService(E2ETestBase):
         validator_file = runtime.runtime_blob_store.put_bytes(validator_source)
         extra_testlib = runtime.runtime_blob_store.put_bytes(b"")
         payload_base = {
+            "problem_mode": "pass-fail",
             "run_config_json": json.dumps(
                 {
                     "checker_mode": "testlib",
@@ -6102,7 +6058,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path=None,
             upload_content=generator_source,
             upload_filename="gen.cpp",
@@ -6120,7 +6075,6 @@ class TestJudgehostService(E2ETestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
-            mode="pass-fail",
             submission_path=None,
             upload_content=generator_source,
             upload_filename="gen.cpp",

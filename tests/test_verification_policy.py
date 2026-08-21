@@ -57,10 +57,12 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
 
         limits = _problem_limits(runtime)
         run_payload = _run_payload_base(
+            problem_mode="pass-fail",
             problem_limits=limits,
             source_files={},
         )
         generate_payload = _generate_payload_base(
+            problem_mode="pass-fail",
             problem_limits=limits,
             source_files={},
         )

@@ -79,7 +79,6 @@
     "test_ui_run.py",
     "test_ui_workspace.py",
     "test_verification_adapters.py",
-    "test_verification_compile_adapter.py",
     "test_verification_policy.py"
   ]
 }

@@ -90,7 +90,7 @@ class TestVerificationAdapters(E2ETestBase):
             problem=self.problem,
             user=self.user,
             verification_id=verification_id,
-            mode="pass-fail",
+            problem_mode="pass-fail",
             pass_limit=1,
             snapshot_root=source_file.path.parent,
             artifact_file_by_test_ref={},
@@ -173,6 +173,8 @@ class TestVerificationAdapters(E2ETestBase):
             [call["service_class"] for call in calls],
             ["foreground", "foreground", "foreground"],
         )
+        self.assertTrue(all("mode" not in call for call in calls))
+        self.assertNotIn("mode", prepare_template.call_args.kwargs)
         self.assertEqual(prepare_template.call_count, 2)
         self.assertIsNotNone(skipped.terminal_result)
         assert skipped.terminal_result is not None
@@ -225,7 +227,6 @@ class TestVerificationAdapters(E2ETestBase):
                 problem=self.problem,
                 user=self.user,
                 verification_id=verification_id,
-                mode="pass-fail",
                 logs_dir=logs_dir,
                 test_plans=[sanity_test_plan()],
                 bypass_case_result_cache=True,
@@ -287,7 +288,6 @@ class TestVerificationAdapters(E2ETestBase):
                 problem=self.problem,
                 user=self.user,
                 verification_id=verification_id,
-                mode="pass-fail",
                 logs_dir=logs_dir,
                 test_plans=[sanity_test_plan()],
                 generate_feedback_by_test={"001.in": feedback},
@@ -325,7 +325,6 @@ class TestVerificationAdapters(E2ETestBase):
                 problem=self.problem,
                 user=self.user,
                 verification_id=verification_id,
-                mode="pass-fail",
                 logs_dir=logs_dir,
                 test_plans=[sanity_test_plan(test_name="001.in"), sanity_test_plan(test_name="002.in")],
                 runtime_columns=[
@@ -393,7 +392,6 @@ class TestVerificationAdapters(E2ETestBase):
                 problem=self.problem,
                 user=self.user,
                 verification_id=verification_id,
-                mode="pass-fail",
                 logs_dir=logs_dir,
                 test_plans=[sanity_test_plan()],
             )
@@ -432,7 +430,6 @@ class TestVerificationAdapters(E2ETestBase):
                 problem=self.problem,
                 user=self.user,
                 verification_id=verification_id,
-                mode="pass-fail",
                 logs_dir=logs_dir,
                 test_plans=[sanity_test_plan()],
             )
@@ -500,7 +497,7 @@ class TestVerificationAdapters(E2ETestBase):
                     verification_id=canonical_test_verification_id(
                         f"custom-upload-execution-{source_name}"
                     ),
-                    mode="pass-fail",
+                    problem_mode="pass-fail",
                     pass_limit=1,
                     snapshot_root=accepted_file.path.parent,
                     artifact_file_by_test_ref={},

@@ -47,6 +47,7 @@ from app.service.repository.workspace import WorkspaceService
 
 class JudgehostPayloadPreparation:
     _TASK_KIND_COMPILE_ONLY = "compile-only"
+    _TASK_KIND_GENERATE_INPUT = "generate-input"
 
     def __init__(
         self,
@@ -339,13 +340,19 @@ class JudgehostPayloadPreparation:
         *,
         artifact_verification_id: str,
         workspace: Path,
-        mode: str,
+        task_kind: str,
         selected_tests: list[str],
         settings: JudgehostSettings,
     ) -> dict[str, object]:
         safe_verification_id = JudgehostPayloadPreparation._normalize_text(artifact_verification_id)
-        if not safe_verification_id:
-            return {}
+        problem_cfg = load_problem_config(
+            workspace,
+            limits=settings.problem_config_limits,
+        )
+        problem_mode = problem_cfg["mode"]
+        build_cfg = load_build_config(workspace, problem_mode=problem_mode)
+        problem_time_limit_ms = problem_cfg["time_limit_ms"]
+        problem_memory_limit_mb = problem_cfg["memory_limit_mb"]
 
         wanted_tests: list[str] = []
         if selected_tests:
@@ -356,66 +363,59 @@ class JudgehostPayloadPreparation:
                 if token in wanted_tests:
                     continue
                 wanted_tests.append(token)
-        artifact_set = self._execution_port.load_artifacts(
-            safe_verification_id,
-            tuple(wanted_tests),
-            limit=settings.max_tests_per_task,
+        artifact_set = (
+            self._execution_port.load_artifacts(
+                safe_verification_id,
+                tuple(wanted_tests),
+                limit=settings.max_tests_per_task,
+            )
+            if safe_verification_id
+            else None
         )
 
         tests_payload: list[dict[str, object]] = []
-        for artifact in artifact_set.cases:
-            test_name = artifact.test_name
-            input_ref = artifact.input_ref
-            if not input_ref:
-                continue
-            input_file = self._runtime_blob_store.descriptor(input_ref)
-            if input_file is None:
-                continue
-            ans_name = f"{Path(test_name).stem}.ans"
-            answer_ref = artifact.answer_ref
-            answer_file = self._runtime_blob_store.put_bytes(b"")
-            if answer_ref:
-                resolved_answer = self._runtime_blob_store.descriptor(answer_ref)
-                if resolved_answer is not None:
-                    answer_file = resolved_answer
-            tests_payload.append(
-                {
-                    "name": test_name,
-                    "input_file": input_file.to_payload(),
-                    "answer_name": ans_name,
-                    "answer_file": answer_file.to_payload(),
-                }
-            )
+        if artifact_set is not None:
+            for artifact in artifact_set.cases:
+                test_name = artifact.test_name
+                input_ref = artifact.input_ref
+                if not input_ref:
+                    continue
+                input_file = self._runtime_blob_store.descriptor(input_ref)
+                if input_file is None:
+                    continue
+                ans_name = f"{Path(test_name).stem}.ans"
+                answer_ref = artifact.answer_ref
+                answer_file = self._runtime_blob_store.put_bytes(b"")
+                if answer_ref:
+                    resolved_answer = self._runtime_blob_store.descriptor(answer_ref)
+                    if resolved_answer is not None:
+                        answer_file = resolved_answer
+                tests_payload.append(
+                    {
+                        "name": test_name,
+                        "input_file": input_file.to_payload(),
+                        "answer_name": ans_name,
+                        "answer_file": answer_file.to_payload(),
+                    }
+                )
 
-        run_config_text = artifact_set.run_config_json
+        run_config_text = "" if artifact_set is None else artifact_set.run_config_json
 
-        build_cfg = load_build_config(workspace)
-        problem_cfg = load_problem_config(
-            workspace,
-            limits=settings.problem_config_limits,
-        )
-        problem_time_limit_ms = problem_cfg["time_limit_ms"]
-        problem_memory_limit_mb = problem_cfg["memory_limit_mb"]
-
-        requested_mode = JudgehostPayloadPreparation._normalize_status(mode)
-        if requested_mode != problem_cfg["mode"]:
-            raise RuntimeError("execution mode does not match config/problem.json")
-        interactive_mode = requested_mode == "interactive"
         checker_source: Path | None = None
-        if not interactive_mode:
+        validator_source: Path | None = None
+        interactor_source: Path | None = None
+        if task_kind == self._TASK_KIND_GENERATE_INPUT:
+            validator_source_token = build_cfg.get("validator_source")
+            validator_source = (
+                None
+                if validator_source_token is None
+                else resolve_source(workspace, validator_source_token)
+            )
+        elif problem_mode == "pass-fail":
             checker_source_token = build_cfg.get("checker_source")
             if checker_source_token is not None:
                 checker_source = resolve_source(workspace, checker_source_token)
-
-        validator_source_token = build_cfg.get("validator_source")
-        validator_source = (
-            None
-            if validator_source_token is None
-            else resolve_source(workspace, validator_source_token)
-        )
-
-        interactor_source: Path | None = None
-        if interactive_mode:
+        else:
             interactor_source_token = build_cfg.get("interactor_source")
             if interactor_source_token is None:
                 raise RuntimeError("interactor source is required for interactive mode")
@@ -441,6 +441,7 @@ class JudgehostPayloadPreparation:
             sources_payload[name] = self._runtime_blob_store.put_file(descriptor).to_payload()
 
         return {
+            "problem_mode": problem_mode,
             "tests": tests_payload,
             "run_config_json": run_config_text,
             "problem_limits": {
@@ -457,7 +458,6 @@ class JudgehostPayloadPreparation:
         problem: str,
         username: str,
         artifact_verification_id: str,
-        mode: str,
         submission_path: str | None,
         upload_content: bytes | None,
         upload_file: PayloadFile | None,
@@ -475,10 +475,18 @@ class JudgehostPayloadPreparation:
         compile_only: bool = False,
         verification_payload_override: dict[str, object] | None = None,
     ) -> dict[str, object]:
+        safe_task_kind = task_plan.task_kind(
+            {
+                "task_kind": task_kind,
+                "verification_source": verification_source,
+                "compile_only": bool(compile_only),
+            }
+        )
+        compile_only_flag = safe_task_kind == self._TASK_KIND_COMPILE_ONLY
         workspace: Path | None = None
         if (
             upload_content is None and upload_file is None
-        ) or verification_payload_override is None:
+        ) or (verification_payload_override is None and not compile_only_flag):
             ctx = self._workspace_service.workspace_context(
                 problem, username, include_recent=False
             )
@@ -534,28 +542,25 @@ class JudgehostPayloadPreparation:
         )
 
         if verification_payload_override is None:
-            if workspace is None:
-                raise RuntimeError("workspace is required for verification payload collection")
-            verification_payload = self._collect_verification_payload(
-                artifact_verification_id=artifact_verification_id,
-                workspace=workspace,
-                mode=mode,
-                selected_tests=selected_tests,
-                settings=settings,
-            )
+            if compile_only_flag:
+                verification_payload = {}
+            else:
+                if workspace is None:
+                    raise RuntimeError(
+                        "workspace is required for verification payload collection"
+                    )
+                verification_payload = self._collect_verification_payload(
+                    artifact_verification_id=artifact_verification_id,
+                    workspace=workspace,
+                    task_kind=safe_task_kind,
+                    selected_tests=selected_tests,
+                    settings=settings,
+                )
         else:
             verification_payload = dict(verification_payload_override)
         verification_payload = self._materialize_verification_payload(
             verification_payload
         )
-        safe_task_kind = task_plan.task_kind(
-            {
-                "task_kind": task_kind,
-                "verification_source": verification_source,
-                "compile_only": bool(compile_only),
-            }
-        )
-        compile_only_flag = safe_task_kind == self._TASK_KIND_COMPILE_ONLY
         if compile_only_flag:
             empty = self._runtime_blob_store.put_bytes(b"").to_payload()
             verification_payload = dict(verification_payload)
@@ -567,13 +572,12 @@ class JudgehostPayloadPreparation:
                     "answer_file": empty,
                 }
             ]
-        return {
+        payload: dict[str, object] = {
             "type": "verification.run",
             "run_id": run_id,
             "problem": problem,
             "username": username,
             "artifact_verification_id": artifact_verification_id,
-            "mode": mode,
             "submission_path": JudgehostPayloadPreparation._normalize_text(submission_path),
             "source_name": source_name,
             "source_label": source_label,
@@ -591,6 +595,8 @@ class JudgehostPayloadPreparation:
             "verification_payload": verification_payload,
             "enqueued_at": now_iso(),
         }
+        payload["mode"] = task_plan.execution_mode(payload)
+        return payload
 
     def _materialize_verification_payload(
         self,
@@ -625,7 +631,6 @@ class JudgehostPayloadPreparation:
     def prepare_execution_template(
         self,
         *,
-        mode: str,
         upload_file: PayloadFile,
         upload_filename: str,
         verification_payload: dict[str, object],
@@ -646,7 +651,6 @@ class JudgehostPayloadPreparation:
             source_bytes=bytes(upload_content),
         )
         payload: dict[str, object] = {
-            "mode": mode,
             "source_name": source_name,
             "source_file": upload_file.to_payload(),
             "entry_point": entry_point,
@@ -711,8 +715,8 @@ class JudgehostPayloadPreparation:
         )
         if problem_limits_obj is None:
             problem_limits_obj = {}
-        mode = decode_text(lower=True, raw=payload.get("mode"), default="pass-fail")
         compile_only, generate_mode, main_correct = task_plan.execution_modes(payload)
+        mode = task_plan.execution_mode(payload)
         manual_validate_only = parse_bool(payload.get("manual_validate_only"), default=False)
         configured_pass_limit = max(
             1,
@@ -959,7 +963,6 @@ class JudgehostPayloadPreparation:
         problem: str,
         username: str,
         artifact_verification_id: str,
-        mode: str,
         submission_path: str | None,
         upload_content: bytes | None,
         upload_file: PayloadFile | None = None,
@@ -991,7 +994,6 @@ class JudgehostPayloadPreparation:
             problem=problem,
             username=username,
             artifact_verification_id=artifact_verification_id,
-            mode=mode,
             submission_path=submission_path,
             upload_content=upload_content,
             upload_file=upload_file,

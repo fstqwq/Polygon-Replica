@@ -6,7 +6,7 @@ from app.config import ConfigValues
 from app.service.platform.testlib_source import workspace_testlib_header
 from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
 from app.service.problem.build_config import BuildConfig
-from app.service.problem.runtime_config import ProblemConfig, problem_config_limits
+from app.service.problem.runtime_config import ProblemConfig, ProblemMode, problem_config_limits
 from app.service.problem.source_tree import load_problem_source_tree
 from app.service.problem.test_spec import TestSpecEntry
 from app.service.problem.test_spec import parse_gen_command_tokens
@@ -24,7 +24,8 @@ SOLUTION_SOURCE_EXTENSIONS = (*CPP_EXTENSIONS, ".py", ".java")
 class SharedSourcePayloads(TypedDict):
     accepted_source_path: str
     source_file_by_path: dict[str, PayloadFile]
-    source_files: dict[str, PayloadFile]
+    generate_source_files: dict[str, PayloadFile]
+    run_source_files: dict[str, PayloadFile]
     testlib_header: Path | None
 
 
@@ -38,10 +39,12 @@ def _problem_limits(runtime_cfg: ProblemConfig) -> dict[str, int]:
 
 def _run_payload_base(
     *,
+    problem_mode: ProblemMode,
     problem_limits: dict[str, int],
     source_files: dict[str, PayloadFile],
 ) -> dict[str, object]:
     return {
+        "problem_mode": problem_mode,
         "run_config_json": json.dumps(
             {
                 "checker_mode": "testlib",
@@ -59,10 +62,12 @@ def _run_payload_base(
 
 def _generate_payload_base(
     *,
+    problem_mode: ProblemMode,
     problem_limits: dict[str, int],
     source_files: dict[str, PayloadFile],
 ) -> dict[str, object]:
     return {
+        "problem_mode": problem_mode,
         "run_config_json": json.dumps(
             {
                 "checker_mode": "testlib",
@@ -87,7 +92,7 @@ def _shared_source_payloads(
     snapshot: Path,
     manifest: VerificationManifest,
     build_cfg: BuildConfig,
-    mode: str,
+    problem_mode: ProblemMode,
 ) -> SharedSourcePayloads:
     snapshot_resolved = snapshot.resolve()
     validator_source = select_source(
@@ -98,7 +103,7 @@ def _shared_source_payloads(
         cpp_extensions=CPP_EXTENSIONS,
         snapshot_resolved=snapshot_resolved,
     )
-    if mode == "interactive":
+    if problem_mode == "interactive":
         checker_source = None
         interactor_source = select_source(
             snapshot,
@@ -132,19 +137,33 @@ def _shared_source_payloads(
         accepted_source_path: manifest.require(accepted_source_path),
     }
     testlib_header = workspace_testlib_header(snapshot)
-    source_files: dict[str, PayloadFile] = {}
+    generate_source_files: dict[str, PayloadFile] = {}
+    run_source_files: dict[str, PayloadFile] = {}
     if checker_source is not None:
-        source_files["checker.cpp"] = manifest.require(checker_source.relative_to(snapshot).as_posix())
+        run_source_files["checker.cpp"] = manifest.require(
+            checker_source.relative_to(snapshot).as_posix()
+        )
     if validator_source is not None:
-        source_files["validator.cpp"] = manifest.require(validator_source.relative_to(snapshot).as_posix())
+        generate_source_files["validator.cpp"] = manifest.require(
+            validator_source.relative_to(snapshot).as_posix()
+        )
     if interactor_source is not None:
-        source_files["interactor.cpp"] = manifest.require(interactor_source.relative_to(snapshot).as_posix())
-    if testlib_header is not None:
-        source_files["testlib.h"] = manifest.require(testlib_header.relative_to(snapshot).as_posix())
+        run_source_files["interactor.cpp"] = manifest.require(
+            interactor_source.relative_to(snapshot).as_posix()
+        )
+    if testlib_header is not None and generate_source_files:
+        generate_source_files["testlib.h"] = manifest.require(
+            testlib_header.relative_to(snapshot).as_posix()
+        )
+    if testlib_header is not None and run_source_files:
+        run_source_files["testlib.h"] = manifest.require(
+            testlib_header.relative_to(snapshot).as_posix()
+        )
     return {
         "accepted_source_path": accepted_source_path,
         "source_file_by_path": source_file_by_path,
-        "source_files": source_files,
+        "generate_source_files": generate_source_files,
+        "run_source_files": run_source_files,
         "testlib_header": testlib_header,
     }
 
@@ -360,13 +379,13 @@ class VerificationExecutionPlanner:
         )
         build_cfg = source_tree.build
         runtime_cfg = source_tree.problem
-        mode = runtime_cfg["mode"]
+        problem_mode = runtime_cfg["mode"]
         pass_limit = runtime_cfg["pass_limit"]
         shared_sources = _shared_source_payloads(
             snapshot=snapshot,
             manifest=resolved_manifest,
             build_cfg=build_cfg,
-            mode=mode,
+            problem_mode=problem_mode,
         )
         problem_limits = _problem_limits(runtime_cfg)
         plans, tests_meta_rows = _tests_from_spec(
@@ -392,15 +411,17 @@ class VerificationExecutionPlanner:
         return VerificationExecutionPlan(
             snapshot_root=snapshot,
             accepted_source_path=str(shared_sources["accepted_source_path"]),
-            mode=mode,
+            problem_mode=problem_mode,
             pass_limit=pass_limit,
             run_verification_payload_base=_run_payload_base(
                 problem_limits=problem_limits,
-                source_files=shared_sources["source_files"],
+                problem_mode=problem_mode,
+                source_files=shared_sources["run_source_files"],
             ),
             generate_verification_payload_base=_generate_payload_base(
                 problem_limits=problem_limits,
-                source_files=shared_sources["source_files"],
+                problem_mode=problem_mode,
+                source_files=shared_sources["generate_source_files"],
             ),
             source_file_by_path=shared_sources["source_file_by_path"],
             test_names=[plan.test_name for plan in plans],

@@ -67,7 +67,6 @@ class JudgehostTaskAdmission:
         problem: str,
         username: str,
         artifact_verification_id: str,
-        mode: str,
         submission_path: str | None,
         upload_content: bytes | None,
         upload_file: PayloadFile | None = None,
@@ -131,7 +130,6 @@ class JudgehostTaskAdmission:
             problem=problem,
             username=username,
             artifact_verification_id=artifact_verification_id,
-            mode=mode,
             submission_path=submission_path,
             upload_content=upload_content,
             upload_file=upload_file,
@@ -154,6 +152,12 @@ class JudgehostTaskAdmission:
         )
         payload["execution_signature"] = task_plan.execution_signature(payload)
         safe_task_kind = task_plan.task_kind(payload)
+        safe_mode = payload.get("mode")
+        if not isinstance(safe_mode, str) or safe_mode not in {
+            "pass-fail",
+            "interactive",
+        }:
+            raise RuntimeError("judgehost execution mode is invalid")
         safe_service_class = service_class.strip().lower()
         if safe_service_class not in {"foreground", "background"}:
             raise RuntimeError("invalid judgehost service class")
@@ -163,7 +167,7 @@ class JudgehostTaskAdmission:
                 "problem": problem,
                 "username": username,
                 "artifact_verification_id": artifact_verification_id,
-                "mode": mode,
+                "mode": safe_mode,
                 "submission_path": submission_path or "",
                 "selected_tests": list(selected),
                 "verification_id": safe_verification_id,
@@ -185,7 +189,7 @@ class JudgehostTaskAdmission:
                 problem=problem,
                 username=username,
                 artifact_verification_id=artifact_verification_id,
-                mode=mode,
+                mode=safe_mode,
                 verification_id=safe_verification_id,
                 verification_task_id=safe_verification_task_id,
                 verification_source=verification_source,
@@ -401,7 +405,6 @@ class JudgehostTaskAdmission:
             problem=problem,
             username=username,
             artifact_verification_id=artifact_verification_id,
-            mode="pass-fail",
             submission_path=None,
             upload_content=upload_content,
             upload_filename=upload_filename or "submission.cpp",

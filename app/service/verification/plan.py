@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.service.platform.runtime_blob_store import PayloadFile
+from app.service.problem.runtime_config import ProblemMode
 
 
 @dataclass(frozen=True)
@@ -26,7 +27,7 @@ class VerificationTestPlan:
 class VerificationExecutionPlan:
     snapshot_root: Path
     accepted_source_path: str
-    mode: str
+    problem_mode: ProblemMode
     pass_limit: int
     run_verification_payload_base: dict[str, object]
     generate_verification_payload_base: dict[str, object]

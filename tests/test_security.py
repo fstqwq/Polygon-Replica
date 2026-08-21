@@ -636,13 +636,12 @@ class TestSecurity(E2ETestBase):
         marker = suite_root() / f"generator-save-escape-{uuid.uuid4().hex[:8]}.cpp"
         marker.unlink(missing_ok=True)
         content = "int main(){return 0;}\n"
-        with patch("app.impl.problem.generator.judgehost_compile_check_error", return_value=""):
-            resp = generator_save_source(
-                problem="alice/sample",
-                user="alice",
-                path="../../" + marker.name,
-                content=content,
-            )
+        resp = generator_save_source(
+            problem="alice/sample",
+            user="alice",
+            path="../../" + marker.name,
+            content=content,
+        )
         self.assertEqual(resp.status_code, 303)
         self.assertFalse(marker.exists())
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -655,13 +654,12 @@ class TestSecurity(E2ETestBase):
         marker = suite_root() / f"validator-save-escape-{uuid.uuid4().hex[:8]}.cpp"
         marker.unlink(missing_ok=True)
         content = "int main(){return 0;}\n"
-        with patch("app.impl.problem.validator.judgehost_compile_check_error", return_value=""):
-            resp = validator_save_source(
-                problem="alice/sample",
-                user="alice",
-                path="../../" + marker.name,
-                content=content,
-            )
+        resp = validator_save_source(
+            problem="alice/sample",
+            user="alice",
+            path="../../" + marker.name,
+            content=content,
+        )
         self.assertEqual(resp.status_code, 303)
         self.assertFalse(marker.exists())
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -673,13 +671,12 @@ class TestSecurity(E2ETestBase):
         marker = suite_root() / f"interactor-save-escape-{uuid.uuid4().hex[:8]}.cpp"
         marker.unlink(missing_ok=True)
         content = "int main(){return 0;}\n"
-        with patch("app.impl.problem.interactor.judgehost_compile_check_error", return_value=""):
-            resp = interactor_save_source(
-                problem="alice/sample",
-                user="alice",
-                path="../../" + marker.name,
-                content=content,
-            )
+        resp = interactor_save_source(
+            problem="alice/sample",
+            user="alice",
+            path="../../" + marker.name,
+            content=content,
+        )
         self.assertEqual(resp.status_code, 303)
         self.assertFalse(marker.exists())
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))

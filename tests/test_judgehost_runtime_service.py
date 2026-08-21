@@ -60,6 +60,7 @@ class TestJudgehostRuntimeService(DBTestBase):
     def test_precompute_rejects_illegal_internal_memory_limit(self) -> None:
         source = self.runtime_blob_store.put_bytes(b"int main(){return 0;}\n")
         verification_payload = {
+            "problem_mode": "pass-fail",
             "run_config_json": '{"memory_limit_mb":0}',
             "problem_limits": {
                 "time_limit_ms": 2000,
@@ -73,7 +74,6 @@ class TestJudgehostRuntimeService(DBTestBase):
             "invalid internal memory_limit_mb",
         ):
             self.service.prepare_execution_template(
-                mode="pass-fail",
                 upload_file=source,
                 upload_filename="solution.cpp",
                 verification_payload=verification_payload,
@@ -81,6 +81,62 @@ class TestJudgehostRuntimeService(DBTestBase):
                 verification_source="verification",
                 task_kind="solution-run",
             )
+
+    def test_non_compile_template_requires_canonical_problem_mode(self) -> None:
+        source = self.runtime_blob_store.put_bytes(b"int main(){return 0;}\n")
+        base_payload: dict[str, object] = {
+            "problem_limits": {
+                "time_limit_ms": 2000,
+                "memory_limit_mb": 1024,
+                "pass_limit": 1,
+            },
+            "source_files": {},
+        }
+
+        for task_kind in ("generate-input", "main-correct", "solution-run"):
+            for value in (None, "", "batch", 1):
+                verification_payload = dict(base_payload)
+                if value is not None:
+                    verification_payload["problem_mode"] = value
+                with self.subTest(
+                    task_kind=task_kind,
+                    problem_mode=value,
+                ), self.assertRaisesRegex(
+                    RuntimeError,
+                    "problem_mode must be 'pass-fail' or 'interactive'",
+                ):
+                    self.service.prepare_execution_template(
+                        upload_file=source,
+                        upload_filename="solution.cpp",
+                        verification_payload=verification_payload,
+                        expected_behavior="accepted",
+                        verification_source="verification",
+                        task_kind=task_kind,
+                    )
+
+    def test_compile_only_derives_pass_fail_without_problem_mode_or_workspace(
+        self,
+    ) -> None:
+        payload = self.service.prepare_enqueue_payload(
+            problem="missing/problem",
+            username="missing-user",
+            artifact_verification_id="",
+            submission_path=None,
+            upload_content=b"int main(){return 0;}\n",
+            upload_filename="checker.cpp",
+            run_id=f"r-compile-mode-{uuid.uuid4().hex[:8]}",
+            selected_tests=[],
+            verification_id="ver-compile-mode",
+            verification_program_id=_PROGRAM_ID,
+            expected_behavior="compile",
+            verification_source="build.compile",
+            task_kind="compile-only",
+            compile_only=True,
+        )
+
+        self.assertEqual(payload["mode"], "pass-fail")
+        self.assertNotIn("problem_mode", dict(payload["verification_payload"]))
+        self.assertEqual(len(list(dict(payload["verification_payload"])["tests"])), 1)
 
     def test_prepare_materializes_external_payloads_before_admission(self) -> None:
         source_root = Path(self.settings.cache_root) / "prepared-test-files"
@@ -96,7 +152,6 @@ class TestJudgehostRuntimeService(DBTestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id="",
-            mode="pass-fail",
             submission_path=None,
             upload_content=None,
             upload_file=RuntimeBlobStore.describe_file(submission_path),
@@ -108,6 +163,7 @@ class TestJudgehostRuntimeService(DBTestBase):
             expected_behavior="accepted",
             verification_source="run.execute",
             verification_payload_override={
+                "problem_mode": "pass-fail",
                 "tests": [
                     {
                         "name": "001.in",
@@ -171,7 +227,6 @@ class TestJudgehostRuntimeService(DBTestBase):
                 problem=self.problem,
                 username=self.user,
                 artifact_verification_id="",
-                mode="pass-fail",
                 submission_path=None,
                 upload_content=None,
                 upload_file=descriptor,
@@ -183,6 +238,7 @@ class TestJudgehostRuntimeService(DBTestBase):
                 expected_behavior="accepted",
                 verification_source="run.execute",
                 verification_payload_override={
+                    "problem_mode": "pass-fail",
                     "tests": [
                         {
                             "name": "001.in",
@@ -279,7 +335,6 @@ class TestJudgehostRuntimeService(DBTestBase):
             problem=self.problem,
             username=self.user,
             artifact_verification_id="",
-            mode="pass-fail",
             submission_path=None,
             upload_content=(
                 b"public class TranslateMain {\n"
@@ -307,7 +362,6 @@ class TestJudgehostRuntimeService(DBTestBase):
                 problem=self.problem,
                 username=self.user,
                 artifact_verification_id="",
-                mode="pass-fail",
                 submission_path=None,
                 upload_content=b"class Helper {}\n",
                 upload_filename="helper.java",

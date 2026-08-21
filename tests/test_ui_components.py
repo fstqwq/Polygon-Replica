@@ -1,6 +1,6 @@
 from unittest.mock import patch
 
-from tests.common import E2ETestBase
+from tests.common import E2ETestBase, runtime
 from tests.ui_support import (
     Path,
     UIHelpersMixin,
@@ -75,19 +75,16 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(resp.status_code, 200)
 
-        with patch(
-            "app.impl.problem.checker.judgehost_compile_check_error", return_value=""
-        ):
-            saved = checker_save_source(
-                problem=self.problem,
-                user=self.user,
-                path=rel,
-                content="int main(int argc, char** argv){return argc > 0 ? 0 : 1;}\n",
-            )
+        saved = checker_save_source(
+            problem=self.problem,
+            user=self.user,
+            path=rel,
+            content="int main(int argc, char** argv){return argc > 0 ? 0 : 1;}\n",
+        )
         self.assertEqual(saved.status_code, 303)
         self.assertIn("return argc", (ws / rel).read_text(encoding="utf-8"))
 
-    def test_checker_save_source_compile_check_failure_keeps_standard_checker_source(
+    def test_checker_save_source_accepts_invalid_source_and_selects_it(
         self,
     ) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
@@ -104,25 +101,25 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         self.assertEqual(cfg_before.get("checker_source"), "checkers/fcmp.cpp")
         self.assertTrue((ws / "checkers/fcmp.cpp").exists())
 
-        failed = checker_save_source(
+        saved = checker_save_source(
             problem=self.problem,
             user=self.user,
             path=rel,
             content="int main( { return 0; }\n",
         )
-        self.assertEqual(failed.status_code, 303)
+        self.assertEqual(saved.status_code, 303)
         self.assertEqual(
-            failed.headers.get("location", ""), f"/problems/{self.problem}/checker"
+            saved.headers.get("location", ""), f"/problems/{self.problem}/checker"
         )
-        self.assertFalse((ws / rel).exists())
+        self.assertEqual((ws / rel).read_text(encoding="utf-8"), "int main( { return 0; }\n")
 
         cfg_after = json.loads(
             (ws / "config" / "build.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(cfg_after.get("checker_source"), "checkers/fcmp.cpp")
+        self.assertEqual(cfg_after.get("checker_source"), rel)
         self.assertNotIn("checker_standard", cfg_after)
 
-    def test_checker_save_source_json_error_keeps_editor_content_local_only(
+    def test_checker_save_source_json_accepts_invalid_source(
         self,
     ) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
@@ -138,13 +135,93 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
             content="int main( { return 0; }\n",
             response_mode="json",
         )
-        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.status_code, 200)
         payload = json.loads(resp.body.decode("utf-8"))
-        self.assertFalse(bool(payload.get("ok")))
-        self.assertIn("compile check failed", str(payload.get("error") or "").lower())
+        self.assertTrue(bool(payload.get("ok")))
         self.assertEqual(
-            source_abs.read_text(encoding="utf-8"), "int main(){return 0;}\n"
+            source_abs.read_text(encoding="utf-8"), "int main( { return 0; }\n"
         )
+
+    def test_component_source_saves_never_call_compile_only(self) -> None:
+        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
+        targets = {
+            "checker": "checkers/not_compiled.cpp",
+            "validator": "validators/not_compiled.cpp",
+            "interactor": "interactors/not_compiled.cpp",
+            "generator": "generators/not_compiled.cpp",
+        }
+
+        with patch.object(
+            runtime.judgehost_task_service,
+            "compile_only_submission",
+            side_effect=AssertionError("save must not compile"),
+        ) as compile_only:
+            responses = (
+                checker_save_source(
+                    problem=self.problem,
+                    user=self.user,
+                    path=targets["checker"],
+                    content="int main( {\n",
+                ),
+                validator_save_source(
+                    problem=self.problem,
+                    user=self.user,
+                    path=targets["validator"],
+                    content="",
+                ),
+                interactor_save_source(
+                    problem=self.problem,
+                    user=self.user,
+                    path=targets["interactor"],
+                    content="int main( {\n",
+                ),
+                generator_save_source(
+                    problem=self.problem,
+                    user=self.user,
+                    path=targets["generator"],
+                    content="int main( {\n",
+                ),
+                checker_save_source(
+                    problem=self.problem,
+                    user=self.user,
+                    path=targets["checker"],
+                    content="int main( {\n",
+                    response_mode="json",
+                ),
+                validator_save_source(
+                    problem=self.problem,
+                    user=self.user,
+                    path=targets["validator"],
+                    content="",
+                    response_mode="json",
+                ),
+                interactor_save_source(
+                    problem=self.problem,
+                    user=self.user,
+                    path=targets["interactor"],
+                    content="int main( {\n",
+                    response_mode="json",
+                ),
+                generator_save_source(
+                    problem=self.problem,
+                    user=self.user,
+                    path=targets["generator"],
+                    content="int main( {\n",
+                    response_mode="json",
+                ),
+            )
+
+        compile_only.assert_not_called()
+        self.assertTrue(all(response.status_code == 303 for response in responses[:4]))
+        self.assertTrue(all(response.status_code == 200 for response in responses[4:]))
+        for path in targets.values():
+            self.assertTrue((ws / path).is_file())
+
+        build = json.loads((ws / "config/build.json").read_text(encoding="utf-8"))
+        self.assertEqual(build["checker_source"], targets["checker"])
+        self.assertEqual(build["validator_source"], targets["validator"])
+        self.assertEqual(build["interactor_source"], targets["interactor"])
+        self.assertIn(targets["generator"], build["generator_sources"])
 
     def test_generators_page_supports_drafts_and_source_save(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
@@ -172,50 +249,41 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         self.assertEqual(draft.status_code, 200)
         self.assertFalse((ws / rel).exists())
 
-        with patch(
-            "app.impl.problem.generator.judgehost_compile_check_error", return_value=""
-        ):
-            created = generator_save_source(
-                problem=self.problem,
-                user=self.user,
-                path=rel,
-                content=(
-                    '#include "testlib.h"\n'
-                    "int main(int argc,char** argv){"
-                    "registerGen(argc, argv, 1); println(1); return 0;}\n"
-                ),
-            )
+        created = generator_save_source(
+            problem=self.problem,
+            user=self.user,
+            path=rel,
+            content=(
+                '#include "testlib.h"\n'
+                "int main(int argc,char** argv){"
+                "registerGen(argc, argv, 1); println(1); return 0;}\n"
+            ),
+        )
         self.assertEqual(created.status_code, 303)
         self.assertTrue((ws / rel).exists())
         created_build = json.loads(
             (ws / "config/build.json").read_text(encoding="utf-8")
         )
         self.assertIn(rel, created_build["generator_sources"])
-        with patch(
-            "app.impl.problem.generator.judgehost_compile_check_error", return_value=""
-        ):
-            saved = generator_save_source(
-                problem=self.problem,
-                user=self.user,
-                path=rel,
-                content=(
-                    '#include "testlib.h"\n'
-                    "int main(int argc,char** argv){"
-                    "registerGen(argc, argv, 1); println(42); return 0;}\n"
-                ),
-            )
+        saved = generator_save_source(
+            problem=self.problem,
+            user=self.user,
+            path=rel,
+            content=(
+                '#include "testlib.h"\n'
+                "int main(int argc,char** argv){"
+                "registerGen(argc, argv, 1); println(42); return 0;}\n"
+            ),
+        )
         self.assertEqual(saved.status_code, 303)
         self.assertIn("println(42)", (ws / rel).read_text(encoding="utf-8"))
 
-        with patch(
-            "app.impl.problem.generator.judgehost_compile_check_error", return_value=""
-        ):
-            saved_second = generator_save_source(
-                problem=self.problem,
-                user=self.user,
-                path=rel_second,
-                content="print(123)\n",
-            )
+        saved_second = generator_save_source(
+            problem=self.problem,
+            user=self.user,
+            path=rel_second,
+            content="print(123)\n",
+        )
         self.assertEqual(saved_second.status_code, 303)
         self.assertEqual((ws / rel_second).read_text(encoding="utf-8"), "print(123)\n")
 
@@ -290,7 +358,7 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         self.assertEqual(cfg.get("interactor_source"), new_paths["interactor"])
         self.assertEqual(cfg.get("generator_sources"), [new_paths["generator"]])
 
-    def test_generator_save_source_compile_check_failure_does_not_persist_source_or_config(
+    def test_generator_save_source_accepts_invalid_source_and_selects_it(
         self,
     ) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
@@ -299,38 +367,34 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         (ws / rel).unlink(missing_ok=True)
         (ws / rel_bad).unlink(missing_ok=True)
 
-        with patch(
-            "app.impl.problem.generator.judgehost_compile_check_error", return_value=""
-        ):
-            ok_saved = generator_save_source(
-                problem=self.problem,
-                user=self.user,
-                path=rel,
-                content=(
-                    '#include "testlib.h"\n'
-                    "int main(int argc,char** argv){"
-                    "registerGen(argc, argv, 1); println(7); return 0;}\n"
-                ),
-            )
+        ok_saved = generator_save_source(
+            problem=self.problem,
+            user=self.user,
+            path=rel,
+            content=(
+                '#include "testlib.h"\n'
+                "int main(int argc,char** argv){"
+                "registerGen(argc, argv, 1); println(7); return 0;}\n"
+            ),
+        )
         self.assertEqual(ok_saved.status_code, 303)
         self.assertIn("println(7)", (ws / rel).read_text(encoding="utf-8"))
 
-        with patch(
-            "app.impl.problem.generator.judgehost_compile_check_error",
-            return_value=f"{rel_bad}: syntax error",
-        ):
-            failed = generator_save_source(
-                problem=self.problem,
-                user=self.user,
-                path=rel_bad,
-                content='#include "testlib.h"\nint main( { return 0; }\n',
-            )
-        self.assertEqual(failed.status_code, 303)
-        self.assertFalse((ws / rel_bad).exists())
+        saved_invalid = generator_save_source(
+            problem=self.problem,
+            user=self.user,
+            path=rel_bad,
+            content='#include "testlib.h"\nint main( { return 0; }\n',
+        )
+        self.assertEqual(saved_invalid.status_code, 303)
+        self.assertEqual(
+            (ws / rel_bad).read_text(encoding="utf-8"),
+            '#include "testlib.h"\nint main( { return 0; }\n',
+        )
         build = json.loads(
             (ws / "config/build.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(build.get("generator_sources"), [rel])
+        self.assertEqual(build.get("generator_sources"), [rel, rel_bad])
 
     def test_generator_save_source_json_success_returns_redirect(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
@@ -340,16 +404,13 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
             "int main(int argc,char** argv){"
             "registerGen(argc, argv, 1); println(9); return 0;}\n"
         )
-        with patch(
-            "app.impl.problem.generator.judgehost_compile_check_error", return_value=""
-        ):
-            resp = generator_save_source(
-                problem=self.problem,
-                user=self.user,
-                path=rel,
-                content=content,
-                response_mode="json",
-            )
+        resp = generator_save_source(
+            problem=self.problem,
+            user=self.user,
+            path=rel,
+            content=content,
+            response_mode="json",
+        )
         self.assertEqual(resp.status_code, 200)
         payload = json.loads(resp.body.decode("utf-8"))
         self.assertTrue(bool(payload.get("ok")))
@@ -580,42 +641,33 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         self.assertEqual(interactor_create_resp.status_code, 200)
         self.assertFalse((ws / interactor_rel).exists())
 
-        with patch(
-            "app.impl.problem.checker.judgehost_compile_check_error", return_value=""
-        ):
-            checker_seed = checker_save_source(
-                problem=self.problem,
-                user=self.user,
-                path="checkers/checker.cpp",
-                content="int main(int argc, char** argv){return argc > 0 ? 0 : 1;}\n",
-            )
+        checker_seed = checker_save_source(
+            problem=self.problem,
+            user=self.user,
+            path="checkers/checker.cpp",
+            content="int main(int argc, char** argv){return argc > 0 ? 0 : 1;}\n",
+        )
         self.assertEqual(checker_seed.status_code, 303)
         checker_after_create = checker_page(
             _request(f"/problems/{self.problem}/checker"), self.problem, self.user
         )
         self.assertEqual(checker_after_create.status_code, 200)
 
-        with patch(
-            "app.impl.problem.validator.judgehost_compile_check_error", return_value=""
-        ):
-            validator_save = validator_save_source(
-                problem=self.problem,
-                user=self.user,
-                path=validator_rel,
-                content="int main(int argc, char** argv){return argc > 0 ? 0 : 1;}\n",
-            )
+        validator_save = validator_save_source(
+            problem=self.problem,
+            user=self.user,
+            path=validator_rel,
+            content="int main(int argc, char** argv){return argc > 0 ? 0 : 1;}\n",
+        )
         self.assertEqual(validator_save.status_code, 303)
         self.assertIn("return argc", (ws / validator_rel).read_text(encoding="utf-8"))
 
-        with patch(
-            "app.impl.problem.interactor.judgehost_compile_check_error", return_value=""
-        ):
-            interactor_save = interactor_save_source(
-                problem=self.problem,
-                user=self.user,
-                path=interactor_rel,
-                content="int main(int argc, char** argv){return argv != nullptr ? 0 : 1;}\n",
-            )
+        interactor_save = interactor_save_source(
+            problem=self.problem,
+            user=self.user,
+            path=interactor_rel,
+            content="int main(int argc, char** argv){return argv != nullptr ? 0 : 1;}\n",
+        )
         self.assertEqual(interactor_save.status_code, 303)
         self.assertIn("argv !=", (ws / interactor_rel).read_text(encoding="utf-8"))
 
@@ -626,15 +678,12 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         validator_abs.parent.mkdir(parents=True, exist_ok=True)
         validator_abs.write_text("int main(){return 0;}\n", encoding="utf-8")
 
-        with patch(
-            "app.impl.problem.validator.judgehost_compile_check_error", return_value=""
-        ):
-            validator_saved = validator_save_source(
-                problem=self.problem,
-                user=self.user,
-                path=validator_rel,
-                content="int main(){\r\n    return 7;\r\n}\r\n",
-            )
+        validator_saved = validator_save_source(
+            problem=self.problem,
+            user=self.user,
+            path=validator_rel,
+            content="int main(){\r\n    return 7;\r\n}\r\n",
+        )
         self.assertEqual(validator_saved.status_code, 303)
         self.assertEqual(validator_abs.read_bytes(), b"int main(){\n    return 7;\n}\n")
 
@@ -648,19 +697,14 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
         self.assertEqual(files_saved.status_code, 303)
         self.assertEqual(validator_abs.read_bytes(), b"int main(){\n    return 9;\n}\n")
 
-        with patch(
-            "app.impl.problem.validator.judgehost_compile_check_error",
-            return_value=f"{validator_rel}: compile check failed",
-        ):
-            emptied = validator_save_source(
-                problem=self.problem,
-                user=self.user,
-                path=validator_rel,
-                content="",
-            )
+        emptied = validator_save_source(
+            problem=self.problem,
+            user=self.user,
+            path=validator_rel,
+            content="",
+        )
         self.assertEqual(emptied.status_code, 303)
-        # Empty validator source should fail compile-check and preserve the previous content.
-        self.assertEqual(validator_abs.read_bytes(), b"int main(){\n    return 9;\n}\n")
+        self.assertEqual(validator_abs.read_bytes(), b"")
 
         page = validator_page(
             _request(f"/problems/{self.problem}/validator"), self.problem, self.user

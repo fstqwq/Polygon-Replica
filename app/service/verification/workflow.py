@@ -10,6 +10,7 @@ from app.service.execution.policy import normalize_execution_result
 from app.service.judgehost.api import Judgehost
 from app.service.platform.fs.layout import StorageLayout
 from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
+from app.service.problem.runtime_config import ProblemMode
 from app.service.problem.solution_metadata import normalize_expected_behavior
 from app.service.problem.source_file import resolve_source
 from app.service.repository.workspace import WorkspaceService
@@ -72,7 +73,7 @@ class TaskExecutionContext:
     problem: str
     user: str
     verification_id: str
-    mode: str
+    problem_mode: ProblemMode
     pass_limit: int
     snapshot_root: Path
     artifact_file_by_test_ref: dict[tuple[str, str], PayloadFile]
@@ -201,7 +202,6 @@ def _execution_template(
         else execution.run_verification_payload_base
     )
     prepared = execution.judgehost.prepare_execution_template(
-        mode=execution.mode,
         upload_file=compile_spec.source_file,
         upload_filename=compile_spec.source_name,
         verification_payload=verification_payload_base,
@@ -337,7 +337,6 @@ def _publish_generate_task(task_row: VerificationTaskRow, *, execution: TaskExec
             problem=execution.problem,
             username=execution.user,
             artifact_verification_id=execution.verification_id,
-            mode=execution.mode,
             submission_path=None,
             upload_content=None,
             upload_file=compile_spec.source_file,
@@ -440,7 +439,6 @@ def _publish_run_task(task_row: VerificationTaskRow, *, execution: TaskExecution
             problem=execution.problem,
             username=execution.user,
             artifact_verification_id=execution.verification_id,
-            mode=execution.mode,
             submission_path=None,
             upload_content=None,
             upload_file=compile_spec.source_file,
@@ -605,7 +603,7 @@ def run_workspace_verification_dag(
     assert execution_plan is not None
     assert snapshot_root is not None
     try:
-        verification_mode = execution_plan.mode
+        verification_mode = execution_plan.problem_mode
         verification_pass_limit = execution_plan.pass_limit
         source_file_by_path = dict(execution_plan.source_file_by_path)
         source_file_by_path.update(_uploaded_source_files(targets, runtime_blob_store))
@@ -675,7 +673,7 @@ def run_workspace_verification_dag(
             problem=problem,
             user=user,
             verification_id=verification_id,
-            mode=verification_mode,
+            problem_mode=verification_mode,
             pass_limit=verification_pass_limit,
             snapshot_root=execution_plan.snapshot_root,
             artifact_file_by_test_ref={},
@@ -767,7 +765,6 @@ def run_workspace_verification_dag(
                 problem=problem,
                 user=user,
                 verification_id=verification_id,
-                mode=verification_mode,
                 logs_dir=layout.logs,
                 test_plans=selected_test_plans,
                 accepted_source_label=execution_plan.accepted_source_path,
