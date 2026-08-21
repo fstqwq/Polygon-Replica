@@ -7,6 +7,7 @@ Documentation describes the current system and is organized by ownership:
   failure semantics.
 - `operations/` owns deployment and operator behavior.
 - `src/` mirrors the actual application package responsibilities.
+- `module-taxonomy.md` owns stable application layers and module-role naming.
 - `coding-style.md` owns Python authoring and import rules.
 - `testing.md` owns test selection and assertion policy.
 

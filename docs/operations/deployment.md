@@ -231,64 +231,18 @@ Create and download a source backup from Admin first. Then update one deployment
 at a time.
 
 Application startup does not alter an existing SQLite schema. Before installing
-a revision that changes required tables, columns, or named indexes, stop the
-service and apply that revision's explicit offline database procedure. If this
-step is missed, the process remains available only as a raw `503` diagnostic
-that lists the missing schema objects; no workers or Judgehost runtime start.
-Extra tables, columns, indexes, and rows do not block startup and are preserved.
+a revision that changes required tables, columns, or named indexes, compare the
+canonical schema in `app/db.py` at the deployed commit with the target commit.
+Stop the Web process, workers, and Judgehosts, back up SQLite together with its
+WAL/SHM files, and apply a one-off offline migration for that exact diff. Keep
+IDs and relationships intact, then require `foreign_key_check`,
+`integrity_check`, and application schema admission to pass before reopening
+traffic. The migration is an operator procedure and does not belong in Git.
 
-### Contest property-map upgrade
-
-The release that moves editable Contest metadata out of dedicated `contests`
-columns requires this one-time offline upgrade. A database that already has a
-`contest_properties` table and no `contests.title` column must not run it
-again.
-
-Stop the Web process, workers, and Judgehosts, then back up the database and
-its WAL/SHM files as described above. Run the following against that stopped
-database with a recent SQLite CLI:
-
-```bash
-sqlite3 -bail "$DB_PATH" <<'SQL'
-PRAGMA foreign_keys=ON;
-BEGIN IMMEDIATE;
-
-CREATE TABLE contest_properties (
-    contest_id INTEGER NOT NULL,
-    key TEXT NOT NULL,
-    value TEXT NOT NULL,
-    PRIMARY KEY(contest_id, key),
-    FOREIGN KEY(contest_id) REFERENCES contests(id)
-);
-
-INSERT INTO contest_properties(contest_id,key,value)
-SELECT id,'title',title FROM contests;
-INSERT INTO contest_properties(contest_id,key,value)
-SELECT id,'location',location FROM contests WHERE location <> '';
-INSERT INTO contest_properties(contest_id,key,value)
-SELECT id,'date',date_text FROM contests WHERE date_text <> '';
-INSERT INTO contest_properties(contest_id,key,value)
-SELECT id,'insertBlankPage','true'
-FROM contests WHERE statement_insert_blank_pages <> 0;
-
-ALTER TABLE contests DROP COLUMN statement_insert_blank_pages;
-ALTER TABLE contests DROP COLUMN statement_default_language;
-ALTER TABLE contests DROP COLUMN date_text;
-ALTER TABLE contests DROP COLUMN location;
-ALTER TABLE contests DROP COLUMN title;
-
-COMMIT;
-PRAGMA foreign_key_check;
-PRAGMA integrity_check;
-SQL
-```
-
-`foreign_key_check` must print no rows and `integrity_check` must print `ok`.
-The removed default-language value is intentionally not migrated: Statement
-language selection now uses the explicit request, then an actually available
-English source, then the first available language. Start the new application
-only after the checks succeed. This upgrade is an operator command, not a
-repository migration script.
+The latest breaking database change is
+[`b16617c` (`Simplify Contest authoring workflows`)](https://github.com/fstqwq/Polygon-Replica/commit/b16617c98579c60a2ad8e6e449d131539bc0ed18).
+Deployments whose current commit predates it must upgrade the database for the
+complete schema diff between their deployed revision and the target revision.
 
 The bearer credential is replayable by design. Keep the application data root
 and database private to the runtime user. The host installer applies mode

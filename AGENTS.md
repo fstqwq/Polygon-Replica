@@ -17,6 +17,8 @@ Repository rules:
   [docs/testing.md](docs/testing.md).
 - Python imports follow the layout and dependency rules in
   [docs/coding-style.md](docs/coding-style.md).
+- Application layers and module responsibilities follow
+  [docs/module-taxonomy.md](docs/module-taxonomy.md).
 - Preserve unrelated worktree changes. Do not commit or push unless requested.
 
 ## Environment discipline

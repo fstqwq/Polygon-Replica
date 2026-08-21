@@ -19,13 +19,15 @@ services use it as their filesystem capability rather than reading settings to
 assemble paths.
 
 The worker queue, runtime cache index, blob locks, and maintenance state are
-process-local. Maintenance has explicit owners: `admission` tracks the shared
+process-local. Runtime blob payloads are content-addressed files below the
+cache root; the process-local cache index and locks only refer to those files.
+Startup resets both the in-memory indexes and the on-disk runtime blob tree.
+Maintenance has explicit owners: `admission` tracks the shared
 gate and active requests; `coordinator` owns the one active operation and its
 snapshot; `plan` declares cleanup-safe tables; `database` and `filesystem`
 provide destructive mechanics; and the `artifact` maintenance module orders the cleanup stages
 and runtime resets. The queue JSONL is diagnostic history, not a recoverable
 job source, and startup resets it together with in-memory queue records.
-Runtime blobs and cache entries live below the startup-cleared cache trees.
 SQLite is used only where a mechanism persists configuration or cleanup
 effects.
 Recovery backup snapshots SQLite with SQLite's online backup API and archives

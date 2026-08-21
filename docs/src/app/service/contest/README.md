@@ -1,38 +1,29 @@
 # `app/service/contest`
 
-Owns Contest identity, membership, typed metadata, problem-index-ordered roster,
-statement source and attachments, build jobs, frozen build inputs, and
-Contest-owned derived products. Relational state lives in `contest_*` tables;
-durable authored content lives below the Contest source root; build products
-live below `artifacts_root/contests`.
-
-`ContestProblemQueryService` authorizes the complete roster in one batch before
-touching a workspace and assembles its source-review and readiness rows. For
-package readiness it compares each current published revision with the highest
-available Native Package and reports `current`, `stale`, or `none`.
+Owns Contest identity, membership, editable properties, the canonical
+problem-index roster, Statement Sources, attachments, readiness projections,
+Statement Preview orchestration, and synchronous Contest package downloads.
+Relational state lives in the canonical `contest_*` tables, while authored TeX
+source and attachments live below the Contest source root.
 
 The normalized problem `idx` is both roster identity and order. The shared
 natural comparator orders Excel-style letter indices before other custom
-indices; no rank or position is stored. Build admission uses one SQLite writer
-transaction to check active work, read that roster, select each problem's
-highest available Native Package, and insert the job and all build items
-with frozen `idx`, consecutive derived `ordinal`, and archive checksums.
-A missing Native Package returns `not_ready` without a job, source snapshot,
-or Verification. Contest workers never prepare or repair a Native Package,
-call `ExportService`, or create problem-level export rows.
+indices; no rank or position is stored. `ContestProblemQueryService` authorizes
+the complete roster in one batch before touching a Workspace and projects each
+current published revision as `current`, `stale`, or `none` against its Native
+Package.
 
-A synchronous Contest package download may request any registered external
-adapter. Its `NativePackageReader` instances are opened once and shared across
-all child builds. Every adapter receives the frozen roster `idx` and ordinal;
-DOMjudge uses them as its short name and balloon palette position. Temporary
-child ZIPs exist only inside the request and never enter the problem
-external-package cache. The bundle is all-or-nothing and is deleted after the
-response. The exact lifecycle is owned by the
-[package protocol](../../../../protocol/package.md) and storage by the
-[storage protocol](../../../../protocol/storage.md).
+`ContestStatementPreviewService` builds blocking HTML Review and transient PDF
+Preview results from Workspace or Native Package sources. Preview payloads are
+cache, not Contest artifacts.
 
-`ContestStatementPreviewService` owns blocking HTML Review orchestration and
-transient PDF Preview orchestration. PDF Preview reuses the complete Contest TeX
-compiler to produce one document; it is not a Contest job or artifact. The
-[Statement Preview protocol](../../../../protocol/statement-preview.md) owns
-that cache lifecycle.
+A Contest package download opens every ready Native Package in canonical roster
+order and invokes the selected registered adapter. DOMjudge receives each
+problem's `idx` and ordinal for its short name and balloon color. Child archives
+and the outer bundle are request-owned temporary files, are all-or-nothing, and
+are deleted after transfer. The current service creates no Contest build job,
+history, build item, artifact, or problem-level external-package cache entry.
+The exact lifecycle is defined by the
+[package](../../../../protocol/package.md),
+[Statement Preview](../../../../protocol/statement-preview.md), and
+[storage](../../../../protocol/storage.md) protocols.

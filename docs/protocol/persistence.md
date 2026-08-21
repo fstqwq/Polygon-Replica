@@ -61,9 +61,8 @@ callbacks cannot attach a new locator or failure reason.
 The Judgehost completion publisher marks an in-memory case acknowledged only
 after this transaction succeeds or reports the task already terminal. A failed
 transaction leaves the case unacknowledged so the callback receives non-2xx and
-can be retried. Custom-run cases have no verification task identity; their
-terminal result is retained by the process-local Judgehost scheduler and does
-not enter this verification transaction.
+can be retried. `all`, `sample`, `custom`, and internal `package` Verifications
+all use durable Verification tasks and this completion transaction.
 
 `verification_task_diagnostics` stores at most one late-diagnostic snapshot per
 task. Its columns are `task_id`, `snapshot_json`, and `updated_at`. A diagnostic
@@ -105,7 +104,7 @@ remains the only removal rule. Their table has no write path to any decision
 column. This separation makes a late diagnostic incapable of reopening
 execution even when it arrives concurrently with completion or cancellation.
 
-Legacy Preview, Package Export, Native Package build, and Contest-job rows
+Legacy Preview, Package Export, and Native Package build rows
 survive normal restarts. Unfinished rows are moved to `failed` because their
 process-local work cannot resume. Startup does not open and validate every
 completed Native Package archive; its recorded SHA-256 is checked when a
@@ -141,8 +140,8 @@ uses temporary non-canonical values to exchange unique indices and increments
 performs no write. Current Contest package downloads persist no job, build item,
 or artifact row. They recheck the current published-package readiness and
 archive checksums in the request before producing a temporary response file.
-The retained Contest build tables describe historical data only and are
-removed by normal generated-data cleanup.
+Extra legacy Contest tables are tolerated by schema admission as unknown
+objects; the current application does not read, maintain, or clean them.
 
 Contest identity and lifecycle remain on `contests`. Editable Contest metadata
 is a sparse string mapping in `contest_properties`, keyed by
@@ -219,15 +218,8 @@ indexes, and rows are accepted and preserved; they do not satisfy any current
 application requirement and are not interpreted as compatibility state.
 Existing constraints and definitions behind already named indexes are not
 compared against the DDL. A schema change updates the DDL, required-object
-manifest, service queries, cleanup policy, offline operator procedure, and this
-document together. An upgrade that introduces required schema objects includes
-its stopped-service procedure with that release.
-
-The `idx`-only Contest roster schema requires the stopped-service
-[Contest problem-index upgrade](../operations/deployment.md#contest-problem-index-upgrade).
-The upgrade preserves current roster identities and copies each historical
-build's former position unchanged into its frozen `ordinal`; it does not resort
-old jobs.
-
-The Contest property-map schema requires the stopped-service
-[Contest property-map upgrade](../operations/deployment.md#contest-property-map-upgrade).
+manifest, service queries, cleanup policy, and this document together. The
+deployment guide records the [latest breaking database
+commit](../operations/deployment.md#upgrade). An older deployment compares its
+own canonical schema with the target and performs one stopped-service migration
+for that complete diff; the repository does not carry executable migrations.

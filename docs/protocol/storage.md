@@ -76,10 +76,9 @@ the execution evidence shape, while the ownership index authorizes and locates
 cache downloads without scanning that JSON. JudgeFS executable blobs and
 indexes are cache. Native Package materialization and external-package cache
 rows carry archive locators below the physical `artifacts_root`. A current
-Contest package download uses a request-owned directory below the Contest
-artifact root and deletes it after transfer. Historical Contest outputs may
-remain below `artifacts_root/contests` until cleanup; the Contest source root
-owns only authored Contest content.
+Contest package download uses request-owned staging below `cache_root` and
+deletes it after transfer. It creates no Contest artifact or history. The
+Contest source root owns only authored Contest content.
 
 ## Startup cleanup
 
@@ -89,8 +88,8 @@ Before the worker queue starts, the application:
    opening every completed archive;
 2. in one durable recovery transaction, fails unfinished verifications and
    cancels all of their open tasks; startup stops if that transaction fails;
-3. invalidates all Statement Preview cache records, cancels other unfinished
-   preview, contest-job, and Judgehost runtime work;
+3. invalidates all Statement Preview cache records and cancels other unfinished
+   preview and Judgehost runtime work;
 4. resets worker history in memory and removes its JSONL;
 5. clears the process-local runtime cache index;
 6. deletes every child of `cache_root` and recreates the empty root.
@@ -106,12 +105,13 @@ Administrative cleanup closes both ordinary work admission and the Judgehost
 callback admission gate. It refuses to start while requests, callbacks, worker
 jobs, or queued/leased/reporting Judgehost work is active. It recreates
 the Statement Preview, legacy preview, Verification, Native Package materialization,
-external-package-cache, export-job, and Contest-build metadata tables;
+external-package-cache, and export-job metadata tables;
 empties the entire `artifacts_root` and `cache_root`; resets process-local execution
 state; and vacuums SQLite. Recreating those explicitly registered cleanup-safe
 tables removes every row and any extra local columns in that domain. Unknown
-tables and durable problem, user, workspace, contest, membership, contest
-attachment, configuration, and backup data are not guessed at or removed.
+tables, including extra legacy Contest build tables, and durable problem, user,
+workspace, Contest, membership, Contest attachment, configuration, and backup
+data are not guessed at or removed.
 The database stage also drops the explicitly registered redundant indexes that
 are already covered by current `UNIQUE` or composite primary-key constraints.
 It does not infer or remove other operator-created indexes.

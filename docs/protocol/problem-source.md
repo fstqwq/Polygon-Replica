@@ -219,9 +219,10 @@ render-resource boundary.
 
 Statement languages are ordered as English, Chinese, then alphabetically. The
 producer obtains sample order and explicit display overrides from
-`tests/spec.json`. Browser Preview may run a sample-only Verification and a
-Native Package creation uses its full Verification; both consume the same
-main-correct per-pass artifacts without modifying the source snapshot.
+`tests/spec.json`. Browser Preview may run a sample-only Verification. Package
+Export runs full Verification by default or a standard-solution-only run when
+requested; both consume the same main-correct per-pass artifacts without
+modifying the source snapshot.
 
 The canonical examples template preserves Polygon compatibility by rendering
 `problem.sampleTests[].inputFile` and `.outputFile` through `\exmpfile`. It also

@@ -6,7 +6,7 @@ Polygon Replica covers the stage of problem setting that begins once an author h
 
 A problem-setting product has three layers. Execution establishes whether the problem behaves as intended. Collaboration gives the team an authoritative version and a controlled way to change it. Ecosystem contracts make the result usable by the systems around it.
 
-The product owns the connection between these layers. The source accepted by the team, the evidence produced by Verification, and the Package delivered at the end all refer to the same problem state.
+One published source identity connects the three layers: Verification records evidence for that source, and Package delivery uses the same source state.
 
 ### Execution tools
 
@@ -14,11 +14,11 @@ The execution layer turns authored source into evidence. Verification checks the
 
 ### Collaboration
 
-The collaboration layer makes that evidence authoritative for a team. Git records the official problem history, while isolated workspaces hold changes until they are reviewed and published. People and agents use the same permission model. [Polygon-Skills](https://github.com/fstqwq/Polygon-Skills) gives agents the project context and conventions needed to work with better taste inside that authority.
+The collaboration layer makes that evidence authoritative for a team. Git records the official problem history, while isolated workspaces hold changes until they are reviewed and published. People and Agents use the same Problem and Contest capability decisions, and Agent scopes can only narrow the connected user's current authority. [Polygon-Skills](https://github.com/fstqwq/Polygon-Skills) gives Agents the project context and working conventions needed to exercise good taste within their granted authority.
 
 ### Ecosystem contracts
 
-The ecosystem layer preserves compatibility across the product boundary. Existing Polygon sources and working habits carry over directly. A successful Verification produces a Native Package tied to the published source, and adapters turn that Package into deliverables ready for multiple contest systems.
+The ecosystem layer preserves compatibility across the product boundary. Existing Polygon sources and working habits carry over directly. Package Export prepares or reuses a Native Package tied to the published source, full Verification certifies it, and adapters produce deliverables ready for multiple contest systems.
 
 The exact boundaries are defined by the [problem source](protocol/problem-source.md), [execution](protocol/execution.md), and [package](protocol/package.md) contracts.
 

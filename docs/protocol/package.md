@@ -134,8 +134,9 @@ does not backfill source from `test-data/`, modify `tests/spec.json`, or become 
 manifest field.
 
 `test-data/` is not Git source, but it is the materialized payload consumed when
-the platform opens a Native Package or runs an external-package adapter. Those
-read paths validate its manifest, checksums, paths, and complete inventory.
+the platform opens a Native Package or runs an external-package adapter.
+Construction validates its source, manifest, declared payloads, paths,
+checksums, and complete inventory.
 Source import deliberately does none of that because it neither consumes nor
 stores the materialized payload. `statement-build/` is a reproducible
 convenience product:
@@ -165,8 +166,11 @@ declared payloads before serialization. Native and external Package writers
 validate their complete staging tree, then pass its root to a 7-Zip process in
 ZIP mode using fastest deflate. ZIP entry ordering, timestamps, compression
 streams, and complete archive bytes are not Package identity. A later reader
-checks the archive's recorded SHA-256, safely extracts ZIP members, and parses
-the manifest required by the consumer. It does not rehash individual payloads,
+checks the materialization record's whole-archive SHA-256, safely extracts ZIP
+members, and parses the manifest shape required by the consumer. A validated
+`NativePackageReader` therefore means archive-level integrity and safe
+extraction have completed; it does not repeat construction-time inventory
+validation. It does not rehash individual payloads,
 rebuild the source digest, or rescan the archive when the reader closes. A
 frozen consumer can
 additionally require the checksum recorded at admission. The reader exposes

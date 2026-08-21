@@ -41,11 +41,12 @@ adding a problem also requires direct management of that problem.
 
 Browser sessions, Agent identities, and Judgehost credentials are separate
 actors. A connected Agent session has a user-selected general scope
-and may also hold multiple independently expiring per-problem grants. Their
-strongest declared scope is capped by the connected user's current problem
-role, so neither source can retain access after all direct and Contest-derived
-access is removed. Contest discovery additionally requires general scope and
-current Contest read access. Browser sudo is session-bound and is never
+and may also hold multiple independently expiring per-problem grants. The union
+of those declared scopes is capped by the connected user's current Problem
+role. Neither general scope nor a per-problem grant can retain access after the
+user loses all direct and Contest-derived access. Contest discovery additionally
+requires general scope and current Contest read access. Browser sudo is
+session-bound and is never
 inherited by an Agent. Judgehost authentication authorizes only the trusted
 execution protocol under `/api/v4/*`; it does not create a user or problem
 role.

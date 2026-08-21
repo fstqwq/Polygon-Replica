@@ -43,9 +43,9 @@ would turn the record into a multiline continuation.
 ## Durable application settings
 
 Admin-managed settings are stored as JSON values in SQLite `system_config`.
-The typed registry under `app/config/` is the only authority for every key's
-type, default, range, category, description, and restart behavior. It currently
-contains 95 settings, including `PROBLEM_ZIP_MAX_EXPANDED_BYTES`,
+The typed registry under `app/config/` owns the complete setting set and is the
+only authority for every key's type, default, range, category, description, and
+restart behavior. Representative keys include `PROBLEM_ZIP_MAX_EXPANDED_BYTES`,
 `CONTEST_MAX_PROBLEMS`, and `STATEMENT_SAMPLE_MAX_BYTES`. SQLite stores only
 values that differ from registry defaults. Bootstrap environment variables
 select resources needed before this registry can be loaded.

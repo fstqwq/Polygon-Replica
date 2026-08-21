@@ -76,9 +76,8 @@ idempotent `add-judging-run` responses are the JSON integer `1`. A newly accepte
 result bound to a verification task receives `1` only after the canonical
 `ExecutionResult` and verification completion transaction are durable.
 Persistence failure returns non-2xx so the daemon retries. The in-memory case is
-then marked `completion_acknowledged`. A custom-run case has no
-`verification_task_id`; its ACK follows batch-runtime decision capture and does not
-invoke the verification completion sink.
+then marked `completion_acknowledged`. `all`, `sample`, `custom`, and internal
+`package` Verifications follow this same durable callback boundary.
 A retry whose durable task is already terminal, or whose case is cancelled or
 retired, also receives `1`. Invalid hostnames and active
 lease-owner mismatches receive non-2xx; invalid hostnames are HTTP 400 and a
@@ -87,10 +86,9 @@ concurrent claim is HTTP 503.
 A verification case is staged as non-fetchable, bound to its durable task and
 active coordinator, and only then exposed to fetch-work. Its callback therefore
 carries that task identity directly and does not depend on installing a reverse
-`(judgetask_id, test_name)` mapping after work is visible. A custom-run case has
-no verification task or coordinator binding and is exposed through its
-process-local Judgehost task. The owning result and transaction semantics are
-in the [execution protocol](execution.md#results-and-cache-payloads).
+`(judgetask_id, test_name)` mapping after work is visible. The owning result and
+transaction semantics are in the
+[execution protocol](execution.md#results-and-cache-payloads).
 
 Before task admission, submission sources, auxiliary compile sources, inputs,
 and answers are fixed in the runtime blob store. Batch state therefore owns

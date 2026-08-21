@@ -23,6 +23,7 @@ This index covers the design, protocols, engineering rules, and operations of Po
 ## Engineering
 
 - [Application package map](src/README.md)
+- [Module taxonomy](module-taxonomy.md)
 - [Python coding and import policy](coding-style.md)
 - [Testing policy](testing.md)
 

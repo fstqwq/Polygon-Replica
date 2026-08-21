@@ -1,10 +1,13 @@
 # `app/service/agent`
 
-Owns agent registration codes, desktop identities and sessions, general
-permissions, and expiring per-problem grants. A connected agent authenticates
-with its session ID and identity hash. The service combines the session's
-general permission with all active grants for the target problem, then caps the
-declared scope by the connected user's current effective problem role.
+Owns Agent registration codes, desktop identities and sessions, general
+permissions, and expiring per-problem grants. A connected Agent authenticates
+with a random `polygon_agent_...` bearer credential; SQLite stores only its
+SHA-256 verifier. `session_id` identifies the session. `identity_hash` validates
+registration and reconnect metadata and is not an authentication secret. The
+service combines general scope with active per-problem grants, then caps that
+declared scope by the connected user's current effective Problem role. Browser
+sudo is never transferred to an Agent.
 
 Registration codes, sessions, approval requests, and grants are durable in the
 `agent_*` tables. General permission has no expiry. Each problem approval adds

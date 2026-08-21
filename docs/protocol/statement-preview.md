@@ -2,9 +2,10 @@
 
 ## Render source
 
-Statement Preview accepts either the current user's Workspace or the current
-published Native Package. Both sources produce the same canonical Problem
-render tree:
+Statement Preview accepts the current user's Workspace, the current ready
+Native Package, or an explicitly selected historical `native_package_id` that
+belongs to the Problem and remains available. These sources produce the same
+canonical Problem render tree:
 
 ```text
 source snapshot
@@ -44,12 +45,12 @@ The UI uses no external MathJax or CDN resource.
 
 ## Problem outputs
 
-The Statement editor presents `Text`, `PDF`, and `HTML` as peer output links.
-Text renders the current language's `problem.tex` directly. PDF and HTML use
-the transient Preview service: opening either link synchronously reuses a valid
-content-identity cache entry or generates the missing result before returning
-it. The editor does not expose a second compile/rebuild action or durable
-ready/stale state.
+The Statement editor presents `Preview: PDF HTML LaTeX` as peer output links.
+LaTeX opens the current language's rendered TeX source directly. PDF and HTML
+use the transient Preview service: opening either link synchronously reuses a
+valid content-identity cache entry or generates the missing result before
+returning it. The editor does not expose a second compile/rebuild action or
+durable ready/stale state.
 
 Cache lookup uses a source-derived identity before creating a snapshot, running
 sample-only Verification, rendering templates, or compiling output. On a miss,
@@ -61,10 +62,13 @@ The editor offers it only when one of the three canonical Statement templates
 differs from the repository default, is missing/invalid, or when the optional
 editable `statement/examples.tex` override exists.
 
+The Packages history menu passes the exact Native Package identity to both HTML
+and PDF Preview. A historical link never falls back to the current Package.
+
 ## Contest review
 
 Contest Statement Review computes the common Statement language set for the
-selected Workspace or Native Package source. Opening a Review link builds or
+selected `source=workspace|native_package` source. Opening a Review link builds or
 reuses every Problem HTML preview in canonical Contest `idx` order through a
 bounded worker pool and blocks until every item finishes. The response is one
 long document with no intermediate generation page, iframe, fragment polling,

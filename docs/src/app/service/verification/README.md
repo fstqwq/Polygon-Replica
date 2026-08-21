@@ -58,16 +58,12 @@ mutate the source record: an
 authorized viewer may use its reusable solution paths to create a new
 verification owned by the viewer's current workspace.
 
-The process-local coordinator is constructed only after activation. It normally
-exists while a verification is active; a post-registration snapshot may instead
-make it consume one closed-state reconciliation and unregister immediately. It
-consumes lifecycle commits after SQLite commit and is not a durable fact source.
-Failed completion-event delivery falls back to a durable task-snapshot
-reconciliation; idle coordinators repeat that reconciliation before advancing
-successors. An idle coordinator that discovers a terminal durable parent drains
-Judgehost execution before it retires.
-SQLite rows survive restart and startup reconciliation terminalizes interrupted
-work. Cache payloads remain disposable. See the
+Each Verification has at most one active process-local coordinator. Durable
+task decisions are committed before notification; when notification is lost,
+the coordinator reconciles from SQLite. Registration races reread the persisted
+parent state, and process-local events cannot reopen a terminal parent. SQLite
+rows survive restart, startup reconciliation terminalizes interrupted work,
+and cache payloads remain disposable. See the
 [execution protocol](../../../../protocol/execution.md) for graph, identity,
 result, and availability semantics.
 
@@ -77,15 +73,7 @@ and testcase facts. Historical runtime limits and expected behavior come only
 from that snapshot; current workspace Source is not used to reinterpret an old
 Verification.
 
-`VerificationJudgehostAdapter` is the sole verification persistence boundary
-presented to Judgehost. It reads the selected test refs and run configuration
-as one SQLite snapshot, validates every opaque `CaseBinding` against the
-durable task identity, and delegates completion, diagnostic, lease, and quiet
-cleanup effects to their verification owners.
-
-An instance-owned runtime registry admits one coordinator per verification and
-requires object-identical unregistration. `VerificationExecutionService` owns
-coordinator construction, registration, post-registration durable-state
-reconciliation, execution, scheduler failure, cancellation, and Judgehost drain
-ordering. Workspace adapters provide plans, publishers, and sanity callbacks;
-completion and Judgehost lease events enter through injected narrow methods.
+The Judgehost-facing adapter reads selected test references and run
+configuration from one SQLite snapshot, validates each opaque case binding
+against its durable task identity, and routes completion, diagnostics, and
+lease events to the owning Verification services.

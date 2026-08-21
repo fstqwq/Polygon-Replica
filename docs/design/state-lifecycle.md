@@ -12,15 +12,22 @@ new problem or imported package
               | publish
               v
    official problem version
-              +---- full verification ----> Native Package
-                                                     |
-                                   +-----------------+------------------+
-                                   |                                    |
-                                   v                                    v
-                     external-package adapters                    Contest outputs
-                                   |
-                                   v
-                 DOMjudge / ICPC 2025-09 / QOJ / Nowcoder packages
+              |
+              v
+        Package Export
+              |
+              +---- full Verification by default
+              |     or standard-solution-only
+              v
+   Native Package (certified or not verified)
+              |
+              +-----------------+------------------+
+              |                                    |
+              v                                    v
+ external-package adapters                 Contest package download
+              |
+              v
+ DOMjudge / ICPC 2025-09 / QOJ / Nowcoder packages
 ```
 
 Generated tests, official answers, PDFs, logs, and packages never flow back
@@ -33,8 +40,8 @@ Persisted files belong to one of three classes:
 - **Source** is authored state: problem Git history, user workspaces, and
   Contest source and attachments. Source is durable, and its database identity
   and filesystem content must correspond.
-- **Derived** data is generated delivery products such as Native Packages,
-  external packages, and Contest outputs. They survive restart. Their
+- **Derived** data is generated delivery products such as Native Packages and
+  external packages. They survive restart. Their
   database record and filesystem payload describe one object; a missing or
   mismatched payload is an integrity failure. Maintenance cleanup removes both.
 - **Cache** is disposable execution and preview data. Cache entries may be
@@ -47,9 +54,9 @@ Persisted files belong to one of three classes:
 | Workspace | A new problem, imported source, or an existing official version | Not fixed; its owner continues editing it | Durable until explicitly deleted |
 | Official problem version | A reviewed workspace published to the problem | Publish | Durable Git history |
 | Statement Preview | A Workspace or Native Package statement render source plus requested language/output | Preview request | Cache; all entries are invalidated at startup/deploy |
-| Workspace verification | One workspace snapshot and selected verification targets | Verification admission and activation | Cleanup-safe database record; program input, output, answer, feedback, transcript, and logs are cache |
-| Native Package | One official problem version and a successful full verification of that exact source | Package Export verification phase | Derived; directly downloadable and reusable while its source snapshot and verified test data remain intact |
-| External package | One Native Package plus a target adapter; standalone DOMjudge exports also use the canonical problem slug | External-package adapter run | Derived; reusable for the same Native Package and format |
+| Workspace verification | One workspace snapshot and selected verification targets | Verification admission and activation | Its summary and task decisions remain in SQLite; program input, output, answer, feedback, transcript, and logs are disposable cache |
+| Native Package | One official problem version plus generated inputs and main-correct answers | Package Export | Derived; directly downloadable and either certified by full Verification or marked not verified |
+| External package | One Native Package plus a target adapter | External-package adapter run | Derived; reusable for the same Native Package and format |
 | Contest package download | Current Contest roster plus every problem's current Native Package | Download request | Transient response; deleted after transfer |
 
 SQLite records identities, relationships, lifecycle states, and filesystem
@@ -102,12 +109,14 @@ A Package Export request freezes the current official problem version. It never
 reads a user's changing workspace. For that version:
 
 1. An existing Native Package is checksum-checked and reused.
-2. If none exists, the service extracts the published source, runs one complete
-   verification, and records the source snapshot, generated inputs, and
-   official answers as a Native Package materialization.
+2. If none exists, the service extracts the published source and runs full
+   Verification by default. When the user selects `Run standard solution only`,
+   it runs only the generators and main-correct solution. Either path records
+   the source snapshot, generated inputs, and official answers as a Native
+   Package materialization; the standard-only result is marked not verified.
 3. If the stored payload is unavailable or fails checksum checking, the
    service invalidates it and its cached external packages, then repeats the
-   full Verification in that same export job.
+   requested Package Export workflow in that same export job.
 4. A Native request finishes when the Native Package is ready. A DOMjudge,
    ICPC 2025-09, QOJ, or Nowcoder request then runs the corresponding adapter or
    reuses the requested cached external package.
@@ -118,6 +127,13 @@ Downloading an existing Native Package creates no job. An adapter consumes only
 a checksum-checked `NativePackageReader` and caller-owned staging; it
 cannot read Git, workspaces, Verification tables, runtime cache, or another
 adapter's output, and cannot start Verification.
+
+A later full Verification of the same published revision can certify an
+existing not-verified Package when its generated inputs and main-correct
+answers match. Certification updates the Package's Verification reference; it
+does not rewrite the archive or cached external packages. A full Workspace
+Verification of that exact published revision may certify an existing Package,
+but only Package Export creates a Native Package.
 
 Publishing a newer official version leaves older Native Packages tied to their
 original versions. Package Export always targets the published version
@@ -170,8 +186,7 @@ be verified and packaged again.
 - Derived files can be deleted and rebuilt; authored source and durable Contest
   source are outside generated-data cleanup.
 - Validation occurs when external input enters the system and when stored
-  derived products are reopened. Internal consumers use the accepted canonical shape
-  instead of maintaining parallel compatibility representations.
+  derived products are reopened.
 
 The detailed state transitions and data shapes are defined by the
 [problem source](../protocol/problem-source.md),

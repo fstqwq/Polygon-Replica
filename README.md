@@ -6,10 +6,6 @@ Polygon Replica is a self-hosted problem-setting system compatible with Codeforc
 - **Better scalability.** DOMjudge Judgehosts scale execution independently across remote machines. Use `domjudge/judgehost:latest` directly, or use the [modified version for long-running stability](docs/operations/deployment.md#judgehost-image-choice). The system is designed around content-addressed caching, reducing repeated computation and deduplicating stored data as workloads grow.
 - **Better AI integration.** Agents work through the same permission model as human users. [Polygon-Skills](https://github.com/fstqwq/Polygon-Skills) gives them the project context and conventions needed to apply good taste.
 
-## Installation
-
-Polygon Replica runs on Linux. Follow the [deployment runbook](docs/operations/deployment.md) for Docker Compose and systemd installations, sandbox prerequisites, Judgehost setup, TLS, upgrades, backups, and recovery.
-
 ## Documentation
 
 - [Deployment and operations](docs/operations/deployment.md)

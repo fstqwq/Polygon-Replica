@@ -134,36 +134,11 @@ Predecessor failure or cancellation skips or cancels dependants. Compile-only,
 pass-fail, interactive, and multi-pass execution are mapped to Judgehost batches
 and case results by the verification and Judgehost services.
 
-One process-owned `VerificationRuntimeRegistry` maps an active verification to
-its coordinator. Registration is insert-only and unregistration must present
-the same coordinator object, so a stale worker cannot remove another session.
-The registry lock protects only the object map; it is released before an event
-is enqueued. Completion notification and Judgehost lease notification use this
-injected registry rather than module-global scheduler functions. A missing
-runtime notification is a no-op because the task transaction remains durable.
-If direct completion-event delivery fails while a runtime is registered, the
-registry requests a durable task-snapshot reconciliation. The coordinator also
-performs that reconciliation after an idle interval before advancing ready
-successors. If both event paths fail, the caller receives an error preserving
-both causes. When the idle check instead discovers that the durable parent is
-already terminal, the coordinator drains Judgehost execution before retiring.
-Lease notification performs one current-owner retry; if both attempts fail,
-the fetch request fails so the process-local lease can expire and be requested
-again instead of silently losing coordinator state.
-
-`VerificationWorkflow` owns workspace snapshot acquisition and cleanup,
-planning, task publication, and sanity callbacks. Callers may instead supply an
-already frozen snapshot for the published-revision and package workflows.
-`VerificationExecutionService` owns coordinator construction, registration,
-durable-state reconciliation, execution, exact unregistration, scheduler
-failure, and user cancellation. Neither HTTP code nor the workspace service
-owns the runtime session.
-The coordinator is constructed from the immutable durable graph, then
-registered before execution starts. The execution service rereads the parent
-snapshot after registration. If it is already closed, the coordinator consumes
-a closed event and reloads terminal task state instead of publishing work. A
-cancellation that committed before registration is therefore observed from
-SQLite, while a later cancellation reaches the registered coordinator.
+Each Verification has at most one active process-local coordinator. Persisted
+task decisions are durable authority and are committed before the coordinator
+is notified. If notification is lost, the coordinator reconciles from SQLite.
+Registration races also reread the persisted parent state, so a process-local
+event cannot reopen a terminal Verification.
 
 Completion evaluates each `solution-run` from its canonical `ExecutionResult`,
 not the batch transport status or summary. At the testcase boundary, AC, WA, TL,
@@ -184,9 +159,9 @@ reports the batch as failed. Generator, `main-correct`, and unexpected task
 cancellation failures are hard failures: they fail the parent and cancel all
 remaining open tasks immediately in the same transaction.
 
-Explicit user cancellation atomically changes the parent to `cancelled` and every open task to `cancelled`. The request then closes process-local Judgehost admission, notifies the coordinator, and enqueues a deduplicated runtime drain before returning. The drain runs in bounded maintenance slices and retires cases, batches, and task-registry entries without publishing per-case cancellation back to SQLite. Repeating cancellation for an already terminal parent still closes admission and ensures that its drain remains queued.
+Explicit user cancellation atomically changes the parent to `cancelled` and every open task to `cancelled`. The request then closes process-local Judgehost admission, notifies the coordinator, and enqueues a deduplicated process-local cancellation drain before returning. A dedicated drain thread retires cases, batches, and task-registry entries in slices of `VERIFICATION_RUNTIME_BATCH_SIZE = 256` without publishing per-case cancellation back to SQLite. Repeating cancellation for an already terminal parent still closes admission and ensures that its drain remains queued.
 
-Already leased or reporting cases may remain in process-local Judgehost state while a callback receipt is active, but their ordinary results cannot change the durable decision. A callback that observes cancellation discards its result and cache candidate, completes runtime cancellation, and receives the protocol ACK. A callback that linearized before cancellation is likewise absorbed by the background drain rather than reopening the task. A failed drain slice leaves admission closed and is retried by later maintenance.
+Already leased or reporting cases may remain in process-local Judgehost state while a callback receipt is active, but their ordinary results cannot change the durable decision. A callback that observes cancellation discards its result and cache candidate, completes runtime cancellation, and receives the protocol ACK. A callback that linearized before cancellation is likewise absorbed by the background drain rather than reopening the task. The drain requeues its own unfinished or failed slice while admission remains closed; periodic Judgehost maintenance does not own this queue.
 
 Scheduler failure uses `failed`; user cancellation uses `cancelled`. A failed in-memory cancellation notification falls back to a closed event, and idle coordinators reconcile task rows with the durable parent state. A synchronous hard failure stops the current publish slice before another independent ready task can be exposed. A runtime verification moves through dormant, active, draining, and retired phases independently of the parent status. Terminal runtime records remain available for idempotent callbacks until the verification has been quiet for 60 seconds.
 
