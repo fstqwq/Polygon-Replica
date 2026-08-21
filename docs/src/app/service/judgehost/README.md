@@ -29,7 +29,7 @@ run identity and content-addressed compile identity. The injected execution
 port validates durable task bindings before cases become fetchable and before
 lease, diagnostic, or completion events are published.
 
-The formal wire contract—including ACK semantics, callback retry, lease
-deadlines, cancellation, toolchain reports, and interactive or multi-pass
-evidence—is defined by the
+The formal wire contract for ACK semantics, callback retry, lease deadlines,
+cancellation, toolchain reports, and interactive or multi-pass evidence is
+defined by the
 [Judgehost protocol](../../../../protocol/judgehost.md).
