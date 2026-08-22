@@ -2,6 +2,8 @@ import asyncio
 import shutil
 from pathlib import Path
 
+from fastapi import HTTPException
+
 from app.impl.preview.preview import (
     preview_save,
     statement_attachment_delete,
@@ -36,6 +38,39 @@ class TestStatementRoutes(BackendE2ETestBase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/plain", response.media_type)
+
+    def test_problem_reader_cannot_save_statement(self) -> None:
+        reader = "statement-save-reader"
+        runtime.workspace_service.ensure_user(reader)
+        runtime.workspace_service.grant_repo_access(self.problem, reader, "read")
+        workspace = runtime.workspace_service.ensure_workspace(
+            self.problem,
+            reader,
+            refresh_status=False,
+        )
+        legend_path = workspace / "statement-sections" / "english" / "legend.tex"
+        before_bytes = legend_path.read_bytes()
+        before_status = runtime.workspace_service.read_workspace_status(workspace)
+
+        with self.assertRaises(HTTPException) as denied:
+            preview_save(
+                self.problem,
+                reader,
+                legend_tex="reader mutation\n",
+                input_tex="",
+                output_tex="",
+                interaction_tex="",
+                notes_tex="",
+                page="statement",
+                language="english",
+            )
+
+        self.assertEqual(denied.exception.status_code, 403)
+        self.assertEqual(legend_path.read_bytes(), before_bytes)
+        self.assertEqual(
+            runtime.workspace_service.read_workspace_status(workspace),
+            before_status,
+        )
 
     def test_statement_language_add_creates_seed_files_and_redirects_to_language(self) -> None:
         ws = Path(runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
@@ -143,7 +178,6 @@ class TestStatementRoutes(BackendE2ETestBase):
             notes_tex="",
             page="statement",
             language="english",
-            preview_id="",
         )
         self.assertEqual(resp.status_code, 303)
         self.assertEqual(legend_path.read_bytes(), before)
@@ -160,7 +194,6 @@ class TestStatementRoutes(BackendE2ETestBase):
             notes_tex="Notes\r\nSection\r\n",
             page="statement",
             language="english",
-            preview_id="",
         )
         self.assertEqual(resp.status_code, 303)
         self.assertEqual((ws / "statement-sections" / "english" / "legend.tex").read_bytes(), b"Legend\nBody\n")

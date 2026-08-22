@@ -13,9 +13,12 @@
     <a class="linkish" href="{{ problem_href('problem_statement_html_page', query={'source': 'workspace', 'language': current_language}) }}" target="_blank" rel="noopener">HTML</a>
     <a class="linkish" href="{{ problem_href('statement_tex_source', query={'language': current_language}) }}" target="_blank" rel="noopener">LaTeX</a>
   </nav>
-  {% endif %}
+{% endif %}
 </div>
 {% include "_flash_message.html" %}
+{% if not ctx.access.can_write %}
+<p class="flash">Read-only access: {{ ctx.access.write_block_reason }}</p>
+{% endif %}
 
 <div class="statement-editor-toolbar">
     <div class="statement-page-title-tools">
@@ -46,16 +49,18 @@
       </select>
     </div>
     {% endif %}
-    {% if current_language %}
+    {% if current_language and ctx.access.can_write %}
     <form class="inline-action" method="post" action="{{ problem_href('statement_language_delete') }}" data-confirm-message="Delete statement language {{ current_language }}? This removes all statement section files for that language.">
       <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
       <input type="hidden" name="language" value="{{ current_language }}" />
       <a href="#" class="linkish danger-link" data-submit-form="1">Delete current</a>
     </form>
     {% endif %}
+    {% if ctx.access.can_write %}
     <a class="linkish statement-language-add-link" href="#statement-language-popup" data-popup-open="statement-language-popup">Add language</a>
+    {% endif %}
     </div>
-    {% if statement_templates_customized %}
+    {% if statement_templates_customized and ctx.access.can_write %}
     <form class="inline-action statement-template-reset" method="post" action="{{ problem_href('statement_templates_reset') }}" data-confirm-message="Restore statement/statements.ftl, statement/problem.tex, and statement/olymp.sty to Qiulygon defaults? This also removes the optional statement/examples.tex file, but keeps statement sections and attachments.">
       <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
       <input type="hidden" name="language" value="{{ current_language }}" />
@@ -67,9 +72,10 @@
 <section class="content-section statement-editor-main">
 {% if statement_language_missing %}
 <div class="flash">
-  Add a language to start.
+  {% if ctx.access.can_write %}Add a language to start.{% else %}No statement language is available.{% endif %}
 </div>
 {% else %}
+  {% if ctx.access.can_write %}
   <form
     method="post"
     action="{{ problem_href('preview_save') }}"
@@ -81,6 +87,9 @@
   >
     <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
     <input type="hidden" name="language" value="{{ current_language }}" />
+  {% else %}
+  <div>
+  {% endif %}
     {% for section in statement_sections %}
     {% if section.enabled %}
     {% if section.key == 'name' %}
@@ -94,6 +103,7 @@
           value="{{ section.content }}"
           autocomplete="off"
           spellcheck="false"
+          {% if not ctx.access.can_write %}readonly{% endif %}
         />
       </div>
     </div>
@@ -103,6 +113,7 @@
         <label>{{ section.label }}</label>
       </div>
       <div class="statement-editor-field-body">
+        {% if ctx.access.can_write %}
         <a
           href="#statement-draft-popup"
           class="linkish statement-draft-inline-trigger"
@@ -112,6 +123,7 @@
           data-draft-label="{{ section.label }}"
           aria-label="Open local draft history for {{ section.label }}"
         >Draft</a>
+        {% endif %}
         <textarea
           name="{{ section.field_name }}"
           rows="12"
@@ -119,6 +131,7 @@
           data-code-path="{{ section.path }}"
           data-code-autosize="1"
           data-code-wrap="1"
+          {% if not ctx.access.can_write %}readonly{% endif %}
         >{{ section.content }}</textarea>
       </div>
     </div>
@@ -129,9 +142,13 @@
     {% endif %}
     {% endfor %}
     <div class="form-submit-row statement-save-actions">
-      <button class="btn primary-action" type="submit">Save Statement</button>
+      <button class="btn primary-action" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Save Statement</button>
     </div>
+  {% if ctx.access.can_write %}
   </form>
+  {% else %}
+  </div>
+  {% endif %}
 {% endif %}
 </section>
 
@@ -188,13 +205,16 @@
 </section>
 {% endif %}
 
+{% if ctx.access.can_write %}
 {% call ui_popup('statement-draft-popup', 'Draft History', overlay_class='statement-draft-popup') %}
       <p class="muted" data-statement-draft-status="1">Loading local drafts...</p>
       <p class="flash" data-statement-draft-error="1" hidden></p>
       <p class="muted" data-statement-draft-empty="1" hidden>No drafts.</p>
       <div class="statement-draft-list" data-statement-draft-list="1"></div>
 {% endcall %}
+{% endif %}
 
+{% if ctx.access.can_write %}
 {% call ui_popup('statement-language-popup', 'Add Statement Language') %}
       <form class="form-stack" method="post" action="{{ problem_href('statement_language_add') }}">
         <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
@@ -204,6 +224,7 @@
         <button class="btn" type="submit">Add Language</button>
       </form>
 {% endcall %}
+{% endif %}
 
 {% if not statement_language_missing %}
 <div class="statement-assets-grid">
@@ -213,6 +234,7 @@
     </div>
     <p class="muted statement-assets-card-copy">Compile-only files shared by all statement languages.</p>
     <div class="statement-assets-card-body">
+      {% if ctx.access.can_write %}
       <div class="form-block statement-assets-upload-block">
         <form id="statement-assets-upload-form" class="form-stack" method="post" enctype="multipart/form-data" action="{{ problem_href('statement_compile_asset_upload') }}">
           <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
@@ -226,6 +248,7 @@
           </div>
         </form>
       </div>
+      {% endif %}
       <table class="table-base">
         <tr>
           <th>Path</th>
@@ -239,12 +262,14 @@
             <a href="{{ problem_href('problem_files', query={'dir': statement_assets_dir, 'path': row.path}) }}">Open</a>
             <span class="workspace-link-sep" aria-hidden="true">/</span>
             <a href="{{ problem_href('files_download', query={'path': row.path}) }}">Download</a>
+            {% if ctx.access.can_write %}
             <form class="inline-action" method="post" action="{{ problem_href('statement_compile_asset_delete') }}" data-confirm-message="Delete statement asset {{ row.display_path }}? This cannot be undone; uncommitted changes will be lost.">
               <input type="hidden" name="path" value="{{ row.path }}" />
               <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
               <input type="hidden" name="language" value="{{ current_language }}" />
               <a href="#" class="linkish danger-link" data-submit-form="1">Delete</a>
             </form>
+            {% endif %}
           </td>
         </tr>
         {% endfor %}
@@ -263,6 +288,7 @@
     </div>
     <p class="muted statement-assets-card-copy">Files included in ICPC packages.</p>
     <div class="statement-assets-card-body">
+      {% if ctx.access.can_write %}
       <div class="form-block statement-assets-upload-block">
         <form id="contestant-attachments-upload-form" class="form-stack" method="post" enctype="multipart/form-data" action="{{ problem_href('statement_attachment_upload') }}">
           <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
@@ -276,6 +302,7 @@
           </div>
         </form>
       </div>
+      {% endif %}
       <table class="table-base">
         <tr>
           <th>Path</th>
@@ -289,12 +316,14 @@
             <a href="{{ problem_href('problem_files', query={'dir': 'attachments', 'path': row.path}) }}">Open</a>
             <span class="workspace-link-sep" aria-hidden="true">/</span>
             <a href="{{ problem_href('files_download', query={'path': row.path}) }}">Download</a>
+            {% if ctx.access.can_write %}
             <form class="inline-action" method="post" action="{{ problem_href('statement_attachment_delete') }}" data-confirm-message="Delete attachment {{ row.display_path }}? This cannot be undone; uncommitted changes will be lost.">
               <input type="hidden" name="path" value="{{ row.path }}" />
               <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
               <input type="hidden" name="language" value="{{ current_language }}" />
               <a href="#" class="linkish danger-link" data-submit-form="1">Delete</a>
             </form>
+            {% endif %}
           </td>
         </tr>
         {% endfor %}
