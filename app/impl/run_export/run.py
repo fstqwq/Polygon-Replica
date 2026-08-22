@@ -566,6 +566,7 @@ def _start_run_verification(
             workspace_dirty=workspace_dirty,
             targets=dag_targets,
             verification_id=verification_id,
+            allow_package_certification=bool(ctx["access"]["can_create_packages"]),
             workspace_path=workspace,
             selected_test_names=selected_test_names,
             bypass_case_result_cache=bypass_case_result_cache_flag,

@@ -78,7 +78,7 @@ Package export is the only workflow that creates a native package. A request fre
 | `Run standard solution only` | Reuse any available native package, or run input generation and the main correct solution to create one marked `not verified`. |
 | External package | Prepare or reuse the native package under the selected verification mode, then run or reuse the selected adapter. |
 
-A later successful full verification certifies an existing `not verified` package only when its inputs and answers match. Certification does not rewrite the native archive or cached external packages; evidence mismatch leaves the package unchanged and reports an error. External adapters may consume an available `not verified` package.
+A later successful full verification certifies an existing `not verified` package only when its inputs and answers match and the verification admission explicitly carried package-create authority. Read-only browser verification and `readonly` or `workspace` agent verification remain private evidence and cannot certify shared package state. A `commit` agent may certify only while the connected user still has package-create capability. Certification does not rewrite the native archive or cached external packages; evidence mismatch leaves the package unchanged and reports an error. External adapters may consume an available `not verified` package.
 
 Package export always targets the published revision frozen at admission. Historical native packages remain downloadable but cannot be selected as new export inputs.
 

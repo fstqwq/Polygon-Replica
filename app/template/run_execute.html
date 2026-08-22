@@ -5,6 +5,9 @@
 <h1 class="page-title">Run Solutions</h1>
 <p><a href="{{ problem_href('problem_run') }}">&laquo; Back to verifications</a></p>
 {% include "_flash_message.html" %}
+{% if not ctx.access.can_write %}
+<p class="muted">Custom Run requires write access: {{ ctx.access.write_block_reason }}</p>
+{% endif %}
 
 <section class="content-section">
   <h2>Execute</h2>
@@ -20,7 +23,7 @@
           {% if solution_options %}
             {% for row in solution_options %}
             <label class="run-pick-item">
-              <input type="checkbox" name="solution_paths" value="{{ row.path }}" {% if row.path in selected_solution_paths %}checked{% endif %} />
+              <input type="checkbox" name="solution_paths" value="{{ row.path }}" {% if row.path in selected_solution_paths %}checked{% endif %} {% if not ctx.access.can_write %}disabled{% endif %} />
               <span class="run-pick-main">{{ row.label }}</span>
             </label>
             {% endfor %}
@@ -39,7 +42,7 @@
           {% if test_options %}
             {% for row in test_options %}
             <label class="run-pick-item">
-              <input type="checkbox" name="test_names" value="{{ row.name }}" {% if row.name in selected_test_names %}checked{% endif %} />
+              <input type="checkbox" name="test_names" value="{{ row.name }}" {% if row.name in selected_test_names %}checked{% endif %} {% if not ctx.access.can_write %}disabled{% endif %} />
               <span class="run-pick-main">{{ row.label }}</span>
             </label>
             {% endfor %}
@@ -51,10 +54,10 @@
     </div>
     <div class="form-row">
       <label for="submission-upload">Upload source (optional)</label>
-      <input id="submission-upload" type="file" name="submission_upload" />
+      <input id="submission-upload" type="file" name="submission_upload" {% if not ctx.access.can_write %}disabled{% endif %} />
     </div>
     <div class="form-row">
-      <button class="btn primary-action" type="submit">Execute</button>
+      <button class="btn primary-action" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Execute</button>
     </div>
   </form>
   {% if solution_options_truncated %}

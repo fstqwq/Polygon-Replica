@@ -145,7 +145,7 @@
         <a class="problem-section-tab-title problem-section-tab-title-link" data-page="run" href="{{ problem_href('problem_run') }}"{% if problem_section == 'run' %} aria-current="page"{% endif %}{% if verification_tooltip %} data-tooltip="{{ verification_tooltip }}" aria-label="verification {{ verification_mode }} details"{% endif %}>Verification</a>
         <form class="problem-section-tab-action-form" method="post" action="{{ problem_href('verification_start') }}">
           <input class="page-target" type="hidden" name="page" value="{{ problem_page_target }}" />
-          <button class="problem-section-tab-action-control" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Start</button>
+          <button class="problem-section-tab-action-control" type="submit" {% if not ctx.access.can_read %}disabled title="{{ ctx.access.read_block_reason }}"{% endif %}>Start</button>
         </form>
         <span class="problem-section-tab-status {{ 'section-tab-status-danger' if verification_tone == 'danger' else 'section-tab-status-warn' if verification_tone == 'warning' else '' }}">{{ verification_status }}</span>
       </div>

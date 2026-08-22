@@ -7,9 +7,11 @@
   <div class="page-title-actions">
     <form class="inline-form" method="post" action="{{ problem_href('verification_start') }}">
       <input class="page-target" type="hidden" name="page" value="run" />
-      <button class="btn primary-action" type="submit" {% if not ctx.access.can_write %}disabled title="{{ ctx.access.write_block_reason }}"{% endif %}>Start verification</button>
+      <button class="btn primary-action" type="submit" {% if not ctx.access.can_read %}disabled title="{{ ctx.access.read_block_reason }}"{% endif %}>Start verification</button>
     </form>
+    {% if ctx.access.can_write %}
     <a class="text-nowrap" href="{{ problem_href('run_new_page') }}">Customize verification</a>
+    {% endif %}
   </div>
 </div>
 {% include "_flash_message.html" %}
@@ -77,6 +79,6 @@
 </table>
 </div>
 {% else %}
-<p class="muted">Start a verification or <a href="{{ problem_href('run_new_page') }}">customize it</a>.</p>
+<p class="muted">Start a verification{% if ctx.access.can_write %} or <a href="{{ problem_href('run_new_page') }}">customize it</a>{% endif %}.</p>
 {% endif %}
 {% endblock %}

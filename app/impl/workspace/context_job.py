@@ -32,6 +32,7 @@ def _run_verification_start_worker(
     workspace_id: int,
     workspace_head: str,
     workspace_dirty: bool,
+    allow_package_certification: bool,
     targets: list[dict[str, object]],
     verification_id: str,
     signature: str = "",
@@ -57,7 +58,7 @@ def _run_verification_start_worker(
         bypass_case_result_cache=bypass_case_result_cache,
         service_class="background",
     )
-    if kind != Kind.ALL.value or workspace_dirty:
+    if not allow_package_certification or kind != Kind.ALL.value or workspace_dirty:
         return
     published_commit = str(source_commit or workspace_head).strip()
     if not re.fullmatch(r"[0-9a-f]{40}", published_commit):
@@ -107,6 +108,7 @@ def start_verification_job(
     workspace_dirty: bool,
     targets: list[dict[str, object]],
     verification_id: str,
+    allow_package_certification: bool,
     workspace_path: Path | str | None = None,
     selected_test_names: list[str] | None = None,
     bypass_case_result_cache: bool = False,
@@ -178,6 +180,7 @@ def start_verification_job(
                 workspace_id=workspace_id,
                 workspace_head=workspace_head,
                 workspace_dirty=workspace_dirty,
+                allow_package_certification=allow_package_certification,
                 targets=targets,
                 verification_id=verification_id,
                 signature=signature,

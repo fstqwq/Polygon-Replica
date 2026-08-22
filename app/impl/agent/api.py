@@ -332,6 +332,10 @@ async def agent_verification_start(request: Request):
             workspace_dirty=bool(ctx["workspace"].get("dirty")),
             targets=targets,
             verification_id=verification_id,
+            allow_package_certification=(
+                identity.effective_scope == "commit"
+                and bool(ctx["access"]["can_create_packages"])
+            ),
             workspace_path=workspace,
         )
         if not started:

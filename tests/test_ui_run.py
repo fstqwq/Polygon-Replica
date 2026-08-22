@@ -69,7 +69,7 @@ from app.service.execution.model import (
 from app.service.execution.policy import normalize_execution_result
 from app.service.verification.lifecycle import PlannedTask, verification_task_id
 from app.service.verification.task_completion import TaskCompletion
-from app.service.verification.types import VerificationTaskStatus
+from app.service.verification.types import VerificationStatus, VerificationTaskStatus
 from app.service.verification.types import Kind
 
 TEXTAREA_MAX_BYTES = int(CONFIG_REGISTRY.defaults()["TEXTAREA_MAX_BYTES"])
@@ -1497,6 +1497,55 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertIsNotNone(after)
         self.assertEqual(int(after["count"]), int(before["count"]))
 
+    def test_problem_reader_can_start_standard_verification_without_package_certification(self) -> None:
+        problem = f"alice/reader-verify-{uuid.uuid4().hex[:8]}"
+        self._prepare_verification_workspace(problem)
+        workspace_service.ensure_user("bob")
+        workspace_service.grant_repo_access(problem, "bob", "read")
+        bob_workspace = Path(
+            workspace_service.ensure_workspace(problem, "bob", refresh_status=False)
+        )
+        self._configure_solution_fixtures(
+            bob_workspace,
+            ("accepted.cpp", "accepted"),
+        )
+
+        with patch(
+            "app.impl.tests_spec.verification.start_verification_job",
+            return_value=True,
+        ) as start_job:
+            response = verification_start(problem=problem, user="bob", page="run")
+
+        self.assertEqual(response.status_code, 303)
+        start_job.assert_called_once()
+        bob_ctx = workspace_service.workspace_context(
+            problem,
+            "bob",
+            include_recent=False,
+        )
+        self.assertEqual(
+            start_job.call_args.kwargs["workspace_id"],
+            int(bob_ctx["workspace"]["id"]),
+        )
+        self.assertFalse(start_job.call_args.kwargs["allow_package_certification"])
+
+    def test_problem_reader_cannot_start_custom_run(self) -> None:
+        problem = f"alice/reader-custom-{uuid.uuid4().hex[:8]}"
+        self._prepare_verification_workspace(problem)
+        workspace_service.ensure_user("bob")
+        workspace_service.grant_repo_access(problem, "bob", "read")
+        workspace_service.ensure_workspace(problem, "bob", refresh_status=False)
+
+        with self.assertRaises(HTTPException) as raised:
+            run_execute(
+                problem=problem,
+                user="bob",
+                solution_paths=["solutions/accepted.cpp"],
+                test_names=[],
+                submission_upload=None,
+            )
+        self.assertEqual(raised.exception.status_code, 403)
+
     def test_admitted_verification_fails_when_layout_preparation_fails(self) -> None:
         problem = f"alice/layout-failure-{uuid.uuid4().hex[:8]}"
         user = "alice"
@@ -1980,6 +2029,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             start_job.call_args.kwargs["workspace_id"],
             int(bob_ctx["workspace"]["id"]),
         )
+        self.assertFalse(start_job.call_args.kwargs["allow_package_certification"])
         cancel_response = run_cancel(
             "alice/sample",
             "alice",
@@ -2382,6 +2432,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 workspace_dirty=bool(ctx["workspace"].get("dirty")),
                 targets=[],
                 verification_id=verification_id,
+                allow_package_certification=True,
                 workspace_path=workspace,
             )
 
@@ -2392,6 +2443,55 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertIsNotNone(row)
         self.assertEqual(str(row["status"]), "failed")
         self.assertIn("queue rejected", str(row["fail_reason"]))
+
+    def test_package_certification_requires_explicit_worker_admission(self) -> None:
+        commit = "a" * 40
+        worker_kwargs = {
+            "actor_user_id": 1,
+            "problem_id": 1,
+            "workspace_id": 1,
+            "workspace_head": commit,
+            "workspace_dirty": False,
+            "targets": [],
+            "signature": "",
+            "source_commit": commit,
+            "kind": Kind.ALL.value,
+        }
+        with (
+            patch.object(runtime.verification_workflow, "run"),
+            patch.object(
+                runtime.verification_service,
+                "verification_record",
+                return_value={"status": VerificationStatus.OK},
+            ),
+            patch.object(
+                runtime.problem_package_service,
+                "promote_native_package_verification",
+                return_value="",
+            ) as promote,
+        ):
+            workspace_context_job._run_verification_start_worker(
+                runtime,
+                "alice/sample",
+                "alice",
+                verification_id="ver-reader-certification",
+                allow_package_certification=False,
+                **worker_kwargs,
+            )
+            promote.assert_not_called()
+            workspace_context_job._run_verification_start_worker(
+                runtime,
+                "alice/sample",
+                "alice",
+                verification_id="ver-writer-certification",
+                allow_package_certification=True,
+                **worker_kwargs,
+            )
+            promote.assert_called_once_with(
+                problem_id=1,
+                source_commit=commit,
+                verification_id="ver-writer-certification",
+            )
 
     def test_pass_fail_sample_json_exposes_every_pass(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")

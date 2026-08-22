@@ -26,6 +26,8 @@ absent -> queued -> running -> ok | failed | cancelled
 
 Admission creates a taskless `queued` record for a frozen workspace snapshot. Activation atomically installs the complete task graph and changes the parent to `running`. A plan is installed once. User cancellation produces `cancelled`; planning, queue, infrastructure, and startup failures produce `failed`. Terminal status never reopens, and terminalization cancels every remaining open task without rewriting completed evidence.
 
+A problem reader may start `all` verification or rejudge visible evidence into their own workspace. Custom Run remains problem-write-only because it accepts user-selected programs, tests, uploads, and cache-bypass controls. Every full-verification admission explicitly records in process whether the actor may publish matching evidence as native-package certification. Readers and `readonly` or `workspace` agent scopes cannot do so; a browser actor with package-create capability or a currently authorized `commit` agent scope can. Sample verification never certifies a package.
+
 `pending` is a display projection, not a persisted parent state. An `ok` verification has terminal tasks and completed sanity processing. Sanity warnings remain attached to an otherwise successful verification. A pre-activation failure may have no task graph.
 
 ## Task graph

@@ -8,7 +8,7 @@ from fastapi import Form, Depends
 from app.impl.auth.shared import redirect_response
 from app.impl.runtime.dependency import runtime
 from app.impl.tests_spec.shared import normalize_verification_target_page
-from app.impl.workspace.access import require_write_access
+from app.impl.workspace.access import require_read_access
 from app.impl.workspace.context_job import start_verification_job
 from app.impl.workspace.context_ui import page_ctx
 from app.impl.workspace.context_job_helper import allocate_verification_id
@@ -19,7 +19,7 @@ from app.service.problem.solution_metadata import normalize_expected_behavior
 def verification_start(problem: str, user: Annotated[str, Depends(require_session_user)], page: str=Form('statement')):
     target_page = normalize_verification_target_page(page)
     ctx = page_ctx(problem, user, include_branches=False, refresh_status=True, include_recent=False)
-    require_write_access(ctx)
+    require_read_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     workspace_head = ctx['workspace']['head_commit']
     workspace_dirty = bool(ctx['workspace'].get('dirty'))
@@ -72,6 +72,7 @@ def verification_start(problem: str, user: Annotated[str, Depends(require_sessio
             workspace_dirty=workspace_dirty,
             targets=targets,
             verification_id=verification_id,
+            allow_package_certification=bool(ctx['access']['can_create_packages']),
             workspace_path=workspace,
         )
         msg = 'verification running' if started else 'verification already running'
