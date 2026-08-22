@@ -1,13 +1,111 @@
+from pathlib import Path
+from unittest.mock import patch
+
+from app.impl.contest.statement_review import (
+    contest_statement_pdf_build,
+    contest_statement_pdf_page,
+    contest_statement_review_build,
+    contest_statement_review_page,
+)
 from tests.contest_support import ContestActionBase
 from tests.db_helpers import db_fetch_one
 from tests.ui_support import (
     runtime,
     contest_access_revoke,
+    _request,
     workspace_service,
 )
 
 
 class TestContestAccessActions(ContestActionBase):
+    def test_contest_reader_can_render_statement_review_and_pdf(self) -> None:
+        contest_slug, contest_id, actor_user_id = self.create_contest(
+            "reader-preview"
+        )
+        _row_id, _problem_id, problem_slug = self.add_owned_problem(
+            contest_id,
+            actor_user_id,
+            "A",
+            "reader-preview-problem",
+        )
+        reader = "carol"
+        workspace_service.ensure_user(reader)
+        runtime.contest_service.grant_member_role(contest_id, reader, "read")
+        workspace_service.ensure_workspace(problem_slug, reader, refresh_status=False)
+        reader_row = workspace_service.user_row(reader)
+        access = runtime.access_query.contest_context(contest_id, int(reader_row["id"]))
+        self.assertTrue(access["can_read"])
+        self.assertFalse(access["can_build"])
+
+        preview = {
+            "id": "sp-contest-reader",
+            "status": "ok",
+            "summary": {"items": []},
+            "language": "english",
+        }
+        pdf_path = Path(runtime.settings.cache_root) / "contest-reader.pdf"
+        pdf_path.write_bytes(b"%PDF-reader")
+        self.addCleanup(pdf_path.unlink, missing_ok=True)
+        request = _request(f"/contests/{contest_slug}/statements/review")
+
+        with (
+            patch.object(
+                runtime.contest_statement_service,
+                "resolve_language",
+                return_value="english",
+            ),
+            patch.object(
+                runtime.contest_statement_preview_service,
+                "build_html",
+                return_value=preview,
+            ) as build_html,
+            patch.object(
+                runtime.contest_statement_preview_service,
+                "build_pdf",
+                return_value=preview,
+            ) as build_pdf,
+            patch.object(
+                runtime.statement_preview_service,
+                "pdf",
+                return_value=pdf_path,
+            ),
+        ):
+            review_page = contest_statement_review_page(
+                request,
+                contest_slug,
+                reader,
+                source="workspace",
+                language="english",
+            )
+            review_build = contest_statement_review_build(
+                request,
+                contest_slug,
+                reader,
+                source="workspace",
+                language="english",
+            )
+            pdf_page = contest_statement_pdf_page(
+                request,
+                contest_slug,
+                reader,
+                source="workspace",
+                language="english",
+            )
+            pdf_build = contest_statement_pdf_build(
+                request,
+                contest_slug,
+                reader,
+                source="workspace",
+                language="english",
+            )
+
+        self.assertEqual(review_page.status_code, 200)
+        self.assertEqual(review_build.status_code, 303)
+        self.assertEqual(pdf_page.status_code, 200)
+        self.assertEqual(pdf_build.status_code, 303)
+        self.assertEqual(build_html.call_count, 2)
+        self.assertEqual(build_pdf.call_count, 2)
+
     def test_membership_only_revoke_preserves_problem_acl(self) -> None:
         contest_slug, contest_id, actor_user_id = self.create_contest("revoke-membership")
         _row_id, problem_id, problem_slug = self.add_owned_problem(

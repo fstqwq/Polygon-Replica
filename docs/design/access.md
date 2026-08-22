@@ -14,6 +14,8 @@ A workspace is readable and writable only by its owner, subject to that user's e
 
 Successful packages are shared with problem readers. A queued, running, or failed package job is visible only to its actor or a problem manager. Contest members receive `read`, `write`, or fixed `owner` capabilities. Roster management requires contest ownership or system administration, and adding a problem also requires direct management of that problem.
 
+Contest readers may render HTML review and PDF preview only when they also have problem read access to every roster problem. These previews use the actor's own existing workspaces or ready native packages and write only actor-scoped cache. Contest source editing, roster changes, native-package construction, and contest package bundles retain their existing write, owner, or build capabilities.
+
 ## Authentication boundaries
 
 Browser sessions, agent identities, and judgehost credentials are separate actors. An agent session has a user-selected general scope and may hold independently expiring per-problem grants. Combined agent scopes are capped by the connected user's current problem role and cannot retain access after that user loses direct and contest-derived access. Contest discovery also requires general scope and current contest read access. Browser sudo is session-bound and never inherited by an agent. Judgehost authentication authorizes only the trusted execution protocol under `/api/v4/*`; it creates no user or problem role.

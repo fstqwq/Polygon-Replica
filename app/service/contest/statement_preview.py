@@ -140,18 +140,14 @@ class ContestStatementPreviewService:
 
         def build(row: ContestProblem) -> ContestStatementPreviewItem:
             problem_access = access[row["problem_id"]]
-            allowed = (
-                problem_access["can_write"]
-                if source_kind == "workspace"
-                else problem_access["can_read"]
-            )
-            if not allowed:
-                reason = (
-                    problem_access["write_block_reason"]
-                    if source_kind == "workspace"
-                    else problem_access["read_block_reason"]
+            if not problem_access["can_read"]:
+                return self._item(
+                    row,
+                    error=str(
+                        problem_access["read_block_reason"]
+                        or "problem read access required"
+                    ),
                 )
-                return self._item(row, error=str(reason or "problem access required"))
             try:
                 preview = self._problem_previews.build_problem(
                     row["problem_slug"],
@@ -285,18 +281,13 @@ class ContestStatementPreviewService:
             raise ValueError("contest not found")
         for row in rows:
             problem_access = access[row["problem_id"]]
-            allowed = (
-                problem_access["can_write"]
-                if source_kind == "workspace"
-                else problem_access["can_read"]
-            )
-            if not allowed:
-                reason = (
-                    problem_access["write_block_reason"]
-                    if source_kind == "workspace"
-                    else problem_access["read_block_reason"]
+            if not problem_access["can_read"]:
+                raise PermissionError(
+                    str(
+                        problem_access["read_block_reason"]
+                        or "problem read access required"
+                    )
                 )
-                raise PermissionError(str(reason or "problem access required"))
         preview_inputs = [
             self._problem_previews.problem_input(
                 row["problem_slug"],
@@ -498,13 +489,16 @@ class ContestStatementPreviewService:
         user_id: int,
         username: str,
     ) -> list[set[str]]:
-        eligible = [row for row in rows if access[row["problem_id"]]["can_write"]]
+        eligible = [row for row in rows if access[row["problem_id"]]["can_read"]]
         states = self._workspaces.workspace_rows(
             [row["problem_id"] for row in eligible],
             user_id,
         )
         result: list[set[str]] = []
-        for row in eligible:
+        for row in rows:
+            if not access[row["problem_id"]]["can_read"]:
+                result.append(set())
+                continue
             state = states.get(row["problem_id"])
             if state is None:
                 result.append(set())
@@ -532,7 +526,10 @@ class ContestStatementPreviewService:
             [row["problem_id"] for row in eligible]
         )
         result: list[set[str]] = []
-        for row in eligible:
+        for row in rows:
+            if not access[row["problem_id"]]["can_read"]:
+                result.append(set())
+                continue
             package_id = readiness[row["problem_id"]]["native_package_id"]
             result.append(
                 set(self._packages.statement_languages(package_id))

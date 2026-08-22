@@ -31,6 +31,8 @@ The Statement editor exposes `Preview: PDF HTML LaTeX` to problem readers. LaTeX
 
 ## Contest review
 
+Contest HTML review and PDF preview require contest read access plus problem read access for every roster problem. Workspace source uses only the requesting actor's existing, path-validated workspace for each problem; it never creates a missing workspace or falls back to an owner's checkout. Package source requires a ready available package for every problem and never starts a package build. A workspace or package link exists only when every problem has the requested source and the source languages have a non-empty intersection.
+
 Contest review builds or reuses problem previews in canonical `idx` order and returns one complete document after all problems finish. A failed problem remains in place with its diagnostic and available log; successful statements remain visible. The combined HTML result is reusable while the ordered problem identities and statuses remain unchanged.
 
 | Input | Resolution |

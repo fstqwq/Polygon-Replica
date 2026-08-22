@@ -102,11 +102,6 @@ def contest_statement_review_page(
     language: str = "",
 ):
     ctx = _contest_ctx(contest, user, "overview", request=request)
-    if not ctx["access"]["can_build"]:
-        raise HTTPException(
-            status_code=403,
-            detail=ctx["access"]["build_block_reason"],
-        )
     contest_id = int(ctx["contest"]["id"])
     source_kind = _source(source)
     safe_language = _language(contest_id, language)
@@ -152,11 +147,6 @@ def contest_statement_review_build(
     language: str = "",
 ):
     ctx = _contest_ctx(contest, user, "overview", request=request)
-    if not ctx["access"]["can_build"]:
-        raise HTTPException(
-            status_code=403,
-            detail=ctx["access"]["build_block_reason"],
-        )
     source_kind = _source(source)
     safe_language = _language(int(ctx["contest"]["id"]), language)
     runtime().contest_statement_preview_service.build_html(
@@ -217,11 +207,6 @@ def contest_statement_pdf_page(
     language: str = "",
 ):
     ctx = _contest_ctx(contest, user, "overview", request=request)
-    if not ctx["access"]["can_build"]:
-        raise HTTPException(
-            status_code=403,
-            detail=ctx["access"]["build_block_reason"],
-        )
     contest_id = int(ctx["contest"]["id"])
     source_kind = _source(source)
     safe_language = _language(contest_id, language)
@@ -273,8 +258,6 @@ def contest_statement_pdf_build(
     language: str = "",
 ):
     ctx = _contest_ctx(contest, user, "overview", request=request)
-    if not ctx["access"]["can_build"]:
-        raise HTTPException(status_code=403, detail=ctx["access"]["build_block_reason"])
     source_kind = _source(source)
     safe_language = _language(int(ctx["contest"]["id"]), language)
     preview = runtime().contest_statement_preview_service.build_pdf(
