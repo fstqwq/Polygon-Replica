@@ -285,7 +285,7 @@ def _walk_pages(
     for path in (*root_pages, *problem_pages, *contest_pages):
         _assert_get(anonymous, path, 303, role="anonymous")
     for path in admin_pages:
-        _assert_get(anonymous, path, 401, role="anonymous")
+        _assert_get(anonymous, path, 303, role="anonymous")
 
     for role, client in sessions.items():
         _assert_get(client, "/", 303, role=role)
