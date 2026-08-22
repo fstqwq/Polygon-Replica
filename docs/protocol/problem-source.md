@@ -170,3 +170,5 @@ The structured extension uses controlled resource paths and never modifies autho
 ## Publication
 
 Publishing refuses a workspace based on an older published revision, commits the workspace, and pushes `main`. If the push fails, it attempts to roll back the new local commit. Verification signatures use the relevant source paths and canonical configuration. Verification cache payloads and derived packages do not replace Git provenance: their rows retain the source commit they were built from.
+
+Merge review returns structured, escaped text differences for display. A complete file from a workspace, published, or suggested preview tree is available only as an attachment download; raw preview bytes are never served as an inline document from the application origin.

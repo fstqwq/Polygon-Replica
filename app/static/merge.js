@@ -43,7 +43,7 @@
       link.hidden = !item[1].open_url;
       if (item[1].open_url) {
         link.href = item[1].open_url;
-        link.textContent = payload.binary ? "Download file" : "Open full file";
+        link.textContent = "Download file";
       }
     });
     var rows = root.querySelector("[data-merge-rows]");

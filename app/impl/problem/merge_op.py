@@ -1,4 +1,3 @@
-import mimetypes
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -276,14 +275,12 @@ def merge_file(
     user: Annotated[str, Depends(require_session_user)],
 ):
     _workspace_context(problem, user)
-    path, descriptor = runtime().workspace_merge_service.entry_file(
+    path, _descriptor = runtime().workspace_merge_service.entry_file(
         user, problem, preview_id, entry_id, side
     )
-    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-    disposition = "inline" if descriptor.content_kind == "text" else "attachment"
     return FileResponse(
         path,
         filename=path.name,
-        media_type=media_type,
-        content_disposition_type=disposition,
+        media_type="application/octet-stream",
+        content_disposition_type="attachment",
     )

@@ -43,7 +43,7 @@ from app.service.statement.render import (
     ensure_statement_language_sources,
     statement_templates_are_default,
 )
-from app.impl.problem.merge_op import merge_apply, merge_compare, merge_page
+from app.impl.problem.merge_op import merge_apply, merge_compare, merge_file, merge_page
 from app.impl.root.contests import import_package_as_new_problem
 from tests.package_builders import polygon_contest_package, polygon_problem_package
 from tests.common import E2ETestBase
@@ -1220,6 +1220,106 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(applied.status_code, 303)
         self.assertEqual((alice_ws / conflict_path).read_text(encoding="utf-8"), "theirs & shared\n")
+
+    def test_merge_raw_files_are_attachment_downloads(self) -> None:
+        alice_ws, _head = self._ensure_committed_head("alice/sample", "alice")
+        html_path = f"notes/payload-{uuid.uuid4().hex[:8]}.html"
+        script_path = f"notes/payload-{uuid.uuid4().hex[:8]}.js"
+        text_path = f"notes/payload-{uuid.uuid4().hex[:8]}.txt"
+        binary_path = f"notes/payload-{uuid.uuid4().hex[:8]}.bin"
+        html_payload = f"<!doctype html><script src='{Path(script_path).name}'></script>&\n"
+        script_payload = "fetch('/admin', {credentials: 'same-origin'});\n"
+        expected_payloads = {
+            html_path: html_payload.encode("utf-8"),
+            script_path: script_payload.encode("utf-8"),
+            text_path: b"ordinary text\n",
+            binary_path: b"binary\0payload",
+        }
+
+        workspace_service.grant_repo_access("alice/sample", "bob", "owner")
+        bob_ws = Path(workspace_service.ensure_workspace("alice/sample", "bob"))
+        self.assertEqual(
+            run_git(["git", "fetch", "origin", "main"], cwd=bob_ws).returncode,
+            0,
+        )
+        self.assertEqual(
+            run_git(["git", "reset", "--hard", "origin/main"], cwd=bob_ws).returncode,
+            0,
+        )
+        self.assertEqual(
+            run_git(["git", "config", "user.name", "Bob"], cwd=bob_ws).returncode,
+            0,
+        )
+        self.assertEqual(
+            run_git(["git", "config", "user.email", "bob@example.com"], cwd=bob_ws).returncode,
+            0,
+        )
+        (bob_ws / html_path).parent.mkdir(parents=True, exist_ok=True)
+        for path, payload in expected_payloads.items():
+            (bob_ws / path).write_bytes(payload)
+        self.assertEqual(
+            run_git(["git", "add", *expected_payloads], cwd=bob_ws).returncode,
+            0,
+        )
+        self.assertEqual(
+            run_git(
+                ["git", "commit", "-m", "add merge preview payloads"],
+                cwd=bob_ws,
+            ).returncode,
+            0,
+        )
+        self.assertEqual(
+            run_git(["git", "push", "origin", "main"], cwd=bob_ws).returncode,
+            0,
+        )
+
+        preview = runtime.workspace_merge_service.start_preview(
+            "alice",
+            "alice/sample",
+            alice_ws,
+        )
+        entries = {row.path: row for row in preview.suggested_entries}
+        self.assertTrue(expected_payloads.keys() <= entries.keys())
+        for path, expected in expected_payloads.items():
+            with self.subTest(path=path):
+                response = merge_file(
+                    "alice/sample",
+                    preview.preview_id,
+                    entries[path].entry_id,
+                    "suggested",
+                    "alice",
+                )
+                disposition = response.headers.get("content-disposition", "")
+                self.assertTrue(disposition.startswith("attachment;"))
+                self.assertIn(Path(path).name, disposition)
+                self.assertEqual(
+                    response.headers.get("content-type"),
+                    "application/octet-stream",
+                )
+                self.assertEqual(Path(response.path).read_bytes(), expected)
+
+        comparison = merge_compare(
+            _request(
+                f"/problems/alice/sample/merge/{preview.preview_id}/compare/"
+                f"{entries[html_path].entry_id}",
+                "target=suggested",
+            ),
+            "alice/sample",
+            preview.preview_id,
+            entries[html_path].entry_id,
+            "alice",
+        )
+        self.assertEqual(comparison.status_code, 200)
+        payload = json.loads(comparison.body)
+        displayed = "".join(
+            str(segment["text"])
+            for row in payload["rows"]
+            for side in ("left", "right")
+            if (cell := row.get(side)) is not None
+            for segment in cell["segments"]
+        )
+        self.assertIn("<script", displayed)
+        self.assertIn("&", displayed)
 
     def test_problem_page_denies_user_without_acl(self) -> None:
         private_problem = f"alice/ui-private-{uuid.uuid4().hex[:8]}"
