@@ -2,7 +2,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.impl.contest.statement_review import (
-    contest_statement_pdf_build,
     contest_statement_pdf_page,
     contest_statement_review_build,
     contest_statement_review_page,
@@ -91,20 +90,11 @@ class TestContestAccessActions(ContestActionBase):
                 source="workspace",
                 language="english",
             )
-            pdf_build = contest_statement_pdf_build(
-                request,
-                contest_slug,
-                reader,
-                source="workspace",
-                language="english",
-            )
-
         self.assertEqual(review_page.status_code, 200)
         self.assertEqual(review_build.status_code, 303)
         self.assertEqual(pdf_page.status_code, 200)
-        self.assertEqual(pdf_build.status_code, 303)
         self.assertEqual(build_html.call_count, 2)
-        self.assertEqual(build_pdf.call_count, 2)
+        self.assertEqual(build_pdf.call_count, 1)
 
     def test_membership_only_revoke_preserves_problem_acl(self) -> None:
         contest_slug, contest_id, actor_user_id = self.create_contest("revoke-membership")

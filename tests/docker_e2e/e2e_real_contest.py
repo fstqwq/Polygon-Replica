@@ -5,7 +5,6 @@ import os
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
 
 import httpx
 
@@ -25,7 +24,7 @@ def start_contest_pdf(
     *,
     post_redirect: PostRedirect,
     problem: str,
-) -> str:
+) -> httpx.Response:
     post_redirect(
         client,
         "/contests/create",
@@ -36,53 +35,53 @@ def start_contest_pdf(
         f"/contests/{CONTEST}/problems/add",
         {"problem_slugs": problem, "q": ""},
     )
-    response = client.post(
+    response = client.get(
         f"/contests/{CONTEST}/statements/pdf",
         params={"source": "native_package", "language": "english"},
-        data={},
-        headers={"Origin": str(client.base_url).rstrip("/")},
         timeout=300.0,
     )
-    if response.status_code != 303:
+    if response.status_code != 200:
         raise RuntimeError(
             "Contest PDF Preview returned "
             f"{response.status_code}: {response.text[:500]}"
         )
-    location = response.headers.get("location", "")
-    preview_ids = parse_qs(urlparse(location).query).get("preview_id", [])
-    if len(preview_ids) != 1 or not preview_ids[0]:
-        raise RuntimeError(
-            f"Contest PDF Preview did not return one preview id: {location!r}"
-        )
-    return preview_ids[0]
+    return response
 
 
 def assert_contest_pdf(
-    client: httpx.Client,
+    response: httpx.Response,
     connection: sqlite3.Connection,
     *,
     problem: str,
-    preview_id: str,
+    username: str,
     expected_head: str,
     expected_solution_verdicts: dict[str, dict[str, str]],
 ) -> str:
     row = connection.execute(
         """
-        SELECT sp.status,sp.output_kind,sp.source_kind,sp.language,sp.summary_json,
-               c.id AS contest_id,title_property.value AS title
+        SELECT sp.id,sp.status,sp.output_kind,sp.source_kind,sp.language,
+               sp.summary_json,c.id AS contest_id,title_property.value AS title,
+               u.username AS actor_username
         FROM statement_previews sp
         JOIN contests c ON c.id=sp.contest_id
+        JOIN users u ON u.id=sp.actor_user_id
         JOIN contest_properties title_property
           ON title_property.contest_id=c.id AND title_property.key='title'
-        WHERE c.slug=? AND sp.id=?
+        WHERE c.slug=? AND sp.subject_kind='contest' AND sp.output_kind='pdf'
+          AND sp.source_kind='native_package' AND sp.language='english'
+          AND sp.status='ok'
+        ORDER BY sp.created_at DESC,sp.id DESC
+        LIMIT 1
         """,
-        [CONTEST, preview_id],
+        [CONTEST],
     ).fetchone()
     if row is None:
         raise RuntimeError("Contest PDF Preview metadata is missing")
+    preview_id = str(row["id"])
     summary = json.loads(str(row["summary_json"] or "{}"))
     if (
         str(row["title"]) != CONTEST_TITLE
+        or str(row["actor_username"]) != username
         or str(row["status"]) != "ok"
         or str(row["output_kind"]) != "pdf"
         or str(row["source_kind"]) != "native_package"
@@ -133,21 +132,25 @@ def assert_contest_pdf(
         expected_answer=b"49\n",
     )
 
-    download = client.get(
-        f"/contests/{CONTEST}/statements/pdf/file/{preview_id}"
-    )
+    content_type = response.headers.get("content-type", "")
+    content_disposition = response.headers.get("content-disposition", "")
     if (
-        download.status_code != 200
-        or len(download.content) < 100
-        or not download.content.startswith(b"%PDF-")
+        response.status_code != 200
+        or not content_type.startswith("application/pdf")
+        or "inline" not in content_disposition.lower()
+        or f"{CONTEST}-english-statements.pdf" not in content_disposition
+        or len(response.content) < 100
+        or not response.content.startswith(b"%PDF-")
     ):
         raise RuntimeError(
-            f"Contest PDF Preview is invalid: status={download.status_code} "
-            f"size={len(download.content)}"
+            f"Contest PDF Preview is invalid: status={response.status_code} "
+            f"content_type={content_type!r} "
+            f"content_disposition={content_disposition!r} "
+            f"size={len(response.content)}"
         )
     cache_root = Path(os.environ["POLYGON_REPLICA_E2E_CACHE_ROOT"]).resolve()
     preview_root = cache_root / "artifacts" / "previews" / preview_id
-    if (preview_root / "pdf" / "statement.pdf").read_bytes() != download.content:
+    if (preview_root / "pdf" / "statement.pdf").read_bytes() != response.content:
         raise RuntimeError("Contest PDF Preview cache and HTTP payload differ")
     compile_log = (preview_root / "logs" / "contest-pdf.log").read_text(
         encoding="utf-8",

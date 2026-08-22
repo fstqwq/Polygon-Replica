@@ -2188,17 +2188,17 @@ def verify_deployment() -> None:
         job_id, domjudge_archive = _agent_export("domjudge")
         icpc_job_id, icpc_archive = _agent_export("icpc-2025-09")
 
-        contest_preview_id = start_contest_pdf(
+        contest_pdf_response = start_contest_pdf(
             client,
             post_redirect=_post,
             problem=PROBLEM,
         )
         with _connect() as connection:
             materialization_verification_id = assert_contest_pdf(
-                client,
+                contest_pdf_response,
                 connection,
                 problem=PROBLEM,
-                preview_id=contest_preview_id,
+                username=USERNAME,
                 expected_head=head,
                 expected_solution_verdicts=AGENT_SOLUTION_VERDICTS,
             )
