@@ -71,6 +71,64 @@ def _headings(fragment: str) -> list[tuple[str, dict[str, str | None], str]]:
 
 
 class TestStatementHtmlRender(BackendE2ETestBase):
+    def test_problem_reader_can_render_own_workspace_html_and_pdf(self) -> None:
+        reader = "statement-reader"
+        runtime.workspace_service.ensure_user(reader)
+        runtime.workspace_service.grant_repo_access(self.problem, reader, "read")
+        runtime.workspace_service.ensure_workspace(
+            self.problem,
+            reader,
+            refresh_status=False,
+        )
+        preview_row = {
+            "id": "sp-reader-preview",
+            "status": "ok",
+            "summary": {},
+        }
+        pdf_path = Path(runtime.settings.cache_root) / "reader-statement.pdf"
+        pdf_path.write_bytes(b"%PDF-reader")
+        self.addCleanup(pdf_path.unlink, missing_ok=True)
+
+        with (
+            patch.object(
+                runtime.statement_preview_service,
+                "build_problem",
+                return_value=preview_row,
+            ) as build_problem,
+            patch.object(
+                runtime.statement_preview_service,
+                "html_fragment",
+                return_value="<p>reader preview</p>",
+            ),
+            patch.object(
+                runtime.statement_preview_service,
+                "pdf",
+                return_value=pdf_path,
+            ),
+            bind_application(app),
+        ):
+            html_response = problem_statement_html_page(
+                _request(f"/problems/{self.problem}/statement/html"),
+                self.problem,
+                reader,
+                source="workspace",
+                language="english",
+            )
+            pdf_response = problem_statement_pdf_page(
+                self.problem,
+                reader,
+                source="workspace",
+                language="english",
+            )
+
+        self.assertEqual(html_response.status_code, 200)
+        self.assertEqual(pdf_response.status_code, 200)
+        self.assertEqual(build_problem.call_count, 2)
+        self.assertEqual(
+            {call.kwargs["source_kind"] for call in build_problem.call_args_list},
+            {"workspace"},
+        )
+
     def test_native_package_preview_rejects_package_from_another_problem(
         self,
     ) -> None:

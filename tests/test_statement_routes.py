@@ -22,6 +22,21 @@ TEXTAREA_MAX_BYTES = int(CONFIG_REGISTRY.defaults()["TEXTAREA_MAX_BYTES"])
 
 
 class TestStatementRoutes(BackendE2ETestBase):
+    def test_problem_reader_can_read_own_workspace_latex_preview(self) -> None:
+        reader = "latex-reader"
+        runtime.workspace_service.ensure_user(reader)
+        runtime.workspace_service.grant_repo_access(self.problem, reader, "read")
+        runtime.workspace_service.ensure_workspace(
+            self.problem,
+            reader,
+            refresh_status=False,
+        )
+
+        response = statement_tex_source(self.problem, reader, language="english")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/plain", response.media_type)
+
     def test_statement_language_add_creates_seed_files_and_redirects_to_language(self) -> None:
         ws = Path(runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
         resp = statement_language_add(self.problem, self.user, language="japanese", page="statement")

@@ -80,14 +80,6 @@ def problem_statement_html_page(
         source_kind,
         native_package_id,
     )
-    allowed = access["can_write"] if source_kind == "workspace" else access["can_read"]
-    if not allowed:
-        reason = (
-            access["write_block_reason"]
-            if source_kind == "workspace"
-            else access["read_block_reason"]
-        )
-        raise HTTPException(status_code=403, detail=reason)
     try:
         row = runtime().statement_preview_service.build_problem(
             problem,
@@ -157,14 +149,6 @@ def problem_statement_pdf_page(
         source_kind,
         native_package_id,
     )
-    allowed = access["can_write"] if source_kind == "workspace" else access["can_read"]
-    if not allowed:
-        reason = (
-            access["write_block_reason"]
-            if source_kind == "workspace"
-            else access["read_block_reason"]
-        )
-        raise HTTPException(status_code=403, detail=reason)
     safe_language = _language(language)
     try:
         row = runtime().statement_preview_service.build_problem(
