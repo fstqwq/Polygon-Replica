@@ -290,7 +290,6 @@ def _wait_for_export_workers(timeout_sec: float = 300.0) -> None:
 
 db = runtime.db
 export_service = runtime.export_service
-preview_service = runtime.preview_service
 workspace_service = runtime.workspace_service
 
 

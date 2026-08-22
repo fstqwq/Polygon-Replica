@@ -417,12 +417,6 @@ class VerificationStore:
         return row is not None
 
     def workspace_artifact_exists(self, problem_id: int, workspace_id: int, artifact_id: str) -> bool:
-        if artifact_id.startswith("p-"):
-            row = self.db.fetch_one(
-                "SELECT id FROM previews WHERE id=? AND problem_id=? AND workspace_id=?",
-                [artifact_id, problem_id, workspace_id],
-            )
-            return row is not None
         row = self.db.fetch_one(
             "SELECT id FROM verifications WHERE id=? AND problem_id=? AND workspace_id=?",
             [artifact_id, problem_id, workspace_id],

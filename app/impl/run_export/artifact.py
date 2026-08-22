@@ -10,8 +10,6 @@ from app.impl.auth.session import require_session_user
 from app.impl.runtime.dependency import runtime
 from app.impl.workspace.artifact import (
     assert_workspace_artifact_access,
-    browser_file_response,
-    safe_artifact_path,
     verification_artifact_file,
 )
 from app.impl.workspace.context_ui import page_ctx
@@ -44,15 +42,7 @@ def artifact_file(problem: str, user: Annotated[str, Depends(require_session_use
     if virtual_file is not None:
         payload_file, filename = virtual_file
         return _browser_blob_response(payload_file.path, filename)
-    if not str(verification_id or "").startswith("p-"):
-        raise HTTPException(status_code=404, detail="artifact file not found")
-    try:
-        file_path = safe_artifact_path(problem, verification_id, rel_norm)
-    except HTTPException as exc:
-        if exc.status_code == 404:
-            raise HTTPException(status_code=404, detail="preview artifact expired")
-        raise
-    return browser_file_response(file_path)
+    raise HTTPException(status_code=404, detail="artifact file not found")
 
 
 def export_file(problem: str, user: Annotated[str, Depends(require_session_user)], export_id: str, filename: str):

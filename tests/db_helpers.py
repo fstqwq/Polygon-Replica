@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 from typing import Callable
 
@@ -125,32 +124,3 @@ def judgehost_fetch_batch(service, batch_id: int):
 
 def judgehost_cases_for_run(service, run_id: str):
     return service.run_case_snapshots(run_id)
-
-
-def read_preview_summary(preview_id: str) -> dict[str, object]:
-    row = db_fetch_one(
-        "SELECT summary_json FROM previews WHERE id=?", [str(preview_id).strip()]
-    )
-    if row is None:
-        return {}
-    text = str(row["summary_json"] or "")
-    if not text:
-        return {}
-    try:
-        payload = json.loads(text)
-    except Exception:
-        return {}
-    return payload if isinstance(payload, dict) else {}
-
-
-def write_preview_summary(preview_id: str, summary: dict[str, object]) -> None:
-    row = db_fetch_one("SELECT id FROM previews WHERE id=?", [str(preview_id).strip()])
-    if row is None:
-        raise AssertionError(f"preview row missing: {preview_id}")
-    db_execute(
-        "UPDATE previews SET summary_json=? WHERE id=?",
-        [
-            json.dumps(summary, ensure_ascii=True, separators=(",", ":")),
-            str(preview_id).strip(),
-        ],
-    )

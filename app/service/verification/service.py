@@ -104,12 +104,6 @@ class VerificationService:
         return self._verification_store.exists_for_problem(int(problem_id), verification_id)
 
     def artifact_path_for_problem_artifact(self, problem_id: int, artifact_id: str) -> str:
-        if artifact_id.startswith("p-"):
-            row = self.db.fetch_one(
-                "SELECT id FROM previews WHERE id=? AND problem_id=?",
-                [artifact_id, int(problem_id)],
-            )
-            return "" if row is None else str(self.storage_layout.resolve_preview_root(artifact_id))
         row = self.db.fetch_one(
             "SELECT id FROM verifications WHERE id=? AND problem_id=?",
             [artifact_id, int(problem_id)],

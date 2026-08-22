@@ -1738,18 +1738,15 @@ def _run_statement_preview(
     workspace_id: int,
     previous_id: str,
 ) -> str:
-    response = _post(
-        client,
-        f"/problems/{PROBLEM}/preview/run",
-        {"page": "statement", "language": "english"},
-        timeout_sec=300.0,
+    response = client.get(
+        f"/problems/{PROBLEM}/statement/pdf",
+        params={"source": "workspace", "language": "english"},
+        timeout=300.0,
     )
-    location = response.headers.get("location", "")
-    preview_ids = parse_qs(urlparse(location).query).get("preview_id", [])
-    if len(preview_ids) != 1 or not preview_ids[0]:
+    if response.status_code != 200 or not response.content.startswith(b"%PDF-"):
         raise RuntimeError(
-            "statement preview did not start a compile: "
-            f"location={location!r} set-cookie={response.headers.get('set-cookie', '')!r}"
+            "statement PDF preview failed: "
+            f"status={response.status_code} body={response.text[:500]!r}"
         )
     verification = _wait_for_verification(
         connection,

@@ -49,7 +49,6 @@ def _startup_clear_all_caches(runtime: ApplicationRuntime) -> None:
 def _startup_reset_runtime_state(runtime: ApplicationRuntime) -> None:
     now_text = now_iso()
     failure_reason = "interrupted by application restart"
-    _startup_fail_summary_rows(runtime, "previews", failure_reason, now_text=now_text)
     _startup_fail_summary_rows(
         runtime,
         "statement_previews",

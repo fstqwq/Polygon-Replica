@@ -4,7 +4,6 @@ from tests.db_helpers import (
     db_execute,
     db_fetch_all,
     db_fetch_one,
-    db_write_transaction,
     verification_programs_for_tasks,
 )
 
@@ -339,25 +338,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             reason="delete history fixture",
         )
         self.assertEqual(failure.outcome, "transitioned")
-        db_execute(
-            """
-            INSERT INTO previews(id,problem_id,workspace_id,verification_id,source_commit,source_ref,status,summary_json,created_at,finished_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?)
-            """,
-            [
-                f"p-delete-history-{uuid.uuid4().hex[:8]}",
-                int(row_before["id"]),
-                workspace_id,
-                verification_id,
-                "",
-                "",
-                "ok",
-                "{}",
-                "2026-04-08T00:00:00Z",
-                "2026-04-08T00:00:01Z",
-            ],
-        )
-
         sudo_resp = _sudo_with_password_envelope(
             auth_cookie,
             password,
@@ -383,7 +363,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertFalse(ws.exists())
         self.assertFalse(bare_repo.exists())
 
-    def test_problem_delete_finds_active_job_behind_terminal_history(self) -> None:
+    def test_problem_delete_rejects_active_verification(self) -> None:
         problem = f"alice/delete-history-{uuid.uuid4().hex[:8]}"
         workspace_service.ensure_problem(problem)
         workspace = workspace_service.workspace_context(
@@ -402,33 +382,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             workspace_id=workspace_id,
         )
         self.assertEqual(admission.outcome, "admitted")
-
-        def _insert_history(conn) -> None:
-            conn.executemany(
-                """
-                INSERT INTO previews(
-                    id,problem_id,workspace_id,verification_id,source_commit,
-                    source_ref,status,summary_json,created_at,finished_at
-                ) VALUES(?,?,?,?,?,?,?,?,?,?)
-                """,
-                [
-                    (
-                        f"preview-terminal-{index:03}",
-                        problem_id,
-                        workspace_id,
-                        None,
-                        "",
-                        "",
-                        "ok",
-                        "{}",
-                        f"2099-01-01T00:00:00.{index:03}Z",
-                        f"2099-01-01T00:00:01.{index:03}Z",
-                    )
-                    for index in range(65)
-                ],
-            )
-
-        db_write_transaction(_insert_history)
 
         with self.assertRaisesRegex(ValueError, "verification jobs are active"):
             workspace_service.delete_problem(problem)

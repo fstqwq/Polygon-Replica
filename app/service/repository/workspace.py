@@ -865,9 +865,6 @@ class WorkspaceService:
             active_verification_status = self._store.latest_workspace_job_status(workspace_id, kind="verification")
             if self._is_active_status(active_verification_status):
                 raise ValueError("workspace has active verifications")
-            active_preview_status = self._store.latest_workspace_job_status(workspace_id, kind="preview")
-            if self._is_active_status(active_preview_status):
-                raise ValueError("workspace has active preview jobs")
             active_stage_status = self._store.latest_workspace_job_status(workspace_id, kind="all")
             if self._is_active_status(active_stage_status):
                 raise ValueError("workspace has active verification jobs")

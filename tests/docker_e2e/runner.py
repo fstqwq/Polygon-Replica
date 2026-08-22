@@ -63,17 +63,16 @@ def _latest_preview(
     connection: sqlite3.Connection,
     *,
     problem_id: int,
-    workspace_id: int,
 ) -> sqlite3.Row | None:
     return connection.execute(
         """
-        SELECT id,status,verification_id,summary_json,created_at
-        FROM previews
-        WHERE problem_id=? AND workspace_id=?
+        SELECT id,status,summary_json,created_at
+        FROM statement_previews
+        WHERE problem_id=? AND source_kind='workspace' AND output_kind='pdf'
         ORDER BY created_at DESC,id DESC
         LIMIT 1
         """,
-        [problem_id, workspace_id],
+        [problem_id],
     ).fetchone()
 
 
@@ -282,22 +281,16 @@ def _assert_preview_sample_materialization(
     preview = _latest_preview(
         connection,
         problem_id=problem_id,
-        workspace_id=workspace_id,
     )
     if preview is None or str(preview["status"]) != "ok":
         raise RuntimeError(f"preview did not finish successfully: {preview!r}")
-    if str(preview["verification_id"] or "") != verification_id:
-        raise RuntimeError(
-            "preview did not retain the sample verification identity: "
-            f"{dict(preview)!r}"
-        )
     preview_root = (
         Path(os.environ["POLYGON_REPLICA_E2E_CACHE_ROOT"]).resolve()
         / "artifacts"
         / "previews"
         / str(preview["id"])
     )
-    preview_pdf = preview_root / "statement_preview" / "statement.pdf"
+    preview_pdf = preview_root / "pdf" / "statement.pdf"
     if not preview_pdf.is_file() or not preview_pdf.read_bytes().startswith(b"%PDF-"):
         raise RuntimeError(f"preview PDF is unavailable or invalid: {preview_pdf}")
     latex_log = preview_root / "logs" / "latex.log"
@@ -319,17 +312,9 @@ def _assert_preview_sample_materialization(
         summary = json.loads(str(preview["summary_json"]))
     except json.JSONDecodeError as exc:
         raise RuntimeError("preview persisted invalid summary JSON") from exc
-    statement_examples = (
-        summary.get("statement_examples") if isinstance(summary, dict) else None
-    )
-    if (
-        not isinstance(statement_examples, dict)
-        or statement_examples.get("verification_id") != verification_id
-        or int(statement_examples.get("sample_count") or 0) != 1
-    ):
+    if not isinstance(summary, dict) or int(summary.get("sample_count") or 0) != 1:
         raise RuntimeError(
-            "preview did not persist statement example evidence: "
-            f"{statement_examples!r}"
+            f"preview did not persist statement sample count: {summary!r}"
         )
 
 
@@ -602,9 +587,9 @@ def main() -> None:
             f"{bootstrap['session_cookie_name']}={bootstrap['session_token']}"
         )
 
-        preview_response = httpx.post(
-            f"{origin}/problems/{problem}/preview/run",
-            data={"page": "statement", "language": "english"},
+        preview_response = httpx.get(
+            f"{origin}/problems/{problem}/statement/pdf",
+            params={"source": "workspace", "language": "english"},
             headers={
                 "Origin": origin,
                 "Cookie": session_cookie,
@@ -612,9 +597,9 @@ def main() -> None:
             follow_redirects=False,
             timeout=300.0,
         )
-        if preview_response.status_code != 303:
+        if preview_response.status_code != 200 or not preview_response.content.startswith(b"%PDF-"):
             raise RuntimeError(
-                "preview run returned "
+                "statement PDF preview returned "
                 f"{preview_response.status_code}: {preview_response.text[:500]}"
             )
         sample_verification = _wait_for_verification(

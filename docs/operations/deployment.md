@@ -224,10 +224,25 @@ at a time.
 
 Application startup does not alter an existing SQLite schema. Before installing a revision with schema changes, compare `app/db.py` at the deployed and target commits. Stop the application and judgehosts, back up SQLite with its WAL/SHM files, and apply the complete diff offline. Preserve IDs and relationships; require `foreign_key_check`, `integrity_check`, and application schema admission to pass before reopening traffic.
 
-The latest breaking database change is
-[`b16617c` (`Simplify Contest authoring workflows`)](https://github.com/fstqwq/Polygon-Replica/commit/b16617c98579c60a2ad8e6e449d131539bc0ed18).
-Deployments whose current commit predates it must upgrade the database for the
-complete schema diff between their deployed revision and the target revision.
+The latest breaking database change is `Retire legacy workspace preview
+compile`, which removes the disposable legacy `previews` table. Deployments
+whose schema still contains that table must stop the application and
+Judgehosts, back up the SQLite database together with its WAL and SHM files,
+and apply the following offline change in addition to every other schema diff
+between the deployed and target revisions:
+
+```sql
+DROP TABLE previews;
+PRAGMA foreign_key_check;
+PRAGMA integrity_check;
+```
+
+`DROP TABLE` also removes the legacy preview indexes. The application tolerates
+an extra table, so omitting this step does not block schema admission, but the
+upgrade is incomplete and generated-data cleanup no longer manages that
+operator-visible legacy object. Old `p-*` payloads are disposable cache and are
+removed by normal startup cache cleanup; they are not migrated to
+`statement_previews`.
 
 Keep the application data root and database private to the runtime user. The installer applies mode `0700` to `/var/lib/polygon-replica`, and systemd uses `UMask=0077`.
 

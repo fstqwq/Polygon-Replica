@@ -8,7 +8,6 @@ from app.service.platform.error_text import (
 
 class RuntimeStateStore:
     _ALLOWED_SUMMARY_TABLES = {
-        "previews",
         "statement_previews",
     }
 
@@ -29,8 +28,6 @@ class RuntimeStateStore:
         safe_table = table_name.strip()
         if safe_table not in self._ALLOWED_SUMMARY_TABLES:
             return []
-        if safe_table == "previews":
-            return self._fail_inflight_previews(reason, now_text=now_text)
         if safe_table == "statement_previews":
             return self._invalidate_statement_previews(reason, now_text=now_text)
         try:
@@ -97,48 +94,6 @@ class RuntimeStateStore:
             except Exception as exc:
                 warnings.append(
                     "startup statement preview invalidation failed for "
-                    f"{preview_id}: {exc}"
-                )
-        return warnings
-
-    def _fail_inflight_previews(self, reason: str, *, now_text: str) -> list[str]:
-        safe_reason = self._bounded_text(reason)
-        rows = self.db.fetch_all(
-            """
-            SELECT id
-            FROM previews
-            WHERE status IN ('running','queued','pending')
-            """
-        )
-        warnings: list[str] = []
-        for row in rows:
-            preview_id = str(row["id"] or "")
-            if not preview_id:
-                continue
-            try:
-                self.db.execute(
-                    """
-                    UPDATE previews
-                    SET status='failed', summary_json=?, finished_at=COALESCE(finished_at, ?)
-                    WHERE id=?
-                    """,
-                    [
-                        json.dumps(
-                            {
-                                "status": "failed",
-                                "finished_at": now_text,
-                                "error": safe_reason,
-                            },
-                            ensure_ascii=True,
-                            separators=(",", ":"),
-                        ),
-                        now_text,
-                        preview_id,
-                    ],
-                )
-            except Exception as exc:
-                warnings.append(
-                    "startup previews inflight failure update failed for "
                     f"{preview_id}: {exc}"
                 )
         return warnings

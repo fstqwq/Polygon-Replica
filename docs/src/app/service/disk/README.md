@@ -1,7 +1,7 @@
 # `app/service/disk`
 
 This package contains SQLite store adapters for authentication, workspaces,
-contests, previews, verifications, exports, runtime reconciliation, system
+contests, statement previews, verifications, exports, runtime reconciliation, system
 configuration, and SMTP configuration. Despite its package name, it does not
 own the derived/cache filesystem layout.
 

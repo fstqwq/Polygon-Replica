@@ -2,9 +2,7 @@ from fastapi.responses import HTMLResponse
 
 from app.impl.preview.preview import (
     preview_page,
-    preview_run,
     preview_save,
-    preview_status,
     statement_tex_source,
     statement_compile_asset_upload,
     statement_attachment_upload,
@@ -47,16 +45,6 @@ router.add_api_route(
     preview_page,
     methods=["GET"],
     response_class=HTMLResponse,
-)
-router.add_api_route(
-    "/problems/{problem:path}/preview/run",
-    preview_run,
-    methods=["POST"],
-)
-router.add_api_route(
-    "/problems/{problem:path}/preview/status",
-    preview_status,
-    methods=["GET"],
 )
 router.add_api_route(
     "/problems/{problem:path}/statement/source.tex",

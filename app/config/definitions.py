@@ -173,13 +173,6 @@ UI_AND_LIMIT_DEFINITIONS = (
         _bounds(1, 10000),
     ),
     _int(
-        "PREVIEW_LOG_REF_LIST_LIMIT",
-        200,
-        "UI",
-        "Max statement log references parsed.",
-        _bounds(1, 5000),
-    ),
-    _int(
         "API_PROBLEMS_LIST_LIMIT",
         200,
         "Misc",

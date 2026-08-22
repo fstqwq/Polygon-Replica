@@ -265,22 +265,6 @@ CREATE TABLE IF NOT EXISTS contest_attachments (
     FOREIGN KEY(created_by_user_id) REFERENCES users(id)
 );
 
-CREATE TABLE IF NOT EXISTS previews (
-    id TEXT PRIMARY KEY,
-    problem_id INTEGER NOT NULL,
-    workspace_id INTEGER,
-    verification_id TEXT,
-    source_commit TEXT,
-    source_ref TEXT,
-    status TEXT NOT NULL,
-    summary_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL,
-    finished_at TEXT,
-    FOREIGN KEY(problem_id) REFERENCES problems(id),
-    FOREIGN KEY(workspace_id) REFERENCES workspaces(id),
-    FOREIGN KEY(verification_id) REFERENCES verifications(id)
-);
-
 CREATE TABLE IF NOT EXISTS statement_previews (
     id TEXT PRIMARY KEY,
     actor_user_id INTEGER NOT NULL,
@@ -527,11 +511,6 @@ CREATE INDEX IF NOT EXISTS idx_contest_members_user ON contest_members(user_id, 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_contest_members_single_owner ON contest_members(contest_id) WHERE role='owner';
 CREATE INDEX IF NOT EXISTS idx_contest_problems_problem ON contest_problems(problem_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_contest_attachments_contest_created ON contest_attachments(contest_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_previews_problem_created ON previews(problem_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_previews_problem_workspace_created ON previews(problem_id, workspace_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_previews_workspace_created ON previews(workspace_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_previews_problem_source_status_created ON previews(problem_id, source_commit, status, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_previews_verification_created ON previews(verification_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_statement_previews_problem_lookup ON statement_previews(actor_user_id,problem_id,source_kind,output_kind,language,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_statement_previews_contest_lookup ON statement_previews(actor_user_id,contest_id,source_kind,output_kind,language,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_statement_previews_identity ON statement_previews(actor_user_id,subject_kind,problem_id,contest_id,source_kind,output_kind,language,input_identity,status);
@@ -792,18 +771,6 @@ CURRENT_SCHEMA_COLUMNS: dict[str, tuple[str, ...]] = {
         "rel_path",
         "created_at",
         "created_by_user_id",
-    ),
-    "previews": (
-        "id",
-        "problem_id",
-        "workspace_id",
-        "verification_id",
-        "source_commit",
-        "source_ref",
-        "status",
-        "summary_json",
-        "created_at",
-        "finished_at",
     ),
     "statement_previews": (
         "id",

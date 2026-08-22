@@ -263,14 +263,6 @@ class TestArtifactCleanup(unittest.TestCase):
         )
         self._execute(
             """
-            INSERT INTO previews(
-                id,problem_id,workspace_id,verification_id,status,created_at
-            ) VALUES('preview-cleanup',?,?, 'ver-c1ea4','ok',?)
-            """,
-            (self.problem_id, self.workspace_id, now),
-        )
-        self._execute(
-            """
             INSERT INTO problem_package_materializations(
                 id,problem_id,source_commit,revision_number,source_digest,
                 archive_rel_path,archive_sha256,archive_size_bytes,verification_id,
@@ -472,7 +464,6 @@ class TestArtifactCleanup(unittest.TestCase):
         self.assertTrue(self.maintenance_gate.is_open())
 
         for table in (
-            "previews",
             "export_jobs",
             "exports",
             "problem_package_builds",

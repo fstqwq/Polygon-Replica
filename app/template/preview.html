@@ -31,9 +31,6 @@
       {% if ctx.contest_workspace %}
       <input type="hidden" name="contest" value="{{ ctx.contest_workspace.contest_slug }}" />
       {% endif %}
-      {% if preview_id %}
-      <input type="hidden" name="preview_id" value="{{ preview_id }}" />
-      {% endif %}
       <label for="statement-language-select">Language</label>
       <select id="statement-language-select" name="language" data-statement-language-select="1">
         {% for language in available_languages %}
@@ -53,9 +50,6 @@
     <form class="inline-action" method="post" action="{{ problem_href('statement_language_delete') }}" data-confirm-message="Delete statement language {{ current_language }}? This removes all statement section files for that language.">
       <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
       <input type="hidden" name="language" value="{{ current_language }}" />
-      {% if preview_id %}
-      <input type="hidden" name="preview_id" value="{{ preview_id }}" />
-      {% endif %}
       <a href="#" class="linkish danger-link" data-submit-form="1">Delete current</a>
     </form>
     {% endif %}
@@ -65,9 +59,6 @@
     <form class="inline-action statement-template-reset" method="post" action="{{ problem_href('statement_templates_reset') }}" data-confirm-message="Restore statement/statements.ftl, statement/problem.tex, and statement/olymp.sty to Qiulygon defaults? This also removes the optional statement/examples.tex file, but keeps statement sections and attachments.">
       <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
       <input type="hidden" name="language" value="{{ current_language }}" />
-      {% if preview_id %}
-      <input type="hidden" name="preview_id" value="{{ preview_id }}" />
-      {% endif %}
       <a href="#" class="linkish danger-link" data-submit-form="1">Restore default templates</a>
     </form>
     {% endif %}
@@ -90,9 +81,6 @@
   >
     <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
     <input type="hidden" name="language" value="{{ current_language }}" />
-    {% if preview_id %}
-    <input type="hidden" name="preview_id" value="{{ preview_id }}" />
-    {% endif %}
     {% for section in statement_sections %}
     {% if section.enabled %}
     {% if section.key == 'name' %}
@@ -162,9 +150,6 @@
     >
       <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
       <input type="hidden" name="language" value="{{ current_language }}" />
-      {% if preview_id %}
-      <input type="hidden" name="preview_id" value="{{ preview_id }}" />
-      {% endif %}
       <label>
         <input
           type="checkbox"
@@ -184,9 +169,6 @@
   <form method="post" action="{{ problem_href('statement_examples_template_save') }}">
     <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'preview' }}" />
     <input type="hidden" name="language" value="{{ current_language }}" />
-    {% if preview_id %}
-    <input type="hidden" name="preview_id" value="{{ preview_id }}" />
-    {% endif %}
     <textarea
       name="examples_tex"
       rows="24"
@@ -216,9 +198,6 @@
 {% call ui_popup('statement-language-popup', 'Add Statement Language') %}
       <form class="form-stack" method="post" action="{{ problem_href('statement_language_add') }}">
         <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
-        {% if preview_id %}
-        <input type="hidden" name="preview_id" value="{{ preview_id }}" />
-        {% endif %}
         <label for="statement-language-add">Language token</label>
         <input id="statement-language-add" type="text" name="language" placeholder="chinese" required />
         <p class="muted">Order: <code>english</code>, <code>chinese</code>, then alphabetical.</p>
@@ -238,9 +217,6 @@
         <form id="statement-assets-upload-form" class="form-stack" method="post" enctype="multipart/form-data" action="{{ problem_href('statement_compile_asset_upload') }}">
           <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
           <input type="hidden" name="language" value="{{ current_language }}" />
-          {% if preview_id %}
-          <input type="hidden" name="preview_id" value="{{ preview_id }}" />
-          {% endif %}
           <div class="form-row">
             <label for="statement-compile-asset-upload">Local file</label>
             <div class="form-input-with-action">
@@ -267,9 +243,6 @@
               <input type="hidden" name="path" value="{{ row.path }}" />
               <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
               <input type="hidden" name="language" value="{{ current_language }}" />
-              {% if preview_id %}
-              <input type="hidden" name="preview_id" value="{{ preview_id }}" />
-              {% endif %}
               <a href="#" class="linkish danger-link" data-submit-form="1">Delete</a>
             </form>
           </td>
@@ -294,9 +267,6 @@
         <form id="contestant-attachments-upload-form" class="form-stack" method="post" enctype="multipart/form-data" action="{{ problem_href('statement_attachment_upload') }}">
           <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
           <input type="hidden" name="language" value="{{ current_language }}" />
-          {% if preview_id %}
-          <input type="hidden" name="preview_id" value="{{ preview_id }}" />
-          {% endif %}
           <div class="form-row">
             <label for="statement-attachment-upload">Local file</label>
             <div class="form-input-with-action">
@@ -323,9 +293,6 @@
               <input type="hidden" name="path" value="{{ row.path }}" />
               <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
               <input type="hidden" name="language" value="{{ current_language }}" />
-              {% if preview_id %}
-              <input type="hidden" name="preview_id" value="{{ preview_id }}" />
-              {% endif %}
               <a href="#" class="linkish danger-link" data-submit-form="1">Delete</a>
             </form>
           </td>

@@ -2,7 +2,6 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 
 from app.config import build_config_values
 from app.service.problem.runtime_config import (
@@ -19,7 +18,6 @@ from app.service.statement.constant import (
 )
 from app.service.statement.context import pick_statement_language, statement_languages
 from app.service.statement.ftl.renderer import render_ftl_template
-from app.service.statement.preview import PreviewService
 from app.service.statement.examples import (
     StatementExamplesBundle,
     statement_examples_require_verification,
@@ -74,8 +72,6 @@ class TestPreviewUnit(unittest.TestCase):
         (self.workspace / "tests/spec.json").write_text(
             '{"tests": []}\n', encoding="utf-8"
         )
-        self.preview = PreviewService.__new__(PreviewService)
-        self.preview.db = SimpleNamespace(config_values=_CONFIG_VALUES)
 
     def test_statement_languages_use_stable_preferred_order(self) -> None:
         root = self.workspace / "statement-sections"
@@ -921,19 +917,3 @@ class TestPreviewUnit(unittest.TestCase):
             {"problem": {"sampleTests": [{"inputFile": "1"}, {"inputFile": "2"}]}},
         )
         self.assertEqual(rendered, "A\nX1\nX2\nB\n")
-
-    def test_latex_failure_detail_names_missing_runtime_component(self) -> None:
-        self.assertIn(
-            "missing LaTeX format file",
-            self.preview._latex_compile_error_detail(
-                "I can't find the format file `pdflatex.fmt'!\n",
-                1,
-            ),
-        )
-        self.assertEqual(
-            self.preview._latex_compile_error_detail(
-                "! LaTeX Error: File `siunitx.sty' not found.\n",
-                1,
-            ),
-            "missing LaTeX package siunitx.sty",
-        )

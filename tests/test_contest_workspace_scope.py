@@ -184,7 +184,7 @@ class TestContestWorkspaceScope(ContestActionBase):
 
     def test_detail_section_mapping_and_unknown_fallback(self) -> None:
         expectations = {
-            "/problems/{problem:path}/preview/status": "statement",
+            "/problems/{problem:path}/statement/pdf": "statement",
             "/problems/{problem:path}/verification/start": "run",
             "/problems/{problem:path}/artifacts/{verification_id}/{rel_path:path}": "run",
             "/problems/{problem:path}/solutions/editor": "solutions",

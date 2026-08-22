@@ -41,7 +41,6 @@ from app.service.judgehost.api import Judgehost
 from app.service.sandbox.base import SandboxBackend
 from app.service.sandbox.tex_backend import TexSandboxBackend
 from app.service.statement.tex_compile import TexCompileService
-from app.service.statement.preview import PreviewService
 from app.service.statement.html_render import StatementHtmlRenderer
 from app.service.statement.transient_preview import StatementPreviewService
 from app.service.statement.examples import StatementExamplesProducer
@@ -109,7 +108,6 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
     verification_planner: VerificationExecutionPlanner = field(init=False)
     verification_sanity_service: VerificationSanityService = field(init=False)
     verification_workflow: VerificationWorkflow = field(init=False)
-    preview_service: PreviewService = field(init=False)
     statement_html_renderer: StatementHtmlRenderer = field(init=False)
     statement_preview_service: StatementPreviewService = field(init=False)
     contest_statement_preview_service: ContestStatementPreviewService = field(init=False)
@@ -136,8 +134,6 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
             directory=str(ApplicationRuntime.TEMPLATE_ROOT)
         )
     )
-    preview_lock: threading.Lock = field(default_factory=threading.Lock)
-    preview_inflight: set[str] = field(default_factory=set)
     export_lock: threading.Lock = field(default_factory=threading.Lock)
     export_workers: set[WorkerFuture] = field(default_factory=set)
     export_inflight: set[str] = field(default_factory=set)
@@ -161,8 +157,6 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
         return secrets.token_hex(32).encode("utf-8")
 
     def _reset_process_job_tracking(self) -> None:
-        with self.preview_lock:
-            self.preview_inflight.clear()
         with self.export_lock:
             self.export_workers.clear()
             self.export_inflight.clear()
@@ -317,15 +311,6 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
         )
         self.statement_examples_producer = StatementExamplesProducer(
             self.verification_service
-        )
-        self.preview_service = PreviewService(
-            self.db,
-            self.workspace_service,
-            self.tex_compile_service,
-            self.storage_layout,
-            verification_service=self.verification_service,
-            verification_workflow=self.verification_workflow,
-            statement_examples_producer=self.statement_examples_producer,
         )
         self.problem_package_service = ProblemPackageService(
             self.db,

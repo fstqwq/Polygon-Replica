@@ -5,7 +5,6 @@ from typing import Literal, TypedDict
 
 ARTIFACT_TABLES = (
     "statement_previews",
-    "previews",
     "export_jobs",
     "exports",
     "problem_package_builds",

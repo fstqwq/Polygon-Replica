@@ -10,7 +10,7 @@ source snapshot
   -> HTML renderer or PDF compiler
 ```
 
-Workspace preview renders authored source with sample evidence. Native package preview reads `statement-build/<language>/`. Generated examples never modify authored source. Preview records, IDs, and resources are scoped to the requesting user and remain subject to problem or contest access checks.
+Workspace preview renders authored source with sample evidence. Native package preview reads `statement-build/<language>/`. Generated examples never modify authored source. The synchronous `statement_previews` flow is the only statement-preview lifecycle: it uses `sp-*` identities and actor-scoped cache payloads. Preview records, IDs, and resources are scoped to the requesting user and remain subject to problem or contest access checks.
 
 ## HTML
 
@@ -27,7 +27,7 @@ Includes and resources must remain inside the render tree. The renderer supports
 
 ## Problem outputs
 
-The Statement editor exposes `Preview: PDF HTML LaTeX`. LaTeX opens rendered source directly. HTML and PDF synchronously reuse a matching cache entry or generate the result before returning it. Cache identity is checked before expensive source preparation and again before publication. Historical package links carry the exact native package identity.
+The Statement editor exposes `Preview: PDF HTML LaTeX`. LaTeX opens rendered source directly. HTML and PDF synchronously reuse a matching `statement_previews` cache entry or generate the result before returning it; there is no asynchronous workspace compile or status endpoint. Cache identity is checked before expensive source preparation and again before publication. Historical package links carry the exact native package identity.
 
 ## Contest review
 

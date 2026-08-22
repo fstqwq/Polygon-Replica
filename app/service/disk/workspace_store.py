@@ -546,12 +546,7 @@ class WorkspaceDiskStore:
         }
 
     def latest_workspace_job_status(self, workspace_id: int, *, kind: str) -> str:
-        if kind == "preview":
-            row = self.db.fetch_one(
-                "SELECT status FROM previews WHERE workspace_id=? ORDER BY created_at DESC LIMIT 1",
-                [int(workspace_id)],
-            )
-        elif kind == "verification":
+        if kind == "verification":
             row = self.db.fetch_one(
                 "SELECT status FROM verifications WHERE workspace_id=? AND kind IN ('all','custom') ORDER BY created_at DESC LIMIT 1",
                 [int(workspace_id)],
@@ -597,10 +592,6 @@ class WorkspaceDiskStore:
                     FROM verifications
                     WHERE problem_id=? AND status IN ('queued','running')
                     UNION ALL
-                    SELECT 'preview' AS kind,id,status
-                    FROM previews
-                    WHERE problem_id=? AND status IN ('queued','running')
-                    UNION ALL
                     SELECT 'export' AS kind,id,status
                     FROM export_jobs
                     WHERE problem_id=? AND status IN ('queued','running')
@@ -616,7 +607,6 @@ class WorkspaceDiskStore:
                     int(problem_id),
                     int(problem_id),
                     int(problem_id),
-                    int(problem_id),
                 ],
             ).fetchone()
             if active is not None:
@@ -629,7 +619,6 @@ class WorkspaceDiskStore:
             conn.execute("DELETE FROM exports WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM problem_package_builds WHERE problem_id=?", [int(problem_id)])
             conn.execute("DELETE FROM problem_package_materializations WHERE problem_id=?", [int(problem_id)])
-            conn.execute("DELETE FROM previews WHERE problem_id=?", [int(problem_id)])
             conn.execute(
                 "DELETE FROM verification_task_artifacts WHERE verification_id IN (SELECT id FROM verifications WHERE problem_id=?)",
                 [int(problem_id)],

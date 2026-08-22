@@ -23,13 +23,6 @@ class VerificationLayout:
 
 
 @dataclass(frozen=True)
-class PreviewLayout:
-    root: Path
-    logs: Path
-    statement_preview: Path
-
-
-@dataclass(frozen=True)
 class SourceBackupLayout:
     root: Path
     archive: Path
@@ -316,21 +309,6 @@ class StorageLayout:
     def resolve_preview_root(self, preview_id: str) -> Path:
         token = self._normalize_token(preview_id, field_name="preview_id")
         return self._safe_relative(self.preview_root, token, field_name="preview_id")
-
-    def preview_layout(self, preview_id: str) -> PreviewLayout:
-        root = self.resolve_preview_root(preview_id)
-        return PreviewLayout(
-            root=root,
-            logs=root / "logs",
-            statement_preview=root / "statement_preview",
-        )
-
-    def prepare_preview_layout(self, preview_id: str) -> PreviewLayout:
-        layout = self.preview_layout(preview_id)
-        layout.root.mkdir(parents=True, exist_ok=True)
-        layout.logs.mkdir(parents=True, exist_ok=True)
-        layout.statement_preview.mkdir(parents=True, exist_ok=True)
-        return layout
 
     @staticmethod
     def _normalize_token(value: str, *, field_name: str) -> str:
