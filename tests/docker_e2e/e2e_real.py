@@ -2194,7 +2194,7 @@ def verify_deployment() -> None:
             problem=PROBLEM,
         )
         with _connect() as connection:
-            materialization_verification_id = assert_contest_pdf(
+            materialization_verification_id, contest_preview_id = assert_contest_pdf(
                 contest_pdf_response,
                 connection,
                 problem=PROBLEM,

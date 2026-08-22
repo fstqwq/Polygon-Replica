@@ -56,7 +56,7 @@ def assert_contest_pdf(
     username: str,
     expected_head: str,
     expected_solution_verdicts: dict[str, dict[str, str]],
-) -> str:
+) -> tuple[str, str]:
     row = connection.execute(
         """
         SELECT sp.id,sp.status,sp.output_kind,sp.source_kind,sp.language,
@@ -166,4 +166,4 @@ def assert_contest_pdf(
         preview_root / "contest-sources"
     ).exists():
         raise RuntimeError("Contest PDF Preview retained an intermediate source tree")
-    return verification_id
+    return verification_id, preview_id

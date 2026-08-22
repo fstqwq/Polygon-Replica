@@ -317,6 +317,10 @@ async def agent_contest_problem_snapshot(
 async def agent_verification_start(request: Request):
     identity = require_agent_problem(request, min_scope="readonly")
     ctx = _agent_problem_ctx(identity)
+    access = runtime().access_query.problem_context(
+        identity.problem_id,
+        identity.user_id,
+    )
     workspace = Path(str(ctx["workspace"]["path"])).resolve()
     verification_id = allocate_verification_id()
     try:
@@ -334,7 +338,7 @@ async def agent_verification_start(request: Request):
             verification_id=verification_id,
             allow_package_certification=(
                 identity.effective_scope == "commit"
-                and bool(ctx["access"]["can_create_packages"])
+                and access["can_create_packages"]
             ),
             workspace_path=workspace,
         )

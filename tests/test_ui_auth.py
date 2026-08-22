@@ -1155,6 +1155,13 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertEqual(resp.status_code, 200)
 
     def test_auth_middleware_redirects_unauthenticated_admin_paths(self) -> None:
+        registered = _setup_with_password_envelope(
+            self.random_id("adminredirect"),
+            "StrongPass123",
+            next_path="/",
+        )
+        self.assertEqual(registered.status_code, 303)
+
         async def _next(_: Request) -> PlainTextResponse:
             raise AssertionError("unauthenticated Admin request reached its handler")
 

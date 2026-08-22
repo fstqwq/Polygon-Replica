@@ -26,13 +26,12 @@ TEXTAREA_MAX_BYTES = int(CONFIG_REGISTRY.defaults()["TEXTAREA_MAX_BYTES"])
 class TestStatementRoutes(BackendE2ETestBase):
     def test_problem_reader_can_read_own_workspace_latex_preview(self) -> None:
         reader = "latex-reader"
-        runtime.workspace_service.ensure_user(reader)
-        runtime.workspace_service.grant_repo_access(self.problem, reader, "read")
-        runtime.workspace_service.ensure_workspace(
+        self._seed_workspace(
             self.problem,
             reader,
-            refresh_status=False,
+            profile="statement",
         )
+        runtime.workspace_service.grant_repo_access(self.problem, reader, "read")
 
         response = statement_tex_source(self.problem, reader, language="english")
 
@@ -41,13 +40,12 @@ class TestStatementRoutes(BackendE2ETestBase):
 
     def test_problem_reader_cannot_save_statement(self) -> None:
         reader = "statement-save-reader"
-        runtime.workspace_service.ensure_user(reader)
-        runtime.workspace_service.grant_repo_access(self.problem, reader, "read")
-        workspace = runtime.workspace_service.ensure_workspace(
+        workspace = self._seed_workspace(
             self.problem,
             reader,
-            refresh_status=False,
+            profile="statement",
         )
+        runtime.workspace_service.grant_repo_access(self.problem, reader, "read")
         legend_path = workspace / "statement-sections" / "english" / "legend.tex"
         before_bytes = legend_path.read_bytes()
         before_status = runtime.workspace_service.read_workspace_status(workspace)
