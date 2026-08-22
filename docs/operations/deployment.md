@@ -239,17 +239,29 @@ and apply the following offline change in addition to every other schema diff
 between the deployed and target revisions:
 
 ```sql
+DELETE FROM system_config
+WHERE key = 'PREVIEW_LOG_REF_LIST_LIMIT';
+
 DROP TABLE previews;
+
 PRAGMA foreign_key_check;
 PRAGMA integrity_check;
 ```
 
-`DROP TABLE` also removes the legacy preview indexes. The application tolerates
-an extra table, so omitting this step does not block schema admission, but the
-upgrade is incomplete and generated-data cleanup no longer manages that
-operator-visible legacy object. Old `p-*` payloads are disposable cache and are
-removed by normal startup cache cleanup; they are not migrated to
-`statement_previews`.
+`system_config` stores only values that differ from their defaults, so the
+legacy configuration row exists only when an operator changed
+`PREVIEW_LOG_REF_LIST_LIMIT`. The `DELETE` is safe when no such row exists and
+must run before starting the new revision: persisted keys absent from the typed
+configuration registry prevent startup. `DROP TABLE` also removes the legacy
+preview indexes. The application tolerates an extra table, so omitting that
+statement does not block schema admission, but the upgrade is incomplete and
+generated-data cleanup no longer manages that operator-visible legacy object.
+Old `p-*` payloads are disposable cache and are removed by normal startup cache
+cleanup; they are not migrated to `statement_previews`.
+
+`PRAGMA foreign_key_check` must return no rows and `PRAGMA integrity_check` must
+return `ok`. Start the application only after both checks pass, then confirm
+application schema admission before reopening traffic.
 
 Keep the application data root and database private to the runtime user. The installer applies mode `0700` to `/var/lib/polygon-replica`, and systemd uses `UMask=0077`.
 
