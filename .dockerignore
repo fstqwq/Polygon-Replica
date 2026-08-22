@@ -4,6 +4,10 @@
 .github
 .e2e
 .venv
+.env
+.env.*
+**/.env
+**/.env.*
 .DS_Store
 **/__pycache__
 **/*.pyc

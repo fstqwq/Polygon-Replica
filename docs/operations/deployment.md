@@ -88,6 +88,13 @@ If SMTP is used, add the stable encryption key to `.env` and explicitly pass
 `POLYGON_REPLICA_ENCRYPTION_KEY` through the Compose `environment` block. Keep
 `.env` mode `0600`.
 
+The root `.env` is client-side Compose configuration and may contain deployment
+secrets. `.dockerignore` excludes `.env`, `.env.*`, and their nested equivalents
+from the Docker build context. These exclusions MUST remain in place for local,
+shared, and remote BuildKit builders. Selective `COPY` instructions only keep a
+file out of the final image; they do not keep it out of the context sent to the
+builder.
+
 ## TLS proxy
 
 A TLS certificate, including a locally trusted self-signed certificate, is strongly recommended. Outside localhost, the browser password flow requires HTTPS because it uses Web Crypto. `AUTH_COOKIE_SECURE` also defaults to `true`, so authentication cookies are sent only over HTTPS.

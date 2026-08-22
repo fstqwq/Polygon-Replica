@@ -108,6 +108,22 @@ def _is_db_handle(node: ast.AST) -> bool:
 
 
 class TestPublicContracts(unittest.TestCase):
+    def test_docker_build_context_excludes_environment_files(self) -> None:
+        rules = {
+            line.strip()
+            for line in (ROOT / ".dockerignore")
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        }
+        required_rules = {".env", ".env.*", "**/.env", "**/.env.*"}
+
+        self.assertEqual(
+            required_rules - rules,
+            set(),
+            "Docker build contexts must exclude root and nested environment files.",
+        )
+
     def test_user_templates_use_package_published_revision_terms(self) -> None:
         template_source = "\n".join(
             path.read_text(encoding="utf-8")
