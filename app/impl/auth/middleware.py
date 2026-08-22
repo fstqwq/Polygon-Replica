@@ -17,12 +17,13 @@ async def auth_middleware(request: Request, call_next):
         return response
     protected = (
         path == "/"
-        or path in {"/problems", "/contests", "/settings"}
+        or path in {"/problems", "/contests", "/settings", "/admin"}
         or path == "/agent"
         or (path.startswith("/agent/") and (not path.startswith("/agent/v1/")))
         or path.startswith("/problems/")
         or path.startswith("/contests/")
         or path.startswith("/settings/")
+        or path.startswith("/admin/")
         or path.startswith("/switch-")
         or path.startswith("/sudo")
         or (path == "/logout")

@@ -1081,6 +1081,91 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             asyncio.run(auth_middleware(req, _next))
         self.assertEqual(blocked.exception.status_code, 403)
 
+    def test_auth_middleware_blocks_cross_origin_admin_posts(self) -> None:
+        username = self.random_id("admincsrf")
+        password = "StrongPass123"
+        reg = _register_with_password_envelope(username, password, next_path="/")
+        self.assertEqual(reg.status_code, 303)
+        token = _cookie_value_from_response(reg, AUTH_COOKIE_NAME)
+        self.assertTrue(token)
+
+        reached_handler = False
+
+        async def _next(_: Request) -> PlainTextResponse:
+            nonlocal reached_handler
+            reached_handler = True
+            return PlainTextResponse("ok", status_code=200)
+
+        for path in (
+            "/admin/users/system-admin",
+            "/admin/maintenance/admission",
+        ):
+            with self.subTest(path=path):
+                req = _request_with_cookie(
+                    path,
+                    f"{AUTH_COOKIE_NAME}={token}",
+                    method="POST",
+                    extra_headers=[(b"origin", b"http://evil.example")],
+                )
+                with self.assertRaises(HTTPException) as blocked:
+                    asyncio.run(auth_middleware(req, _next))
+                self.assertEqual(blocked.exception.status_code, 403)
+                self.assertFalse(reached_handler)
+
+    def test_auth_middleware_blocks_admin_post_without_origin(self) -> None:
+        username = self.random_id("admincsrfmissing")
+        password = "StrongPass123"
+        reg = _register_with_password_envelope(username, password, next_path="/")
+        self.assertEqual(reg.status_code, 303)
+        token = _cookie_value_from_response(reg, AUTH_COOKIE_NAME)
+        self.assertTrue(token)
+
+        req = _request_with_cookie(
+            "/admin/config/reset",
+            f"{AUTH_COOKIE_NAME}={token}",
+            method="POST",
+        )
+
+        async def _next(_: Request) -> PlainTextResponse:
+            return PlainTextResponse("ok", status_code=200)
+
+        with self.assertRaises(HTTPException) as blocked:
+            asyncio.run(auth_middleware(req, _next))
+        self.assertEqual(blocked.exception.status_code, 403)
+
+    def test_auth_middleware_allows_same_origin_admin_post(self) -> None:
+        username = self.random_id("admincsrfok")
+        password = "StrongPass123"
+        reg = _register_with_password_envelope(username, password, next_path="/")
+        self.assertEqual(reg.status_code, 303)
+        token = _cookie_value_from_response(reg, AUTH_COOKIE_NAME)
+        self.assertTrue(token)
+
+        req = _request_with_cookie(
+            "/admin/users/system-admin",
+            f"{AUTH_COOKIE_NAME}={token}",
+            method="POST",
+            extra_headers=[(b"origin", b"http://testserver")],
+        )
+
+        async def _next(_: Request) -> PlainTextResponse:
+            return PlainTextResponse("ok", status_code=200)
+
+        resp = asyncio.run(auth_middleware(req, _next))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_auth_middleware_redirects_unauthenticated_admin_paths(self) -> None:
+        async def _next(_: Request) -> PlainTextResponse:
+            raise AssertionError("unauthenticated Admin request reached its handler")
+
+        for path in ("/admin", "/admin/users"):
+            with self.subTest(path=path):
+                response = asyncio.run(auth_middleware(_request(path), _next))
+                self.assertEqual(response.status_code, 303)
+                self.assertTrue(
+                    response.headers.get("location", "").startswith("/login?next=")
+                )
+
     def test_auth_middleware_allows_same_origin_post(self) -> None:
         username = self.random_id("csrfok")
         password = "StrongPass123"

@@ -17,3 +17,5 @@ Successful packages are shared with problem readers. A queued, running, or faile
 ## Authentication boundaries
 
 Browser sessions, agent identities, and judgehost credentials are separate actors. An agent session has a user-selected general scope and may hold independently expiring per-problem grants. Combined agent scopes are capped by the connected user's current problem role and cannot retain access after that user loses direct and contest-derived access. Contest discovery also requires general scope and current contest read access. Browser sudo is session-bound and never inherited by an agent. Judgehost authentication authorizes only the trusted execution protocol under `/api/v4/*`; it creates no user or problem role.
+
+Admin pages require an authenticated system administrator. Every state-changing request below `/admin` must carry an `Origin` or `Referer` whose origin exactly matches the application origin; session authentication and cookie same-site policy do not replace this check.
