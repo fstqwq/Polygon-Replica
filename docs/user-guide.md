@@ -1,12 +1,10 @@
 # Polygon Replica 用户指南
 
-Polygon Replica 是一套面向 ICPC 风格题目的协作出题系统。它覆盖一道题从已有想法、初步解法和测试，到团队审阅、完整验证与比赛包交付的过程。比赛当天的报名、提交与榜单不在这里运行。最终产物按 DOMjudge、ICPC 2025-09、QOJ 或 Nowcoder 格式导出，再交给目标系统。
+Polygon Replica 是一套面向 ICPC 风格题目的协作出题系统。它覆盖一道题从已有想法、初步解法和测试，到团队审阅、完整验证与比赛包交付的过程。比赛当天的报名、提交与榜单不在这里运行。最终产物可按目标比赛系统的要求导出。
 
 本指南假定读者用过 Codeforces Polygon，并熟悉桌面 Agent。界面目前使用英文，文中沿用实际按钮和页面名称。
 
-## 先看懂 Workspace、Published Revision 和 Package
-
-使用 Polygon Replica 时，先区分 Workspace、Published Revision 和 Package：
+## Workspace、Published Revision 和 Package
 
 ```text
 创建或导入后，继续编辑题目
@@ -26,13 +24,11 @@ Native Package（有共享验证认证，或 not verified）
           |
           | Format Adapter
           v
-DOMjudge / ICPC 2025-09 / QOJ / Nowcoder Package
+External Package（目标比赛系统格式）
 
 Contest = 有序题目列表 + 比赛属性 + 比赛题面模板
         = 下载时组合每道题当前 Published Revision 的包
 ```
-
-实际操作时，记住这些规则：
 
 - 题目编辑页的 `Save` 写入个人 Problem Workspace。Contest Properties 和 Statement Sources 写入比赛的共享内容。
 - `Verification` 针对启动时冻结的 Workspace 快照。之后的编辑不会改变这次结果，验证也不会发布源码。
@@ -43,7 +39,7 @@ Contest = 有序题目列表 + 比赛属性 + 比赛题面模板
 
 每位作者在独立的 Git Workspace 中工作，Published Revision 是团队共享的基准。Verification 和 Package 保留各自对应的源码状态，因此多人和 Agent 并行工作时仍可追溯结果。
 
-## 功能在哪里
+## 页面入口
 
 顶栏的主入口是单数形式的 `Problem` 和 `Contest`。右上角的 `Settings` 用于账号与 Agent 连接。
 
@@ -87,8 +83,6 @@ Contest = 有序题目列表 + 比赛属性 + 比赛题面模板
 - `Mode` 选择普通 `pass-fail` 或 `interactive`。
 - `Pass Limit` 大于 1 时表示 multi-pass。
 
-题型会改变页面结构：普通题显示 `Checker`，交互题显示 `Interactor`，二者不会同时出现。
-
 ### 3. 写题面、组件、解法和测试
 
 `Statements` 按语言维护 Title、Legend、Input、Output、Notes，交互题还会显示 Interaction Protocol。右上角的 `Preview: PDF HTML LaTeX` 用来检查最终渲染。题面编译使用的图片等资源放在 `Statement attachments`。需要随 ICPC 包交付给参赛者的文件放在 `Contestant attachments`。
@@ -117,8 +111,6 @@ Package Preview 读取固定的 Native Package，不会触发 Build、Verify 或
 ### 5. 运行 Verification
 
 进入 `Verification`，点击 `Start verification` 运行标准全量验证。系统会对当前 Workspace 冻结一份快照，并为每个测试建立依赖链：读取 manual input，或运行 Generator 得到输入；配置了 Validator 时，检查准备好的测试输入；随后运行 main correct solution 取得答案，再运行其他 Solutions，并用 Checker 或 Interactor 判断结果。不同测试和彼此独立的任务可以并发执行。
-
-完整验证检查的是“实际结果是否符合 Expected”，不是“所有解是否都 AC”。因此，一个标记为 WA、TL、RE 或 CE 的错误解得到相应结果，正是成功证据；它意外 AC，或得到不符合声明的其他 verdict，才会使验证不满足预期。
 
 详情页按“测试为行、解法为列”展示 verdict、时间和内存。点击测试或单元格可查看 `Test Details`，下方 `Diagnostics` 汇总编译错误、生成失败和 sanity warning。验证状态含义如下：
 
@@ -149,14 +141,7 @@ Package Preview 读取固定的 Native Package，不会触发 Build、Verify 或
 
 勾选 `Run standard solution only` 后，需要构建时只执行测试输入生成和 main correct solution，并创建或复用一个 `not verified` Native Package。这个状态只描述共享认证：归档本身仍可用，私有 Workspace 中也可能已有完整验证记录。正式交付前，可由具备权限的作者使用默认完整流程或 `Verify` 补齐认证。
 
-当前外部格式为：
-
-- `DOMjudge`
-- `ICPC 2025-09`
-- `QOJ`
-- `Nowcoder`
-
-它们都从同一个 Native Package 派生。不同目标格式支持的题型、pass 数、checker 和内存范围各不相同。如果 Adapter 拒绝当前配置，请按目标系统限制调整，具体见[包导入与导出协议](protocol/package.md)。
+外部包从同一个 Native Package 派生。当前支持的格式及其题型、pass 数、checker 和内存范围见[包导入与导出协议](protocol/package.md)。如果 Adapter 拒绝当前配置，请按目标系统限制调整。
 
 发布新 revision 不会删除或改写旧包。仍然可用的历史 Native Package、对应题面预览和已经生成的外部包会继续列在 `Revisions` 中。当前 revision 需要属于自己的新包。
 
@@ -176,7 +161,8 @@ Package Preview 读取固定的 Native Package，不会触发 Build、Verify 或
 2. 点击 `Connect to Agent`，复制页面生成的 Registration URL。这个 URL 只能使用一次，过期时间以页面显示为准。
 3. 把完整 URL 发给桌面 Agent，让它使用 `polygon-agent-auth` 连接。这个地址是 Agent 注册端点，不要当作普通网页手工打开。
 4. 注册成功后，`Agents` 页面会出现会话卡，显示 Agent 名称、Desktop ID、连接时间、Last seen 和权限。
-5. Agent 首次处理某道题或需要更高权限时，会给出 approval URL。请使用连接该 Agent 的同一账号打开它。核对 Agent、Desktop ID、Problem 和 Scope 后，再选择有效期并 `Approve` 或 `Deny`。
+5. `General permission` 是整个 Agent 会话的基础权限。新会话默认为 `none`，Agent 需要逐题申请授权。改为 `readonly`、`workspace` 或 `commit` 后，该 Scope 会应用到你的账号当前有权访问的所有题目，直到再次修改或断开会话；它不会超过你自己的 Problem 权限。
+6. Agent 首次处理某道题或需要更高权限时，会给出 approval URL。请使用连接该 Agent 的同一账号打开它。核对 Agent、Desktop ID、Problem 和 Scope 后，再选择有效期并 `Approve` 或 `Deny`。
 
 逐题授权可选择 1 小时、24 小时、7 天、30 天或 forever。每条授权都有自己的有效期和撤销状态。某条授权到期或被 `Revoke` 后，它不再贡献权限。如果 General permission 或同一问题的另一条有效授权仍然够用，Agent 还可以继续操作。你的账号一旦失去该题访问权，Agent 会在下一次请求时立即失权。
 
@@ -189,11 +175,9 @@ Package Preview 读取固定的 Native Package，不会触发 Build、Verify 或
 | `workspace` | 包含 readonly；把本地修改应用到你的 Workspace，上传/删除文件，启动账号有权进行的导出 | 不能 Publish 正式 revision |
 | `commit` | 包含 workspace；在明确要求下 Commit/Publish；满足用户权限时可让 Full Verification 成为共享包认证证据 | 不会获得 Problem 管理权、成员管理权或浏览器提升权限 |
 
-`General permission` 对该 Agent 会话能够访问的所有题目生效，而且不会自动过期。如果希望按需控制权限，可以保留默认的 `none`，等 Agent 处理具体问题时再做限时授权。系统会取 General scope 和逐题 grant 中较强的一项，但不会超过你自己的 Problem 角色。如果你只有 read 权限，即使选择 `commit`，Agent 也不能写入。
-
 单独读取文件或 snapshot 只需要 `readonly`。当前 Polygon-Skills 的完整 `clone` 和日常本地镜像流程会申请 `workspace`，以便继续编辑和 push。若只想让 Agent 查看状态、读取文件或检查已有结果，授予 `readonly` 即可。
 
-有两个操作必须使用 General permission。创建自己命名空间下的新题需要 General `commit`；按 Contest roster 拉取整场问题需要 General `readonly`，同时你的账号必须拥有该 Contest 的 read 权限。逐题 grant 不能代替这两项权限。
+有两个操作必须使用 General permission。创建自己命名空间下的新题需要 General `commit`；按 Contest 的题目列表拉取整场题目需要 General `readonly`，同时你的账号必须拥有该 Contest 的 read 权限。逐题 grant 不能代替这两项权限。
 
 ### Agent 与浏览器如何配合
 
@@ -224,12 +208,6 @@ Native Package -> 外部平台包
 2. 在浏览器审阅差异，针对当前 Workspace 运行 Full Verification。
 3. 确认发布内容、消息和验证状态后，由你点击 Publish；也可以临时授予 `commit`，明确要求 Agent 发布。
 
-如果 push 报 `workspace head changed`，说明 compare 之后远端 Workspace 又发生了变化。让 Agent 重新 pull，协调本地改动后再 push。
-
-如果 Publish 提示 Published Revision 已更新，先在浏览器使用 `Resolve Conflicts` 合并 Published Changes。完成后让 Agent pull 最新 Workspace，复查合并结果，并在需要时重新运行 Full Verification。不要用旧本地镜像直接 push，否则会覆盖刚处理好的冲突。
-
-Agent 默认把连接状态保存在当前桌面工作根目录的 `./.polygon-agent/state.json`。该文件包含 bearer credential，不要提交、分享或放进题目源码。后续任务应继续使用同一工作根目录。如果 Agent 突然报告没有连接，先检查是否打开了错误目录，不要立即重建会话。
-
 要收回权限，可以在 `Settings` -> `Agents` 中：
 
 - 将 `General permission` 调低或设回 `none`；这不会自动删除仍有效的逐题 grant。
@@ -250,7 +228,7 @@ Problem 角色分为：
 
 如果按钮只读、禁用或不存在，先检查当前角色。部分禁用控件会在悬停时显示原因。
 
-Contest 同样有 read、write 和固定 owner。Contest membership 会把权限动态带到 roster 中的题目：Contest read 对应 Problem read，Contest write/owner 对应 Problem write。这里不包含 Problem owner。管理 Problem 成员或把题加入 roster，仍需相应的直接管理权限。
+Contest 同样有 read、write 和固定 owner。Contest membership 会把权限动态带到比赛中的题目：Contest read 对应 Problem read，Contest write/owner 对应 Problem write。这里不包含 Problem owner。管理 Problem 成员或把题加入比赛，仍需相应的直接管理权限。
 
 Contest owner 可在比赛页右侧的 `Manage access` 授予或撤销 read/write membership。Problem 的直接成员仍在各题的 `Manage access` 中管理。
 
@@ -260,13 +238,11 @@ Contest owner 可在比赛页右侧的 `Manage access` 授予或撤销 read/writ
 
 进入 `Contest` -> `My Contests`。`Create Contest` 用于创建空比赛。选择 `Import Polygon Contest Package` 可以上传 Polygon contest ZIP。随后在 `Review Contest Import` 检查比赛 slug、标题和每道题的新 slug，再确认导入。
 
-打开比赛后，主标签只有 `Problems` 和 `Properties`。
-
 ### 编排题目
 
 `Problems` 概览列出每题的 idx、时限、内存、题型、内容就绪情况，以及 Workspace、Verification 和 Package 状态。点击 `Manage problems` 可以搜索并加入题目、移除题目、修改 idx 和批量调整时限/内存。
 
-Contest 只引用 Problem，不会复制题目内容。从 roster 移除一道题，也不会删除它的源码、历史或个人 Workspace。题目在页面和比赛包中的顺序都由 idx 决定。
+Contest 只引用 Problem，不会复制题目内容。从比赛中移除一道题，也不会删除它的源码、历史或个人 Workspace。题目在页面和比赛包中的顺序都由 idx 决定。
 
 ### 整场审题
 
@@ -276,17 +252,15 @@ Contest 只引用 Problem，不会复制题目内容。从 roster 移除一道�
 
 - 选择 Workspace 来源时，系统只使用你现有的各题 Workspace。缺失的不会自动创建，也不会改用题目 owner 的 Workspace。
 - 选择 Packages 来源时，每道题都必须已有可用 Native Package。预览不会自动构建包。
-- 只有你对所有 roster problems 都有 read 权限、所有题都具备所选来源，并且存在共同语言时，对应链接才会出现。
+- 只有你对所有比赛题目都有 read 权限、所有题都具备所选来源，并且存在共同语言时，对应链接才会出现。
 
 整场预览始终按 idx 顺序排列。某一道题渲染失败时，HTML review 会保留它的位置和诊断，其他成功题面仍可检查。
 
 ### 构建并下载比赛包
 
-比赛 `Problems` 页顶部汇总各题的 Package 状态：`ready`、`queued`、`stale`、`none`。点击 `Build All Packages` 后，系统会为你有权构建且当前包未 `ready` 的题目排队。所有题的当前包都变为 `ready` 后，页面才显示 `Download Packages`。
+点击 `Build All Packages` 后，系统会为你有权构建且当前包未 `ready` 的题目排队。所有题的当前包都变为 `ready` 后，页面才显示 `Download Packages`。
 
 下载时选择一种 External format。系统按 idx 组合每道题当前 Published Revision 对应的 Native Package。它不会自动补建缺失包，也不会回退到旧 revision。任何一道题缺包或 Adapter 失败，整场下载都会失败。
-
-下载完成后，将包导入目标比赛系统。比赛提交、判题和榜单都在那里运行。
 
 ## 常见状态和处理方法
 
@@ -295,7 +269,6 @@ Contest 只引用 Problem，不会复制题目内容。从 roster 移除一道�
 | 保存后其他人看不到修改 | 修改还在你的 Workspace | `Review workspace` -> `Publish new revision` |
 | `Resolve Conflicts` 出现，Publish 不可用 | Published Revision 已由其他作者更新 | `Review Published Changes`，应用并复查合并结果 |
 | Verification 显示 stale | 运行相关源码、配置或测试在验证后发生变化 | 对当前 Workspace 重新 `Start verification` |
-| 错误解得到 WA/TL/RE/CE，但验证仍为 ok | 实际 verdict 符合该解声明的 Expected | 这是正常结果；检查 `Result / Expected` 即可 |
 | `Verification` 为 `failed`，但结果矩阵看不出原因 | 可能是生成、校验、main correct、编译、证据或 sanity 阶段失败 | 打开该次 Verification 的 Reason、Test Details 和 Diagnostics |
 | `Packages` 显示没有 Published Revision | 当前题还没有正式版本 | 到 `Review workspace` 点击 `Publish new revision` |
 | 发布新 revision 后，Package 显示 `stale`/`none` | 旧包属于旧 revision | 在 `Packages` 为当前 revision 创建新包 |
@@ -308,9 +281,6 @@ Contest 只引用 Problem，不会复制题目内容。从 roster 移除一道�
 | Agent 报 `agent_general_permission_required` | 当前操作要求 General permission，逐题 grant 不能满足 | 到 `Settings` -> `Agents` 把该会话的 General permission 调到错误信息要求的 Scope |
 | Agent 报 401 / `agent_credential_invalid` | 会话已断开、凭据已轮换，或 Agent 使用了旧的本地 state | 保留现有 state，并用新的 Registration URL 让 Agent 尝试重连、轮换凭据。原会话若已 `Disconnect`，再创建会话并重新授权 |
 | Agent 选择高 Scope 后仍被拒绝 | 你的账号自身权限不足，或 grant 已过期/撤销 | 检查 `Manage access` / Contest membership 和 `Settings` -> `Agents` |
-| Agent push 报 Workspace 已变化 | pull/compare 后远端 Workspace 又被修改 | 重新 pull、审阅并协调后再 push |
-
-旧 Verification 可能还保留摘要和最终判定，而输入、输出、transcript、feedback、日志等执行文件已经不可用。此时详情会显示 `unavailable`，但这不表示源码或 Published Revision 已丢失。版本关系仍可通过右侧 Workspace 状态、`Review workspace` 中的 Published/Workspace 摘要和 `Packages` 页面核对。
 
 ## 产品边界
 
