@@ -1,4 +1,7 @@
 {
+  "prepush": [
+    "test_public_contracts.py"
+  ],
   "unit": [
     "test_build_config_format.py",
     "test_contest_problem_index.py",
@@ -14,7 +17,6 @@
     "test_polygon_package_rules.py",
     "test_preview_unit.py",
     "test_problem_readiness_unit.py",
-    "test_public_contracts.py",
     "test_public_judgehost_status.py",
     "test_revision.py",
     "test_run_display.py",

@@ -18,7 +18,7 @@ if [[ "$#" -gt 0 ]]; then
 elif [[ -n "${POLYGON_REPLICA_TEST_GROUPS:-}" ]]; then
   IFS=',' read -r -a groups <<< "$POLYGON_REPLICA_TEST_GROUPS"
 else
-  groups=(unit service executor e2e)
+  groups=(prepush unit service executor e2e)
 fi
 
 for group in "${groups[@]}"; do

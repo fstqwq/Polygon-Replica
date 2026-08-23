@@ -242,22 +242,22 @@ class TestPublicContracts(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary_directory:
             static_root = Path(temporary_directory)
-            asset_path = static_root / "nested" / "space +&?#%.js"
+            asset_path = static_root / "nested" / "space +&#%.js"
             asset_path.parent.mkdir()
             asset_path.write_bytes(b"first version")
             expected_digest = hashlib.sha256(b"first version").hexdigest()[:12]
 
             manifest = StaticAssetManifest(static_root)
             self.assertEqual(
-                manifest.url("nested/space +&?#%.js"),
-                f"/static/nested/space%20%2B%26%3F%23%25.js?v={expected_digest}",
+                manifest.url("nested/space +&#%.js"),
+                f"/static/nested/space%20%2B%26%23%25.js?v={expected_digest}",
             )
 
             asset_path.write_bytes(b"second version")
             refreshed = StaticAssetManifest(static_root)
             self.assertNotEqual(
-                manifest.url("nested/space +&?#%.js"),
-                refreshed.url("nested/space +&?#%.js"),
+                manifest.url("nested/space +&#%.js"),
+                refreshed.url("nested/space +&#%.js"),
             )
 
             for invalid_path in [

@@ -11,7 +11,7 @@ on:
       - "docs/**"
       - "*.md"
       - "**/*.md"
-      # Fast CI-only tests and harnesses. Docker E2E inputs under
+      # Non-Docker tests and CI harnesses. Docker E2E inputs under
       # tests/docker_e2e/ and the three E2E shell entry points remain tracked.
       - "tests/*.py"
       - "tests/resource_groups.json"
@@ -20,7 +20,9 @@ on:
       - "tests/scripts/check*.sh"
       - "tests/scripts/import-smoke.sh"
       - "tests/scripts/test.sh"
+      - ".githooks/pre-push"
       - ".github/workflows/pylint.yml"
+      - ".github/workflows/tests.yml"
       - "requirements-static.txt"
   workflow_dispatch:
 

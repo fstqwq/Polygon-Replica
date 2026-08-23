@@ -14,11 +14,15 @@ Enable the repository hooks once per clone:
 git config core.hooksPath .githooks
 ```
 
-The pre-push hook runs only the resource manifest and group-contract checks. It
-does not load or execute tests.
+The pre-push hook runs the shared static checks, including the resource manifest
+and group-contract checks, followed by the `prepush` test group. The `prepush`
+group contains repository-wide contracts that are worth checking on every push,
+including documentation-only pushes. Ordinary domain behavior remains in its
+own resource group.
 
 | Group | Allowed resources |
 | --- | --- |
+| `prepush` | The same resources as `unit`; only repository-wide contracts suitable for every push |
 | `unit` | Pure Python and small temporary files; no runtime config, SQLite, Git, workers, or subprocesses |
 | `service` | One owning component with explicit dependencies; SQLite, local files, Git, threads, and workers are allowed, but the global runtime and public HTTP/UI entry points are not |
 | `executor` | One owning component using compilers, shell scripts, bwrap, systemd checks, or TeX tools; the global runtime and public HTTP/UI entry points are not allowed |
@@ -47,8 +51,8 @@ Run all groups in separate Python processes:
 PYTHONPATH="$PWD" bash tests/scripts/test.sh
 ```
 
-Static checks are intentionally separate. The shared check includes the
-Linux-target mypy gate for the complete `app/` tree:
+The shared static check includes the Linux-target mypy gate for the complete
+`app/` tree:
 
 ```bash
 PYTHONPATH="$PWD" bash tests/scripts/check.sh
@@ -56,5 +60,6 @@ PYTHONPATH="$PWD" python -m pylint app
 ```
 
 Each group writes `.test-results/<group>.json` with its total duration and
-per-test timings. GitHub Actions runs static checks once and executes all four
-groups as parallel matrix jobs.
+per-test timings. GitHub Actions runs the pre-push hook on every push. A separate
+workflow executes `unit`, `service`, `executor`, and `e2e` as parallel matrix
+jobs for non-documentation pushes.

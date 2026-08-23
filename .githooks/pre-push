@@ -6,3 +6,6 @@ cd "$repo_root"
 
 echo "[pre-push] Running fast static checks"
 bash tests/scripts/check.sh
+
+echo "[pre-push] Running repository contract tests"
+PYTHONPATH="$repo_root${PYTHONPATH:+:$PYTHONPATH}" bash tests/scripts/test.sh prepush
