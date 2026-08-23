@@ -186,19 +186,8 @@ class TestContestProblemActions(ContestActionBase):
                 int(writer_user_id),
             )["can_write"]
         )
-        remove = contest_problems_remove_selected(
-            contest=target_slug,
-            user=writer,
-            selected_problem_ids=[str(direct_id)],
-        )
-        self.assertEqual(remove.status_code, 303)
-        self.assertTrue(
-            runtime.contest_service.contest_has_problem(target_id, direct_id)
-        )
 
-    def test_contest_writer_removes_direct_problem_and_owner_removes_any_problem(
-        self,
-    ) -> None:
+    def test_contest_writer_removes_any_problem(self) -> None:
         contest_slug, contest_id, actor_user_id = self.create_contest("writer-remove")
         _locked_row_id, locked_problem_id, _locked_slug = self.add_owned_problem(
             contest_id,
@@ -214,23 +203,8 @@ class TestContestProblemActions(ContestActionBase):
         )
         writer = f"writer-{uuid.uuid4().hex[:8]}"
         workspace_service.ensure_user(writer)
-        writer_user_id = workspace_service.known_user_id(writer)
-        self.assertIsNotNone(writer_user_id)
         workspace_service.grant_repo_access(direct_slug, writer, "write")
         runtime.contest_service.grant_member_role(contest_id, writer, "write")
-
-        display_rows = runtime.contest_problem_query_service.problem_rows(
-            contest_id,
-            writer,
-            int(writer_user_id),
-            include_review=False,
-        )
-        direct_by_problem = {
-            int(row["problem_id"]): bool(row["can_direct_problem_write"])
-            for row in display_rows
-        }
-        self.assertFalse(direct_by_problem[locked_problem_id])
-        self.assertTrue(direct_by_problem[direct_problem_id])
 
         remove = contest_problems_remove_selected(
             contest=contest_slug,
@@ -246,23 +220,9 @@ class TestContestProblemActions(ContestActionBase):
                 [contest_id],
             )
         }
-        self.assertEqual(remaining, {locked_problem_id})
+        self.assertEqual(remaining, set())
 
-        owner_remove = contest_problems_remove_selected(
-            contest=contest_slug,
-            user="alice",
-            selected_problem_ids=[str(locked_problem_id)],
-        )
-        self.assertEqual(owner_remove.status_code, 303)
-        self.assertEqual(
-            db_fetch_all(
-                "SELECT problem_id FROM contest_problems WHERE contest_id=?",
-                [contest_id],
-            ),
-            [],
-        )
-
-    def test_contest_read_cannot_mutate_roster_and_write_cannot_reorder(self) -> None:
+    def test_contest_read_cannot_mutate_roster_and_write_can_reorder(self) -> None:
         contest_slug, contest_id, actor_user_id = self.create_contest(
             "roster-boundary"
         )
@@ -318,7 +278,7 @@ class TestContestProblemActions(ContestActionBase):
         )
         self.assertEqual(
             {int(row["id"]): str(row["idx"]) for row in rows},
-            {first_row_id: "A", second_row_id: "B"},
+            {first_row_id: "B", second_row_id: "A"},
         )
 
     def test_contest_owner_adds_direct_write_but_not_direct_read_problem(self) -> None:

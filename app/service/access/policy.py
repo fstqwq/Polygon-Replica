@@ -26,7 +26,7 @@ _CAPABILITY_LEVEL: dict[Capability, int] = {
     "contest.read": 1,
     "contest.write": 2,
     "contest.manage": 3,
-    "contest.roster": 3,
+    "contest.roster": 2,
     "contest.build": 2,
     "contest.package": 1,
 }
@@ -126,9 +126,9 @@ def _denial_reason(
         return "workspace belongs to another user"
     if capability == "contest.read":
         return "you do not have access to this contest"
-    if capability in {"contest.write", "contest.build"}:
+    if capability in {"contest.write", "contest.roster", "contest.build"}:
         return "read-only access" if role == "read" else "write access required"
-    if capability in {"contest.manage", "contest.roster"}:
+    if capability == "contest.manage":
         return "contest owner or system admin access required"
     if capability == "contest.package":
         return "you do not have access to this contest"

@@ -8,11 +8,35 @@ System administrator access is the strongest role. Otherwise, effective problem 
 
 ## Resource capabilities
 
-Problem readers can read the problem, render HTML/PDF/LaTeX statement previews from their own workspace or an available native package, view and rejudge visible verifications, run standard full or statement-sample verification against their own workspace, cancel an active verification owned by that workspace, and list or download successful packages. Preview and standard verification freeze or read actor-scoped source and record only cache or private execution evidence; they do not authorize publishing that evidence as shared native-package certification. Problem writers can change source, use Custom Run, create packages, and certify a matching shared package from successful full-verification evidence. Direct problem owners and system administrators can manage the problem and its ACL.
+Problem roles grant the following cumulative capabilities:
+
+| Problem operation | `read` | `write` | direct `owner` |
+| --- | --- | --- | --- |
+| Read the problem; render HTML/PDF/LaTeX previews | Yes | Yes | Yes |
+| View and rejudge visible verifications; run standard full or statement-sample verification in the actor's workspace | Yes | Yes | Yes |
+| List and download successful packages | Yes | Yes | Yes |
+| Change source; use Custom Run; create packages; certify matching full-verification evidence | No | Yes | Yes |
+| Manage the direct Problem ACL | No | No | Yes |
+
+System administrators pass every role-gated row. Preview and standard verification freeze or read actor-scoped source and record only cache or private execution evidence; they do not authorize publishing that evidence as shared native-package certification.
 
 A workspace is readable and writable only by its owner, subject to that user's effective problem capability; system administrators retain the administrative override. Verification visibility also requires the record to belong to the requested problem. A problem reader can rejudge a visible verification into their current workspace, but only actors with package-create capability may let that job certify a shared native package. Custom Run remains a problem-write capability even when its selected targets happen to cover every solution and test. Only the owner of the workspace behind an active verification can cancel it; published or another user's verification is view-only.
 
-Successful packages are shared with problem readers. A queued, running, or failed package job is visible only to its actor or a problem manager. Contest members receive `read`, `write`, or fixed `owner` capabilities. Contest owners and system administrators manage membership and problem ordering. Contest writers and owners may add a problem only when their direct problem role is `write` or `owner`; access derived from another contest is insufficient. Contest owners may remove any roster problem, while contest writers may remove only problems for which they retain direct write access. Adding a problem is an authorized, persistent roster change: later loss of the adding user's direct problem role does not remove the problem from the contest.
+Successful packages are shared with problem readers. A queued, running, or failed package job is visible only to its actor or a problem manager.
+
+Contest roles grant the following cumulative capabilities:
+
+| Contest operation | `read` | `write` | fixed `owner` |
+| --- | --- | --- | --- |
+| Read the Contest and download completed Contest packages | Yes | Yes | Yes |
+| Edit Contest properties and statement sources; build packages | No | Yes | Yes |
+| Edit roster problems through Contest-derived Problem write | No | Yes | Yes |
+| Change problem indices and ordering | No | Yes | Yes |
+| Remove any roster problem | No | Yes | Yes |
+| Add a problem | No | Only with direct Problem `write` or `owner` | Only with direct Problem `write` or `owner` |
+| Manage Contest membership (`Manage access`) | No | No | Yes |
+
+System administrators pass every role-gated row and the direct-access check for adding a problem. Access derived from another Contest is not direct Problem access and therefore cannot authorize adding that problem. Adding a problem is a persistent roster change: later loss of the adding user's direct Problem role does not remove the problem from the Contest.
 
 Contest readers may render HTML review and PDF preview only when they also have problem read access to every roster problem. These previews use the actor's own existing workspaces or ready native packages and write only actor-scoped cache. Contest source editing, native-package construction, and contest package bundles retain their existing write or build capabilities.
 

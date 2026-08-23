@@ -24,7 +24,7 @@
       {% for row in problem_rows %}
       <tr class="{% if row.dirty %}table-row-dirty{% endif %}">
         <td>
-          {% if ctx.access.can_manage_roster or (ctx.access.can_write and row.can_direct_problem_write) %}
+          {% if ctx.access.can_manage_roster %}
           <input type="checkbox" name="selected_problem_ids" value="{{ row.problem_id }}" aria-label="Select {{ row.problem_slug }}" />
           {% endif %}
         </td>
@@ -58,10 +58,10 @@
       {% endfor %}
     </table>
     <div class="contest-management-actions">
-      {% if ctx.access.can_manage_roster or ctx.access.can_write %}
+      {% if ctx.access.can_write %}
       <button class="btn" type="submit">Save</button>
       {% endif %}
-      {% if ctx.access.can_write %}
+      {% if ctx.access.can_manage_roster %}
       <button
         class="linkish-button danger-link"
         type="submit"

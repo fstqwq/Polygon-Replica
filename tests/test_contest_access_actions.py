@@ -1,6 +1,8 @@
 from pathlib import Path
 from unittest.mock import patch
 
+from fastapi import HTTPException
+
 from app.impl.contest.statement_review import (
     contest_statement_pdf_page,
     contest_statement_review_build,
@@ -9,14 +11,54 @@ from app.impl.contest.statement_review import (
 from tests.contest_support import ContestActionBase
 from tests.db_helpers import db_fetch_one
 from tests.ui_support import (
-    runtime,
-    contest_access_revoke,
     _request,
+    contest_access_grant,
+    contest_access_revoke,
+    runtime,
+    uuid,
     workspace_service,
 )
 
 
 class TestContestAccessActions(ContestActionBase):
+    def test_contest_write_manages_roster_but_not_membership(self) -> None:
+        contest_slug, contest_id, _actor_user_id = self.create_contest(
+            "writer-access-boundary"
+        )
+        writer = f"writer-{uuid.uuid4().hex[:8]}"
+        target = f"target-{uuid.uuid4().hex[:8]}"
+        workspace_service.ensure_user(writer)
+        workspace_service.ensure_user(target)
+        runtime.contest_service.grant_member_role(contest_id, writer, "write")
+        runtime.contest_service.grant_member_role(contest_id, target, "read")
+        writer_user_id = workspace_service.known_user_id(writer)
+        self.assertIsNotNone(writer_user_id)
+
+        access = runtime.access_query.contest_context(
+            contest_id,
+            int(writer_user_id),
+        )
+        self.assertTrue(access["can_write"])
+        self.assertTrue(access["can_manage_roster"])
+        self.assertFalse(access["can_manage"])
+
+        with self.assertRaises(HTTPException) as grant_error:
+            contest_access_grant(
+                contest=contest_slug,
+                user=writer,
+                target_user=target,
+                role="write",
+            )
+        self.assertEqual(grant_error.exception.status_code, 403)
+
+        with self.assertRaises(HTTPException) as revoke_error:
+            contest_access_revoke(
+                contest=contest_slug,
+                user=writer,
+                target_user=target,
+            )
+        self.assertEqual(revoke_error.exception.status_code, 403)
+
     def test_contest_reader_can_render_statement_review_and_pdf(self) -> None:
         contest_slug, contest_id, actor_user_id = self.create_contest(
             "reader-preview"

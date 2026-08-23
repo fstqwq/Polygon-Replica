@@ -218,19 +218,30 @@ Native Package -> 外部平台包
 
 每位用户都有独立的 Workspace。A 尚未 Publish 的修改，B 看不到。A Publish 后，B 会看到 Published Revision 已更新，需要先处理更新或冲突才能继续发布。
 
-Problem 角色分为：
+Problem 权限如下：
 
-| 角色 | 主要能力 |
-| --- | --- |
-| `read` | 阅读题目；预览自己的 Workspace 或已有包；启动、查看和重新判可见的 Verification；下载成功包 |
-| `write` | 包含 read；编辑自己的 Workspace；使用 Custom Run；创建包；Publish |
-| `owner` | 包含 write；通过 `Manage access` 管理直接 Problem 成员。Owner 身份固定，不能在普通角色表里转让 |
+| 操作 | `read` | `write` | `owner` |
+| --- | --- | --- | --- |
+| 阅读题目；预览自己的 Workspace 或已有包 | 可以 | 可以 | 可以 |
+| 启动、查看和重新判可见的 Verification；下载成功包 | 可以 | 可以 | 可以 |
+| 编辑自己的 Workspace；使用 Custom Run；创建包；Publish | — | 可以 | 可以 |
+| 通过 `Manage access` 管理直接 Problem 成员 | — | — | 可以 |
 
 如果按钮只读、禁用或不存在，先检查当前角色。部分禁用控件会在悬停时显示原因。
 
-Contest 同样有 read、write 和固定 owner。Contest membership 会把权限动态带到比赛中的题目：Contest read 对应 Problem read，Contest write/owner 对应 Problem write。这里不包含 Problem owner。
+Contest 权限如下：
 
-Contest owner 可在比赛页右侧的 `Manage access` 授予或撤销 read/write membership。Contest write 和 owner 都可以把自己直接拥有 Problem write/owner 的题加入比赛；从其他 Contest 获得的 Problem write 不能用于加入题目。Contest owner 可以移除任意比赛题目并调整顺序，Contest write 只能移除自己直接可写的题目。Problem 的直接成员仍在各题的 `Manage access` 中管理。
+| 操作 | `read` | `write` | `owner` |
+| --- | --- | --- | --- |
+| 查看 Contest 及其中的题目；下载已完成的比赛包 | 可以 | 可以 | 可以 |
+| 编辑比赛属性和比赛级题面；构建包 | — | 可以 | 可以 |
+| 编辑 Contest 中的题目，包括源码和 TL/ML | — | 可以 | 可以 |
+| 修改 idx 和题目顺序 | — | 可以 | 可以 |
+| 移除任意题目 | — | 可以 | 可以 |
+| 加入题目 | — | 需要该题的直接 Problem `write` 或 `owner` | 需要该题的直接 Problem `write` 或 `owner` |
+| 通过 `Manage access` 授予或撤销 Contest membership | — | — | 可以 |
+
+Problem 和 Contest 的 owner 身份固定，不能在普通角色表里转让。系统管理员拥有完整权限。Contest membership 会动态派生题目权限：Contest read 对应 Problem read，Contest write/owner 对应 Problem write，但不会派生 Problem owner。来自其他 Contest 的派生 Problem write 不能用来把题加入当前 Contest；Problem 的直接成员仍在各题的 `Manage access` 中管理。
 
 ## 组一场 Contest
 
@@ -240,7 +251,7 @@ Contest owner 可在比赛页右侧的 `Manage access` 授予或撤销 read/writ
 
 ### 编排题目
 
-`Problems` 概览列出每题的 idx、时限、内存、题型、内容就绪情况，以及 Workspace、Verification 和 Package 状态。点击 `Manage problems` 可以搜索并加入自己直接可写的题目。Contest write 可以移除自己直接可写的题目并批量调整时限/内存；Contest owner 还可以移除任意题目并修改 idx。
+`Problems` 概览列出每题的 idx、时限、内存、题型、内容就绪情况，以及 Workspace、Verification 和 Package 状态。点击 `Manage problems` 可以搜索、加入、移除和排序题目，也可以批量调整时限/内存；具体授权条件见上表。
 
 Contest 只引用 Problem，不会复制题目内容。从比赛中移除一道题，也不会删除它的源码、历史或个人 Workspace。题目在页面和比赛包中的顺序都由 idx 决定。
 
