@@ -58,6 +58,8 @@ class AccessQuery:
         user_id: int,
     ) -> dict[int, ProblemAccessContext]:
         ids = list(dict.fromkeys(int(problem_id) for problem_id in problem_ids))
+        if not ids:
+            return {}
         actor = Actor(int(user_id))
         roles = self._store.effective_problem_roles(ids, actor.user_id)
         return {
@@ -70,17 +72,28 @@ class AccessQuery:
         }
 
     def direct_problem_context(self, problem_id: int, user_id: int) -> ProblemAccessContext:
+        return self.direct_problem_contexts([problem_id], user_id)[int(problem_id)]
+
+    def direct_problem_contexts(
+        self,
+        problem_ids: list[int],
+        user_id: int,
+    ) -> dict[int, ProblemAccessContext]:
+        ids = list(dict.fromkeys(int(problem_id) for problem_id in problem_ids))
         actor = Actor(int(user_id))
-        role: AccessRole = (
-            "admin"
-            if self.is_system_admin(user_id)
-            else self._store.direct_problem_role(problem_id, user_id)
+        roles: dict[int, AccessRole] = (
+            {problem_id: "admin" for problem_id in ids}
+            if self.is_system_admin(actor.user_id)
+            else self._store.direct_problem_roles(ids, actor.user_id)
         )
-        return self._problem_context(
-            actor,
-            Resource("problem", str(problem_id), problem_id=int(problem_id)),
-            role,
-        )
+        return {
+            problem_id: self._problem_context(
+                actor,
+                Resource("problem", str(problem_id), problem_id=problem_id),
+                roles[problem_id],
+            )
+            for problem_id in ids
+        }
 
     def workspace_context(
         self,
@@ -191,14 +204,14 @@ class AccessQuery:
             "package_block_reason": package.reason,
         }
 
-    def manageable_problem_rows_excluding_contest(
+    def directly_writable_problem_rows_excluding_contest(
         self,
         contest_id: int,
         user_id: int,
         *,
         limit: int,
     ) -> list[dict[str, object]]:
-        return self._store.manageable_problem_rows_excluding_contest(
+        return self._store.directly_writable_problem_rows_excluding_contest(
             contest_id,
             user_id,
             limit=limit,

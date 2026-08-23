@@ -53,6 +53,7 @@ class ContestProblemDisplayRow(TypedDict):
     readiness: ProblemReadiness | None
     can_problem_read: bool
     can_problem_write: bool
+    can_direct_problem_write: bool
     created_at: str
 
 
@@ -235,8 +236,11 @@ class ContestProblemQueryService:
         include_review: bool,
     ) -> list[ContestProblemDisplayRow]:
         rows = self._contest_service.contest_problems(contest_id)
-        access = self._access_query.problem_contexts(
-            [row["problem_id"] for row in rows], user_id
+        problem_ids = [row["problem_id"] for row in rows]
+        access = self._access_query.problem_contexts(problem_ids, user_id)
+        direct_access = self._access_query.direct_problem_contexts(
+            problem_ids,
+            user_id,
         )
         states, errors = self._workspace_states(rows, access, username, user_id)
         readiness = (
@@ -248,6 +252,7 @@ class ContestProblemQueryService:
             self._problem_row(
                 row,
                 access[row["problem_id"]],
+                direct_access[row["problem_id"]],
                 states.get(row["problem_id"]),
                 row["problem_id"] in errors,
                 readiness.get(row["problem_id"]),
@@ -260,6 +265,7 @@ class ContestProblemQueryService:
         self,
         row: ContestProblem,
         access: ProblemAccessContext,
+        direct_access: ProblemAccessContext,
         state: WorkspaceState | None,
         workspace_error: bool,
         readiness: ProblemReadiness | None,
@@ -396,5 +402,6 @@ class ContestProblemQueryService:
             "readiness": readiness,
             "can_problem_read": can_read,
             "can_problem_write": can_write,
+            "can_direct_problem_write": bool(direct_access["can_write"]),
             "created_at": row["created_at"],
         }

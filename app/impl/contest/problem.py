@@ -95,8 +95,8 @@ def contest_problems_page(request: Request, contest: str, user: Annotated[str, D
 
 def contest_problems_add(contest: str, user: Annotated[str, Depends(require_session_user)], problem_slugs: list[str] = Form([]), q: str = Form("")):
     ctx = _contest_ctx(contest, user, "problems")
-    if not ctx["access"]["can_manage_roster"]:
-        raise HTTPException(status_code=403, detail=ctx["access"]["roster_block_reason"])
+    if not ctx["access"]["can_write"]:
+        raise HTTPException(status_code=403, detail=ctx["access"]["write_block_reason"])
     safe_slugs = _dedupe_preserve([form_text(item) for item in problem_slugs])
     if not safe_slugs:
         safe_query = q.strip()
@@ -117,8 +117,8 @@ def contest_problems_add(contest: str, user: Annotated[str, Depends(require_sess
             continue
         problem_id = int(problem_row["id"])
         problem_access = runtime().access_query.direct_problem_context(problem_id, user_id)
-        if not problem_access["can_manage"]:
-            failed.append(f"{slug}: direct problem manage access required")
+        if not problem_access["can_write"]:
+            failed.append(f"{slug}: direct problem write access required")
             continue
         if runtime().contest_service.contest_has_problem(contest_id, problem_id):
             failed.append(f"{slug}: already in contest")
@@ -149,8 +149,9 @@ def contest_problems_add(contest: str, user: Annotated[str, Depends(require_sess
 
 def contest_problems_remove(contest: str, user: Annotated[str, Depends(require_session_user)], problem_id: str = Form("")):
     ctx = _contest_ctx(contest, user, "problems")
-    if not ctx["access"]["can_manage_roster"]:
-        raise HTTPException(status_code=403, detail=ctx["access"]["roster_block_reason"])
+    contest_access = ctx["access"]
+    if not contest_access["can_write"]:
+        raise HTTPException(status_code=403, detail=contest_access["write_block_reason"])
     msg = "problem removed"
     try:
         pid = int(problem_id)
@@ -159,7 +160,22 @@ def contest_problems_remove(contest: str, user: Annotated[str, Depends(require_s
     if pid <= 0:
         msg = "invalid problem id"
     else:
-        runtime().contest_service.remove_problem(int(ctx["contest"]["id"]), pid)
+        contest_id = int(ctx["contest"]["id"])
+        selected = runtime().contest_service.selected_problems(contest_id, [pid])
+        if not selected:
+            msg = "problem is not part of this contest"
+        else:
+            if not contest_access["can_manage_roster"]:
+                direct_access = runtime().access_query.direct_problem_context(
+                    pid,
+                    int(ctx["user"]["id"]),
+                )
+                if not direct_access["can_write"]:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="direct problem write access required",
+                    )
+            runtime().contest_service.remove_problem(contest_id, pid)
     return _contest_redirect(
         str(ctx["contest"]["slug"]),
         "overview" if pid > 0 else "problems",
@@ -169,8 +185,9 @@ def contest_problems_remove(contest: str, user: Annotated[str, Depends(require_s
 
 def contest_problems_remove_selected(contest: str, user: Annotated[str, Depends(require_session_user)], selected_problem_ids: list[str] = Form([])):
     ctx = _contest_ctx(contest, user, "problems")
-    if not ctx["access"]["can_manage_roster"]:
-        raise HTTPException(status_code=403, detail=ctx["access"]["roster_block_reason"])
+    contest_access = ctx["access"]
+    if not contest_access["can_write"]:
+        raise HTTPException(status_code=403, detail=contest_access["write_block_reason"])
     ids: list[int] = []
     for raw in selected_problem_ids:
         try:
@@ -181,11 +198,29 @@ def contest_problems_remove_selected(contest: str, user: Annotated[str, Depends(
             ids.append(value)
     if not ids:
         return _contest_redirect(str(ctx["contest"]["slug"]), "problems", message="select at least one problem to remove")
-    removed = runtime().contest_service.remove_problems(int(ctx["contest"]["id"]), ids)
+    contest_id = int(ctx["contest"]["id"])
+    selected = runtime().contest_service.selected_problems(contest_id, ids)
+    selected_ids = [int(row["problem_id"]) for row in selected]
+    removable_ids = selected_ids
+    if not contest_access["can_manage_roster"]:
+        direct_access = runtime().access_query.direct_problem_contexts(
+            selected_ids,
+            int(ctx["user"]["id"]),
+        )
+        removable_ids = [
+            selected_problem_id
+            for selected_problem_id in selected_ids
+            if direct_access[selected_problem_id]["can_write"]
+        ]
+    removed = runtime().contest_service.remove_problems(contest_id, removable_ids)
+    failed = len(ids) - removed
+    message = f"removed {removed} problem(s)"
+    if failed:
+        message += f"; failed {failed}"
     return _contest_redirect(
         str(ctx["contest"]["slug"]),
         "overview",
-        message=f"removed {removed} problem(s)",
+        message=message,
     )
 
 

@@ -682,7 +682,7 @@ class ContestService:
     def available_problems(self, contest_id: int, user_id: int, *, limit: int, query: str) -> list[ContestAvailableProblem]:
         filter_text = str(query).strip().lower()
         result: list[ContestAvailableProblem] = []
-        for row in self.access_query.manageable_problem_rows_excluding_contest(
+        for row in self.access_query.directly_writable_problem_rows_excluding_contest(
             contest_id,
             user_id,
             limit=max(1, int(limit)),

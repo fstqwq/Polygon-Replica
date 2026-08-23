@@ -1,6 +1,6 @@
 # Polygon Replica 用户指南
 
-Polygon Replica 是一套面向 ICPC 风格题目的协作出题系统。它覆盖一道题从已有想法、初步解法和测试，到团队审阅、完整验证与比赛包交付的过程。比赛当天的报名、提交与榜单不在这里运行。最终产物可按目标比赛系统的要求导出。
+Polygon Replica 是一套面向 ICPC 风格题目的协作出题系统。它覆盖一道题从已有想法、初步解法和测试，到团队审阅、Verification 与比赛包交付的过程。最终产物可按目标比赛系统的要求导出。
 
 本指南假定读者用过 Codeforces Polygon，并熟悉桌面 Agent。界面目前使用英文，文中沿用实际按钮和页面名称。
 
@@ -20,7 +20,7 @@ Published Revision（团队共享的正式 Git 版本）
           |
           | Package Export
           v
-Native Package（有共享验证认证，或 not verified）
+Native Package（有共享 Verification 认证，或 not verified）
           |
           | Format Adapter
           v
@@ -31,8 +31,8 @@ Contest = 有序题目列表 + 比赛属性 + 比赛题面模板
 ```
 
 - 题目编辑页的 `Save` 写入个人 Problem Workspace。Contest Properties 和 Statement Sources 写入比赛的共享内容。
-- `Verification` 针对启动时冻结的 Workspace 快照。之后的编辑不会改变这次结果，验证也不会发布源码。
-- `Publish new revision` 创建团队共享的正式版本。验证与发布是两个独立动作，Publish 本身不能证明题目正确。
+- `Verification` 针对启动时冻结的 Workspace 快照。之后的编辑不会改变这次结果，Verification 也不会发布源码。
+- `Publish new revision` 创建团队共享的正式版本。Verification 与发布是两个独立动作，Publish 本身不能证明题目正确。
 - Native Package 以 Published Revision 为源码。要让新修改进入包，先 Publish。
 - External Package 直接从 Native Package 派生。
 - 生成的测试输入、标准答案、PDF、运行日志和包都属于产物。作者源码仍需单独保留。
@@ -54,7 +54,7 @@ Contest = 有序题目列表 + 比赛属性 + 比赛题面模板
 | 编写输入校验器和生成器 | `Validator`、`Generators` | validator、generator 及其选择关系 |
 | 管理标准解、错解和慢解 | `Solutions` | 解法源码及各自的 Expected 行为 |
 | 管理测试和样例 | `Tests` | 手工测试、生成命令、顺序、样例展示数据 |
-| 做全量验证或定点调试 | `Verification` | 结果矩阵、测试详情、编译与运行诊断 |
+| 运行 Verification 或定点调试 | `Verification` | 结果矩阵、测试详情、编译与运行诊断 |
 | 审阅并发布自己的改动 | 右侧 `Workspace` -> `Review workspace` | 文件差异、发布消息和正式 revision |
 | 处理其他人已经发布的新版本 | 右侧 `Workspace` -> `Resolve Conflicts` | 建议合并结果或逐文件取舍 |
 | 直接处理源码树 | 右侧 `Workspace` -> `Browse Files` | 文件浏览、编辑、上传、下载、重命名和删除 |
@@ -110,18 +110,18 @@ Package Preview 读取固定的 Native Package，不会触发 Build、Verify 或
 
 ### 5. 运行 Verification
 
-进入 `Verification`，点击 `Start verification` 运行标准全量验证。系统会对当前 Workspace 冻结一份快照，并为每个测试建立依赖链：读取 manual input，或运行 Generator 得到输入；配置了 Validator 时，检查准备好的测试输入；随后运行 main correct solution 取得答案，再运行其他 Solutions，并用 Checker 或 Interactor 判断结果。不同测试和彼此独立的任务可以并发执行。
+进入 `Verification`，点击 `Start verification`。系统会对当前 Workspace 冻结一份快照，并为每个测试建立依赖链：读取 manual input，或运行 Generator 得到输入；配置了 Validator 时，检查准备好的测试输入；随后运行 main correct solution 取得答案，再运行其他 Solutions，并用 Checker 或 Interactor 判断结果。不同测试和彼此独立的任务可以并发执行。
 
-详情页按“测试为行、解法为列”展示 verdict、时间和内存。点击测试或单元格可查看 `Test Details`，下方 `Diagnostics` 汇总编译错误、生成失败和 sanity warning。验证状态含义如下：
+详情页按“测试为行、解法为列”展示 verdict、时间和内存。点击测试或单元格可查看 `Test Details`，下方 `Diagnostics` 汇总编译错误、生成失败和 sanity warning。Verification 状态含义如下：
 
 - `queued` / `running`：任务正在等待或执行。
 - `ok`：完整计划已经结束并符合预期，但仍可能附带值得处理的 warning。
 - `failed`：可能是 Generator、Validator、main correct solution、运行环境或 Expected mismatch 失败，不能只按“某个解 WA”理解。
-- `cancelled`：该 Workspace 的验证所有者取消了任务。
+- `cancelled`：该 Workspace 的 Verification 所有者取消了任务。
 
-需要只跑部分 Solutions/Tests，或临时上传一个源码时，选择 `Customize verification`，进入 `Run Solutions`。这是调试工具，不等价于 Full Verification。怀疑执行缓存掩盖了问题时，可以使用 `Rejudge Without Cache`。普通改题循环不需要每次绕过缓存。
+需要只跑部分 Solutions/Tests，或临时上传一个源码时，选择 `Customize verification`，进入 `Run Solutions`。这是调试工具，不等价于 Verification。怀疑执行缓存掩盖了问题时，可以使用 `Rejudge Without Cache`。普通改题循环不需要每次绕过缓存。
 
-影响执行的配置、组件、Solutions 或 Tests 变化后，旧验证会显示 stale。只改题面文本不会让执行验证 stale。旧记录仍说明当时冻结快照的结果，不会自动升级为新 Workspace 的证据。
+影响执行的配置、组件、Solutions 或 Tests 变化后，旧 Verification 会显示 stale。只改题面文本不会让 Verification stale。旧记录仍说明当时冻结快照的结果，不会自动升级为新 Workspace 的证据。
 
 ### 6. 审阅并 Publish
 
@@ -131,15 +131,15 @@ Package Preview 读取固定的 Native Package，不会触发 Build、Verify 或
 2. 在 `File Changes` 中逐项审阅差异；不想保留的单文件修改可以 `Discard file changes`。
 3. 填写有意义的 `Message`，点击 `Publish new revision`。
 
-`Publish` 不要求已有成功的 Verification。团队可以在发布前对 Workspace 做 Full Verification。默认 Package 流程则会为 Published Revision 准备匹配的完整验证证据。
+`Publish` 不要求已有成功的 Verification。团队可以在发布前对 Workspace 运行 Verification。默认 Package 流程则会为 Published Revision 准备匹配的 Verification 证据。
 
 如果另一位作者已经发布了新版，你的 Workspace 会提示 `Resolve Conflicts`，并禁止直接发布。进入 `Review Published Changes`，可以采用建议合并结果，也可以逐个文件选择保留 Workspace 或 Published 版本。应用以后再次审阅差异，再 Publish。
 
 ### 7. 创建 Native Package 和外部包
 
-进入 `Packages`。如果页面显示 `No published revision is available.`，先回到 Workspace Publish。默认创建流程会复用已有 verified Native Package。如果没有，系统会先做完整验证，再创建或认证当前 Published Revision 的 Native Package。
+进入 `Packages`。如果页面显示 `No published revision is available.`，先回到 Workspace Publish。默认创建流程会复用已有 verified Native Package。如果没有，系统会先运行 Verification，再创建或认证当前 Published Revision 的 Native Package。
 
-勾选 `Run standard solution only` 后，需要构建时只执行测试输入生成和 main correct solution，并创建或复用一个 `not verified` Native Package。这个状态只描述共享认证：归档本身仍可用，私有 Workspace 中也可能已有完整验证记录。正式交付前，可由具备权限的作者使用默认完整流程或 `Verify` 补齐认证。
+勾选 `Run standard solution only` 后，需要构建时只执行测试输入生成和 main correct solution，并创建或复用一个 `not verified` Native Package。这个状态只描述共享认证：归档本身仍可用，私有 Workspace 中也可能已有 Verification 记录。正式交付前，可由具备权限的作者使用默认流程或 `Verify` 补齐认证。
 
 外部包从同一个 Native Package 派生。当前支持的格式及其题型、pass 数、checker 和内存范围见[包导入与导出协议](protocol/package.md)。如果 Adapter 拒绝当前配置，请按目标系统限制调整。
 
@@ -173,7 +173,7 @@ Package Preview 读取固定的 Native Package，不会触发 Build、Verify 或
 | `none`（General permission） | 不预授予跨题能力；需要时逐题申请 | 不能仅凭会话访问任意题目 |
 | `readonly` | 读取 Workspace、查看状态、下载/比较快照、启动和检查标准 Verification、读取已有成果 | 不能修改远端 Workspace、启动新的导出或 Publish |
 | `workspace` | 包含 readonly；把本地修改应用到你的 Workspace，上传/删除文件，启动账号有权进行的导出 | 不能 Publish 正式 revision |
-| `commit` | 包含 workspace；在明确要求下 Commit/Publish；满足用户权限时可让 Full Verification 成为共享包认证证据 | 不会获得 Problem 管理权、成员管理权或浏览器提升权限 |
+| `commit` | 包含 workspace；在明确要求下 Commit/Publish；满足用户权限时可让 Verification 成为共享包认证证据 | 不会获得 Problem 管理权、成员管理权或浏览器提升权限 |
 
 单独读取文件或 snapshot 只需要 `readonly`。当前 Polygon-Skills 的完整 `clone` 和日常本地镜像流程会申请 `workspace`，以便继续编辑和 push。若只想让 Agent 查看状态、读取文件或检查已有结果，授予 `readonly` 即可。
 
@@ -188,7 +188,7 @@ Package Preview 读取固定的 Native Package，不会触发 Build、Verify 或
 本地题目镜像
           | push / apply
           v
-你在 Polygon Replica 中的 Workspace ------> Full Verification
+你在 Polygon Replica 中的 Workspace ------> Verification
           |                                  （冻结快照；不发布源码）
           | Publish / commit
           v
@@ -205,8 +205,8 @@ Native Package -> 外部平台包
 建议按以下顺序协作：
 
 1. 让 Agent 拉取最新 Workspace，在本地完成修改，并汇总准备 push 的内容。
-2. 在浏览器审阅差异，针对当前 Workspace 运行 Full Verification。
-3. 确认发布内容、消息和验证状态后，由你点击 Publish；也可以临时授予 `commit`，明确要求 Agent 发布。
+2. 在浏览器审阅差异，针对当前 Workspace 运行 Verification。
+3. 确认发布内容、消息和 Verification 状态后，由你点击 Publish；也可以临时授予 `commit`，明确要求 Agent 发布。
 
 要收回权限，可以在 `Settings` -> `Agents` 中：
 
@@ -222,15 +222,15 @@ Problem 角色分为：
 
 | 角色 | 主要能力 |
 | --- | --- |
-| `read` | 阅读题目；预览自己的 Workspace 或已有包；启动标准 Full Verification；查看和重新判可见验证；下载成功包 |
+| `read` | 阅读题目；预览自己的 Workspace 或已有包；启动、查看和重新判可见的 Verification；下载成功包 |
 | `write` | 包含 read；编辑自己的 Workspace；使用 Custom Run；创建包；Publish |
 | `owner` | 包含 write；通过 `Manage access` 管理直接 Problem 成员。Owner 身份固定，不能在普通角色表里转让 |
 
 如果按钮只读、禁用或不存在，先检查当前角色。部分禁用控件会在悬停时显示原因。
 
-Contest 同样有 read、write 和固定 owner。Contest membership 会把权限动态带到比赛中的题目：Contest read 对应 Problem read，Contest write/owner 对应 Problem write。这里不包含 Problem owner。管理 Problem 成员或把题加入比赛，仍需相应的直接管理权限。
+Contest 同样有 read、write 和固定 owner。Contest membership 会把权限动态带到比赛中的题目：Contest read 对应 Problem read，Contest write/owner 对应 Problem write。这里不包含 Problem owner。
 
-Contest owner 可在比赛页右侧的 `Manage access` 授予或撤销 read/write membership。Problem 的直接成员仍在各题的 `Manage access` 中管理。
+Contest owner 可在比赛页右侧的 `Manage access` 授予或撤销 read/write membership。Contest write 和 owner 都可以把自己直接拥有 Problem write/owner 的题加入比赛；从其他 Contest 获得的 Problem write 不能用于加入题目。Contest owner 可以移除任意比赛题目并调整顺序，Contest write 只能移除自己直接可写的题目。Problem 的直接成员仍在各题的 `Manage access` 中管理。
 
 ## 组一场 Contest
 
@@ -240,7 +240,7 @@ Contest owner 可在比赛页右侧的 `Manage access` 授予或撤销 read/writ
 
 ### 编排题目
 
-`Problems` 概览列出每题的 idx、时限、内存、题型、内容就绪情况，以及 Workspace、Verification 和 Package 状态。点击 `Manage problems` 可以搜索并加入题目、移除题目、修改 idx 和批量调整时限/内存。
+`Problems` 概览列出每题的 idx、时限、内存、题型、内容就绪情况，以及 Workspace、Verification 和 Package 状态。点击 `Manage problems` 可以搜索并加入自己直接可写的题目。Contest write 可以移除自己直接可写的题目并批量调整时限/内存；Contest owner 还可以移除任意题目并修改 idx。
 
 Contest 只引用 Problem，不会复制题目内容。从比赛中移除一道题，也不会删除它的源码、历史或个人 Workspace。题目在页面和比赛包中的顺序都由 idx 决定。
 
@@ -268,11 +268,11 @@ Contest 只引用 Problem，不会复制题目内容。从比赛中移除一道�
 | --- | --- | --- |
 | 保存后其他人看不到修改 | 修改还在你的 Workspace | `Review workspace` -> `Publish new revision` |
 | `Resolve Conflicts` 出现，Publish 不可用 | Published Revision 已由其他作者更新 | `Review Published Changes`，应用并复查合并结果 |
-| Verification 显示 stale | 运行相关源码、配置或测试在验证后发生变化 | 对当前 Workspace 重新 `Start verification` |
+| Verification 显示 stale | 运行相关源码、配置或测试在 Verification 后发生变化 | 对当前 Workspace 重新 `Start verification` |
 | `Verification` 为 `failed`，但结果矩阵看不出原因 | 可能是生成、校验、main correct、编译、证据或 sanity 阶段失败 | 打开该次 Verification 的 Reason、Test Details 和 Diagnostics |
 | `Packages` 显示没有 Published Revision | 当前题还没有正式版本 | 到 `Review workspace` 点击 `Publish new revision` |
 | 发布新 revision 后，Package 显示 `stale`/`none` | 旧包属于旧 revision | 在 `Packages` 为当前 revision 创建新包 |
-| Package 是 `not verified` | 当前 Native Package 没有与之匹配的共享 Full Verification 认证 | 有相应权限的作者可通过 `Verify` 或默认完整流程补齐认证 |
+| Package 是 `not verified` | 当前 Native Package 没有与之匹配的共享 Verification 认证 | 有相应权限的作者可通过 `Verify` 或默认流程补齐认证 |
 | Contest 没有整场题面预览链接 | 某题无权访问、缺所选来源，或各题没有共同语言 | 检查每题访问权、Workspace/Package 和语言 |
 | Contest 不能 `Download Packages` | 并非所有当前包都 ready | 先 `Build All Packages`，查看失败题的 `Packages` |
 | 找不到 `Connected Agents` | 当前界面名称不是这个 | 使用右上 `Settings` -> `Agents` |
@@ -281,19 +281,3 @@ Contest 只引用 Problem，不会复制题目内容。从比赛中移除一道�
 | Agent 报 `agent_general_permission_required` | 当前操作要求 General permission，逐题 grant 不能满足 | 到 `Settings` -> `Agents` 把该会话的 General permission 调到错误信息要求的 Scope |
 | Agent 报 401 / `agent_credential_invalid` | 会话已断开、凭据已轮换，或 Agent 使用了旧的本地 state | 保留现有 state，并用新的 Registration URL 让 Agent 尝试重连、轮换凭据。原会话若已 `Disconnect`，再创建会话并重新授权 |
 | Agent 选择高 Scope 后仍被拒绝 | 你的账号自身权限不足，或 grant 已过期/撤销 | 检查 `Manage access` / Contest membership 和 `Settings` -> `Agents` |
-
-## 产品边界
-
-- Polygon Replica 面向 ICPC 风格、整题 pass/fail 的出题流程，不支持按测试点累计的 partial scoring。
-- 系统直接支持 `interactive` 和 `multi-pass`，但每种外部格式只接受其明确声明的子集。
-- `Contest` 用于编排题目、审阅整场题面并下载比赛包。它不承载比赛当天的提交、判题榜单或现场管理。
-- Polygon Replica 兼容已有 Polygon 来源和工作习惯，但不提供 `hosted Polygon private API` 的兼容替代。
-
-需要核对更精确的格式、生命周期或权限边界时，可以继续阅读：
-
-- [状态派生与生命周期](design/state-lifecycle.md)
-- [访问模型](design/access.md)
-- [题目源码协议](protocol/problem-source.md)
-- [执行与验证协议](protocol/execution.md)
-- [题面预览协议](protocol/statement-preview.md)
-- [包导入与导出协议](protocol/package.md)

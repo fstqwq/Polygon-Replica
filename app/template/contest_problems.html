@@ -23,7 +23,11 @@
       </tr>
       {% for row in problem_rows %}
       <tr class="{% if row.dirty %}table-row-dirty{% endif %}">
-        <td><input type="checkbox" name="selected_problem_ids" value="{{ row.problem_id }}" aria-label="Select {{ row.problem_slug }}" /></td>
+        <td>
+          {% if ctx.access.can_manage_roster or (ctx.access.can_write and row.can_direct_problem_write) %}
+          <input type="checkbox" name="selected_problem_ids" value="{{ row.problem_id }}" aria-label="Select {{ row.problem_slug }}" />
+          {% endif %}
+        </td>
         <td>
           <input type="hidden" name="contest_problem_ids" value="{{ row.contest_problem_id }}" />
           <input class="contest-index-input" name="contest_problem_indices" value="{{ row.idx }}" maxlength="16" aria-label="Index for {{ row.problem_slug }}"{% if not ctx.access.can_manage_roster %} readonly{% endif %} />
@@ -57,7 +61,7 @@
       {% if ctx.access.can_manage_roster or ctx.access.can_write %}
       <button class="btn" type="submit">Save</button>
       {% endif %}
-      {% if ctx.access.can_manage_roster %}
+      {% if ctx.access.can_write %}
       <button
         class="linkish-button danger-link"
         type="submit"
@@ -72,7 +76,7 @@
   {% endif %}
 </section>
 
-{% if ctx.access.can_manage_roster %}
+{% if ctx.access.can_write %}
 <section class="content-section-plain contest-manage-section" aria-labelledby="contest-add-problems-heading">
   <div class="workspace-section-head contest-add-problems-head">
     <h2 id="contest-add-problems-heading">Add problems</h2>

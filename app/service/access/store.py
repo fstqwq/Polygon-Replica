@@ -17,11 +17,29 @@ class AccessStore:
         return row is not None and int(row["is_system_admin"] or 0) == 1
 
     def direct_problem_role(self, problem_id: int, user_id: int) -> AccessRole:
-        row = self._db.fetch_one(
-            "SELECT role FROM repo_acl WHERE problem_id=? AND user_id=?",
-            [int(problem_id), int(user_id)],
+        return self.direct_problem_roles([problem_id], user_id)[int(problem_id)]
+
+    def direct_problem_roles(
+        self,
+        problem_ids: list[int],
+        user_id: int,
+    ) -> dict[int, AccessRole]:
+        ids = sorted({int(problem_id) for problem_id in problem_ids})
+        if not ids:
+            return {}
+        placeholders = ",".join("?" for _problem_id in ids)
+        rows = self._db.fetch_all(
+            f"""
+            SELECT problem_id,role
+            FROM repo_acl
+            WHERE user_id=? AND problem_id IN ({placeholders})
+            """,
+            [int(user_id), *ids],
         )
-        return access_role(None if row is None else str(row["role"]))
+        result = {problem_id: access_role(None) for problem_id in ids}
+        for row in rows:
+            result[int(row["problem_id"])] = access_role(str(row["role"]))
+        return result
 
     def effective_problem_roles(
         self,
@@ -292,7 +310,7 @@ class AccessStore:
             )
         return result
 
-    def manageable_problem_rows_excluding_contest(
+    def directly_writable_problem_rows_excluding_contest(
         self,
         contest_id: int,
         user_id: int,
@@ -318,7 +336,7 @@ class AccessStore:
                 SELECT p.id AS problem_id,p.slug AS problem_slug,a.role
                 FROM repo_acl a
                 JOIN problems p ON p.id=a.problem_id
-                WHERE a.user_id=? AND a.role='owner'
+                WHERE a.user_id=? AND a.role IN ('write','owner')
                   AND NOT EXISTS (
                       SELECT 1 FROM contest_problems cp
                       WHERE cp.contest_id=? AND cp.problem_id=p.id
