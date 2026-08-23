@@ -16,11 +16,17 @@ from app.service.problem.runtime_config import problem_config_limits
 
 
 _PROBLEM_LIMITS = problem_config_limits(build_config_values())
+_ICPC_RUN_TWICE_PACKAGE = Path(
+    "third_party/icpc-package-examples/sample-run-twice.zip"
+)
+_POLYGON_RUN_TWICE_PACKAGE = Path(
+    "third_party/polygon-package-examples/sample-run-twice$linux.zip"
+)
 
 
 class TestLargePackageImport(unittest.TestCase):
     def test_reference_icpc_problem_package(self) -> None:
-        package = Path("third_party/icpc-package-examples/ecf50-prac-a.zip")
+        package = _ICPC_RUN_TWICE_PACKAGE
         with tempfile.TemporaryDirectory(prefix="icpc-canary-") as temp_dir:
             workspace = Path(temp_dir)
             with ArchiveView(package, problem_archive_policy(256 * 1024 * 1024)) as archive:
@@ -34,16 +40,14 @@ class TestLargePackageImport(unittest.TestCase):
                 )
 
             problem = json.loads((workspace / "config/problem.json").read_text(encoding="utf-8"))
+            self.assertEqual(result["title"], "Sample Run Twice")
             self.assertEqual(problem["mode"], "interactive")
             self.assertEqual(problem["pass_limit"], 2)
             self.assertEqual(problem["time_limit_ms"], 2000)
-            self.assertGreater(result["tests"]["total"], 0)
+            self.assertEqual(result["tests"]["total"], 6)
 
     def test_reference_polygon_problem_package(self) -> None:
-        package = Path(
-            "third_party/polygon-package-examples/"
-            "run-twice-guess-the-number-46$linux.zip"
-        )
+        package = _POLYGON_RUN_TWICE_PACKAGE
         with tempfile.TemporaryDirectory(prefix="polygon-canary-") as temp_dir:
             workspace = Path(temp_dir)
             with ArchiveView(package, problem_archive_policy(256 * 1024 * 1024)) as archive:
@@ -57,14 +61,14 @@ class TestLargePackageImport(unittest.TestCase):
                 )
 
             problem = json.loads((workspace / "config/problem.json").read_text(encoding="utf-8"))
-            self.assertEqual(result["title"], "Guess the Number (Deluxe ver.)")
+            self.assertEqual(result["title"], "Sample Run Twice")
             self.assertEqual(problem["mode"], "interactive")
             self.assertEqual(problem["pass_limit"], 2)
             self.assertEqual(result["tests"]["total"], 6)
 
     def test_reference_polygon_contest_package(self) -> None:
         package = Path(
-            "third_party/polygon-package-examples/contest/contest-55738.zip"
+            "third_party/polygon-package-examples/contest/sample-contest.zip"
         )
 
         problem_policy = problem_archive_policy(256 * 1024 * 1024)
@@ -95,5 +99,5 @@ class TestLargePackageImport(unittest.TestCase):
                 )
 
         self.assertEqual(parsed["total_problems"], 4)
-        self.assertIn("ICPC Asia East Continent Final", parsed["title"])
+        self.assertEqual(parsed["title"], "Sample Contest")
         self.assertIn(r"\documentclass", staged_template_text)
