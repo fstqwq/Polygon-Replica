@@ -137,7 +137,6 @@ STANDARD_CHECKER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 STANDARD_CHECKER_ROOT = (
     Path(__file__).resolve().parents[1]
     / "third_party"
-    / "upstream"
     / "testlib"
     / "checkers"
 ).resolve()

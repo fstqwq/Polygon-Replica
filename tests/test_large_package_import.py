@@ -68,7 +68,7 @@ class TestLargePackageImport(unittest.TestCase):
 
     def test_reference_polygon_contest_package(self) -> None:
         package = Path(
-            "third_party/polygon-package-examples/contest/sample-contest.zip"
+            "third_party/polygon-package-examples/sample-contest.zip"
         )
 
         problem_policy = problem_archive_policy(256 * 1024 * 1024)

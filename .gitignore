@@ -8,10 +8,10 @@ migration-gates/*
 .*
 !.gitattributes
 !.dockerignore
+!third_party/testlib/checkers/.gitignore
 !.github/
 !.github/workflows/
 !.github/workflows/*.yml
 !.githooks/
 !.githooks/pre-push
 tmp/
-third_party/polygon-package-examples/contest/contest-41963.zip

@@ -12,7 +12,6 @@ def _standard_checker_root() -> Path:
     return (
         Path(__file__).resolve().parents[3]
         / "third_party"
-        / "upstream"
         / "testlib"
         / "checkers"
     ).resolve()

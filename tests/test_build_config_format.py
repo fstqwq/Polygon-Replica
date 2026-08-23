@@ -617,6 +617,6 @@ class TestBuildConfigFormat(unittest.TestCase):
                 )
 
     def test_standard_checker_sources_are_lf_canonical(self) -> None:
-        root = Path(__file__).resolve().parents[1] / "third_party" / "upstream" / "testlib" / "checkers"
+        root = Path(__file__).resolve().parents[1] / "third_party" / "testlib" / "checkers"
         offenders = [path.name for path in sorted(root.glob("*.cpp")) if b"\r" in path.read_bytes()]
         self.assertEqual(offenders, [])

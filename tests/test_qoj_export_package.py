@@ -457,7 +457,6 @@ class TestQOJExportPackage(unittest.TestCase):
                 vendored = (
                     Path(__file__).resolve().parents[1]
                     / "third_party"
-                    / "upstream"
                     / "testlib"
                     / "checkers"
                     / f"{checker}.cpp"

@@ -77,7 +77,7 @@ RUN python3 -m venv .venv \
 
 COPY --chown=judgehost:judgehost app ./app
 COPY --chown=judgehost:judgehost scripts ./scripts
-# third_party/upstream supplies testlib + standard checkers; Polygon-WF-Styles
+# third_party/testlib supplies testlib + standard checkers; Polygon-WF-Styles
 # supplies the canonical statement template. Both are read at app import.
 COPY --chown=judgehost:judgehost third_party ./third_party
 
