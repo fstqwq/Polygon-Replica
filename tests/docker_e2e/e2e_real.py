@@ -2208,6 +2208,7 @@ def verify_deployment() -> None:
             register_user=_register_user,
             post_redirect=_post,
             problem=PROBLEM,
+            addable_problem=CONTEST_PULL_PROBLEM,
             contest=CONTEST,
             verification_id=verification_id,
             initial_head=head,

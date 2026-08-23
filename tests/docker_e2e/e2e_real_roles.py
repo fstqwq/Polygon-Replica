@@ -259,6 +259,79 @@ def _assert_persisted_roles(problem: str, contest: str) -> None:
         raise RuntimeError("outsider unexpectedly received direct access")
 
 
+def _assert_contest_writer_adds_problem(
+    *,
+    admin: httpx.Client,
+    sessions: dict[str, httpx.Client],
+    post_redirect: PostRedirect,
+    contest: str,
+    addable_problem: str,
+) -> None:
+    post_redirect(
+        admin,
+        f"/problems/{addable_problem}/access/grant",
+        {"target_user": ALICE, "role": "write"},
+    )
+    with _connect() as connection:
+        existing = connection.execute(
+            """
+            SELECT 1
+            FROM contest_problems cp
+            JOIN contests c ON c.id=cp.contest_id
+            JOIN problems p ON p.id=cp.problem_id
+            WHERE c.slug=? AND p.slug=?
+            """,
+            [contest, addable_problem],
+        ).fetchone()
+    if existing is not None:
+        raise RuntimeError("ordinary-user Contest add fixture was already present")
+
+    response = post_redirect(
+        sessions[ALICE],
+        f"/contests/{contest}/problems/add",
+        {"problem_slugs": addable_problem, "q": ""},
+    )
+    if response.headers.get("location") != f"/contests/{contest}/overview":
+        raise RuntimeError(
+            "ordinary Contest writer add redirected unexpectedly: "
+            f"{response.headers!r}"
+        )
+
+    with _connect() as connection:
+        added = connection.execute(
+            """
+            SELECT added_by.username AS added_by,direct.role AS direct_role,
+                   membership.role AS contest_role
+            FROM contest_problems cp
+            JOIN contests c ON c.id=cp.contest_id
+            JOIN problems p ON p.id=cp.problem_id
+            JOIN users added_by ON added_by.id=cp.added_by_user_id
+            JOIN users alice ON alice.username=?
+            JOIN repo_acl direct
+              ON direct.problem_id=p.id AND direct.user_id=alice.id
+            JOIN contest_members membership
+              ON membership.contest_id=c.id AND membership.user_id=alice.id
+            WHERE c.slug=? AND p.slug=?
+            """,
+            [ALICE, contest, addable_problem],
+        ).fetchone()
+    if (
+        added is None
+        or str(added["added_by"]) != ALICE
+        or str(added["direct_role"]) != "write"
+        or str(added["contest_role"]) != "write"
+    ):
+        detail = None if added is None else dict(added)
+        raise RuntimeError(
+            f"ordinary Contest writer add was not persisted correctly: {detail!r}"
+        )
+
+    scoped_path = f"/problems/{addable_problem}/statement?contest={contest}"
+    for role in (ALICE, BOB, READER):
+        _assert_get(sessions[role], scoped_path, 200, role=role)
+    _assert_get(sessions[OUTSIDER], scoped_path, 403, role=OUTSIDER)
+
+
 def _walk_pages(
     *,
     anonymous: httpx.Client,
@@ -511,6 +584,7 @@ def exercise_role_pages_and_collaboration(
     register_user: RegisterUser,
     post_redirect: PostRedirect,
     problem: str,
+    addable_problem: str,
     contest: str,
     verification_id: str,
     initial_head: str,
@@ -533,6 +607,13 @@ def exercise_role_pages_and_collaboration(
             contest=contest,
         )
         _assert_persisted_roles(problem, contest)
+        _assert_contest_writer_adds_problem(
+            admin=admin,
+            sessions=sessions,
+            post_redirect=post_redirect,
+            contest=contest,
+            addable_problem=addable_problem,
+        )
         _walk_pages(
             anonymous=anonymous,
             sessions={"owner-admin": admin, **sessions},
