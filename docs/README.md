@@ -2,6 +2,8 @@
 
 This index covers the design, protocols, engineering rules, and operations of Polygon Replica for contributors and maintainers.
 
+For product usage, start with the [User guide (in Chinese)](user-guide.md).
+
 ## Product and system design
 
 - [Product scope and rationale](product.md)

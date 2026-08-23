@@ -157,6 +157,9 @@ context and resources directly. Authors may also replace
 
 ## Blank pages and banners
 
+The files under [`banner/`](banner/README.md) are mock title/banner assets. See
+their README for the ICPC logo trademark notice and usage limits.
+
 The default `statements.ftl` emits the existing `olymp.sty` signal when its
 `insertBlankPage` context value is true:
 
