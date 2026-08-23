@@ -42,6 +42,11 @@ _ROOT_TEXT_FILENAMES = frozenset(
         "LICENSE",
     }
 )
+_INTENTIONALLY_NON_ASCII_TEXT_PATHS = frozenset(
+    {
+        Path("docs/user-guide.md"),
+    }
+)
 
 
 def _python_files_under(root: Path) -> list[Path]:
@@ -224,7 +229,7 @@ class TestPublicContracts(unittest.TestCase):
             payload = path.read_bytes()
             relative = path.relative_to(ROOT)
             has_non_ascii = any(byte > 0x7F for byte in payload)
-            if has_non_ascii:
+            if has_non_ascii and relative not in _INTENTIONALLY_NON_ASCII_TEXT_PATHS:
                 offenders.append(relative.as_posix())
         self.assertEqual(
             offenders,
