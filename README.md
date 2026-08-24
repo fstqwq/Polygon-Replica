@@ -21,4 +21,4 @@ Running at public scale would require a highly reliable judge backend and substa
 
 - **Coordination is limited to a single Python process under the GIL.** Additional judgehosts increase execution parallelism, but UI requests and judgehost protocol traffic remain in one coordinator process. The coordination layer therefore does not scale horizontally.
 - **Larger deployments are undertested.** Current stress tests have exercised up to 16 judgehosts connected over a private network, including full verification of a problem with a five-second time limit across roughly 8,000 solution-test combinations and 5 GB of test data.
-- **Partial scoring is unsupported.** OI-style scoring and other settings that award partial credit are outside project's scope.
+- **Partial scoring is unsupported.** OI-style scoring and other settings that award partial credit are outside the project's scope.

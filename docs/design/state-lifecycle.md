@@ -6,11 +6,11 @@ Polygon Replica keeps authored source separate from the results produced from it
 new problem or imported package
               |
               v
-     per-user workspace --------> preview or workspace verification
+     per-user workspace --------> statement preview or workspace verification
               |
               | publish
               v
-   official problem version
+     published revision
               |
               v
         package export
@@ -38,17 +38,17 @@ SQLite owns identities, relationships, lifecycle states, and filesystem locators
 
 | State | Derived from | Fixed at | Lifetime |
 | --- | --- | --- | --- |
-| Workspace | New problem, imported source, or an official version | Not fixed; its owner edits it | Durable until deleted |
-| Official problem version | Reviewed workspace | Publish | Durable Git history |
+| Workspace | New problem, imported source, or a published revision | Not fixed; its owner edits it | Durable until deleted |
+| Published revision | Reviewed workspace | Publish | Durable Git history |
 | Statement preview | Workspace or native package source plus language/output | Preview request | Cache; invalidated at startup/deploy |
 | Workspace verification | Frozen workspace snapshot and selected targets | Verification admission | Durable summary and decisions; execution payloads are cache |
-| Native package | Official version, generated inputs, and main-correct answers | Package export | Derived; certified by full verification or marked not verified |
+| Native package | Published revision, generated inputs, and main-correct answers | Package export | Derived; certified by full verification or marked not verified |
 | External package | Native package and target adapter | Adapter run | Derived and reusable for that native package/format |
-| contest package download | Current roster and each current native package | Download request | Temporary response; deleted after transfer |
+| Contest package download | Current roster and each current native package | Download request | Temporary response; deleted after transfer |
 
 ## Authoring and publication
 
-Each user edits an isolated workspace. Verification freezes a snapshot, and publication records a new Git version after resolving conflicts with the current official version. Verification never publishes source, and later edits or publications never rewrite earlier results.
+Each user edits an isolated workspace. Verification freezes a snapshot, and publication records a new Git revision after resolving conflicts with the current published revision. Verification never publishes source, and later edits or publications never rewrite earlier results.
 
 ## Verification
 
@@ -56,7 +56,7 @@ A verification follows `queued -> running -> ok | failed | cancelled`. Its task 
 
 ## Native and external packages
 
-Package export creates or reuses a native package for the current published version. Full verification certifies matching evidence; standard-solution-only export produces the same archive marked `not verified`. External packages derive from that native package. The [package protocol](../protocol/package.md) defines reuse, certification, and adapter output.
+Package export creates or reuses a native package for the current published revision. Full verification certifies matching evidence; standard-solution-only export produces the same archive marked `not verified`. External packages derive from that native package. The [package protocol](../protocol/package.md) defines reuse, certification, and adapter output.
 
 ## Contest package download
 
@@ -66,11 +66,11 @@ Contest roster, indices, statement source, and attachments are durable authoring
 
 | Event | What changes | What remains |
 | --- | --- | --- |
-| Edit a workspace | Workspace content and its verification signature | Official versions, other workspaces, packages, contest downloads |
-| Publish | Current official version | Earlier versions and their derived products |
+| Edit a workspace | Workspace content and its verification signature | Published revisions, other workspaces, packages, contest downloads |
+| Publish | Current published revision | Earlier revisions and their derived products |
 | Remove access | The next authorization decision | Source and derived bytes |
 | Restart | Active jobs fail; runtime queues, leases, and cache clear | Git, workspaces, users, contests, and durable contest source |
-| Missing or corrupt native package | Package becomes unavailable; cached external packages are invalidated | Its official source version |
+| Missing or corrupt native package | Package becomes unavailable; cached external packages are invalidated | Its published revision |
 | Generated-data cleanup | Verification, package, export, and preview rows and payloads are removed | Git, workspaces, users, problem metadata, contests, contest source, backups |
 
 Detailed transitions and data shapes are defined by the [problem source](../protocol/problem-source.md), [execution](../protocol/execution.md), [package](../protocol/package.md), and [storage](../protocol/storage.md) protocols.

@@ -234,7 +234,7 @@ Application startup does not alter an existing SQLite schema. Before installing 
 The latest breaking database change is `Retire legacy workspace preview
 compile`, which removes the disposable legacy `previews` table. Deployments
 whose schema still contains that table must stop the application and
-Judgehosts, back up the SQLite database together with its WAL and SHM files,
+judgehosts, back up the SQLite database together with its WAL and SHM files,
 and apply the following offline change in addition to every other schema diff
 between the deployed and target revisions:
 
@@ -269,11 +269,14 @@ Systemd:
 
 ```bash
 cd /opt/polygon-replica
+runtime_user="$(sudo systemctl show polygon-replica.service --property=User --value)"
+test -n "$runtime_user"
+test "$runtime_user" != root
 sudo systemctl stop polygon-replica.service
-sudo -u polygon git pull --ff-only
-sudo -u polygon python3.14 -m venv --clear .venv
-sudo -u polygon .venv/bin/python -m pip install --upgrade pip
-sudo -u polygon .venv/bin/python -m pip install -r requirements.txt
+sudo -u "$runtime_user" git pull --ff-only
+sudo -u "$runtime_user" python3.14 -m venv --clear .venv
+sudo -u "$runtime_user" .venv/bin/python -m pip install --upgrade pip
+sudo -u "$runtime_user" .venv/bin/python -m pip install -r requirements.txt
 sudo systemctl start polygon-replica.service
 sudo journalctl -u polygon-replica.service -n 200 --no-pager
 ```

@@ -15,4 +15,4 @@ status; contest membership never contributes a problem role. A problem reader
 may view and rejudge a visible verification, but only the workspace that owns
 that verification may cancel it. Successful packages are shared with problem
 readers, while unfinished and failed jobs remain visible only to their actor
-and problem managers.
+and the problem owner.

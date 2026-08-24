@@ -10,7 +10,7 @@ Polygon Replica 是一套面向 ICPC 风格题目的协作出题系统。它覆�
 创建或导入后，继续编辑题目
           |
           v
-Workspace（可变、每个用户彼此隔离）
+workspace（可变、每个用户彼此隔离）
           |-- statement preview
           |-- verification / custom run
           |
@@ -24,19 +24,19 @@ native package（有共享 verification 认证，或 not verified）
           |
           | format adapter
           v
-external package（目标比赛系统格式）
+external packages（目标比赛系统格式）
 
 contest = 有序题目列表 + 比赛属性 + 比赛题面模板
         = 下载时组合每道题当前 published revision 的包
 ```
 
-- 题目编辑页的 `Save` 写入 Workspace。`Properties` 和 `Statement Sources` 写入比赛的共享内容。
-- Verification 针对启动时冻结的 Workspace 快照。
+- 题目编辑页的 `Save` 写入 workspace。`Properties` 和 `Statement Sources` 写入比赛的共享内容。
+- Verification 针对启动时冻结的 workspace 快照。
 - `Publish new revision` 创建团队共享的正式版本。
 - Native package 以 published revision 为源码。要让新修改进入包，先 publish。
-- External package 直接从 native package 派生。
+- External packages 直接从 native package 派生。
 
-每位作者在独立的 Git Workspace 中工作，published revision 是团队共享的基准。
+每位作者在独立的 Git workspace 中工作，published revision 是团队共享的基准。
 
 ## 页面入口
 
@@ -65,7 +65,7 @@ contest = 有序题目列表 + 比赛属性 + 比赛题面模板
 
 在 `Problem` 首页选择 `Open/Create`。输入一个不含 `/` 的题目短名称，系统会创建完整题目 ID `<你的用户名>/<短名称>`。打开其他人的题目时，输入完整题目 ID；你的账号还必须具备访问权限。
 
-如果已经有包，选择 `Import Problem Package` 并上传 ZIP。系统会导入作者源码，建立初始 published revision 和 Workspace。此后的修改进入 Workspace；publish 后，再从 published revision 构建 package。
+如果已经有包，选择 `Import Problem Package` 并上传 ZIP。系统会导入作者源码，建立初始 published revision 和 workspace。此后的修改进入 workspace；publish 后，再从 published revision 构建 package。
 
 ### 2. 设置题目运行模型
 
@@ -115,13 +115,13 @@ Interactor 的 testlib 接口、单次交互模板和交互式 multi-pass 写法
 
 ### 5. 预览题面
 
-题目页的 PDF、HTML、LaTeX 链接默认预览你自己的 Workspace。`Packages` 的 revision 列表还可以预览某个已有 native package 中固定版本的题面。
+题目页的 PDF、HTML、LaTeX 链接默认预览你自己的 workspace。`Packages` 的 revision 列表还可以预览某个已有 native package 中固定版本的题面。
 
-Workspace preview 读取当前草稿。package preview 读取所选 native package 中的固定版本。
+Workspace preview 读取当前草稿。Package preview 读取所选 native package 中的固定版本。
 
 ### 6. 运行 verification
 
-进入 `Verification`，点击 `Start verification`。系统会冻结当前 Workspace，并为每个测试依次生成输入、生成答案，再运行其他 solutions。
+进入 `Verification`，点击 `Start verification`。系统会冻结当前 workspace，并为每个测试依次生成输入、生成答案，再运行其他 solutions。
 
 | 任务 | 编译阶段 | 运行阶段 | 判定和产物 |
 | --- | --- | --- | --- |
@@ -143,12 +143,12 @@ Workspace preview 读取当前草稿。package preview 读取所选 native packa
 | `Summary runtime threshold` | 检查答案全部正确的 solution 的最大 user time；达到 time limit 的 50% 至 150% 时提示时限可能过紧 | warning |
 | `Boundary coverage` | 根据 validator 产生的 testlib overview，检查所有测试是否覆盖了具有固定边界的变量最小值和最大值 | warning |
 
-点击测试或单元格可查看 `Test Details`，下方 `Diagnostics` 汇总编译错误、生成失败和 sanity warning。verification 状态含义如下：
+点击测试或单元格可查看 `Test Details`，下方 `Diagnostics` 汇总编译错误、生成失败和 sanity warning。Verification 状态含义如下：
 
 - `queued` / `running`：任务正在等待或执行。
 - `ok`：完整计划已经结束并符合预期。
 - `failed`：generator、validator、main correct solution、运行环境或 expected mismatch 失败。
-- `cancelled`：该 Workspace 的 verification 所有者取消了任务。
+- `cancelled`：该 workspace 的 verification 所有者取消了任务。
 
 需要只跑部分 `Solutions` / `Tests`，或临时上传一个源码时，选择 `Customize verification`，进入 `Run Solutions`。
 
@@ -158,17 +158,17 @@ Workspace preview 读取当前草稿。package preview 读取所选 native packa
 
 ### 7. 审阅并 publish
 
-右侧 `Workspace` 卡片会显示 Workspace 和 published revision 是否一致，以及当前有哪些未发布文件。点击 `Review workspace`：
+右侧 `Workspace` 卡片会显示 workspace 和 published revision 是否一致，以及当前有哪些未发布文件。点击 `Review workspace`：
 
 1. 在 `Review` 中检查 `Published`、`Workspace`、`Verification` 和 `Content` 状态。
 2. 在 `File Changes` 中逐项审阅差异；不想保留的单文件修改可以 `Discard file changes`。
 3. 填写有意义的 `Message`，点击 `Publish new revision`。
 
-如果另一位作者已经发布了新版，Workspace 会提示 `Resolve Conflicts`，并禁止直接发布。进入 `Review Published Changes`，可以采用建议合并结果，也可以逐个文件选择保留 Workspace 或 published 版本。应用以后再次审阅差异，再 publish。
+如果另一位作者已经发布了新版，workspace 会提示 `Resolve Conflicts`，并禁止直接发布。进入 `Review Published Changes`，可以采用建议合并结果，也可以逐个文件选择保留 workspace 或 published 版本。应用以后再次审阅差异，再 publish。
 
 ### 8. 创建 native package 和外部包
 
-进入 `Packages`。如果页面显示 `No published revision is available.`，先回到 Workspace publish。默认创建流程会复用已有 verified native package。如果没有，系统会先运行 verification，再创建或认证当前 published revision 的 native package。
+进入 `Packages`。如果页面显示 `No published revision is available.`，先发布 workspace。默认创建流程会复用已有 verified native package。如果没有，系统会先运行 verification，再创建或认证当前 published revision 的 native package。
 
 勾选 `Run standard solution only` 后，只执行测试输入生成和 main correct solution，并创建或复用一个 `not verified` native package。正式交付前，可由具备权限的作者使用默认流程或 `Verify` 补齐认证。
 
@@ -196,8 +196,8 @@ Workspace preview 读取当前草稿。package preview 读取所选 native packa
 | scope | agent 可以做什么 | 不能做什么 |
 | --- | --- | --- |
 | `none`（`General permission`） | 不预授予跨题能力；需要时逐题申请 | 不能仅凭会话访问任意题目 |
-| `readonly` | 读取 Workspace、查看状态、下载/比较快照、启动和检查标准 verification、读取已有成果 | 不能修改远端 Workspace、启动新的导出或 publish |
-| `workspace` | 包含 readonly；把本地修改应用到 Workspace，上传/删除文件，启动账号有权进行的导出 | 不能 publish 正式 revision |
+| `readonly` | 读取 workspace、查看状态、下载/比较快照、启动和检查标准 verification、读取已有成果 | 不能修改远端 workspace、启动新的导出或 publish |
+| `workspace` | 包含 readonly；把本地修改应用到 workspace，上传/删除文件，启动账号有权进行的导出 | 不能 publish 正式 revision |
 | `commit` | 包含 workspace；在明确要求下 commit/publish；满足用户权限时可让 verification 成为共享包认证证据 | 不会获得 problem 管理权、成员管理权或浏览器提升权限 |
 
 单独读取文件或 snapshot 只需要 `readonly`。当前 Polygon-Skills 的完整 `clone` 和日常本地镜像流程会申请 `workspace`，以便继续编辑和 push。若只想让 agent 查看状态、读取文件或检查已有结果，授予 `readonly` 即可。
@@ -218,19 +218,19 @@ Workspace preview 读取当前草稿。package preview 读取所选 native packa
 | `polygon-generate-tests` | 设计并生成测试数据 |
 | `polygon-review` | 完整审阅题目 |
 | `polygon-agent-auth` | 连接 Polygon Replica，并申请题目授权 |
-| `polygon-agent-pull` | 将远端 Workspace 拉取为本地题目镜像 |
-| `polygon-agent-push` | 将本地题目镜像应用到远端 Workspace |
+| `polygon-agent-pull` | 将远端 workspace 拉取为本地题目镜像 |
+| `polygon-agent-push` | 将本地题目镜像应用到远端 workspace |
 | `polygon-agent-verification` | 启动、等待并检查 verification |
 | `polygon-agent-export` | 创建并下载 package |
-| `polygon-agent-commit` | publish 当前 Workspace |
-| `polygon-workspace-snapshot-export` | 导出可传递的 Workspace snapshot |
-| `polygon-workspace-snapshot-import` | 从 Workspace snapshot 恢复本地题目 |
+| `polygon-agent-commit` | publish 当前 workspace |
+| `polygon-workspace-snapshot-export` | 导出可传递的 workspace snapshot |
+| `polygon-workspace-snapshot-import` | 从 workspace snapshot 恢复本地题目 |
 
 ### 本地与远端 Git 历史
 
-Polygon-Skills 有意将 agent 的本地 Git 历史与 Polygon Replica 的远端 Git 历史分开。agent 每完成一次本地操作，都会被要求创建一个单独的 commit，作为可以撤销的恢复点；这些本地 commit 不会直接成为远端的 published revision。
+Polygon-Skills 有意将 agent 的本地 Git 历史与 Polygon Replica 的远端 Git 历史分开。Agent 每完成一次本地操作，都会被要求创建一个单独的 commit，作为可以撤销的恢复点；这些本地 commit 不会直接成为远端的 published revision。
 
-远端发生修改后，agent 在同步前也会先提交尚未提交的本地改动，再拉取并协调远端变化。这样，本地编辑、同步到 Workspace 和 publish 始终是相互独立且可以审阅的步骤。
+远端发生修改后，agent 在同步前也会先提交尚未提交的本地改动，再拉取并协调远端变化。这样，本地编辑、同步到 workspace 和 publish 始终是相互独立且可以审阅的步骤。
 
 要收回权限，可以在 `Settings` -> `Agents` 中：
 
@@ -240,15 +240,15 @@ Polygon-Skills 有意将 agent 的本地 Git 历史与 Polygon Replica 的远端
 
 ## 多人协作与权限
 
-每位用户都有独立的 Workspace。A 尚未 publish 的修改，B 看不到。A publish 后，B 会看到 published revision 已更新，需要先处理更新或冲突才能继续发布。
+每位用户都有独立的 workspace。A 尚未 publish 的修改，B 看不到。A publish 后，B 会看到 published revision 已更新，需要先处理更新或冲突才能继续发布。
 
 Problem 权限如下：
 
 | 操作 | `read` | `write` | `owner` |
 | --- | --- | --- | --- |
-| 阅读题目；预览自己的 Workspace 或已有包 | 可以 | 可以 | 可以 |
+| 阅读题目；预览自己的 workspace 或已有包 | 可以 | 可以 | 可以 |
 | 启动、查看和重新判可见的 verification；下载成功包 | 可以 | 可以 | 可以 |
-| 编辑自己的 Workspace；使用 `Custom Run`；创建包；publish | — | 可以 | 可以 |
+| 编辑自己的 workspace；使用 `Custom Run`；创建包；publish | — | 可以 | 可以 |
 | 通过 `Manage access` 管理其他人的直接 problem `read` / `write` | — | 可以 | 可以 |
 | 删除 problem | — | — | 可以 |
 
@@ -283,15 +283,15 @@ Contest membership 和 problem 权限彼此独立。获得 contest `read` 或 `w
 
 ### 编排题目
 
-`Problems` 概览列出每题的题号（idx）、时限、内存、题型、内容就绪情况，以及 Workspace、verification 和 package 状态。点击 `Manage problems` 可以搜索、加入、移除和排序题目，也可以批量调整时限/内存；具体授权条件见上表。
+`Problems` 概览列出每题的题号（idx）、时限、内存、题型、内容就绪情况，以及 `Workspace`、`Verification` 和 `Package` 状态。点击 `Manage problems` 可以搜索、加入、移除和排序题目，也可以批量调整时限/内存；具体授权条件见上表。
 
-题目加入成功后，页面会转到 `Manage access`，并高亮新题对应的行。新增或更新 contest member 后，同一页面会高亮该成员列。此时可以在矩阵里一次分配多道题的直接 `read` / `write`；行首和列首的批量选择只填写当前操作者有权管理的单元格，最后仍要点击 `Save Problem Access`。contest membership 本身不授予题目权限。
+题目加入成功后，页面会转到 `Manage access`，并高亮新题对应的行。新增或更新 contest member 后，同一页面会高亮该成员列。此时可以在矩阵里一次分配多道题的直接 `read` / `write`；行首和列首的批量选择只填写当前操作者有权管理的单元格，最后仍要点击 `Save Problem Access`。Contest membership 本身不授予题目权限。
 
 ### 预览整场题面
 
 `Properties` 用于维护比赛属性及其多语言内容，`Statement Sources` 用于编辑整场题面的 TeX 模板和资源。banner、奇数题后插入空白页等选项也在这里。
 
-比赛页右侧的 `Statements (HTML, <Language>)` 和 `Statements (PDF, <Language>)` 按题号顺序预览整场题面。Workspace 来源用于查看各题 Workspace 中的内容，package 来源用于查看各题 native package 中的内容。你需要对所有题目具有 read 权限，并且所有题目都具备所选来源和共同语言，对应的预览链接才会显示。
+比赛页右侧的 `Statements (HTML, <Language>)` 和 `Statements (PDF, <Language>)` 按题号顺序预览整场题面。`Workspace` 来源用于查看各题 workspace 中的内容，`Packages` 来源用于查看各题 native package 中的内容。你需要对所有题目具有 read 权限，并且所有题目都具备所选来源和共同语言，对应的预览链接才会显示。
 
 ### 构建和下载比赛包
 
@@ -303,14 +303,14 @@ Contest membership 和 problem 权限彼此独立。获得 contest `read` 或 `w
 
 | 现象 | 这通常意味着什么 | 去哪里处理 |
 | --- | --- | --- |
-| 保存后其他人看不到修改 | 修改还在 Workspace | `Review workspace` -> `Publish new revision` |
+| 保存后其他人看不到修改 | 修改还在 workspace | `Review workspace` -> `Publish new revision` |
 | `Resolve Conflicts` 出现，publish 不可用 | published revision 已由其他作者更新 | `Review Published Changes`，应用并复查合并结果 |
-| `Verification` 显示 stale | 运行相关源码、配置或测试在 verification 后发生变化 | 对当前 Workspace 重新 `Start verification` |
+| `Verification` 显示 stale | 运行相关源码、配置或测试在 verification 后发生变化 | 对当前 workspace 重新 `Start verification` |
 | `Verification` 为 `failed`，但结果矩阵看不出原因 | 可能是生成、校验、main correct、编译、证据或 sanity 阶段失败 | 打开该次 verification 的 `Reason`、`Test Details` 和 `Diagnostics` |
 | `Packages` 显示没有 published revision | 当前题还没有正式版本 | 到 `Review workspace` 点击 `Publish new revision` |
 | 发布新 revision 后，package 显示 `stale`/`none` | 旧包属于旧 revision | 在 `Packages` 为当前 revision 创建新包 |
 | package 是 `not verified` | 当前 native package 没有与之匹配的共享 verification 认证 | 有相应权限的作者可通过 `Verify` 或默认流程补齐认证 |
-| 比赛没有整场题面预览链接 | 某题无权访问、缺所选来源，或各题没有共同语言 | 检查每题访问权、Workspace/package 和语言 |
+| 比赛没有整场题面预览链接 | 某题无权访问、缺所选来源，或各题没有共同语言 | 检查每题访问权、workspace/package 和语言 |
 | 比赛不能 `Download Packages` | 并非所有当前包都 ready | 先 `Build All Packages`，查看失败题的 `Packages` |
 | registration URL 不存在、过期或已使用 | 注册 URL 只能使用一次，并且有效期较短 | 在 `Settings` -> `Agents` 重新点击 `Connect to Agent`，把新 URL 发给 agent |
 | approval URL 返回 404 或显示 expired | 当前登录账号与 agent 所连接的账号不一致，或授权请求已过期、会话已不存在 | 先确认登录账号，再让 agent 重新请求该题 scope |

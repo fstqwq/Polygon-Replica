@@ -1,8 +1,8 @@
 # Polygon World Finals-style statement templates
 
 This directory contains the canonical statement templates and LaTeX style used
-by Qiulygon. The style is not an official ICPC asset; it is derived from the
-Polygon-compatible `olymp.sty` ecosystem.
+by Polygon Replica. The style is not an official ICPC asset; it is derived from
+the Polygon-compatible `olymp.sty` ecosystem.
 
 ## Hard-fork status
 
@@ -14,7 +14,7 @@ then the copy maintained inside Polygon Replica.
 
 Polygon Replica deliberately preserves selected Polygon-facing commands while
 independently evolving the FreeMarker split, XeLaTeX support, sample resource
-pipeline, structured multipass and interaction presentation, blank-page
+pipeline, structured multi-pass and interaction presentation, blank-page
 behavior, and banner contract. New interfaces and behavior documented here
 must not be assumed to exist in either upstream repository. Conversely,
 upstream changes must be reviewed and ported intentionally; replacing this
@@ -142,7 +142,7 @@ The canonical `examples.tex` recognizes this optional render-context shape:
 ```
 
 Polygon Replica's current `StatementExamplesProducer` synthesizes
-`problem.examples.samples` for browser previews and verified-revision statement
+`problem.examples.samples` for browser previews and native-package statement
 builds. It projects authored inline `sample_json`, explicit display overrides,
 or canonical main-correct pass evidence into the structured context and writes
 each referenced payload as a controlled UTF-8 render resource. The producer
@@ -169,11 +169,11 @@ The default `statements.ftl` emits the existing `olymp.sty` signal when its
 ```
 
 Custom templates may consume the same Boolean context or use the signal
-directly. All effective Contest Properties are injected as top-level FTL
+directly. All effective contest properties are injected as top-level FTL
 values and through the `properties` mapping. No post-render text replacement
 is performed.
 
-No wrapper commands are required. The `banner` Contest Property is empty by
+No wrapper commands are required. The `banner` contest property is empty by
 default. A non-empty value makes the default template replace the existing
 banner slot:
 

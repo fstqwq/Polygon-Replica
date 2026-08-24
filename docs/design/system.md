@@ -8,7 +8,7 @@ The [execution protocol](../protocol/execution.md) defines queued work, restart 
 
 ## State model
 
-Workspaces publish official problem versions. Delivery follows `published source -> native package -> external packages`; adapters never use a workspace or another adapter's output. Statement preview can render workspace or native package source. The [state lifecycle](state-lifecycle.md) defines freeze and invalidation points, and the [problem source protocol](../protocol/problem-source.md) defines authored layout.
+Publishing a workspace creates a published revision. Delivery follows `published revision -> native package -> external packages`; adapters never use a workspace or another adapter's output. Statement preview can render workspace or native package source. The [state lifecycle](state-lifecycle.md) defines freeze and invalidation points, and the [problem source protocol](../protocol/problem-source.md) defines authored layout.
 
 ## Trust boundaries
 

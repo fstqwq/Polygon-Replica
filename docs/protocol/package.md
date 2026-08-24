@@ -3,7 +3,7 @@
 The package lifecycle is one-way:
 
 ```text
-published source -> native package -> external packages
+published revision -> native package -> external packages
 ```
 
 A native package materializes one immutable published Git revision with its committed source, generated testcase inputs, and official answers. Package export creates it; matching evidence from a full verification certifies it. External package adapters derive delivery formats from the same archive.
