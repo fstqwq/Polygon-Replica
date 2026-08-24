@@ -53,6 +53,19 @@ def require_manage_access(ctx: Mapping[str, object]) -> None:
     )
 
 
+def require_problem_access_management(ctx: Mapping[str, object]) -> None:
+    access = _context_row(ctx, "access")
+    if bool(access.get("can_manage_access")):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail=str(
+            access.get("access_manage_block_reason")
+            or "problem write access required"
+        ),
+    )
+
+
 def is_system_admin_user_id(user_id: int) -> bool:
     if user_id <= 0:
         return False

@@ -9,6 +9,7 @@ from app.db import DB, SchemaRequirementsError
 from app.config import ConfigValues, build_config_values
 from app.service.auth.service import AuthService
 from app.service.access.query import AccessQuery
+from app.service.access.command import AccessCommand
 from app.service.agent.service import AgentService
 from app.service.contest.service import ContestService
 from app.service.contest.package import ContestPackageService
@@ -83,6 +84,7 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
     schema_error: SchemaRequirementsError | None = field(init=False, default=None)
     workspace_service: workspace.WorkspaceService = field(init=False)
     access_query: AccessQuery = field(init=False)
+    access_command: AccessCommand = field(init=False)
     auth_service: AuthService = field(init=False)
     agent_service: AgentService = field(init=False)
     contest_service: ContestService = field(init=False)
@@ -212,6 +214,7 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
             self.db, RuntimeStateStore(self.db)
         )
         self.access_query = AccessQuery(self.db)
+        self.access_command = AccessCommand(self.db)
         self.workspace_service = workspace.WorkspaceService(
             self.db,
             self.storage_layout,

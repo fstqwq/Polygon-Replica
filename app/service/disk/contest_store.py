@@ -22,6 +22,7 @@ class ContestContextRecord(TypedDict):
 
 
 class ContestMemberRecord(TypedDict):
+    user_id: int
     username: str
     role: str
     created_at: str
@@ -95,6 +96,7 @@ def _contest_context_record(row: dict[str, object]) -> ContestContextRecord:
 
 def _contest_member_record(row: dict[str, object]) -> ContestMemberRecord:
     return {
+        "user_id": _required_int(row["user_id"], "member user_id"),
         "username": str(row["username"] or ""),
         "role": str(row["role"] or ""),
         "created_at": str(row["created_at"] or ""),
@@ -253,8 +255,8 @@ class ContestDiskStore:
         created_at: str,
         *,
         max_problems: int,
-    ) -> None:
-        def tx(conn: sqlite3.Connection) -> None:
+    ) -> int:
+        def tx(conn: sqlite3.Connection) -> int:
             row = conn.execute(
                 """
                 SELECT COUNT(*) AS problem_count
@@ -266,7 +268,7 @@ class ContestDiskStore:
                 raise ValueError(
                     f"contest already has the configured maximum of {int(max_problems)} problems"
                 )
-            conn.execute(
+            cursor = conn.execute(
                 """
                 INSERT INTO contest_problems(
                     contest_id,idx,problem_id,statement_folder,added_by_user_id,created_at
@@ -274,7 +276,10 @@ class ContestDiskStore:
                 """,
                 [int(contest_id), idx, int(problem_id), "", int(added_by_user_id), created_at],
             )
-        self.db.write_transaction(tx)
+            if cursor.lastrowid is None:
+                raise RuntimeError("contest problem insert did not return an id")
+            return int(cursor.lastrowid)
+        return int(self.db.write_transaction(tx))
 
     def contest_context_row(self, contest_slug: str) -> ContestContextRecord | None:
         row = self.db.fetch_one(
@@ -382,7 +387,8 @@ class ContestDiskStore:
     def member_entries(self, contest_id: int) -> list[ContestMemberRecord]:
         rows = self.db.fetch_all(
             """
-            SELECT u.username,m.role,m.created_at,COALESCE(u.is_system_admin, 0) AS is_system_admin
+            SELECT u.id AS user_id,u.username,m.role,m.created_at,
+                   COALESCE(u.is_system_admin, 0) AS is_system_admin
             FROM contest_members m
             JOIN users u ON u.id=m.user_id
             WHERE m.contest_id=?

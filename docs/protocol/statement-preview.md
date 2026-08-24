@@ -48,9 +48,9 @@ Effective properties are injected as FTL variables and through the `properties` 
 
 Contest PDF preview renders `statements.ftl` with effective properties and ordered problem entries, then compiles the resulting `statements.tex` as one TeX document. `insertBlankPage=true` enables the template's blank-page signal, and `banner` fills the `\StatementBanner` slot. The build includes contest resources, all problem render trees, MetaPost preparation, and two XeLaTeX passes.
 
-The synchronous GET request resolves the current Contest roster and source
+The synchronous GET request resolves the current contest roster and source
 identity, then returns the matching cached or newly compiled PDF inline. There
-is no POST build, preview-ID redirect, or separate Contest PDF file-download
+is no POST build, preview-ID redirect, or separate contest PDF file-download
 stage. `sp-*` remains an internal actor-scoped cache identity rather than a
 public historical download locator. Problem and contest PDF failures use the
 same diagnostic projection: a bounded excerpt beginning at the first LaTeX `!`

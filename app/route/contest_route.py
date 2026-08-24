@@ -5,6 +5,7 @@ from app.impl.contest.access import (
     contest_access_grant,
     contest_access_page,
     contest_access_revoke,
+    contest_problem_access_save,
 )
 from app.impl.contest.overview import (
     contest_build_all_packages,
@@ -142,6 +143,12 @@ router.add_api_route(
 router.add_api_route(
     "/contests/{contest}/access/revoke",
     contest_access_revoke,
+    methods=["POST"],
+)
+
+router.add_api_route(
+    "/contests/{contest}/access/problems/save",
+    contest_problem_access_save,
     methods=["POST"],
 )
 

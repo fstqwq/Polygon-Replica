@@ -191,23 +191,25 @@ def _contest_pages(contest: str) -> tuple[str, ...]:
 def _grant_roles(
     admin: httpx.Client,
     *,
+    sessions: dict[str, httpx.Client],
     post_redirect: PostRedirect,
     problem: str,
     contest: str,
 ) -> None:
-    for username in (ALICE, BOB):
+    for username, role in ((ALICE, "write"), (BOB, "write"), (READER, "read")):
         post_redirect(
             admin,
             f"/problems/{problem}/access/grant",
-            {"target_user": username, "role": "write"},
+            {"target_user": username, "role": role},
         )
-    for username, role in (
-        (ALICE, "write"),
-        (BOB, "write"),
-        (READER, "read"),
-    ):
+    post_redirect(
+        admin,
+        f"/contests/{contest}/access/grant",
+        {"target_user": ALICE, "role": "write"},
+    )
+    for username, role in ((BOB, "write"), (READER, "read")):
         post_redirect(
-            admin,
+            sessions[ALICE],
             f"/contests/{contest}/access/grant",
             {"target_user": username, "role": role},
         )
@@ -241,15 +243,13 @@ def _assert_persisted_roles(problem: str, contest: str) -> None:
                 [contest],
             ).fetchall()
         }
-    expected_problem = {ALICE: "write", BOB: "write"}
+    expected_problem = {ALICE: "write", BOB: "write", READER: "read"}
     expected_contest = {ALICE: "write", BOB: "write", READER: "read"}
     if any(
         problem_roles.get(user) != role
         for user, role in expected_problem.items()
     ):
         raise RuntimeError(f"problem roles were not persisted: {problem_roles!r}")
-    if READER in problem_roles:
-        raise RuntimeError("reader unexpectedly received direct problem access")
     if any(
         contest_roles.get(user) != role
         for user, role in expected_contest.items()
@@ -291,7 +291,11 @@ def _assert_contest_writer_adds_problem(
         f"/contests/{contest}/problems/add",
         {"problem_slugs": addable_problem, "q": ""},
     )
-    if response.headers.get("location") != f"/contests/{contest}/overview":
+    location = response.headers.get("location", "")
+    if not (
+        location.startswith(f"/contests/{contest}/access?focus_problem_id=")
+        and location.endswith("#problem-access-matrix")
+    ):
         raise RuntimeError(
             "ordinary Contest writer add redirected unexpectedly: "
             f"{response.headers!r}"
@@ -326,10 +330,51 @@ def _assert_contest_writer_adds_problem(
             f"ordinary Contest writer add was not persisted correctly: {detail!r}"
         )
 
+    with _connect() as connection:
+        access_ids = connection.execute(
+            """
+            SELECT p.id AS problem_id,
+                   (SELECT id FROM users WHERE username=?) AS bob_id,
+                   (SELECT id FROM users WHERE username=?) AS reader_id
+            FROM problems p
+            WHERE p.slug=?
+            """,
+            [BOB, READER, addable_problem],
+        ).fetchone()
+    if access_ids is None:
+        raise RuntimeError("added Contest Problem access ids are unavailable")
+    problem_id = int(access_ids["problem_id"])
+    bob_id = int(access_ids["bob_id"])
+    reader_id = int(access_ids["reader_id"])
     scoped_path = f"/problems/{addable_problem}/statement?contest={contest}"
+    _assert_get(sessions[BOB], scoped_path, 403, role=BOB)
+    _assert_get(sessions[READER], scoped_path, 403, role=READER)
+    post_redirect(
+        sessions[ALICE],
+        f"/contests/{contest}/access/problems/save",
+        {
+            f"original_role.{problem_id}.{bob_id}": "none",
+            f"role.{problem_id}.{bob_id}": "write",
+            f"original_role.{problem_id}.{reader_id}": "none",
+            f"role.{problem_id}.{reader_id}": "read",
+        },
+    )
+
     for role in (ALICE, BOB, READER):
         _assert_get(sessions[role], scoped_path, 200, role=role)
     _assert_get(sessions[OUTSIDER], scoped_path, 403, role=OUTSIDER)
+    awarded_path = "attachments/matrix-awarded-write.txt"
+    post_redirect(
+        sessions[BOB],
+        f"/problems/{addable_problem}/files/save?contest={contest}",
+        {
+            "path": awarded_path,
+            "content": "direct write granted by Contest access matrix\n",
+            "dir": "attachments",
+        },
+    )
+    if not (_workspace_path(addable_problem, BOB) / awarded_path).is_file():
+        raise RuntimeError("matrix-awarded writer could not edit the added Problem")
 
 
 def _walk_pages(
@@ -391,6 +436,7 @@ def _walk_pages(
 def _assert_write_boundaries(
     *,
     sessions: dict[str, httpx.Client],
+    post_redirect: PostRedirect,
     problem: str,
     contest: str,
 ) -> None:
@@ -407,7 +453,7 @@ def _assert_write_boundaries(
             {"path": denied_path, "content": "outsider", "dir": "attachments"},
         ),
         (
-            ALICE,
+            READER,
             f"/problems/{problem}/access/grant",
             {"target_user": OUTSIDER, "role": "read"},
         ),
@@ -415,6 +461,11 @@ def _assert_write_boundaries(
             READER,
             f"/contests/{contest}/properties/save",
             {"title": "unauthorized", "location": "", "date_text": ""},
+        ),
+        (
+            READER,
+            f"/contests/{contest}/access/revoke",
+            {"target_user": BOB},
         ),
     )
     for role, path, data in denied_requests:
@@ -432,6 +483,28 @@ def _assert_write_boundaries(
     reader_workspace = _workspace_path(problem, READER)
     if (reader_workspace / denied_path).exists():
         raise RuntimeError("read-only user changed the problem workspace")
+    post_redirect(
+        sessions[ALICE],
+        f"/problems/{problem}/access/grant",
+        {"target_user": OUTSIDER, "role": "read"},
+    )
+    _assert_get(
+        sessions[OUTSIDER],
+        f"/problems/{problem}/statement",
+        200,
+        role=OUTSIDER,
+    )
+    post_redirect(
+        sessions[ALICE],
+        f"/problems/{problem}/access/revoke",
+        {"target_user": OUTSIDER},
+    )
+    _assert_get(
+        sessions[OUTSIDER],
+        f"/problems/{problem}/statement",
+        403,
+        role=OUTSIDER,
+    )
     _assert_persisted_roles(problem, contest)
 
 
@@ -445,6 +518,65 @@ def _assert_contest_scoped_problem_links(
     for role in (ALICE, BOB, READER):
         _assert_get(sessions[role], scoped_path, 200, role=role)
     _assert_get(sessions[OUTSIDER], scoped_path, 403, role=OUTSIDER)
+
+
+def _assert_reader_exits_contest(
+    *,
+    sessions: dict[str, httpx.Client],
+    post_redirect: PostRedirect,
+    problem: str,
+    contest: str,
+) -> None:
+    response = post_redirect(
+        sessions[READER],
+        f"/contests/{contest}/access/revoke",
+        {"target_user": READER},
+    )
+    if response.headers.get("location") != "/contests":
+        raise RuntimeError(
+            f"Contest reader exit redirected unexpectedly: {response.headers!r}"
+        )
+
+    with _connect() as connection:
+        membership = connection.execute(
+            """
+            SELECT 1
+            FROM contest_members membership
+            JOIN contests contest ON contest.id=membership.contest_id
+            JOIN users user ON user.id=membership.user_id
+            WHERE contest.slug=? AND user.username=?
+            """,
+            [contest, READER],
+        ).fetchone()
+        direct_role = connection.execute(
+            """
+            SELECT acl.role
+            FROM repo_acl acl
+            JOIN problems problem ON problem.id=acl.problem_id
+            JOIN users user ON user.id=acl.user_id
+            WHERE problem.slug=? AND user.username=?
+            """,
+            [problem, READER],
+        ).fetchone()
+    if membership is not None:
+        raise RuntimeError("Contest reader exit did not remove the membership")
+    if direct_role is None or str(direct_role["role"]) != "read":
+        raise RuntimeError(
+            f"Contest reader exit changed direct Problem access: {direct_role!r}"
+        )
+
+    _assert_get(
+        sessions[READER],
+        f"/contests/{contest}/overview",
+        403,
+        role=READER,
+    )
+    _assert_get(
+        sessions[READER],
+        f"/problems/{problem}/statement",
+        200,
+        role=READER,
+    )
 
 
 def _assert_workspace_base(problem: str, username: str, expected_head: str) -> Path:
@@ -602,6 +734,7 @@ def exercise_role_pages_and_collaboration(
             sessions[username] = register_user(username, password)
         _grant_roles(
             admin,
+            sessions=sessions,
             post_redirect=post_redirect,
             problem=problem,
             contest=contest,
@@ -623,11 +756,18 @@ def exercise_role_pages_and_collaboration(
         )
         _assert_write_boundaries(
             sessions=sessions,
+            post_redirect=post_redirect,
             problem=problem,
             contest=contest,
         )
         _assert_contest_scoped_problem_links(
             sessions=sessions,
+            problem=problem,
+            contest=contest,
+        )
+        _assert_reader_exits_contest(
+            sessions=sessions,
+            post_redirect=post_redirect,
             problem=problem,
             contest=contest,
         )

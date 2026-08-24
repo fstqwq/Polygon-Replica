@@ -204,7 +204,8 @@ class WorkspaceDiskStore:
     def problem_acl_entries(self, problem_id: int) -> list[ProblemAclEntry]:
         rows = self.db.fetch_all(
             """
-            SELECT u.username,a.role,a.created_at,COALESCE(u.is_system_admin, 0) AS is_system_admin
+            SELECT u.id AS user_id,u.username,a.role,a.created_at,
+                   COALESCE(u.is_system_admin, 0) AS is_system_admin
             FROM repo_acl a
             JOIN users u ON u.id=a.user_id
             WHERE a.problem_id=?
@@ -218,6 +219,7 @@ class WorkspaceDiskStore:
         for row in rows:
             entries.append(
                 {
+                    "user_id": int(row["user_id"]),
                     "username": str(row["username"]),
                     "role": str(row["role"]),
                     "created_at": str(row["created_at"]),

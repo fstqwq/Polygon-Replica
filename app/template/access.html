@@ -7,7 +7,7 @@
   <section class="content-section access-summary" aria-label="Current problem access">
     <h2>Access</h2>
     <p><strong>Role:</strong> {{ ctx.access.role }}</p>
-    <p><strong>Capabilities:</strong> {{ "read/write" if ctx.access.can_write else "read-only" }}{% if ctx.access.can_manage %}, manage access{% endif %}</p>
+    <p><strong>Capabilities:</strong> {{ "read/write" if ctx.access.can_write else "read-only" }}{% if ctx.access.can_manage_access %}, manage access{% endif %}</p>
     {% if not ctx.access.can_write %}
     <p class="flash">Read-only access.</p>
     {% endif %}
@@ -15,7 +15,7 @@
 
   <section class="content-section access-members">
     <h2>Problem Access</h2>
-    <p class="muted">Owners and system admins manage roles. Owners are fixed; users must register first.</p>
+    <p class="muted">Writers manage direct roles for other users. Owners and system administrators are fixed; users must register first.</p>
     {% if acl_entries %}
     <div class="table-scroll">
     <table class="table-base access-members-table">
@@ -27,9 +27,13 @@
         <td class="access-granted table-cell-nowrap">{{ row.created_at | local_time }}</td>
         <td class="access-actions table-cell-actions">
           <div class="access-actions-inner">
-          {% if ctx.access.can_manage %}
+          {% if ctx.access.can_manage_access %}
           {% if row.role == "owner" %}
-          <span class="muted">fixed owner</span>
+          <span class="muted">owner</span>
+          {% elif row.is_system_admin %}
+          <span class="muted">system admin</span>
+          {% elif row.user_id == ctx.user.id %}
+          <span class="muted">your access</span>
           {% else %}
           <form class="inline-form" method="post" action="{{ problem_href('workspace_access_grant') }}">
             <input type="hidden" name="target_user" value="{{ row.username }}" />
@@ -51,7 +55,7 @@
           </form>
           {% endif %}
           {% else %}
-          <span class="muted">owner or admin</span>
+          <span class="muted">problem write required</span>
           {% endif %}
           </div>
         </td>
@@ -62,7 +66,7 @@
     {% else %}
     <p class="muted">No members.</p>
     {% endif %}
-    {% if ctx.access.can_manage %}
+    {% if ctx.access.can_manage_access %}
     <form class="access-grant-form" method="post" action="{{ problem_href('workspace_access_grant') }}">
       <div class="form-field-stack">
         <label for="target-user">User</label>
@@ -79,7 +83,7 @@
       <button class="btn" type="submit">Grant / Update</button>
     </form>
     {% else %}
-    <p class="muted">Owner or system admin access required.</p>
+    <p class="muted">Problem write access required.</p>
     {% endif %}
   </section>
 </div>

@@ -450,8 +450,11 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertEqual(add_resp.status_code, 303)
         self.assertTrue(
             add_resp.headers["location"].startswith(
-                f"/contests/{contest_slug}/overview"
+                f"/contests/{contest_slug}/access?focus_problem_id="
             )
+        )
+        self.assertTrue(
+            add_resp.headers["location"].endswith("#problem-access-matrix")
         )
         rows = db_fetch_all(
             "SELECT id,problem_id,idx FROM contest_problems WHERE contest_id=? ORDER BY idx ASC, id ASC",
@@ -579,10 +582,10 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertIsNotNone(problem_row)
         self.assertEqual(int(rows[0]["problem_id"]), int(problem_row["id"]))
 
-    def test_contest_membership_grants_dynamic_problem_access_without_sync(self) -> None:
-        contest_slug = f"ui-contest-dynamic-access-{uuid.uuid4().hex[:8]}"
-        contest_id = self._create_contest(contest_slug, "Dynamic Access Contest")
-        problem_slug = f"alice/ui-dynamic-access-{uuid.uuid4().hex[:8]}"
+    def test_contest_membership_does_not_grant_problem_access(self) -> None:
+        contest_slug = f"ui-contest-independent-access-{uuid.uuid4().hex[:8]}"
+        contest_id = self._create_contest(contest_slug, "Independent Access Contest")
+        problem_slug = f"alice/ui-independent-access-{uuid.uuid4().hex[:8]}"
         workspace_service.ensure_problem(problem_slug)
         workspace_service.grant_repo_access(problem_slug, "alice", "owner")
         alice_row = db_fetch_one("SELECT id FROM users WHERE username='alice'")
@@ -607,7 +610,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertEqual(grant.status_code, 303)
         bob = db_fetch_one("SELECT id FROM users WHERE username='bob'")
         self.assertIsNotNone(bob)
-        self.assertTrue(runtime.access_query.problem_context(problem_id, int(bob["id"]))["can_write"])
+        self.assertFalse(runtime.access_query.problem_context(problem_id, int(bob["id"]))["can_read"])
         self.assertEqual(
             db_fetch_all(
                 "SELECT role FROM repo_acl WHERE problem_id=? AND user_id=?",
@@ -854,3 +857,9 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
 
         revoke = contest_access_revoke(contest=contest_slug, user="alice", target_user="alice")
         self.assertEqual(revoke.status_code, 303)
+        owner_membership = db_fetch_one(
+            "SELECT role FROM contest_members WHERE contest_id=? AND user_id=(SELECT id FROM users WHERE username='alice')",
+            [contest_id],
+        )
+        self.assertIsNotNone(owner_membership)
+        self.assertEqual(str(owner_membership["role"]), "owner")

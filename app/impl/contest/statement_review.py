@@ -36,6 +36,28 @@ def _language(contest_id: int, value: str) -> str:
     return language
 
 
+def _require_roster_problem_read(ctx: dict[str, object]) -> None:
+    contest = ctx["contest"]
+    user = ctx["user"]
+    if not isinstance(contest, dict) or not isinstance(user, dict):
+        raise RuntimeError("invalid Contest page context")
+    rows = runtime().contest_service.contest_problems(int(contest["id"]))
+    access = runtime().access_query.problem_contexts(
+        [int(row["problem_id"]) for row in rows],
+        int(user["id"]),
+    )
+    blocked = [
+        str(row["problem_slug"])
+        for row in rows
+        if not access[int(row["problem_id"])]["can_read"]
+    ]
+    if blocked:
+        raise HTTPException(
+            status_code=403,
+            detail="problem read access required: " + ", ".join(blocked),
+        )
+
+
 def _review_items(
     contest_id: int,
     contest_slug: str,
@@ -102,6 +124,7 @@ def contest_statement_review_page(
     language: str = "",
 ):
     ctx = _contest_ctx(contest, user, "overview", request=request)
+    _require_roster_problem_read(ctx)
     contest_id = int(ctx["contest"]["id"])
     source_kind = _source(source)
     safe_language = _language(contest_id, language)
@@ -147,6 +170,7 @@ def contest_statement_review_build(
     language: str = "",
 ):
     ctx = _contest_ctx(contest, user, "overview", request=request)
+    _require_roster_problem_read(ctx)
     source_kind = _source(source)
     safe_language = _language(int(ctx["contest"]["id"]), language)
     runtime().contest_statement_preview_service.build_html(
@@ -171,6 +195,7 @@ def contest_statement_review_resource(
     user: Annotated[str, Depends(require_session_user)],
 ):
     ctx = _contest_ctx(contest, user, "overview", request=request)
+    _require_roster_problem_read(ctx)
     row = runtime().statement_preview_service.row(
         preview_id,
         actor_user_id=int(ctx["user"]["id"]),
@@ -207,6 +232,7 @@ def contest_statement_pdf_page(
     language: str = "",
 ):
     ctx = _contest_ctx(contest, user, "overview", request=request)
+    _require_roster_problem_read(ctx)
     contest_id = int(ctx["contest"]["id"])
     source_kind = _source(source)
     safe_language = _language(contest_id, language)

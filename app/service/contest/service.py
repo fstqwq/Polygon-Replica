@@ -28,6 +28,7 @@ from app.service.statement.context import normalize_statement_language
 
 
 class ContestMemberEntry(TypedDict):
+    user_id: int
     username: str
     role: str
     created_at: str
@@ -374,8 +375,8 @@ class ContestService:
             created_at=now_iso(),
         )
 
-    def add_problem(self, contest_id: int, idx: str, problem_id: int, added_by_user_id: int) -> None:
-        self._store.add_problem(
+    def add_problem(self, contest_id: int, idx: str, problem_id: int, added_by_user_id: int) -> int:
+        contest_problem_id = self._store.add_problem(
             int(contest_id),
             normalize_contest_problem_idx(idx),
             int(problem_id),
@@ -384,6 +385,7 @@ class ContestService:
             max_problems=self._config_values.integer("CONTEST_MAX_PROBLEMS"),
         )
         self._store.bump_source_generation(int(contest_id))
+        return contest_problem_id
 
     def contest_context(self, contest_slug: str) -> ContestContext | None:
         row = self._store.contest_context_row(contest_slug)
@@ -413,6 +415,7 @@ class ContestService:
         for row in self._store.member_entries(int(contest_id)):
             result.append(
                 {
+                    "user_id": int(row["user_id"]),
                     "username": str(row["username"]),
                     "role": contest_role(str(row["role"])),
                     "created_at": str(row["created_at"]),

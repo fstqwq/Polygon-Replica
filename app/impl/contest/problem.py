@@ -1,5 +1,5 @@
 from typing import Annotated
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlencode
 
 from fastapi import Depends, Form, HTTPException, Request
 
@@ -109,6 +109,7 @@ def contest_problems_add(contest: str, user: Annotated[str, Depends(require_sess
     contest_id = int(ctx["contest"]["id"])
     user_id = int(ctx["user"]["id"])
     added = 0
+    added_contest_problem_ids: list[int] = []
     failed: list[str] = []
     for slug in safe_slugs:
         problem_row = runtime().contest_service.problem_by_slug(slug)
@@ -125,8 +126,14 @@ def contest_problems_add(contest: str, user: Annotated[str, Depends(require_sess
             continue
         try:
             idx = runtime().contest_service.next_problem_index(contest_id)
-            runtime().contest_service.add_problem(contest_id, idx, problem_id, user_id)
+            contest_problem_id = runtime().contest_service.add_problem(
+                contest_id,
+                idx,
+                problem_id,
+                user_id,
+            )
             added += 1
+            added_contest_problem_ids.append(contest_problem_id)
         except Exception as exc:
             failed.append(f"{slug}: {exc}")
     msg = f"added {added} problem(s)"
@@ -135,7 +142,14 @@ def contest_problems_add(contest: str, user: Annotated[str, Depends(require_sess
     if added:
         return _contest_redirect(
             str(ctx["contest"]["slug"]),
-            "overview",
+            "access",
+            query=urlencode(
+                [
+                    ("focus_problem_id", contest_problem_id)
+                    for contest_problem_id in added_contest_problem_ids
+                ]
+            ),
+            fragment="problem-access-matrix",
             message=msg,
         )
     safe_query = q.strip()

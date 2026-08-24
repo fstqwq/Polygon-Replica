@@ -2,7 +2,7 @@ import sqlite3
 
 from app.db import DB
 from app.service.access.model import AccessRole, ProblemParticipationRow
-from app.service.access.policy import access_role, derived_problem_role, stronger_role
+from app.service.access.policy import access_role
 
 
 class AccessStore:
@@ -41,7 +41,34 @@ class AccessStore:
             result[int(row["problem_id"])] = access_role(str(row["role"]))
         return result
 
-    def effective_problem_roles(
+    def direct_problem_roles_for_users(
+        self,
+        problem_ids: list[int],
+        user_ids: list[int],
+    ) -> dict[tuple[int, int], AccessRole]:
+        problems = sorted({int(problem_id) for problem_id in problem_ids})
+        users = sorted({int(user_id) for user_id in user_ids})
+        if not problems or not users:
+            return {}
+        problem_placeholders = ",".join("?" for _problem_id in problems)
+        user_placeholders = ",".join("?" for _user_id in users)
+        rows = self._db.fetch_all(
+            f"""
+            SELECT problem_id,user_id,role
+            FROM repo_acl
+            WHERE problem_id IN ({problem_placeholders})
+              AND user_id IN ({user_placeholders})
+            """,
+            [*problems, *users],
+        )
+        return {
+            (int(row["problem_id"]), int(row["user_id"])): access_role(
+                str(row["role"])
+            )
+            for row in rows
+        }
+
+    def problem_roles(
         self,
         problem_ids: list[int],
         user_id: int,
@@ -51,28 +78,7 @@ class AccessStore:
             return {}
         if self.is_system_admin(user_id):
             return {problem_id: "admin" for problem_id in ids}
-        placeholders = ",".join("?" for _problem_id in ids)
-        rows = self._db.fetch_all(
-            f"""
-            SELECT problem_id,role,'direct' AS source
-            FROM repo_acl
-            WHERE user_id=? AND problem_id IN ({placeholders})
-            UNION ALL
-            SELECT cp.problem_id,cm.role,'contest' AS source
-            FROM contest_problems cp
-            JOIN contest_members cm ON cm.contest_id=cp.contest_id
-            WHERE cm.user_id=? AND cp.problem_id IN ({placeholders})
-            """,
-            [int(user_id), *ids, int(user_id), *ids],
-        )
-        result = {problem_id: access_role(None) for problem_id in ids}
-        for row in rows:
-            problem_id = int(row["problem_id"])
-            role = access_role(str(row["role"]))
-            if str(row["source"]) == "contest":
-                role = derived_problem_role(role)
-            result[problem_id] = stronger_role(result[problem_id], role)
-        return result
+        return self.direct_problem_roles(ids, user_id)
 
     @staticmethod
     def problem_role_in_transaction(
@@ -89,26 +95,15 @@ class AccessStore:
             return "none"
         if int(user[0] or 0) == 1:
             return "admin"
-        rows = connection.execute(
+        row = connection.execute(
             """
-            SELECT role,'direct' AS source
+            SELECT role
             FROM repo_acl
             WHERE problem_id=? AND user_id=?
-            UNION ALL
-            SELECT cm.role,'contest' AS source
-            FROM contest_problems cp
-            JOIN contest_members cm ON cm.contest_id=cp.contest_id
-            WHERE cp.problem_id=? AND cm.user_id=?
             """,
-            [int(problem_id), int(user_id), int(problem_id), int(user_id)],
-        ).fetchall()
-        role: AccessRole = "none"
-        for row in rows:
-            candidate = access_role(str(row[0]))
-            if str(row[1]) == "contest":
-                candidate = derived_problem_role(candidate)
-            role = stronger_role(role, candidate)
-        return role
+            [int(problem_id), int(user_id)],
+        ).fetchone()
+        return access_role(None if row is None else str(row[0]))
 
     def contest_role(self, contest_id: int, user_id: int) -> AccessRole:
         if self.is_system_admin(user_id):
@@ -118,6 +113,27 @@ class AccessStore:
             [int(contest_id), int(user_id)],
         )
         return access_role(None if row is None else str(row["role"]))
+
+    @staticmethod
+    def contest_role_in_transaction(
+        connection: sqlite3.Connection,
+        *,
+        contest_id: int,
+        user_id: int,
+    ) -> AccessRole:
+        user = connection.execute(
+            "SELECT is_system_admin FROM users WHERE id=?",
+            [int(user_id)],
+        ).fetchone()
+        if user is None:
+            return "none"
+        if int(user[0] or 0) == 1:
+            return "admin"
+        row = connection.execute(
+            "SELECT role FROM contest_members WHERE contest_id=? AND user_id=?",
+            [int(contest_id), int(user_id)],
+        ).fetchone()
+        return access_role(None if row is None else str(row[0]))
 
     def workspace_belongs_to_user(self, workspace_id: int, user_id: int) -> bool:
         row = self._db.fetch_one(
@@ -129,23 +145,16 @@ class AccessStore:
     def accessible_problem_slugs(self, user_id: int, *, limit: int) -> list[str]:
         rows = self._db.fetch_all(
             """
-            WITH accessible(problem_id) AS (
-                SELECT problem_id FROM repo_acl WHERE user_id=?
-                UNION
-                SELECT cp.problem_id
-                FROM contest_problems cp
-                JOIN contest_members cm ON cm.contest_id=cp.contest_id
-                WHERE cm.user_id=?
-            )
             SELECT p.slug
-            FROM accessible a
+            FROM repo_acl a
             JOIN problems p ON p.id=a.problem_id
             LEFT JOIN workspaces w ON w.problem_id=p.id AND w.user_id=?
+            WHERE a.user_id=?
             ORDER BY COALESCE(NULLIF(w.updated_at, ''), p.created_at) DESC,
                      p.slug ASC
             LIMIT ?
             """,
-            [int(user_id), int(user_id), int(user_id), max(1, int(limit))],
+            [int(user_id), int(user_id), max(1, int(limit))],
         )
         return [str(row["slug"]) for row in rows]
 
@@ -181,23 +190,14 @@ class AccessStore:
     ) -> list[str]:
         rows = self._db.fetch_all(
             """
-            WITH accessible(problem_id) AS (
-                SELECT problem_id FROM repo_acl WHERE user_id=?
-                UNION
-                SELECT cp.problem_id
-                FROM contest_problems cp
-                JOIN contest_members cm ON cm.contest_id=cp.contest_id
-                WHERE cm.user_id=?
-            )
             SELECT p.slug
-            FROM accessible a
+            FROM repo_acl a
             JOIN problems p ON p.id=a.problem_id
-            WHERE p.slug LIKE ?
+            WHERE a.user_id=? AND p.slug LIKE ?
             ORDER BY p.slug ASC
             LIMIT ?
             """,
             [
-                int(user_id),
                 int(user_id),
                 f"%/{leaf}",
                 max(1, int(limit)),
@@ -241,30 +241,7 @@ class AccessStore:
         else:
             rows = self._db.fetch_all(
                 """
-                WITH grants(problem_id,role_rank) AS (
-                    SELECT problem_id,
-                           CASE role
-                               WHEN 'owner' THEN 3
-                               WHEN 'write' THEN 2
-                               ELSE 1
-                           END
-                    FROM repo_acl WHERE user_id=?
-                    UNION ALL
-                    SELECT cp.problem_id,
-                           CASE WHEN cm.role IN ('owner','write') THEN 2 ELSE 1 END
-                    FROM contest_problems cp
-                    JOIN contest_members cm ON cm.contest_id=cp.contest_id
-                    WHERE cm.user_id=?
-                ), effective AS (
-                    SELECT problem_id,MAX(role_rank) AS role_rank
-                    FROM grants GROUP BY problem_id
-                )
-                SELECT p.id,p.slug,
-                       CASE e.role_rank
-                           WHEN 3 THEN 'owner'
-                           WHEN 2 THEN 'write'
-                           ELSE 'read'
-                       END AS role,
+                SELECT p.id,p.slug,a.role,
                        w.id AS workspace_id,w.path,w.branch,w.head_commit,
                        w.dirty,w.updated_at,w.revision_local,
                        w.revision_upstream,w.revision_missing,
@@ -272,14 +249,15 @@ class AccessStore:
                        w.revision_ahead_count,w.revision_behind_count,
                        COALESCE(NULLIF(w.updated_at, ''), p.created_at)
                            AS last_updated_at
-                FROM effective e
-                JOIN problems p ON p.id=e.problem_id
+                FROM repo_acl a
+                JOIN problems p ON p.id=a.problem_id
                 LEFT JOIN workspaces w
                   ON w.problem_id=p.id AND w.user_id=?
+                WHERE a.user_id=?
                 ORDER BY last_updated_at DESC, p.slug ASC
                 LIMIT ?
                 """,
-                [int(user_id), int(user_id), int(user_id), max(1, int(limit))],
+                [int(user_id), int(user_id), max(1, int(limit))],
             )
         result: list[ProblemParticipationRow] = []
         for row in rows:

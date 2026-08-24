@@ -79,7 +79,7 @@ class TestAccessService(DBTestBase):
         )
         return contest_id
 
-    def test_problem_role_combines_without_manage_escalation(self) -> None:
+    def test_contest_membership_does_not_grant_problem_access(self) -> None:
         problem_id, owner_user_id = self._problem()
         contest_id = self._contest(owner_user_id, problem_id)
         member_user_id = self._user_id(f"member-{self.user}")
@@ -91,13 +91,15 @@ class TestAccessService(DBTestBase):
 
         access = self.access_query.problem_context(problem_id, member_user_id)
 
-        self.assertEqual(access["role"], "write")
-        self.assertTrue(access["can_write"])
+        self.assertEqual(access["role"], "none")
+        self.assertFalse(access["can_read"])
+        self.assertFalse(access["can_write"])
+        self.assertFalse(access["can_manage_access"])
         self.assertFalse(access["can_manage"])
-        self.assertTrue(access["can_rejudge"])
-        self.assertTrue(access["can_create_packages"])
+        self.assertFalse(access["can_rejudge"])
+        self.assertFalse(access["can_create_packages"])
 
-    def test_direct_acl_outweighs_contest_derived_role(self) -> None:
+    def test_direct_problem_acl_is_independent_from_contest_role(self) -> None:
         problem_id, owner_user_id = self._problem()
         contest_id = self._contest(owner_user_id, problem_id)
         direct_owner = f"direct-{self.user}"
@@ -200,7 +202,7 @@ class TestAccessService(DBTestBase):
         self.assertTrue(owner["can_write"])
         self.assertTrue(owner["can_manage"])
 
-    def test_problem_listing_uses_the_same_effective_role(self) -> None:
+    def test_problem_listing_uses_only_direct_acl(self) -> None:
         problem_id, owner_user_id = self._problem()
         contest_id = self._contest(owner_user_id, problem_id)
         member_user_id = self._user_id(f"member-{self.user}")
@@ -218,11 +220,77 @@ class TestAccessService(DBTestBase):
             limit=20,
         )
 
+        self.assertNotIn(self.problem, [row["slug"] for row in rows])
+
+        self.workspace_service.grant_repo_access(
+            self.problem,
+            f"member-{self.user}",
+            "write",
+        )
+        rows = self.access_query.participating_problem_rows(
+            member_user_id,
+            limit=20,
+        )
+
         row = next(row for row in rows if row["slug"] == self.problem)
         self.assertEqual(row["role"], "write")
         self.assertEqual(
             row["role"],
             self.access_query.problem_context(problem_id, member_user_id)["role"],
+        )
+
+    def test_problem_writer_manages_other_direct_acl_but_not_fixed_roles(self) -> None:
+        problem_id, owner_user_id = self._problem()
+        writer = f"writer-{self.user}"
+        target = f"target-{self.user}"
+        admin = f"admin-{self.user}"
+        writer_user_id = self._user_id(writer)
+        target_user_id = self._user_id(target)
+        admin_user_id = self._user_id(admin)
+        self.workspace_service.grant_repo_access(self.problem, writer, "write")
+        isolated_db_execute(
+            self.db,
+            "UPDATE users SET is_system_admin=1 WHERE id=?",
+            [admin_user_id],
+        )
+
+        result = self.access_command.set_problem_access(
+            actor_user_id=writer_user_id,
+            problem_id=problem_id,
+            target_username=target,
+            role="write",
+        )
+
+        self.assertEqual(result["target_user_id"], target_user_id)
+        self.assertEqual(
+            self.access_query.problem_context(problem_id, target_user_id)["role"],
+            "write",
+        )
+        writer_access = self.access_query.problem_context(problem_id, writer_user_id)
+        self.assertTrue(writer_access["can_manage_access"])
+        self.assertFalse(writer_access["can_manage"])
+        for fixed_target in (writer, self.user, admin):
+            with self.subTest(target=fixed_target):
+                with self.assertRaises(ValueError):
+                    self.access_command.set_problem_access(
+                        actor_user_id=writer_user_id,
+                        problem_id=problem_id,
+                        target_username=fixed_target,
+                        role="read",
+                    )
+
+        self.access_command.revoke_problem_access(
+            actor_user_id=writer_user_id,
+            problem_id=problem_id,
+            target_username=target,
+        )
+        self.assertEqual(
+            self.access_query.problem_context(problem_id, target_user_id)["role"],
+            "none",
+        )
+        self.assertEqual(
+            self.access_query.problem_context(problem_id, owner_user_id)["role"],
+            "owner",
         )
 
     def test_package_jobs_share_only_succeeded_or_manager_visible_history(self) -> None:

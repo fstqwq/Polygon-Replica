@@ -495,6 +495,11 @@ class TestAgentAPI(E2ETestBase):
             self.assertIsNotNone(row)
             roster_items.append((int(row["id"]), label, problem_slug))
         runtime.contest_service.grant_member_role(contest_id, username, "read")
+        workspace_service.grant_repo_access(
+            roster_items[0][2],
+            username,
+            "read",
+        )
 
         with TestClient(app, raise_server_exceptions=False) as client:
             connect = self._connect_agent(client, auth_cookie)
@@ -592,23 +597,24 @@ class TestAgentAPI(E2ETestBase):
                 headers=headers,
             )
             self.assertEqual(revoked.status_code, 403, revoked.text)
-            ordinary_hidden = client.get(
-                "/agent/v1/workspace/status",
-                params={"problem": roster_items[0][2]},
-                headers=headers,
-            )
-            self.assertEqual(ordinary_hidden.status_code, 404, ordinary_hidden.text)
-            workspace_service.grant_repo_access(
-                roster_items[0][2],
-                username,
-                "read",
-            )
             ordinary_direct = client.get(
                 "/agent/v1/workspace/status",
                 params={"problem": roster_items[0][2]},
                 headers=headers,
             )
             self.assertEqual(ordinary_direct.status_code, 200, ordinary_direct.text)
+            problem_id = workspace_service.known_problem_id(roster_items[0][2])
+            self.assertIsNotNone(problem_id)
+            workspace_service.revoke_repo_access_for_problem_id(
+                int(problem_id),
+                username,
+            )
+            ordinary_hidden = client.get(
+                "/agent/v1/workspace/status",
+                params={"problem": roster_items[0][2]},
+                headers=headers,
+            )
+            self.assertEqual(ordinary_hidden.status_code, 404, ordinary_hidden.text)
 
     def test_agent_auth_status_reports_general_scope_and_individual_grants(self) -> None:
         username = self.random_id("agent-status")

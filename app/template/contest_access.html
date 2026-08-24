@@ -1,4 +1,5 @@
 {% extends "contest_base.html" %}
+{% block page_scripts %}<script type="module" src="{{ static_asset_url('js/contest_access.js') }}"></script>{% endblock %}
 {% block content %}
 <h1 class="page-title">Access</h1>
 
@@ -12,7 +13,7 @@
   <form class="contest-access-grant" method="post" action="/contests/{{ ctx.contest.slug }}/access/grant">
     <div class="form-field-stack">
       <label for="contest-target-user">User</label>
-      <input id="contest-target-user" name="target_user" autocomplete="off" />
+      <input id="contest-target-user" name="target_user" autocomplete="off" required />
     </div>
     <div class="form-field-stack contest-access-role-field">
       <label for="contest-target-role">Role</label>
@@ -29,39 +30,44 @@
 <section class="content-section-plain contest-manage-section" aria-labelledby="contest-members-heading">
   <div class="workspace-section-head">
     <h2 id="contest-members-heading">Members</h2>
-    <span class="muted contest-member-count">{{ entries | length }} total</span>
   </div>
-  <p class="muted contest-access-note">
-    Contest membership grants problem access dynamically: read members can read roster problems, while write members and the
-    contest owner can edit them. Direct problem ACLs remain independent.
-  </p>
   {% if entries %}
   <table class="table-base table-compact contest-members-table">
     <tr>
       <th>User</th>
       <th>Role</th>
       <th>Added</th>
-      {% if ctx.access.can_manage %}<th>Actions</th>{% endif %}
+      {% if show_member_actions %}<th>Actions</th>{% endif %}
     </tr>
     {% for row in entries %}
-    <tr>
+    <tr{% if row.focused %} class="contest-access-focus"{% endif %}>
       <td>{{ row.username }}</td>
       <td>{{ row.role }}</td>
       <td>{{ row.created_at | local_time }}</td>
-      {% if ctx.access.can_manage %}
+      {% if show_member_actions %}
       <td class="contest-member-actions">
-        {% if row.role != "owner" %}
+        {% if row.role == "owner" %}
+        <span class="muted">owner</span>
+        {% elif row.can_exit %}
         <form
           method="post"
           action="/contests/{{ ctx.contest.slug }}/access/revoke"
           class="inline-form"
-          data-confirm-message="Revoke contest membership for {{ row.username }}? Contest-derived problem access ends immediately; direct problem ACLs remain unchanged."
+          data-confirm-message="Exit this contest?"
+        >
+          <input type="hidden" name="target_user" value="{{ row.username }}" />
+          <button class="linkish-button danger-link" type="submit">Exit</button>
+        </form>
+        {% elif ctx.access.can_manage %}
+        <form
+          method="post"
+          action="/contests/{{ ctx.contest.slug }}/access/revoke"
+          class="inline-form"
+          data-confirm-message="Revoke contest membership for {{ row.username }}? Direct Problem access will remain unchanged."
         >
           <input type="hidden" name="target_user" value="{{ row.username }}" />
           <button class="linkish-button danger-link" type="submit">Revoke</button>
         </form>
-        {% else %}
-        <span class="muted">fixed owner</span>
         {% endif %}
       </td>
       {% endif %}
@@ -73,7 +79,165 @@
   {% endif %}
 </section>
 
-{% if not ctx.access.can_manage %}
-<p class="muted">Owner or system admin access required.</p>
-{% endif %}
+<section
+  id="problem-access-matrix"
+  class="content-section-plain contest-manage-section contest-problem-access-section"
+  aria-labelledby="contest-problem-access-heading"
+>
+  <div class="workspace-section-head">
+    <h2 id="contest-problem-access-heading">Problem Access</h2>
+  </div>
+  {% if matrix_rows and entries %}
+  <form method="post" action="/contests/{{ ctx.contest.slug }}/access/problems/save">
+    <div class="contest-access-matrix-scroll" tabindex="0" aria-label="Problem access matrix">
+      <table class="table-base table-compact contest-access-matrix">
+        <colgroup>
+          <col class="contest-access-problem-name-track" />
+          <col class="contest-access-problem-bulk-track" />
+          {% for member in entries %}<col class="contest-access-user-track" />{% endfor %}
+        </colgroup>
+        <thead>
+          <tr class="contest-access-matrix-head-labels">
+            <th class="contest-access-problem-heading" colspan="2">Problem</th>
+            {% for member in entries %}
+            <th
+              class="contest-access-user-heading{% if member.focused %} contest-access-focus{% endif %}"
+              data-access-user="{{ member.user_id }}"
+              {% if member.user_id == focus_user_id %}data-access-focus-primary="1"{% endif %}
+            >
+              <span class="contest-access-user-name">{{ member.username }}</span>
+            </th>
+            {% endfor %}
+          </tr>
+          <tr class="contest-access-matrix-head-controls">
+            <th class="contest-access-problem-controls-spacer" colspan="2">
+              {% if matrix_has_editable %}
+              <span class="contest-access-select-control">
+              <select
+                class="contest-access-bulk-select"
+                data-matrix-all-bulk="1"
+                aria-label="Set all manageable Problems and users"
+              >
+                <option value="">For all problems and users</option>
+                {% for option in repo_role_options %}
+                <option value="{{ option }}">{{ option }}</option>
+                {% endfor %}
+              </select>
+                <span class="contest-access-select-label" aria-hidden="true">
+                  <span>For all problems and users</span>
+                  <span class="contest-access-select-chevron"></span>
+                </span>
+              </span>
+              {% endif %}
+            </th>
+            {% for member in entries %}
+            <th class="contest-access-user-bulk{% if member.focused %} contest-access-focus{% endif %}">
+              {% if member.can_bulk_edit %}
+              <span class="contest-access-select-control">
+              <select
+                class="contest-access-bulk-select"
+                data-matrix-column-bulk="{{ member.user_id }}"
+                aria-label="Set all manageable Problems for {{ member.username }}"
+              >
+                <option value="">For all</option>
+                {% for option in repo_role_options %}
+                <option value="{{ option }}">{{ option }}</option>
+                {% endfor %}
+              </select>
+                <span class="contest-access-select-label" aria-hidden="true">
+                  <span>For all</span>
+                  <span class="contest-access-select-chevron"></span>
+                </span>
+              </span>
+              {% endif %}
+            </th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in matrix_rows %}
+          <tr
+            class="{% if row.focused %}contest-access-focus{% endif %}"
+            data-access-problem-row="{{ row.contest_problem_id }}"
+            {% if focus_problem_ids and row.contest_problem_id == focus_problem_ids[0] %}data-access-focus-primary="1"{% endif %}
+          >
+            <th class="contest-access-problem-name-column" scope="row" title="{{ row.problem_slug }}">
+              <span class="contest-access-problem-name"><code>{{ row.idx }}</code><span aria-hidden="true"> - </span>{{ row.slug_leaf }}</span>
+            </th>
+            <td class="contest-access-problem-bulk-column">
+              {% if row.can_bulk_edit %}
+              <span class="contest-access-select-control">
+              <select
+                class="contest-access-bulk-select"
+                data-matrix-row-bulk="{{ row.problem_id }}"
+                aria-label="Set all manageable users for {{ row.problem_slug }}"
+              >
+                <option value="">For all</option>
+                {% for option in repo_role_options %}
+                <option value="{{ option }}">{{ option }}</option>
+                {% endfor %}
+              </select>
+                <span class="contest-access-select-label" aria-hidden="true">
+                  <span>For all</span>
+                  <span class="contest-access-select-chevron"></span>
+                </span>
+              </span>
+              {% endif %}
+            </td>
+            {% for cell in row.cells %}
+            <td
+              class="contest-access-cell{% if cell.focused %} contest-access-focus{% endif %}"
+              data-access-user="{{ cell.target_user_id }}"
+            >
+              {% if cell.can_edit %}
+              <input
+                type="hidden"
+                name="original_role.{{ row.problem_id }}.{{ cell.target_user_id }}"
+                value="{{ cell.role }}"
+              />
+              <span class="contest-access-select-control">
+                <select
+                  name="role.{{ row.problem_id }}.{{ cell.target_user_id }}"
+                  data-matrix-role="1"
+                  data-role-tone="{{ cell.role }}"
+                  data-problem-id="{{ row.problem_id }}"
+                  data-user-id="{{ cell.target_user_id }}"
+                  aria-label="{{ row.problem_slug }} access for {{ entries[loop.index0].username }}"
+                >
+                  {% for option in repo_role_options %}
+                  <option value="{{ option }}"{% if option == cell.role %} selected{% endif %}>{{ option }}</option>
+                  {% endfor %}
+                </select>
+                <span class="contest-access-select-label" data-role-tone="{{ cell.role }}" aria-hidden="true">
+                  <span data-matrix-role-label>{{ cell.role }}</span>
+                  <span class="contest-access-select-chevron"></span>
+                </span>
+              </span>
+              {% else %}
+              <span
+                class="contest-access-role-text {% if cell.fixed %}contest-access-fixed-role{% else %}contest-access-readonly-role{% endif %}"
+                data-role-tone="{{ cell.display_role }}"
+                {% if cell.fixed_reason %}title="{{ cell.fixed_reason }}"{% endif %}
+              >{{ cell.display_role }}</span>
+              {% endif %}
+            </td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if ctx.access.can_manage %}
+    <div class="contest-management-actions">
+      <button class="btn" type="submit"{% if not matrix_has_editable %} disabled{% endif %}>Save Problem Access</button>
+    </div>
+    {% endif %}
+  </form>
+  {% elif not matrix_rows %}
+  <p class="muted">Add Problems to this Contest before assigning Problem access.</p>
+  {% else %}
+  <p class="muted">Add Contest members before assigning Problem access.</p>
+  {% endif %}
+</section>
+
 {% endblock %}

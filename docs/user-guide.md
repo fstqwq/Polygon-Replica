@@ -26,11 +26,11 @@ Native Package（有共享 Verification 认证，或 not verified）
           v
 External Package（目标比赛系统格式）
 
-Contest = 有序题目列表 + 比赛属性 + 比赛题面模板
+contest = 有序题目列表 + 比赛属性 + 比赛题面模板
         = 下载时组合每道题当前 Published Revision 的包
 ```
 
-- 题目编辑页的 `Save` 写入个人 Problem Workspace。Contest Properties 和 Statement Sources 写入比赛的共享内容。
+- 题目编辑页的 `Save` 写入个人 problem Workspace。`Properties` 和 `Statement Sources` 写入比赛的共享内容。
 - `Verification` 针对启动时冻结的 Workspace 快照。之后的编辑不会改变这次结果，Verification 也不会发布源码。
 - `Publish new revision` 创建团队共享的正式版本。Verification 与发布是两个独立动作，Publish 本身不能证明题目正确。
 - Native Package 以 Published Revision 为源码。要让新修改进入包，先 Publish。
@@ -45,7 +45,7 @@ Contest = 有序题目列表 + 比赛属性 + 比赛题面模板
 
 | 想做的事 | 从哪里进入 | 你会得到什么 |
 | --- | --- | --- |
-| 查看、打开或创建题目 | `Problem` -> `My Problems` -> `Open/Create` | 打开完整 Problem ID，或创建自己的新题 |
+| 查看、打开或创建题目 | `Problem` -> `My Problems` -> `Open/Create` | 打开完整 problem ID，或创建自己的新题 |
 | 导入现有题目 | `Problem` -> `Import Problem Package` | 从 Polygon Linux、ICPC 或 Polygon Replica 包创建新题 |
 | 修改时限、内存、题型和 pass 数 | 打开题目，点击题目 ID 旁的元数据胶囊/齿轮 | `Time Limit`、`Memory Limit`、`Mode`、`Pass Limit` |
 | 写题面并预览 | `Statements` | 多语言题面、PDF、HTML、LaTeX 预览和附件 |
@@ -58,10 +58,10 @@ Contest = 有序题目列表 + 比赛属性 + 比赛题面模板
 | 审阅并发布自己的改动 | 右侧 `Workspace` -> `Review workspace` | 文件差异、发布消息和正式 revision |
 | 处理其他人已经发布的新版本 | 右侧 `Workspace` -> `Resolve Conflicts` | 建议合并结果或逐文件取舍 |
 | 直接处理源码树 | 右侧 `Workspace` -> `Browse Files` | 文件浏览、编辑、上传、下载、重命名和删除 |
-| 管理题目协作者 | 右侧 `Workspace` -> `Manage access` | Problem 的 read/write 成员 |
+| 管理题目协作者 | 右侧 `Workspace` -> `Manage access` | problem 的 read/write 成员 |
 | 构建可交付包 | `Packages` | Native Package 和目标平台包 |
 | 组一场比赛 | `Contest` -> `My Contests` | 有序题目列表、整场题面预览和比赛包 |
-| 管理比赛协作者 | 比赛页右侧 `Manage access` | Contest 的 read/write 成员 |
+| 管理比赛协作者和逐题权限 | 比赛页右侧 `Manage access` | contest membership 和各题的直接 problem read/write 矩阵 |
 | 修改登录密码 | `Settings` -> `User` | 当前账号的密码设置 |
 | 连接桌面 Agent | `Settings` -> `Agents` | Agent 会话、权限和逐题授权 |
 
@@ -161,8 +161,8 @@ Package Preview 读取固定的 Native Package，不会触发 Build、Verify 或
 2. 点击 `Connect to Agent`，复制页面生成的 Registration URL。这个 URL 只能使用一次，过期时间以页面显示为准。
 3. 把完整 URL 发给桌面 Agent，让它使用 `polygon-agent-auth` 连接。这个地址是 Agent 注册端点，不要当作普通网页手工打开。
 4. 注册成功后，`Agents` 页面会出现会话卡，显示 Agent 名称、Desktop ID、连接时间、Last seen 和权限。
-5. `General permission` 是整个 Agent 会话的基础权限。新会话默认为 `none`，Agent 需要逐题申请授权。改为 `readonly`、`workspace` 或 `commit` 后，该 Scope 会应用到你的账号当前有权访问的所有题目，直到再次修改或断开会话；它不会超过你自己的 Problem 权限。
-6. Agent 首次处理某道题或需要更高权限时，会给出 approval URL。请使用连接该 Agent 的同一账号打开它。核对 Agent、Desktop ID、Problem 和 Scope 后，再选择有效期并 `Approve` 或 `Deny`。
+5. `General permission` 是整个 Agent 会话的基础权限。新会话默认为 `none`，Agent 需要逐题申请授权。改为 `readonly`、`workspace` 或 `commit` 后，该 Scope 会应用到你的账号当前有权访问的所有题目，直到再次修改或断开会话；它不会超过你自己的 problem 权限。
+6. Agent 首次处理某道题或需要更高权限时，会给出 approval URL。请使用连接该 Agent 的同一账号打开它。核对 Agent、Desktop ID、problem 和 Scope 后，再选择有效期并 `Approve` 或 `Deny`。
 
 逐题授权可选择 1 小时、24 小时、7 天、30 天或 forever。每条授权都有自己的有效期和撤销状态。某条授权到期或被 `Revoke` 后，它不再贡献权限。如果 General permission 或同一问题的另一条有效授权仍然够用，Agent 还可以继续操作。你的账号一旦失去该题访问权，Agent 会在下一次请求时立即失权。
 
@@ -173,11 +173,11 @@ Package Preview 读取固定的 Native Package，不会触发 Build、Verify 或
 | `none`（General permission） | 不预授予跨题能力；需要时逐题申请 | 不能仅凭会话访问任意题目 |
 | `readonly` | 读取 Workspace、查看状态、下载/比较快照、启动和检查标准 Verification、读取已有成果 | 不能修改远端 Workspace、启动新的导出或 Publish |
 | `workspace` | 包含 readonly；把本地修改应用到你的 Workspace，上传/删除文件，启动账号有权进行的导出 | 不能 Publish 正式 revision |
-| `commit` | 包含 workspace；在明确要求下 Commit/Publish；满足用户权限时可让 Verification 成为共享包认证证据 | 不会获得 Problem 管理权、成员管理权或浏览器提升权限 |
+| `commit` | 包含 workspace；在明确要求下 Commit/Publish；满足用户权限时可让 Verification 成为共享包认证证据 | 不会获得 problem 管理权、成员管理权或浏览器提升权限 |
 
 单独读取文件或 snapshot 只需要 `readonly`。当前 Polygon-Skills 的完整 `clone` 和日常本地镜像流程会申请 `workspace`，以便继续编辑和 push。若只想让 Agent 查看状态、读取文件或检查已有结果，授予 `readonly` 即可。
 
-有两个操作必须使用 General permission。创建自己命名空间下的新题需要 General `commit`；按 Contest 的题目列表拉取整场题目需要 General `readonly`，同时你的账号必须拥有该 Contest 的 read 权限。逐题 grant 不能代替这两项权限。
+有两个操作必须使用 General permission。创建自己命名空间下的新题需要 General `commit`；按 contest 的题目列表拉取整场题目需要 General `readonly`，同时你的账号必须拥有该 contest 的 read 权限。逐题 grant 不能代替这两项权限。
 
 ### Agent 与浏览器如何配合
 
@@ -218,32 +218,40 @@ Native Package -> 外部平台包
 
 每位用户都有独立的 Workspace。A 尚未 Publish 的修改，B 看不到。A Publish 后，B 会看到 Published Revision 已更新，需要先处理更新或冲突才能继续发布。
 
-Problem 权限如下：
+problem 权限如下：
 
 | 操作 | `read` | `write` | `owner` |
 | --- | --- | --- | --- |
 | 阅读题目；预览自己的 Workspace 或已有包 | 可以 | 可以 | 可以 |
 | 启动、查看和重新判可见的 Verification；下载成功包 | 可以 | 可以 | 可以 |
 | 编辑自己的 Workspace；使用 Custom Run；创建包；Publish | — | 可以 | 可以 |
-| 通过 `Manage access` 管理直接 Problem 成员 | — | — | 可以 |
+| 通过 `Manage access` 管理其他人的直接 problem `read` / `write` | — | 可以 | 可以 |
+| 删除 problem | — | — | 可以 |
 
 如果按钮只读、禁用或不存在，先检查当前角色。部分禁用控件会在悬停时显示原因。
 
-Contest 权限如下：
+contest 权限如下：
 
 | 操作 | `read` | `write` | `owner` |
 | --- | --- | --- | --- |
-| 查看 Contest 及其中的题目；下载已完成的比赛包 | 可以 | 可以 | 可以 |
-| 编辑比赛属性和比赛级题面；构建包 | — | 可以 | 可以 |
-| 编辑 Contest 中的题目，包括源码和 TL/ML | — | 可以 | 可以 |
+| 查看 contest | 可以 | 可以 | 可以 |
+| 从 contest 页面进入某道题 | 需要该题直接 problem `read` | 相同 | 相同 |
+| 编辑某道题源码 | 需要该题直接 problem `write` 或 `owner` | 相同 | 相同 |
+| 编辑比赛属性和比赛级题面 | — | 可以 | 可以 |
+| `Build All Packages` 或批量调整 TL/ML | — | 只处理直接可写的题 | 相同 |
 | 修改 idx 和题目顺序 | — | 可以 | 可以 |
 | 移除任意题目 | — | 可以 | 可以 |
-| 加入题目 | — | 需要该题的直接 Problem `write` 或 `owner` | 需要该题的直接 Problem `write` 或 `owner` |
-| 通过 `Manage access` 授予或撤销 Contest membership | — | — | 可以 |
+| 加入题目 | — | 需要该题的直接 problem `write` 或 `owner` | 需要该题的直接 problem `write` 或 `owner` |
+| 通过 `Manage access` 管理其他人的 contest membership | — | 可以 | 可以 |
+| 退出 contest | 可以 | 可以 | — |
+| 在权限矩阵中管理某道题的直接 problem 权限 | — | 还需要该题的直接 problem `write` 或 `owner` | 相同 |
+| 整场题面预览；下载已完成的比赛包 | 每道题都需要直接 problem `read` | 相同 | 相同 |
 
-Problem 和 Contest 的 owner 身份固定，不能在普通角色表里转让。系统管理员拥有完整权限。Contest membership 会动态派生题目权限：Contest read 对应 Problem read，Contest write/owner 对应 Problem write，但不会派生 Problem owner。来自其他 Contest 的派生 Problem write 不能用来把题加入当前 Contest；Problem 的直接成员仍在各题的 `Manage access` 中管理。
+problem 和 contest 的 owner 身份固定，不能在普通角色表里转让。用户不能给自己改角色，但 contest 的 `read` 和 `write` 成员可以在 Actions 中点击 `Exit`，移除自己的 contest membership。系统管理员拥有完整权限。
 
-## 组一场 Contest
+contest membership 和 problem 权限彼此独立。获得 contest `read` 或 `write` 不会自动获得其中任何题目的权限。比赛的 `Manage access` 页面提供 `problem × user` 矩阵，修改的是全局、直接的 problem ACL：成员退出 contest 或题目被移出 contest 后，这些权限仍然保留，必须显式撤销。矩阵只列出当前比赛成员；其他用户仍在单题的 `Manage access` 页面管理。
+
+## 组一场 contest
 
 ### 创建或导入
 
@@ -253,11 +261,13 @@ Problem 和 Contest 的 owner 身份固定，不能在普通角色表里转让�
 
 `Problems` 概览列出每题的 idx、时限、内存、题型、内容就绪情况，以及 Workspace、Verification 和 Package 状态。点击 `Manage problems` 可以搜索、加入、移除和排序题目，也可以批量调整时限/内存；具体授权条件见上表。
 
-Contest 只引用 Problem，不会复制题目内容。从比赛中移除一道题，也不会删除它的源码、历史或个人 Workspace。题目在页面和比赛包中的顺序都由 idx 决定。
+题目加入成功后，页面会转到 `Manage access`，并高亮新题对应的行。新增或更新 contest member 后，同一页面会高亮该成员列。此时可以在矩阵里一次分配多道题的直接 `read` / `write`；行首和列首的批量选择只填写当前操作者有权管理的单元格，最后仍要点击 `Save Problem Access`。contest membership 本身不授予题目权限。
+
+contest 只引用 problem，不会复制题目内容。从比赛中移除一道题，也不会删除它的源码、历史或个人 Workspace。题目在页面和比赛包中的顺序都由 idx 决定。
 
 ### 整场审题
 
-`Properties` 用于维护比赛属性及其多语言内容，`Statement Sources` 用于编辑比赛级 TeX 模板和资源。默认 banner、奇数题后插入空白页等选项也在这里。这些比赛级题面源不会改动各道 Problem 的题面。
+`Properties` 用于维护比赛属性及其多语言内容，`Statement Sources` 用于编辑比赛级 TeX 模板和资源。默认 banner、奇数题后插入空白页等选项也在这里。这些比赛级题面源不会改动各道 problem 的题面。
 
 比赛页右侧会在条件满足时显示整场 `Statements (HTML, <Language>)` 和 `Statements (PDF, <Language>)`：
 
@@ -284,11 +294,11 @@ Contest 只引用 Problem，不会复制题目内容。从比赛中移除一道�
 | `Packages` 显示没有 Published Revision | 当前题还没有正式版本 | 到 `Review workspace` 点击 `Publish new revision` |
 | 发布新 revision 后，Package 显示 `stale`/`none` | 旧包属于旧 revision | 在 `Packages` 为当前 revision 创建新包 |
 | Package 是 `not verified` | 当前 Native Package 没有与之匹配的共享 Verification 认证 | 有相应权限的作者可通过 `Verify` 或默认流程补齐认证 |
-| Contest 没有整场题面预览链接 | 某题无权访问、缺所选来源，或各题没有共同语言 | 检查每题访问权、Workspace/Package 和语言 |
-| Contest 不能 `Download Packages` | 并非所有当前包都 ready | 先 `Build All Packages`，查看失败题的 `Packages` |
+| contest 没有整场题面预览链接 | 某题无权访问、缺所选来源，或各题没有共同语言 | 检查每题访问权、Workspace/Package 和语言 |
+| contest 不能 `Download Packages` | 并非所有当前包都 ready | 先 `Build All Packages`，查看失败题的 `Packages` |
 | 找不到 `Connected Agents` | 当前界面名称不是这个 | 使用右上 `Settings` -> `Agents` |
 | Registration URL 不存在、过期或已使用 | 注册 URL 只能注册一次，并且有效期较短 | 在 `Settings` -> `Agents` 重新点击 `Connect to Agent`，把新 URL 发给 Agent |
 | approval URL 返回 404 或显示 expired | 当前登录账号与 Agent 所连接的账号不一致，或授权请求已过期、会话已不存在 | 先确认登录账号，再让 Agent 重新请求该题 Scope |
 | Agent 报 `agent_general_permission_required` | 当前操作要求 General permission，逐题 grant 不能满足 | 到 `Settings` -> `Agents` 把该会话的 General permission 调到错误信息要求的 Scope |
 | Agent 报 401 / `agent_credential_invalid` | 会话已断开、凭据已轮换，或 Agent 使用了旧的本地 state | 保留现有 state，并用新的 Registration URL 让 Agent 尝试重连、轮换凭据。原会话若已 `Disconnect`，再创建会话并重新授权 |
-| Agent 选择高 Scope 后仍被拒绝 | 你的账号自身权限不足，或 grant 已过期/撤销 | 检查 `Manage access` / Contest membership 和 `Settings` -> `Agents` |
+| Agent 选择高 Scope 后仍被拒绝 | 你的账号自身权限不足，或 grant 已过期/撤销 | 在对应 problem 的 `Manage access` 检查直接权限；整场操作还要单独检查 contest membership 和 `Settings` -> `Agents` |

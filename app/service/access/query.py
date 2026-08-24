@@ -61,7 +61,7 @@ class AccessQuery:
         if not ids:
             return {}
         actor = Actor(int(user_id))
-        roles = self._store.effective_problem_roles(ids, actor.user_id)
+        roles = self._store.problem_roles(ids, actor.user_id)
         return {
             problem_id: self._problem_context(
                 actor,
@@ -94,6 +94,13 @@ class AccessQuery:
             )
             for problem_id in ids
         }
+
+    def direct_problem_roles_for_users(
+        self,
+        problem_ids: list[int],
+        user_ids: list[int],
+    ) -> dict[tuple[int, int], AccessRole]:
+        return self._store.direct_problem_roles_for_users(problem_ids, user_ids)
 
     def workspace_context(
         self,
@@ -152,6 +159,7 @@ class AccessQuery:
     ) -> ProblemAccessContext:
         read = role_decision(actor, resource, "problem.read", role)
         write = role_decision(actor, resource, "problem.write", role)
+        access_manage = role_decision(actor, resource, "problem.access.manage", role)
         manage = role_decision(actor, resource, "problem.manage", role)
         verification = role_decision(actor, resource, "verification.view", role)
         rejudge = role_decision(actor, resource, "verification.rejudge", role)
@@ -162,6 +170,7 @@ class AccessQuery:
             "role": role,
             "can_read": read.allowed,
             "can_write": write.allowed,
+            "can_manage_access": access_manage.allowed,
             "can_manage": manage.allowed,
             "can_view_verification": verification.allowed,
             "can_rejudge": rejudge.allowed,
@@ -170,6 +179,7 @@ class AccessQuery:
             "can_create_packages": package_create.allowed,
             "read_block_reason": read.reason,
             "write_block_reason": write.reason,
+            "access_manage_block_reason": access_manage.reason,
             "manage_block_reason": manage.reason,
             "verification_block_reason": verification.reason,
             "rejudge_block_reason": rejudge.reason,

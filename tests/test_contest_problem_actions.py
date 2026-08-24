@@ -121,23 +121,23 @@ class TestContestProblemActions(ContestActionBase):
         runtime.contest_service.grant_member_role(source_id, writer, "write")
 
         direct_id, direct_slug = self._create_problem("writer-direct")
-        inherited_id, inherited_slug = self._create_problem("writer-inherited")
+        inaccessible_id, inaccessible_slug = self._create_problem("writer-inaccessible")
         workspace_service.grant_repo_access(direct_slug, writer, "write")
         runtime.contest_service.add_problem(
             source_id,
             "A",
-            inherited_id,
+            inaccessible_id,
             source_actor_id,
         )
-        self.assertTrue(
+        self.assertFalse(
             runtime.access_query.problem_context(
-                inherited_id,
+                inaccessible_id,
                 int(writer_user_id),
             )["can_write"]
         )
         self.assertFalse(
             runtime.access_query.direct_problem_context(
-                inherited_id,
+                inaccessible_id,
                 int(writer_user_id),
             )["can_write"]
         )
@@ -153,28 +153,38 @@ class TestContestProblemActions(ContestActionBase):
             for row in candidates
         }
         self.assertEqual(candidate_roles.get(direct_slug), "write")
-        self.assertNotIn(inherited_slug, candidate_roles)
+        self.assertNotIn(inaccessible_slug, candidate_roles)
 
         response = contest_problems_add(
             contest=target_slug,
             user=writer,
-            problem_slugs=[direct_slug, inherited_slug],
+            problem_slugs=[direct_slug, inaccessible_slug],
             q="",
         )
 
         self.assertEqual(response.status_code, 303)
         self.assertTrue(
+            str(response.headers["location"]).startswith(
+                f"/contests/{target_slug}/access?focus_problem_id="
+            )
+        )
+        self.assertTrue(
+            str(response.headers["location"]).endswith(
+                "#problem-access-matrix"
+            )
+        )
+        self.assertTrue(
             runtime.contest_service.contest_has_problem(target_id, direct_id)
         )
         self.assertFalse(
-            runtime.contest_service.contest_has_problem(target_id, inherited_id)
+            runtime.contest_service.contest_has_problem(target_id, inaccessible_id)
         )
 
         workspace_service.revoke_repo_access_for_problem_id(direct_id, writer)
         self.assertTrue(
             runtime.contest_service.contest_has_problem(target_id, direct_id)
         )
-        self.assertTrue(
+        self.assertFalse(
             runtime.access_query.problem_context(
                 direct_id,
                 int(writer_user_id),

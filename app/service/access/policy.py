@@ -13,6 +13,7 @@ _AGENT_SCOPE_LEVEL = {"readonly": 1, "workspace": 2, "commit": 3}
 _CAPABILITY_LEVEL: dict[Capability, int] = {
     "problem.read": 1,
     "problem.write": 2,
+    "problem.access.manage": 2,
     "problem.manage": 3,
     "workspace.read": 1,
     "workspace.write": 2,
@@ -25,7 +26,7 @@ _CAPABILITY_LEVEL: dict[Capability, int] = {
     "package.create": 2,
     "contest.read": 1,
     "contest.write": 2,
-    "contest.manage": 3,
+    "contest.manage": 2,
     "contest.roster": 2,
     "contest.build": 2,
     "contest.package": 1,
@@ -76,18 +77,6 @@ def access_role(raw_role: str | None) -> AccessRole:
     raise RuntimeError("invalid access role")
 
 
-def stronger_role(left: AccessRole, right: AccessRole) -> AccessRole:
-    return left if _ROLE_LEVEL[left] >= _ROLE_LEVEL[right] else right
-
-
-def derived_problem_role(member_role: AccessRole) -> AccessRole:
-    if member_role in {"owner", "write"}:
-        return "write"
-    if member_role == "read":
-        return "read"
-    raise ValueError("contest membership cannot derive problem access")
-
-
 def role_decision(
     actor: Actor,
     resource: Resource,
@@ -118,7 +107,7 @@ def _denial_reason(
     }
     if capability in problem_read_capabilities:
         return "you do not have access to this problem"
-    if capability in {"problem.write", "package.create"}:
+    if capability in {"problem.write", "problem.access.manage", "package.create"}:
         return "read-only access" if role == "read" else "write access required"
     if capability == "problem.manage":
         return "owner or admin access required"
@@ -129,7 +118,7 @@ def _denial_reason(
     if capability in {"contest.write", "contest.roster", "contest.build"}:
         return "read-only access" if role == "read" else "write access required"
     if capability == "contest.manage":
-        return "contest owner or system admin access required"
+        return "read-only access" if role == "read" else "write access required"
     if capability == "contest.package":
         return "you do not have access to this contest"
     return "access denied"

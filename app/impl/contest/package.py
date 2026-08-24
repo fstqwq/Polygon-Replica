@@ -20,6 +20,23 @@ def contest_packages_download(
             status_code=403,
             detail=ctx["access"]["package_block_reason"],
         )
+    roster = runtime().contest_service.contest_problems(
+        int(ctx["contest"]["id"])
+    )
+    problem_access = runtime().access_query.problem_contexts(
+        [int(row["problem_id"]) for row in roster],
+        int(ctx["user"]["id"]),
+    )
+    blocked = [
+        str(row["problem_slug"])
+        for row in roster
+        if not problem_access[int(row["problem_id"])]["can_read"]
+    ]
+    if blocked:
+        raise HTTPException(
+            status_code=403,
+            detail="problem read access required: " + ", ".join(blocked),
+        )
     if not runtime().export_service.package_adapters.supports(package_format):
         raise HTTPException(status_code=400, detail="unsupported Contest package format")
 

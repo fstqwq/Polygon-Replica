@@ -3,6 +3,7 @@ from typing import Literal, TypedDict
 
 
 AccessRole = Literal["none", "read", "write", "owner", "admin"]
+DirectProblemRole = Literal["none", "read", "write", "owner"]
 AgentScope = Literal["readonly", "workspace", "commit"]
 AgentGeneralScope = Literal["none", "readonly", "workspace", "commit"]
 ResourceKind = Literal[
@@ -15,6 +16,7 @@ ResourceKind = Literal[
 Capability = Literal[
     "problem.read",
     "problem.write",
+    "problem.access.manage",
     "problem.manage",
     "workspace.read",
     "workspace.write",
@@ -61,10 +63,26 @@ class AccessDecision:
     reason: str
 
 
+@dataclass(frozen=True)
+class ProblemAccessChange:
+    problem_id: int
+    target_user_id: int
+    original_role: DirectProblemRole
+    requested_role: DirectProblemRole
+
+
+class AccessMutationResult(TypedDict):
+    target_user_id: int
+    target_username: str
+    previous_role: str
+    role: str
+
+
 class ProblemAccessContext(TypedDict):
     role: AccessRole
     can_read: bool
     can_write: bool
+    can_manage_access: bool
     can_manage: bool
     can_view_verification: bool
     can_rejudge: bool
@@ -73,6 +91,7 @@ class ProblemAccessContext(TypedDict):
     can_create_packages: bool
     read_block_reason: str
     write_block_reason: str
+    access_manage_block_reason: str
     manage_block_reason: str
     verification_block_reason: str
     rejudge_block_reason: str
@@ -143,6 +162,7 @@ class ProblemParticipationRow(TypedDict):
 
 
 class ProblemAclEntry(TypedDict):
+    user_id: int
     username: str
     role: str
     created_at: str

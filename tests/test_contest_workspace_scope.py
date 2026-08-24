@@ -211,6 +211,12 @@ class TestContestWorkspaceScope(ContestActionBase):
         workspace_service.ensure_user(carol)
         runtime.contest_service.grant_member_role(contest_id, carol, "read")
         carol_cookie = self._session_cookie(carol)
+
+        dave = self.random_id("dave")
+        workspace_service.ensure_user(dave)
+        workspace_service.grant_repo_access("alice/sample", dave, "read")
+        runtime.contest_service.grant_member_role(contest_id, dave, "read")
+        dave_cookie = self._session_cookie(dave)
         alice_cookie = self._session_cookie("alice")
 
         from app.main import app
@@ -222,7 +228,8 @@ class TestContestWorkspaceScope(ContestActionBase):
             ("?contest=missing-contest", alice_cookie, 404),
             (f"?contest={empty_contest_slug}", alice_cookie, 404),
             (f"?contest={contest_slug}", bob_cookie, 403),
-            (f"?contest={contest_slug}", carol_cookie, 200),
+            (f"?contest={contest_slug}", carol_cookie, 403),
+            (f"?contest={contest_slug}", dave_cookie, 200),
         ]
         with TestClient(app) as client:
             for query, cookie, expected in cases:
@@ -328,7 +335,7 @@ class TestContestWorkspaceScope(ContestActionBase):
             f"/problems/{peer_slug}/statement?contest={contest_slug}",
             hrefs,
         )
-        self.assertIn(
+        self.assertNotIn(
             f"/problems/{locked_slug}/statement?contest={contest_slug}",
             hrefs,
         )

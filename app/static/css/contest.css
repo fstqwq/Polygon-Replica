@@ -54,6 +54,14 @@
   font-size: var(--font-size-ui-xs);
 }
 
+.contest-row-note.warn {
+  color: var(--warn);
+}
+
+.contest-row-note.danger {
+  color: var(--danger);
+}
+
 .contest-management-actions {
   display: flex;
   align-items: center;
@@ -243,15 +251,6 @@
   min-height: 34px;
 }
 
-.contest-member-count,
-.contest-access-note {
-  font-size: var(--font-size-ui-sm);
-}
-
-.contest-access-note {
-  margin: -2px 0 0;
-}
-
 .contest-member-actions {
   white-space: nowrap;
 }
@@ -260,6 +259,268 @@
   content: "\8def";
   margin: 0 var(--space-2);
   color: var(--muted);
+}
+
+.contest-problem-access-section {
+  min-width: 0;
+}
+
+.contest-problem-access-section > form {
+  min-width: 0;
+  width: 100%;
+}
+
+.contest-access-matrix-scroll {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: auto;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.contest-access-matrix {
+  width: 100%;
+  min-width: max-content;
+  border: 0;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.table-base.table-compact.contest-access-matrix th,
+.table-base.table-compact.contest-access-matrix td {
+  min-width: 0;
+  height: 24px;
+  padding: 1px 4px;
+  border-width: 0 1px 1px 0;
+  border-color: var(--line);
+  text-align: center;
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.contest-access-matrix tr:last-child > * {
+  border-bottom: 0;
+}
+
+.contest-access-matrix tr > *:last-child {
+  border-right: 0;
+}
+
+.table-base.table-compact.contest-access-matrix thead th {
+  position: sticky;
+  z-index: 3;
+  color: var(--text-secondary);
+  background: var(--surface-subtle);
+}
+
+.table-base.table-compact.contest-access-matrix .contest-access-matrix-head-labels th {
+  top: 0;
+  height: 20px;
+  padding: 2px 4px 0;
+  border-bottom: 0;
+}
+
+.table-base.table-compact.contest-access-matrix .contest-access-matrix-head-controls th {
+  top: 20px;
+  height: 24px;
+  padding: 1px 4px 3px;
+  border-top: 0;
+}
+
+.contest-access-problem-name-track {
+  width: 120px;
+}
+
+.contest-access-problem-bulk-track {
+  width: 90px;
+}
+
+.contest-access-user-track {
+  width: 90px;
+}
+
+.contest-access-matrix .contest-access-problem-heading {
+  text-align: center;
+}
+
+.contest-access-matrix .contest-access-problem-name-column {
+  width: 120px;
+  text-align: left;
+}
+
+.contest-access-matrix .contest-access-problem-bulk-column {
+  width: 90px;
+  text-align: center;
+}
+
+.table-base.table-compact.contest-access-matrix .contest-access-problem-name-column {
+  min-width: 120px;
+  padding-left: 6px;
+  text-align: left;
+}
+
+.table-base.table-compact.contest-access-matrix .contest-access-problem-bulk-column {
+  min-width: 90px;
+  text-align: center;
+}
+
+.table-base.table-compact.contest-access-matrix .contest-access-user-heading,
+.table-base.table-compact.contest-access-matrix .contest-access-user-bulk,
+.table-base.table-compact.contest-access-matrix .contest-access-cell {
+  min-width: 90px;
+}
+
+.contest-access-user-name,
+.contest-access-problem-name {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contest-access-user-name {
+  max-width: 82px;
+  margin: 0 auto;
+}
+
+.contest-access-problem-name {
+  max-width: 108px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.contest-access-problem-name code {
+  color: inherit;
+  font-family: inherit;
+  font-weight: 700;
+}
+
+.contest-access-select-control {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  height: 20px;
+}
+
+.contest-access-select-control > select {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: 20px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  color: transparent;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--font-size-ui-xs);
+  font-weight: inherit;
+  line-height: 1;
+  text-align: center;
+  text-align-last: center;
+}
+
+.contest-access-select-label {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  color: var(--text);
+  font-size: var(--font-size-ui-xs);
+  line-height: 1;
+  pointer-events: none;
+}
+
+.contest-access-select-chevron {
+  width: 0;
+  height: 0;
+  margin-top: 2px;
+  border-top: 4px solid var(--text-secondary);
+  border-right: 4px solid transparent;
+  border-left: 4px solid transparent;
+}
+
+.contest-access-select-control:hover {
+  background: var(--surface-hover);
+}
+
+.contest-access-select-control:focus-within {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -1px;
+  background: var(--surface);
+}
+
+.contest-access-bulk-select option,
+.contest-access-cell select option {
+  color: var(--text);
+}
+
+.contest-access-bulk-select option[value="none"],
+.contest-access-cell select option[value="none"] {
+  color: var(--danger);
+}
+
+.contest-access-bulk-select option[value="read"],
+.contest-access-cell select option[value="read"] {
+  color: var(--warn);
+}
+
+.contest-access-bulk-select option[value="write"],
+.contest-access-cell select option[value="write"] {
+  color: var(--text);
+}
+
+.contest-access-select-label[data-role-tone="none"] {
+  color: var(--danger);
+}
+
+.contest-access-select-label[data-role-tone="read"] {
+  color: var(--warn);
+}
+
+.contest-access-role-text {
+  font-size: var(--font-size-ui-xs);
+  line-height: 20px;
+}
+
+.contest-access-role-text.contest-access-readonly-role[data-role-tone="none"] {
+  color: var(--danger);
+}
+
+.contest-access-role-text.contest-access-readonly-role[data-role-tone="read"] {
+  color: var(--warn);
+}
+
+.contest-access-role-text.contest-access-readonly-role[data-role-tone="write"],
+.contest-access-role-text.contest-access-fixed-role {
+  color: var(--muted);
+}
+
+.table-base.contest-access-matrix tbody tr:nth-child(odd) > th,
+.table-base.contest-access-matrix tbody tr:nth-child(odd) > td,
+.table-base.contest-access-matrix tbody tr:nth-child(even) > th,
+.table-base.contest-access-matrix tbody tr:nth-child(even) > td {
+  background: var(--surface);
+}
+
+.table-base.table-compact.contest-members-table tr.contest-access-focus > td,
+.table-base.table-compact.contest-access-matrix thead th.contest-access-focus,
+.table-base.table-compact.contest-access-matrix tbody td.contest-access-focus,
+.table-base.table-compact.contest-access-matrix tbody tr.contest-access-focus > th,
+.table-base.table-compact.contest-access-matrix tbody tr.contest-access-focus > td {
+  background: var(--warn-bg);
 }
 
 @media (max-width: 820px) {

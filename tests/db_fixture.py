@@ -9,6 +9,7 @@ from app.config import build_config_values
 from app.db import DB
 from app.service.platform.fs.layout import StorageLayout
 from app.service.access.query import AccessQuery
+from app.service.access.command import AccessCommand
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
 from app.service.repository.workspace import WorkspaceService
@@ -81,6 +82,7 @@ class DBTestBase(unittest.TestCase):
         self.db = DB(_DB_PATH, config_values=self.config_values)
         self.verification_task_store = VerificationTaskStore(self.db)
         self.access_query = AccessQuery(self.db)
+        self.access_command = AccessCommand(self.db)
         self.workspace_service = WorkspaceService(
             self.db,
             self.storage_layout,
