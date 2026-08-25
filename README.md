@@ -14,6 +14,10 @@ Polygon Replica is a self-hosted problem-setting system compatible with Codeforc
 - [Package import and export](docs/protocol/package.md)
 - [Development documentation index](docs/README.md)
 
+## License
+
+Polygon Replica is licensed under the [GNU Affero General Public License, version 3 or any later version](LICENSE). Third-party components remain under the licenses listed in [`third_party/README.md`](third_party/README.md).
+
 ## Known limitations
 
 Polygon Replica is designed for a **small team** completing a limited run of problem-setting tasks.
