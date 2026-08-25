@@ -66,6 +66,7 @@ echo "[1/6] Installing system dependencies..."
   texlive-latex-base \
   texlive-latex-recommended \
   texlive-latex-extra \
+  texlive-plain-generic \
   texlive-xetex \
   texlive-science \
   texlive-lang-chinese \
@@ -138,7 +139,7 @@ RUNTIME_DIRS=(
   /var/backups/polygon-replica
 
 echo "[3/6] Probing bubblewrap root-switch capability..."
-PROBE_CMD=(bwrap --die-with-parent --new-session --ro-bind / / --chdir / -- /bin/sh -lc 'true')
+PROBE_CMD=(bwrap --die-with-parent --new-session --unshare-user --ro-bind / / --chdir / -- /bin/sh -lc 'true')
 if [[ "${EUID}" -eq 0 && "$RUNTIME_USER" != "$(id -un)" ]]; then
   if ! runuser -u "$RUNTIME_USER" -- "${PROBE_CMD[@]}" >/dev/null 2>&1; then
     echo "bubblewrap probe failed for runtime user: $RUNTIME_USER." >&2

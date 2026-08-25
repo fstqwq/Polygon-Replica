@@ -75,8 +75,11 @@ RUN python3 -m venv .venv \
     && .venv/bin/pip install --upgrade pip \
     && .venv/bin/pip install -r requirements.txt
 
+COPY --chown=judgehost:judgehost LICENSE ./LICENSE
 COPY --chown=judgehost:judgehost app ./app
-COPY --chown=judgehost:judgehost scripts ./scripts
+COPY --chown=judgehost:judgehost \
+    scripts/docker-entrypoint.sh \
+    ./scripts/docker-entrypoint.sh
 # third_party/testlib supplies testlib + standard checkers; Polygon-WF-Styles
 # supplies the canonical statement template. Both are read at app import.
 COPY --chown=judgehost:judgehost third_party ./third_party

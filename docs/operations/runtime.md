@@ -14,6 +14,14 @@ Generated judgehost commands use `domjudge/judgehost:latest`. The [judgehost ima
 
 `scripts/install_host.sh` supports Debian and Ubuntu hosts with a regular GIL-enabled CPython 3.14 interpreter. It installs dependencies, prepares storage and user namespaces, verifies bubblewrap, TeX, fonts, and statement conversion tools, creates `.venv`, and installs the systemd unit. The application runs as a non-root service account; direct root invocation must name that account through `POLYGON_REPLICA_RUNTIME_USER`.
 
+On a prepared Linux host, `bash scripts/start_local.sh` starts the application
+directly as a temporary foreground process. It creates a self-signed localhost
+certificate when needed and is useful for short-lived development or diagnosis.
+It is not a supervised deployment: closing the shell stops the application, and
+the host must already provide the application, sandbox, TeX, and conversion
+dependencies. Its launcher variables are listed in the
+[configuration reference](configuration.md#bootstrap-environment).
+
 ## Startup and shutdown
 
 | Phase | Behavior |

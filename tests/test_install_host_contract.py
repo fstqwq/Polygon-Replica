@@ -28,6 +28,8 @@ class TestInstallHostContract(unittest.TestCase):
         self.assertNotIn('install -m 0644 "$TMP_ENV_FILE" "$ENV_FILE"', installer)
         self.assertIn("/var/lib/polygon-replica", installer)
         self.assertIn('"${SUDO[@]}" chmod 0700', installer)
+        self.assertIn("texlive-plain-generic", installer)
+        self.assertIn("--unshare-user", installer)
 
     def test_rendered_unit_quotes_spaces_and_escapes_specifiers(self) -> None:
         root = Path(__file__).resolve().parents[1]

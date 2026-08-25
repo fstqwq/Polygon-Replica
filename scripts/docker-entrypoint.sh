@@ -13,7 +13,7 @@ mkdir -p \
 
 # Quick bubblewrap probe so misconfigured hosts fail loudly rather than
 # crashing later inside a verification job.
-if ! bwrap --die-with-parent --new-session --ro-bind / / --chdir / -- /bin/sh -lc 'true' >/dev/null 2>&1; then
+if ! bwrap --die-with-parent --new-session --unshare-user --ro-bind / / --chdir / -- /bin/sh -lc 'true' >/dev/null 2>&1; then
   echo "bubblewrap probe failed inside the container." >&2
   echo "Set on the host: kernel.unprivileged_userns_clone=1," >&2
   echo "user.max_user_namespaces=1048576, kernel.apparmor_restrict_unprivileged_userns=0," >&2
