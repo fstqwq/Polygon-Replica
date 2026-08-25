@@ -1,6 +1,6 @@
 # Polygon Replica
 
-Polygon Replica is a self-hosted problem-setting system compatible with Codeforces Polygon. It uses [DOMjudge](https://www.domjudge.org/) judgehosts for execution, with the browser as its primary interface.
+Polygon Replica is a self-hosted problem-setting system compatible with Codeforces Polygon. It uses [DOMjudge](https://github.com/DOMjudge/domjudge) judgehosts for execution, with the browser as its primary interface.
 
 - **Better compatibility.** The TeX statement pipeline uses our maintained hard fork of [Polygon-WF-Styles](third_party/Polygon-WF-Styles/README.md) to produce World Finals-style statements, while retaining (almost) full compatibility with Codeforces Polygon's FreeMarker sources. Existing Polygon sources and working habits therefore carry over directly. Interactive and multi-pass problems are fully supported as first-class problem types. All problems can be packaged for direct delivery to multiple contest systems.
 - **Better scalability.** DOMjudge judgehosts scale execution independently across remote machines using either `domjudge/judgehost:latest` or the [modified version for long-running stability](docs/operations/deployment.md#judgehost-image-choice). This also enables last-minute calibration on the actual contest hardware by wiring the on-site judgehosts into Polygon Replica. Content-addressed caching reduces repeated computation and duplicate storage as workloads grow.
