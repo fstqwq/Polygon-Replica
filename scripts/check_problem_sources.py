@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Report published problem repositories that are not canonical source trees."""
+"""Audit published problem sources before a source-format upgrade.
+
+Run this read-only operator tool before deploying a revision that tightens the
+canonical problem-source rules, or when current source consumers reject an
+existing published revision. It reports invalid published ``main`` revisions
+without changing SQLite, Git repositories, or workspaces.
+"""
 
 import argparse
 import json

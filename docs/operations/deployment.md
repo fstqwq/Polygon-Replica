@@ -229,6 +229,21 @@ Once host, username, and password are configured, public registration sends a ve
 Create and download a source backup from Admin first. Then update one deployment
 at a time.
 
+When the target revision tightens the canonical problem-source rules, audit the
+currently published revisions before deployment:
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/check_problem_sources.py \
+  --db <sqlite> \
+  --bare-root <repos>
+```
+
+The command opens SQLite read-only, extracts each published `main` revision to a
+temporary directory, and reports source validation errors. It does not change
+SQLite, Git repositories, or workspaces. Run it again with the target revision's
+code and Python environment when diagnosing a published revision rejected after
+an upgrade.
+
 Application startup does not alter an existing SQLite schema. Before installing a revision with schema changes, compare `app/db.py` at the deployed and target commits. Stop the application and judgehosts, back up SQLite with its WAL/SHM files, and apply the complete diff offline. Preserve IDs and relationships; require `foreign_key_check`, `integrity_check`, and application schema admission to pass before reopening traffic.
 
 The latest breaking database change is `Retire legacy workspace preview
