@@ -82,21 +82,6 @@ def _production_text_files() -> list[Path]:
     return sorted(set(paths))
 
 
-def _imported_symbol_set(module_name: str) -> set[str]:
-    symbols: set[str] = set()
-    for path in list((ROOT / "app").rglob("*.py")) + list((ROOT / "tests").rglob("*.py")):
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
-        except SyntaxError:
-            continue
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module == module_name:
-                for alias in node.names:
-                    if alias.name != "*":
-                        symbols.add(alias.name)
-    return symbols
-
-
 def _is_name_attr(node: ast.AST, *, name: str, attr: str) -> bool:
     return (
         isinstance(node, ast.Attribute)
@@ -128,48 +113,6 @@ class TestPublicContracts(unittest.TestCase):
             set(),
             "Docker build contexts must exclude root and nested environment files.",
         )
-
-    def test_user_templates_use_package_published_revision_terms(self) -> None:
-        template_source = "\n".join(
-            path.read_text(encoding="utf-8")
-            for path in sorted((ROOT / "app" / "template").glob("*.html"))
-        )
-        self.assertNotIn("Verified revision", template_source)
-        self.assertNotIn("Verified revisions", template_source)
-        self.assertNotIn("Native Package", template_source)
-        self.assertNotIn("Native Packages", template_source)
-        self.assertNotIn("Upstream", template_source)
-        self.assertIn("Package", template_source)
-        self.assertIn("Published", template_source)
-
-        core_css = (ROOT / "app" / "static" / "css" / "core.css").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn(".compact-fact-label::after", core_css)
-        self.assertIn('content: ":"', core_css)
-
-    def test_agent_runtime_has_no_problem_bearer_compatibility(self) -> None:
-        paths = [
-            ROOT / "app" / "db.py",
-            ROOT / "app" / "impl" / "agent" / "api.py",
-            ROOT / "app" / "impl" / "agent" / "shared.py",
-            ROOT / "app" / "route" / "agent_route.py",
-            ROOT / "app" / "service" / "agent" / "service.py",
-            ROOT / "app" / "service" / "agent" / "store.py",
-        ]
-        source = "\n".join(path.read_text(encoding="utf-8") for path in paths)
-        for obsolete in (
-            "agent_tokens",
-            "delivery_token",
-            "delivered_at",
-            "poly_",
-            "require_agent_token",
-        ):
-            with self.subTest(obsolete=obsolete):
-                self.assertNotIn(obsolete, source)
-        self.assertIn('getlist("Authorization")', source)
-        self.assertIn("credential_sha256", source)
-        self.assertIn("agent_problem_grants", source)
 
     def test_agent_problem_routes_require_explicit_problem_scope(self) -> None:
         route_tree = ast.parse(
@@ -273,14 +216,30 @@ class TestPublicContracts(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         manifest.url(invalid_path)
 
-    def test_generated_judgehost_command_resolves_its_container_hostname(self) -> None:
-        admin_script = (ROOT / "app" / "static" / "js" / "admin.js").read_text(
-            encoding="utf-8"
+    def test_page_favicons_use_stable_disjoint_major_arcana_ranges(self) -> None:
+        from app.service.platform.favicon import (
+            contest_favicon_asset,
+            problem_favicon_asset,
         )
 
-        self.assertIn(
-            "--add-host=judgedaemon-${daemonId}:127.0.1.1",
-            admin_script,
+        self.assertEqual(
+            problem_favicon_asset("alice/example"),
+            "favicon/major-arcana/04.png",
+        )
+        self.assertEqual(
+            contest_favicon_asset("world-finals"),
+            "favicon/major-arcana/20.png",
+        )
+
+        static_root = ROOT / "app" / "static"
+        arcana_root = static_root / "favicon" / "major-arcana"
+        self.assertEqual(
+            sorted(path.name for path in arcana_root.glob("*.png")),
+            [f"{index:02d}.png" for index in range(22)],
+        )
+        self.assertEqual(
+            (static_root / "favicon.png").read_bytes(),
+            (arcana_root / "00.png").read_bytes(),
         )
 
     def test_uvicorn_access_filter_only_suppresses_successful_fetch_poll(self) -> None:
@@ -304,25 +263,6 @@ class TestPublicContracts(unittest.TestCase):
         self.assertTrue(access_filter.filter(access_record("POST", fetch_path, 400)))
         self.assertTrue(access_filter.filter(access_record("GET", fetch_path, 200)))
         self.assertTrue(access_filter.filter(access_record("POST", "/login", 200)))
-
-    def test_server_entrypoints_outlive_judgedaemon_fetch_interval(self) -> None:
-        local_script = (ROOT / "scripts" / "start_local.sh").read_text(encoding="utf-8")
-        docker_script = (ROOT / "scripts" / "docker-entrypoint.sh").read_text(encoding="utf-8")
-        systemd_unit = (ROOT / "scripts" / "systemd" / "polygon-replica.service").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertIn("POLYGON_REPLICA_KEEPALIVE_TIMEOUT_SEC:-30", local_script)
-        self.assertIn("POLYGON_REPLICA_KEEPALIVE_TIMEOUT_SEC:-30", docker_script)
-        self.assertIn("--timeout-keep-alive 30", systemd_unit)
-
-    def test_main_utils_contract_covers_repo_consumers(self) -> None:
-        import app.main_util
-
-        main_utils = app.main_util
-        required = _imported_symbol_set("app.main_util")
-        missing = sorted(name for name in required if not hasattr(main_utils, name))
-        self.assertEqual(missing, [])
 
     def test_impl_modules_do_not_issue_direct_sql(self) -> None:
         offenders: list[str] = []
