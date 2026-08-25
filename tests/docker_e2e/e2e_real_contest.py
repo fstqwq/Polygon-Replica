@@ -179,9 +179,11 @@ def assert_contest_package_download(
     problem: str,
     expected_head: str,
 ) -> None:
+    origin_headers = {"Origin": str(client.base_url).rstrip("/")}
     rejected = client.post(
         f"/contests/{CONTEST}/packages/download",
         data={"package_format": "qoj"},
+        headers=origin_headers,
         timeout=300.0,
     )
     if rejected.status_code != 409:
@@ -195,7 +197,10 @@ def assert_contest_package_download(
             f"Contest package readiness error is inaccurate: {rejected_detail!r}"
         )
 
-    build = client.post(f"/contests/{CONTEST}/packages/build-all")
+    build = client.post(
+        f"/contests/{CONTEST}/packages/build-all",
+        headers=origin_headers,
+    )
     if build.status_code != 303:
         raise RuntimeError(
             f"Build All Packages failed: {build.status_code} {build.text[:500]}"
@@ -264,6 +269,7 @@ def assert_contest_package_download(
     first_qoj = client.post(
         f"/contests/{CONTEST}/packages/download",
         data={"package_format": "qoj"},
+        headers=origin_headers,
         timeout=300.0,
     )
     qoj_after_first = export_count("qoj")
@@ -271,6 +277,7 @@ def assert_contest_package_download(
     second_qoj = client.post(
         f"/contests/{CONTEST}/packages/download",
         data={"package_format": "qoj"},
+        headers=origin_headers,
         timeout=300.0,
     )
     qoj_after_second = export_count("qoj")
@@ -310,6 +317,7 @@ def assert_contest_package_download(
     domjudge = client.post(
         f"/contests/{CONTEST}/packages/download",
         data={"package_format": "domjudge"},
+        headers=origin_headers,
         timeout=300.0,
     )
     if domjudge.status_code != 200 or export_count("domjudge") != domjudge_before + 1:
