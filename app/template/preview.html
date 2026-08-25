@@ -61,7 +61,7 @@
     {% endif %}
     </div>
     {% if statement_templates_customized and ctx.access.can_write %}
-    <form class="inline-action statement-template-reset" method="post" action="{{ problem_href('statement_templates_reset') }}" data-confirm-message="Restore statement/statements.ftl, statement/problem.tex, and statement/olymp.sty to Qiulygon defaults? This also removes the optional statement/examples.tex file, but keeps statement sections and attachments.">
+    <form class="inline-action statement-template-reset" method="post" action="{{ problem_href('statement_templates_reset') }}" data-confirm-message="Restore statement/statements.ftl, statement/problem.tex, and statement/olymp.sty to defaults? This also removes the optional statement/examples.tex file, but keeps statement sections and attachments.">
       <input type="hidden" name="page" value="{{ return_page if return_page is defined else 'statement' }}" />
       <input type="hidden" name="language" value="{{ current_language }}" />
       <a href="#" class="linkish danger-link" data-submit-form="1">Restore default templates</a>
