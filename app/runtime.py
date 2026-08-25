@@ -35,6 +35,10 @@ from app.service.problem.query import ProblemSourceQueryService
 from app.service.repository.git import GitService
 from app.service.repository.merge import WorkspaceMergeService
 from app.service.platform.archive_integrity import ArchiveIntegrityVerifier
+from app.service.platform.favicon import (
+    contest_favicon_asset,
+    problem_favicon_asset,
+)
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
 from app.service.platform.static_assets import StaticAssetManifest
@@ -189,6 +193,8 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
         validate_runtime_startup_preconditions(self.storage_layout)
         self.static_assets = StaticAssetManifest(self.STATIC_ROOT)
         self.templates.env.globals["static_asset_url"] = self.static_assets.url
+        self.templates.env.globals["problem_favicon_asset"] = problem_favicon_asset
+        self.templates.env.globals["contest_favicon_asset"] = contest_favicon_asset
         self.config_values = build_config_values()
         self.db = DB(
             self.storage_layout.database_path, config_values=self.config_values

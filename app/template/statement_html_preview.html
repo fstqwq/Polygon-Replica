@@ -1,5 +1,6 @@
 {% extends "root_base.html" %}
 {% block root_title %}{{ problem.slug }} Statement Preview - {{ ui_browser_title }}{% endblock %}
+{% block page_favicon %}<link rel="icon" href="{{ static_asset_url(problem_favicon_asset(problem.slug)) }}" type="image/png" sizes="32x32" />{% endblock %}
 {% block page_styles %}<link rel="stylesheet" href="{{ static_asset_url('css/statement_preview.css') }}" />{% endblock %}
 {% block content %}
 <div class="page-title-inline">

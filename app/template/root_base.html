@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{% block root_title %}{{ ui_browser_title }}{% endblock %}</title>
+  {% block page_favicon %}<link rel="icon" href="{{ static_asset_url('favicon.png') }}" type="image/png" sizes="32x32" />{% endblock %}
   <link rel="stylesheet" href="{{ static_asset_url('css/00_tokens.css') }}" />
   <link rel="stylesheet" href="{{ static_asset_url('css/core.css') }}" />
   <link rel="stylesheet" href="{{ static_asset_url('css/dialog_auth.css') }}" />
