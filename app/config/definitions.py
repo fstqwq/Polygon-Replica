@@ -500,10 +500,10 @@ PROBLEM_DEFINITIONS = (
     ),
     _int(
         "PROBLEM_ZIP_MAX_EXPANDED_BYTES",
-        256 * 1024 * 1024,
+        1024 * 1024 * 1024,
         "Limits",
         "Maximum consumed expanded bytes in one problem archive.",
-        _bounds(64 * 1024 * 1024, 4 * 1024 * 1024 * 1024, restart=True),
+        _bounds(64 * 1024 * 1024, 16 * 1024 * 1024 * 1024, restart=True),
     ),
 )
 

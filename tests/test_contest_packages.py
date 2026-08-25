@@ -306,6 +306,26 @@ class TestContestPackageDownload(unittest.TestCase):
                 statement_pdfs=self._statement_pdfs(),
             )
 
+    def test_download_reports_the_expanded_limit_for_a_cached_archive(self) -> None:
+        snapshot = self._snapshot()
+        external_packages = self._external_packages(snapshot)
+        with zipfile.ZipFile(external_packages[101].path, "w") as archive:
+            archive.writestr("data/secret/020.ans", b"x" * (4 * 1024 * 1024 + 1))
+
+        with self.assertRaises(ValueError) as raised:
+            self.service.build_download(
+                snapshot,
+                external_packages=external_packages,
+                statement_pdfs=self._statement_pdfs(),
+            )
+
+        self.assertEqual(
+            str(raised.exception),
+            "cached external package is invalid: external-101.zip: "
+            "expanded zip payload is too large at data/secret/020.ans; "
+            "increase PROBLEM_ZIP_MAX_EXPANDED_BYTES (currently 4194304 bytes)",
+        )
+
     def test_freeze_rejects_unregistered_format(self) -> None:
         with self.assertRaisesRegex(ValueError, "unsupported package format: custom"):
             self._snapshot("custom")

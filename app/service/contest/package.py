@@ -173,8 +173,14 @@ class ContestPackageService:
                     else:
                         archive.zip_file.copy_to(info, destination)
         except (OSError, ValueError, zipfile.BadZipFile) as exc:
+            detail = str(exc)
+            if detail.startswith("expanded zip payload is too large"):
+                detail += (
+                    "; increase PROBLEM_ZIP_MAX_EXPANDED_BYTES "
+                    f"(currently {self._problem_zip_max_expanded_bytes} bytes)"
+                )
             raise ValueError(
-                f"cached external package is invalid: {source.name}: {exc}"
+                f"cached external package is invalid: {source.name}: {detail}"
             ) from exc
 
     @staticmethod
