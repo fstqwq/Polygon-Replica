@@ -12,7 +12,7 @@ Priorities are external protocols, security boundaries, durable transitions, use
 | --- | --- |
 | External protocol, security boundary, durable transition, or concurrency invariant | Add or update the owning behavioral test. |
 | User workflow with a durable or external result | Exercise one real entry path; update its existing owner before adding another. |
-| Bug fix | Add a regression test only when the behavior is stable and can credibly recur. |
+| Bug fix | Preserve the complete path from an external input to an externally observable result in an existing test. Do not add an isolated assertion for the failed intermediate step or implementation detail. |
 | Presentation-only change | Review the rendered UI; do not add an automated assertion by default. |
 | Refactor or dead-code removal | Use the existing suite and static checks unless a new boundary is exposed. |
 

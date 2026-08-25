@@ -27,6 +27,7 @@ For product usage, start with the [User guide (in Chinese)](user-guide.md).
 - [Application package map](src/README.md)
 - [Module taxonomy](module-taxonomy.md)
 - [Python coding and import policy](coding-style.md)
+- [Refactoring policy](refactoring.md)
 - [Testing policy](testing.md)
 
 ## Operations

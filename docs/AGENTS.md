@@ -11,6 +11,10 @@ Documentation describes the current system and is organized by ownership:
 - `coding-style.md` owns Python authoring and import rules.
 - `testing.md` owns test selection and assertion policy.
 
+Every design and behavior statement directly states a current fact: the acting
+component, its action, and the applicable scope. Delete contrastive framing,
+rejected alternatives, obsolete behavior, and hypothetical caveats.
+
 Each fact has one home. Other documents link to its owner instead of copying it.
 Use `MUST` and `MUST NOT` only for external protocols and security or storage
 invariants. Describe internal Python structure and current orchestration in the

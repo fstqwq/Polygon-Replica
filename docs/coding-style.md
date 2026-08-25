@@ -5,6 +5,41 @@ The [PEP 8 import guidance](https://peps.python.org/pep-0008/#imports) is the ba
 Application code targets CPython 3.14 exclusively and uses its native deferred
 annotation semantics.
 
+## Type discipline
+
+Annotations define statically checked application interfaces. Function and
+method signatures state their exact inputs and outputs, and collections state
+their element types. Stable records use `TypedDict` or dataclasses, finite value
+sets use `Literal` or enums, and substitutable behavior uses `Protocol`. These
+types preserve known structure across application layers.
+
+`T | None` declares absence as part of the contract. The boundary that owns the
+fallback or rejection resolves that possibility before returning `T` to
+downstream code.
+
+Untyped values remain at the boundary that introduced them, such as a framework
+adapter, decoded payload, database row, or third-party API. Accept such a value
+as `object` or its most precise library type, validate and narrow it once, then
+return a canonical application type. `Any` is limited to interfaces that are
+defined dynamically by a framework or library, with a typed application value
+produced at the same boundary.
+
+`cast()` records a type fact already established by validation or by the owning
+boundary. It changes the static checker's view of a value, while runtime
+validation remains at the boundary. Type disagreements are resolved in the
+declared interface, and missing third-party type information is supplied through
+annotations or stubs.
+
+## Canonical internal data
+
+Use precise type annotations. Validate and normalize external or incomplete data
+once at its owning boundary; internal code consumes canonical typed values.
+
+Place `isinstance`, `None`, truthiness, and compatibility checks at the owning
+boundary and strengthen the resulting type. Canonical tokens then flow through
+internal code unchanged; `.strip()`, `.lower()`, `str(...)`, and similar
+normalization belong at their entry boundary.
+
 ## Incomplete and legacy data
 
 Authoring reads must remain usable with incomplete source. Normalize or diagnose the condition once at its owning boundary:
