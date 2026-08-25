@@ -297,7 +297,7 @@ Contest membership 和 problem 权限彼此独立。获得 contest `read` 或 `w
 
 点击 `Build All Packages` 后，系统会为你有权构建且当前包未 `ready` 的题目排队。所有题的当前包都变为 `ready` 后，页面才显示 `Download Packages`。
 
-下载时选择一种 `External format`。系统按题号组合每道题当前 published revision 对应的 native package。如果某道题不符合所选格式，页面会显示需要调整的题目配置。
+下载时选择一种 `External format`。系统准备缺少的目标格式包，再按题号返回整场归档。归档根目录同时包含所有题共同具备的各语言完整题面 PDF。如果某道题不符合所选格式，页面会显示需要调整的题目配置。
 
 ## 常见状态和处理方法
 

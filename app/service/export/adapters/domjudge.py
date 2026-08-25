@@ -122,19 +122,16 @@ class DOMjudgePackageAdapter(PackageAdapterSupport):
         *,
         target: Path,
         canonical_problem_slug: str,
-        placement: ContestPackagePlacement | None = None,
         plan: PackageAdapterPlan | None = None,
     ) -> str:
         adapter_plan = plan or self.plan(reader)
         if adapter_plan.package_format != self.format:
             raise ValueError("package adapter plan format does not match request")
         external_id = self.external_id(canonical_problem_slug)
-        resolved_short_name = self.short_name(
-            placement.idx if placement is not None else external_id
-        )
+        resolved_short_name = self.short_name(external_id)
         color = self.balloon_color(
             external_id=external_id,
-            placement=placement,
+            placement=None,
         )
         self.prepare_target(target)
 
@@ -204,6 +201,50 @@ class DOMjudgePackageAdapter(PackageAdapterSupport):
         )
         self.copy_attachments(snapshot, target)
         return adapter_plan.warning
+
+    def apply_contest_placement(
+        self,
+        target: Path,
+        *,
+        canonical_problem_slug: str,
+        placement: ContestPackagePlacement,
+    ) -> None:
+        del canonical_problem_slug
+        ini_path = target / "domjudge-problem.ini"
+        if ini_path.is_symlink() or not ini_path.is_file():
+            raise ValueError("DOMjudge package is missing domjudge-problem.ini")
+        lines = ini_path.read_text(encoding="utf-8").splitlines()
+        short_name = self.ini_value(self.short_name(placement.idx))
+        color = self.balloon_color(
+            external_id="problem",
+            placement=placement,
+        )
+        replaced_short_name = False
+        replaced_color = False
+        rendered: list[str] = []
+        for line in lines:
+            key = line.partition("=")[0].strip().lower()
+            if key == "short-name":
+                if replaced_short_name:
+                    raise ValueError(
+                        "DOMjudge package has duplicate short-name metadata"
+                    )
+                rendered.append(f"short-name = {short_name}")
+                replaced_short_name = True
+            elif key == "color":
+                if replaced_color:
+                    raise ValueError("DOMjudge package has duplicate color metadata")
+                rendered.append(f"color = {color}")
+                replaced_color = True
+            else:
+                rendered.append(line)
+        if not replaced_short_name or not replaced_color:
+            raise ValueError("DOMjudge package placement metadata is incomplete")
+        ini_path.write_text(
+            "\n".join(rendered) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
 
     @staticmethod
     def short_name(value: str | None) -> str:

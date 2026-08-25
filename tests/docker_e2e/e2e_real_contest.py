@@ -1,8 +1,11 @@
 """Transient Contest PDF portion of the deployed real-Judgehost E2E journey."""
 
+import io
 import json
 import os
 import sqlite3
+import time
+import zipfile
 from collections.abc import Callable
 from pathlib import Path
 
@@ -167,3 +170,156 @@ def assert_contest_pdf(
     ).exists():
         raise RuntimeError("Contest PDF Preview retained an intermediate source tree")
     return verification_id, preview_id
+
+
+def assert_contest_package_download(
+    client: httpx.Client,
+    connection: sqlite3.Connection,
+    *,
+    problem: str,
+    expected_head: str,
+) -> None:
+    rejected = client.post(
+        f"/contests/{CONTEST}/packages/download",
+        data={"package_format": "qoj"},
+        timeout=300.0,
+    )
+    if rejected.status_code != 409:
+        raise RuntimeError(
+            "Contest package download did not reject the stale Native Package: "
+            f"status={rejected.status_code} body={rejected.text[:500]}"
+        )
+    rejected_detail = str(rejected.json().get("detail") or "")
+    if "Packages are not ready" not in rejected_detail or problem not in rejected_detail:
+        raise RuntimeError(
+            f"Contest package readiness error is inaccurate: {rejected_detail!r}"
+        )
+
+    build = client.post(f"/contests/{CONTEST}/packages/build-all")
+    if build.status_code != 303:
+        raise RuntimeError(
+            f"Build All Packages failed: {build.status_code} {build.text[:500]}"
+        )
+    deadline = time.monotonic() + 300.0
+    job = None
+    while time.monotonic() < deadline:
+        job = connection.execute(
+            """
+            SELECT j.status,j.error,j.materialization_id
+            FROM export_jobs j
+            JOIN problems p ON p.id=j.problem_id
+            WHERE p.slug=? AND j.export_type='native' AND j.source_commit=?
+            ORDER BY j.created_at DESC,j.id DESC LIMIT 1
+            """,
+            [problem, expected_head],
+        ).fetchone()
+        if job is not None and str(job["status"]) in {"succeeded", "failed"}:
+            break
+        time.sleep(0.1)
+    if job is None or str(job["status"]) != "succeeded":
+        detail = None if job is None else dict(job)
+        raise RuntimeError(f"Build All Packages did not finish successfully: {detail!r}")
+
+    materialization = connection.execute(
+        """
+        SELECT m.id
+        FROM contest_problems cp
+        JOIN contests c ON c.id=cp.contest_id
+        JOIN problems p ON p.id=cp.problem_id
+        JOIN problem_package_materializations m ON m.problem_id=p.id
+        WHERE c.slug=? AND p.slug=? AND m.status='available'
+          AND m.source_commit=?
+        ORDER BY m.revision_number DESC,m.created_at DESC LIMIT 1
+        """,
+        [CONTEST, problem, expected_head],
+    ).fetchone()
+    if materialization is None:
+        raise RuntimeError("Contest package Native Package is missing")
+    native_package_id = str(materialization["id"])
+
+    def export_count(package_format: str) -> int:
+        row = connection.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM exports
+            WHERE materialization_id=? AND export_type=?
+            """,
+            [native_package_id, package_format],
+        ).fetchone()
+        return int(row["count"])
+
+    def export_job_count(package_format: str) -> int:
+        row = connection.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM export_jobs
+            WHERE materialization_id=? AND export_type=?
+            """,
+            [native_package_id, package_format],
+        ).fetchone()
+        return int(row["count"])
+
+    qoj_before = export_count("qoj")
+    qoj_jobs_before = export_job_count("qoj")
+    first_qoj = client.post(
+        f"/contests/{CONTEST}/packages/download",
+        data={"package_format": "qoj"},
+        timeout=300.0,
+    )
+    qoj_after_first = export_count("qoj")
+    qoj_jobs_after_first = export_job_count("qoj")
+    second_qoj = client.post(
+        f"/contests/{CONTEST}/packages/download",
+        data={"package_format": "qoj"},
+        timeout=300.0,
+    )
+    qoj_after_second = export_count("qoj")
+    qoj_jobs_after_second = export_job_count("qoj")
+    if (
+        qoj_after_first != qoj_before + 1
+        or qoj_after_second != qoj_after_first
+        or qoj_jobs_after_first != qoj_jobs_before + 1
+        or qoj_jobs_after_second != qoj_jobs_after_first
+    ):
+        raise RuntimeError(
+            "Contest package download did not create and reuse one QOJ export: "
+            f"before={qoj_before} first={qoj_after_first} "
+            f"second={qoj_after_second} jobs_before={qoj_jobs_before} "
+            f"jobs_first={qoj_jobs_after_first} jobs_second={qoj_jobs_after_second}"
+        )
+    for response in (first_qoj, second_qoj):
+        if response.status_code != 200:
+            raise RuntimeError(
+                "Contest QOJ package returned "
+                f"{response.status_code}: {response.text[:500]}"
+            )
+        with zipfile.ZipFile(io.BytesIO(response.content)) as outer:
+            names = set(outer.namelist())
+            child_name = "packages/A-e2e-sample.zip"
+            if {"statements.en.pdf", child_name} != names:
+                raise RuntimeError(
+                    f"Contest QOJ bundle has unexpected members: {sorted(names)!r}"
+                )
+            if not outer.read("statements.en.pdf").startswith(b"%PDF-"):
+                raise RuntimeError("Contest QOJ bundle statement PDF is invalid")
+            with zipfile.ZipFile(io.BytesIO(outer.read(child_name))) as child:
+                if "problem.conf" not in child.namelist():
+                    raise RuntimeError("Contest QOJ child omitted problem.conf")
+
+    domjudge_before = export_count("domjudge")
+    domjudge = client.post(
+        f"/contests/{CONTEST}/packages/download",
+        data={"package_format": "domjudge"},
+        timeout=300.0,
+    )
+    if domjudge.status_code != 200 or export_count("domjudge") != domjudge_before + 1:
+        raise RuntimeError(
+            "Contest DOMjudge package did not prepare one external export: "
+            f"status={domjudge.status_code} body={domjudge.text[:500]}"
+        )
+    with zipfile.ZipFile(io.BytesIO(domjudge.content)) as outer:
+        child_name = "packages/A-e2e-sample.zip"
+        with zipfile.ZipFile(io.BytesIO(outer.read(child_name))) as child:
+            metadata = child.read("domjudge-problem.ini").decode()
+    if "short-name = A\n" not in metadata or "color = #e6194b\n" not in metadata:
+        raise RuntimeError(f"Contest DOMjudge placement is wrong: {metadata!r}")

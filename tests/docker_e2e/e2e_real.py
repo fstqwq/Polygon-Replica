@@ -22,6 +22,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from app.service.platform.maintenance.plan import ARTIFACT_TABLES
 from e2e_real_contest import (
     CONTEST,
+    assert_contest_package_download,
     assert_contest_pdf,
     start_contest_pdf,
 )
@@ -2202,6 +2203,39 @@ def verify_deployment() -> None:
                 expected_head=head,
                 expected_solution_verdicts=AGENT_SOLUTION_VERDICTS,
             )
+        package_refresh = AGENT_TEMP / "contest-package-refresh.txt"
+        package_refresh.write_text(
+            "publish a new revision before Build All Packages\n",
+            encoding="utf-8",
+        )
+        _agent_cli(
+            "upload",
+            "--problem",
+            PROBLEM,
+            "--workspace-path",
+            "attachments/contest-package-refresh.txt",
+            "--local-file",
+            str(package_refresh),
+        )
+        package_commit = _agent_cli(
+            "commit",
+            "--problem",
+            PROBLEM,
+            "--message",
+            "exercise Contest package rebuild",
+        )
+        head = str(package_commit.get("head") or "")
+        if package_commit.get("status") != "ok" or not head:
+            raise RuntimeError(
+                f"Contest package refresh commit failed: {package_commit!r}"
+            )
+        with _connect() as connection:
+            assert_contest_package_download(
+                client,
+                connection,
+                problem=PROBLEM,
+                expected_head=head,
+            )
         collaboration_head = exercise_role_pages_and_collaboration(
             admin=client,
             client_factory=_client,
@@ -2220,7 +2254,8 @@ def verify_deployment() -> None:
         )
     print(
         "e2e-real completed deployment, sample preview, verification, commit, "
-        "DOMjudge/ICPC 2025-09 exports, and Contest PDF Preview "
+        "DOMjudge/ICPC 2025-09 exports, Contest PDF Preview, and repeated "
+        "Contest package download "
         f"variant={variant} "
         f"sample_verification={sample_verification_id} "
         f"generation_failure={generation_failure_id} "

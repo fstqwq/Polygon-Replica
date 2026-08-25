@@ -13,13 +13,7 @@ from unittest import mock
 import yaml
 
 from app.config import ConfigValues
-from app.service.export.adapters.shared import (
-    ContestPackagePlacement,
-    SUBMISSION_RULES,
-    annotated_submission,
-    write_input_validator,
-    write_output_validator,
-)
+from app.service.export.adapters import PackageAdapterRegistry
 from app.service.export.adapters.domjudge import (
     DOMjudgePackageAdapter,
     render_domjudge_problem_yaml,
@@ -29,10 +23,19 @@ from app.service.export.adapters.icpc_2025 import (
     render_problem_yaml,
     render_submissions_yaml,
 )
-from app.service.export.adapters import PackageAdapterRegistry
+from app.service.export.adapters.shared import (
+    ContestPackagePlacement,
+    SUBMISSION_RULES,
+    annotated_submission,
+    write_input_validator,
+    write_output_validator,
+)
+from app.service.platform.latex_process import detect_latex_engine
 from app.service.problem_package.manifest import NativePackageManifest, describe_file
 from app.service.problem_package.service import NativePackageReader
 from app.service.problem_package.store import MaterializationRow
+from app.service.sandbox.base import ExecResult
+from app.service.statement.tex_compile import TexCompileResult
 
 
 class TestICPCExportPackage(unittest.TestCase):
@@ -155,6 +158,102 @@ class TestICPCExportPackage(unittest.TestCase):
             ),
             palette[expected_index],
         )
+
+    def test_domjudge_contest_placement_rewrites_only_contest_metadata(self) -> None:
+        target = self.root / "placement"
+        target.mkdir()
+        ini = target / "domjudge-problem.ini"
+        ini.write_text(
+            "externalid = projected-problem\n"
+            "short-name = projected-problem\n"
+            "color = #123456\n",
+            encoding="utf-8",
+        )
+        values = ConfigValues(
+            {"AUX_DISPLAY_TEXT_LIMIT_BYTES": 4096},
+            normalizer=lambda raw: raw,
+        )
+        adapter = DOMjudgePackageAdapter(values, mock.Mock())
+
+        adapter.apply_contest_placement(
+            target,
+            canonical_problem_slug="owner/projected-problem",
+            placement=ContestPackagePlacement(idx="B", ordinal=2),
+        )
+
+        self.assertEqual(
+            ini.read_text(encoding="utf-8"),
+            "externalid = projected-problem\n"
+            "short-name = B\n"
+            f"color = {DOMjudgePackageAdapter.COLOR_PALETTE[1]}\n",
+        )
+
+    def test_other_adapters_leave_contest_placement_unchanged(self) -> None:
+        values = ConfigValues(
+            {"AUX_DISPLAY_TEXT_LIMIT_BYTES": 4096},
+            normalizer=lambda raw: raw,
+        )
+        adapters = PackageAdapterRegistry(values, mock.Mock())
+        for package_format in ("icpc-2025-09", "qoj", "nowcoder"):
+            with self.subTest(package_format=package_format):
+                target = self.root / f"placement-{package_format}"
+                target.mkdir()
+                marker = target / "marker.txt"
+                marker.write_text("unchanged\n", encoding="utf-8")
+
+                adapters.require(package_format).apply_contest_placement(
+                    target,
+                    canonical_problem_slug="owner/problem",
+                    placement=ContestPackagePlacement(idx="B", ordinal=2),
+                )
+
+                self.assertEqual(marker.read_text(encoding="utf-8"), "unchanged\n")
+                self.assertEqual(
+                    sorted(path.name for path in target.iterdir()),
+                    ["marker.txt"],
+                )
+
+    def test_statement_compile_error_prefers_real_latex_log_error(self) -> None:
+        values = ConfigValues(
+            {"AUX_DISPLAY_TEXT_LIMIT_BYTES": 4096},
+            normalizer=lambda raw: raw,
+        )
+        adapter = DOMjudgePackageAdapter(values, mock.Mock())
+        result = TexCompileResult(
+            engine="pdflatex",
+            proc=ExecResult(
+                backend="fixture",
+                status="failed",
+                returncode=1,
+                elapsed_ms=1,
+                stdout="pdfTeX failed",
+                stderr="kpathsea: Running mktextfm larm1095\n",
+            ),
+            log_text=(
+                "Font metrics written on larm1095.tfm.\n"
+                "! LaTeX Error: Unicode character 括 (U+62EC)\n"
+                "               not set up for use with LaTeX.\n"
+            ),
+            pdf_path=self.root / "statement" / "problem.pdf",
+        )
+
+        error = adapter.statement_compile_error(result)
+
+        self.assertIn("Unicode character 括 (U+62EC)", error)
+        self.assertNotIn("mktextfm", error)
+        self.assertNotIn("Font metrics written", error)
+
+    def test_traditional_polygon_template_with_chinese_keeps_pdflatex(self) -> None:
+        source = self.root / "traditional.tex"
+        source.write_text(
+            "\\documentclass{article}\n"
+            "\\usepackage[T2A]{fontenc}\n"
+            "\\usepackage[utf8]{inputenc}\n"
+            "\\begin{document}括号\\end{document}\n",
+            encoding="utf-8",
+        )
+
+        self.assertEqual(detect_latex_engine(source), "pdflatex")
 
     def test_submissions_yaml_preserves_all_expected_result_sets(self) -> None:
         entries = {
@@ -352,7 +451,6 @@ class TestICPCExportPackage(unittest.TestCase):
                 reader,
                 target=domjudge,
                 canonical_problem_slug="owner/projected-problem",
-                placement=ContestPackagePlacement(idx="A", ordinal=1),
             )
 
         self.assertIn("solutions/compile.cpp", strict_warning)
@@ -373,7 +471,11 @@ class TestICPCExportPackage(unittest.TestCase):
 
         self.assertTrue((domjudge / "problem_statement" / "problem.pdf").is_file())
         domjudge_ini = (domjudge / "domjudge-problem.ini").read_text()
-        self.assertIn(f"color = {DOMjudgePackageAdapter.COLOR_PALETTE[0]}\n", domjudge_ini)
+        standalone_color = DOMjudgePackageAdapter.balloon_color(
+            external_id="projected-problem",
+            placement=None,
+        )
+        self.assertIn(f"color = {standalone_color}\n", domjudge_ini)
         self.assertTrue((domjudge / "domjudge-problem.ini").is_file())
         self.assertFalse((domjudge / "statement").exists())
         self.assertFalse((domjudge / "submissions" / "submissions.yaml").exists())
@@ -384,13 +486,23 @@ class TestICPCExportPackage(unittest.TestCase):
             domjudge_metadata["validation"],
             "custom interactive",
         )
-        self.assertIn(
-            "short-name = A\n",
-            (domjudge / "domjudge-problem.ini").read_text(encoding="utf-8"),
-        )
+        self.assertIn("short-name = projected-problem\n", domjudge_ini)
         self.assertIn(
             "externalid = projected-problem\n",
             (domjudge / "domjudge-problem.ini").read_text(encoding="utf-8"),
+        )
+        domjudge_adapter.apply_contest_placement(
+            domjudge,
+            canonical_problem_slug="owner/projected-problem",
+            placement=ContestPackagePlacement(idx="A", ordinal=1),
+        )
+        placed_ini = (domjudge / "domjudge-problem.ini").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("short-name = A\n", placed_ini)
+        self.assertIn(
+            f"color = {DOMjudgePackageAdapter.COLOR_PALETTE[0]}\n",
+            placed_ini,
         )
         domjudge_mixed = domjudge / "submissions" / "mixed" / "mixed.cpp"
         self.assertTrue(

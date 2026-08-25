@@ -7,7 +7,6 @@ import yaml
 
 from app.config import ConfigValues
 from app.service.export.adapters.shared import (
-    ContestPackagePlacement,
     PackageAdapterPlan,
     PackageAdapterSupport,
     PackageFormat,
@@ -134,10 +133,8 @@ class ICPC2025PackageAdapter(PackageAdapterSupport):
         *,
         target: Path,
         canonical_problem_slug: str,
-        placement: ContestPackagePlacement | None = None,
         plan: PackageAdapterPlan | None = None,
     ) -> str:
-        del placement
         adapter_plan = plan or self.plan(reader)
         if adapter_plan.package_format != self.format:
             raise ValueError("package adapter plan format does not match request")

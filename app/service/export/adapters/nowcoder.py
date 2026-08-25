@@ -36,10 +36,9 @@ class NowcoderPackageAdapter:
         *,
         target: Path,
         canonical_problem_slug: str,
-        placement: ContestPackagePlacement | None = None,
         plan: PackageAdapterPlan | None = None,
     ) -> str:
-        del canonical_problem_slug, placement
+        del canonical_problem_slug
         adapter_plan = plan or self.plan(reader)
         if adapter_plan.package_format != self.format:
             raise ValueError("package adapter plan format does not match request")
@@ -61,6 +60,15 @@ class NowcoderPackageAdapter:
         if checker is not None:
             shutil.copy2(checker, target / "checker.cc")
         return adapter_plan.warning
+
+    @staticmethod
+    def apply_contest_placement(
+        target: Path,
+        *,
+        canonical_problem_slug: str,
+        placement: ContestPackagePlacement,
+    ) -> None:
+        del target, canonical_problem_slug, placement
 
     @staticmethod
     def _require_supported_problem(reader: NativePackageReader) -> None:

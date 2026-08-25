@@ -2,7 +2,7 @@ import logging
 import re
 from pathlib import Path
 
-from app.runtime import ApplicationRuntime
+from app.runtime import ApplicationRuntime, ExportInFlight
 from app.service.export.service import NATIVE_PACKAGE_FORMAT
 from app.service.platform.worker_queue import WorkerFuture
 from app.service.problem_package.service import PublishedRevision
@@ -234,8 +234,19 @@ def start_verification_job(
     return True
 
 
-def _export_key(problem_id: int, source_commit: str) -> str:
-    return f"{int(problem_id)}:{source_commit}"
+def _export_key(
+    problem_id: int,
+    source_commit: str,
+    requested_format: str,
+) -> str:
+    return f"{int(problem_id)}:{source_commit}:{requested_format}"
+
+
+class _ExportCompletion(WorkerFuture):
+    """Expose completion for one export identity shared across queue admissions."""
+
+    def finish(self, error: Exception | None = None) -> None:
+        self._mark_done(error)
 
 
 def _run_export_create_worker(
@@ -313,32 +324,17 @@ def start_export_job(
 ) -> bool:
     if not export_job_id:
         raise ValueError("export_job_id is required")
+    package_format = application_runtime.export_service.require_job_format(
+        requested_format
+    )
     revision = application_runtime.problem_package_service.published_revision(problem_id)
     source_commit = revision.source_commit
-    key = _export_key(problem_id, source_commit)
-    with application_runtime.export_lock:
-        if key in application_runtime.export_inflight:
-            return False
-        application_runtime.export_inflight.add(key)
-    job_created = False
-    try:
-        application_runtime.export_service.create_export_job(
-            job_id=export_job_id,
-            problem_id=problem_id,
-            actor_user_id=actor_user_id,
-            package_format=requested_format,
-            source_commit=source_commit,
-        )
-        job_created = True
-    except Exception as exc:
-        if job_created:
-            application_runtime.export_service.mark_export_job_failed(export_job_id, str(exc))
-        with application_runtime.export_lock:
-            application_runtime.export_inflight.discard(key)
-        raise
+    key = _export_key(problem_id, source_commit, package_format)
+    completion = _ExportCompletion(f"export-inflight:{key}")
     worker_ref: list[WorkerFuture | None] = [None]
 
     def _runner() -> None:
+        error: Exception | None = None
         try:
             _run_export_create_worker(
                 application_runtime,
@@ -351,45 +347,221 @@ def start_export_job(
                 export_job_id=export_job_id,
                 standard_solution_only=standard_solution_only,
             )
+        except Exception as exc:
+            error = exc
+            raise
         finally:
+            completion.finish(error)
             worker = worker_ref[0]
             with application_runtime.export_lock:
-                application_runtime.export_inflight.discard(key)
+                active = application_runtime.export_inflight.get(key)
+                if active is not None and active.future is completion:
+                    application_runtime.export_inflight.pop(key, None)
                 if worker is not None:
                     application_runtime.export_workers.discard(worker)
     thread_name = f"{key}:{export_job_id}".replace(':', '-')
+    with application_runtime.export_lock:
+        existing = application_runtime.export_inflight.get(key)
+        if existing is not None and existing.future.is_alive():
+            return False
+        application_runtime.export_inflight.pop(key, None)
+        application_runtime.export_inflight[key] = ExportInFlight(
+            export_job_id=export_job_id,
+            future=completion,
+        )
+    job_created = False
     try:
+        application_runtime.export_service.create_export_job(
+            job_id=export_job_id,
+            problem_id=problem_id,
+            actor_user_id=actor_user_id,
+            package_format=package_format,
+            source_commit=source_commit,
+        )
+        job_created = True
         worker, queued, submit_reason = application_runtime.worker_queue_service.submit(
-            name=f'export-{thread_name}',
+            name=f"export-{thread_name}",
             fn=_runner,
-            queue_name='export',
-            dedupe_key=f'export-job:{export_job_id}',
-            job_type='export',
+            queue_name="export",
+            dedupe_key=f"export-job:{export_job_id}",
+            job_type="export",
         )
         worker_ref[0] = worker
         if not queued:
-            with application_runtime.export_lock:
-                application_runtime.export_inflight.discard(key)
-            application_runtime.export_service.mark_export_job_failed(
-                export_job_id,
-                f'export queue rejected ({submit_reason})',
-            )
-            raise RuntimeError(f'export queue rejected ({submit_reason})')
+            raise RuntimeError(f"export queue rejected ({submit_reason})")
         with application_runtime.export_lock:
             application_runtime.export_workers.add(worker)
             if not worker.is_alive():
                 application_runtime.export_workers.discard(worker)
-                application_runtime.export_inflight.discard(key)
-    except Exception:
+    except Exception as exc:
         if job_created:
             application_runtime.export_service.mark_export_job_failed(
                 export_job_id,
-                'export queue submission failed',
+                str(exc) or "export queue submission failed",
             )
+        completion.finish(exc)
         with application_runtime.export_lock:
             cleanup_worker = worker_ref[0]
             if cleanup_worker is not None:
                 application_runtime.export_workers.discard(cleanup_worker)
-            application_runtime.export_inflight.discard(key)
+            active = application_runtime.export_inflight.get(key)
+            if active is not None and active.future is completion:
+                application_runtime.export_inflight.pop(key, None)
         raise
     return True
+
+
+def _run_ready_external_export_worker(
+    application_runtime: ApplicationRuntime,
+    problem: str,
+    *,
+    problem_id: int,
+    requested_format: str,
+    source_commit: str,
+    native_package_id: str,
+    native_archive_sha256: str,
+    export_job_id: str,
+) -> None:
+    package_format = application_runtime.export_service.require_job_format(
+        requested_format
+    )
+    if package_format == NATIVE_PACKAGE_FORMAT:
+        raise ValueError("ready external export requires an external format")
+    try:
+        application_runtime.export_service.mark_export_job_running(
+            export_job_id,
+            source_commit=source_commit,
+        )
+        native_package = application_runtime.problem_package_service.native_package(
+            native_package_id
+        )
+        if (
+            native_package is None
+            or native_package["problem_id"] != problem_id
+            or native_package["status"] != "available"
+            or native_package["source_commit"] != source_commit
+            or native_package["archive_sha256"] != native_archive_sha256
+        ):
+            raise ValueError("frozen Native Package is no longer available")
+        application_runtime.export_service.mark_export_job_packaging(
+            export_job_id,
+            native_package_id=native_package_id,
+        )
+        export_id, _path, warning = application_runtime.export_service.create_export(
+            problem,
+            package_format,
+            native_package_id=native_package_id,
+            expected_archive_sha256=native_archive_sha256,
+        )
+        application_runtime.export_service.mark_export_job_succeeded(
+            export_job_id,
+            native_package_id=native_package_id,
+            export_id=export_id,
+            warning=warning,
+        )
+    except Exception as exc:
+        application_runtime.export_service.mark_export_job_failed(
+            export_job_id,
+            str(exc),
+        )
+        raise
+
+
+def start_ready_external_export_job(
+    application_runtime: ApplicationRuntime,
+    problem: str,
+    *,
+    actor_user_id: int,
+    problem_id: int,
+    requested_format: str,
+    source_commit: str,
+    native_package_id: str,
+    native_archive_sha256: str,
+    export_job_id: str,
+) -> tuple[str, WorkerFuture]:
+    """Run or join one adapter job for a frozen ready Native Package."""
+
+    package_format = application_runtime.export_service.require_job_format(
+        requested_format
+    )
+    if package_format == NATIVE_PACKAGE_FORMAT:
+        raise ValueError("Contest download requires an external package format")
+    key = _export_key(problem_id, source_commit, package_format)
+    completion = _ExportCompletion(f"external-export-inflight:{key}")
+    worker_ref: list[WorkerFuture | None] = [None]
+
+    def _runner() -> None:
+        error: Exception | None = None
+        try:
+            _run_ready_external_export_worker(
+                application_runtime,
+                problem,
+                problem_id=problem_id,
+                requested_format=package_format,
+                source_commit=source_commit,
+                native_package_id=native_package_id,
+                native_archive_sha256=native_archive_sha256,
+                export_job_id=export_job_id,
+            )
+        except Exception as exc:
+            error = exc
+            raise
+        finally:
+            completion.finish(error)
+            worker = worker_ref[0]
+            with application_runtime.export_lock:
+                active = application_runtime.export_inflight.get(key)
+                if active is not None and active.future is completion:
+                    application_runtime.export_inflight.pop(key, None)
+                if worker is not None:
+                    application_runtime.export_workers.discard(worker)
+
+    with application_runtime.export_lock:
+        existing = application_runtime.export_inflight.get(key)
+        if existing is not None and existing.future.is_alive():
+            return (existing.export_job_id, existing.future)
+        application_runtime.export_inflight.pop(key, None)
+        application_runtime.export_inflight[key] = ExportInFlight(
+            export_job_id=export_job_id,
+            future=completion,
+        )
+    job_created = False
+    try:
+        application_runtime.export_service.create_export_job(
+            job_id=export_job_id,
+            problem_id=problem_id,
+            actor_user_id=actor_user_id,
+            package_format=package_format,
+            source_commit=source_commit,
+        )
+        job_created = True
+        worker, queued, reason = application_runtime.worker_queue_service.submit(
+            name=f"contest-export-{export_job_id}",
+            fn=_runner,
+            queue_name="export",
+            dedupe_key=f"external-export:{key}",
+            job_type="export",
+        )
+        worker_ref[0] = worker
+        if not queued:
+            raise RuntimeError(f"export queue rejected ({reason})")
+        with application_runtime.export_lock:
+            application_runtime.export_workers.add(worker)
+            if not worker.is_alive():
+                application_runtime.export_workers.discard(worker)
+        return (export_job_id, completion)
+    except Exception as exc:
+        if job_created:
+            application_runtime.export_service.mark_export_job_failed(
+                export_job_id,
+                str(exc) or "export queue submission failed",
+            )
+        completion.finish(exc)
+        with application_runtime.export_lock:
+            cleanup_worker = worker_ref[0]
+            if cleanup_worker is not None:
+                application_runtime.export_workers.discard(cleanup_worker)
+            active = application_runtime.export_inflight.get(key)
+            if active is not None and active.future is completion:
+                application_runtime.export_inflight.pop(key, None)
+        raise

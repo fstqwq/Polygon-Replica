@@ -572,7 +572,7 @@ class TestPublishedRevisionExport(E2ETestBase):
             captured_runner.append(fn)
             return worker, True, "queued"
 
-        key = f"{problem_id}:{commit}"
+        key = f"{problem_id}:{commit}:domjudge"
         try:
             with patch.object(
                 runtime.worker_queue_service,
@@ -602,7 +602,7 @@ class TestPublishedRevisionExport(E2ETestBase):
         finally:
             worker.alive = False
             with runtime.export_lock:
-                runtime.export_inflight.discard(key)
+                runtime.export_inflight.pop(key, None)
                 runtime.export_workers.discard(worker)
 
     def test_native_package_job_finishes_with_the_native_package(self) -> None:
@@ -651,7 +651,7 @@ class TestPublishedRevisionExport(E2ETestBase):
         self.assertIsNone(row["export_id"])
         create_export.assert_not_called()
 
-    def test_same_published_commit_package_exports_fail_fast(self) -> None:
+    def test_same_published_commit_exports_different_formats_independently(self) -> None:
         _workspace, problem_id, commit = self._publish_problem()
         actor = db_fetch_one("SELECT id FROM users WHERE username=?", [self.user])
         self.assertIsNotNone(actor)
@@ -667,7 +667,10 @@ class TestPublishedRevisionExport(E2ETestBase):
             captured_runner.append(fn)
             return worker, True, "queued"
 
-        key = f"{problem_id}:{commit}"
+        keys = (
+            f"{problem_id}:{commit}:domjudge",
+            f"{problem_id}:{commit}:icpc-2025-09",
+        )
         try:
             with patch.object(runtime.worker_queue_service, "submit", side_effect=submit):
                 first = workspace_context_job.start_export_job(
@@ -690,15 +693,169 @@ class TestPublishedRevisionExport(E2ETestBase):
                 )
 
             self.assertTrue(first)
-            self.assertFalse(second)
-            self.assertEqual(len(captured_runner), 1)
-            self.assertIsNone(
+            self.assertTrue(second)
+            self.assertEqual(len(captured_runner), 2)
+            self.assertIsNotNone(
                 db_fetch_one("SELECT id FROM export_jobs WHERE id='export-second'")
             )
         finally:
             with runtime.export_lock:
-                runtime.export_inflight.discard(key)
+                for key in keys:
+                    runtime.export_inflight.pop(key, None)
                 runtime.export_workers.discard(worker)
+
+    def test_same_published_commit_and_format_share_inflight_export(self) -> None:
+        _workspace, problem_id, commit = self._publish_problem()
+        actor = db_fetch_one("SELECT id FROM users WHERE username=?", [self.user])
+        self.assertIsNotNone(actor)
+        captured_runner: list[object] = []
+
+        class FakeWorker:
+            @staticmethod
+            def is_alive() -> bool:
+                return True
+
+        worker = FakeWorker()
+
+        def submit(*, fn, **_kwargs):
+            captured_runner.append(fn)
+            return worker, True, "queued"
+
+        key = f"{problem_id}:{commit}:domjudge"
+        try:
+            with patch.object(runtime.worker_queue_service, "submit", side_effect=submit):
+                first = workspace_context_job.start_export_job(
+                    runtime,
+                    self.problem,
+                    self.user,
+                    actor_user_id=int(actor["id"]),
+                    problem_id=problem_id,
+                    requested_format="domjudge",
+                    export_job_id="export-shared-first",
+                )
+                second = workspace_context_job.start_export_job(
+                    runtime,
+                    self.problem,
+                    self.user,
+                    actor_user_id=int(actor["id"]),
+                    problem_id=problem_id,
+                    requested_format="domjudge",
+                    export_job_id="export-shared-second",
+                )
+
+            self.assertTrue(first)
+            self.assertFalse(second)
+            self.assertEqual(len(captured_runner), 1)
+            self.assertIsNone(
+                db_fetch_one(
+                    "SELECT id FROM export_jobs WHERE id='export-shared-second'"
+                )
+            )
+        finally:
+            with runtime.export_lock:
+                runtime.export_inflight.pop(key, None)
+                runtime.export_workers.discard(worker)
+
+    def test_contest_export_admission_returns_the_existing_job_and_future(self) -> None:
+        _workspace, problem_id, commit = self._publish_problem()
+        actor = db_fetch_one("SELECT id FROM users WHERE username=?", [self.user])
+        self.assertIsNotNone(actor)
+
+        class FakeWorker:
+            @staticmethod
+            def is_alive() -> bool:
+                return True
+
+        worker = FakeWorker()
+
+        def submit(**_kwargs):
+            return worker, True, "queued"
+
+        key = f"{problem_id}:{commit}:domjudge"
+        try:
+            with patch.object(runtime.worker_queue_service, "submit", side_effect=submit):
+                first_job, first_future = (
+                    workspace_context_job.start_ready_external_export_job(
+                        runtime,
+                        self.problem,
+                        actor_user_id=int(actor["id"]),
+                        problem_id=problem_id,
+                        requested_format="domjudge",
+                        source_commit=commit,
+                        native_package_id="np-frozen",
+                        native_archive_sha256="a" * 64,
+                        export_job_id="export-contest-first",
+                    )
+                )
+                second_job, second_future = (
+                    workspace_context_job.start_ready_external_export_job(
+                        runtime,
+                        self.problem,
+                        actor_user_id=int(actor["id"]),
+                        problem_id=problem_id,
+                        requested_format="domjudge",
+                        source_commit=commit,
+                        native_package_id="np-frozen",
+                        native_archive_sha256="a" * 64,
+                        export_job_id="export-contest-second",
+                    )
+                )
+
+            self.assertEqual(first_job, "export-contest-first")
+            self.assertEqual(second_job, first_job)
+            self.assertIs(second_future, first_future)
+            self.assertIsNone(
+                db_fetch_one(
+                    "SELECT id FROM export_jobs WHERE id='export-contest-second'"
+                )
+            )
+        finally:
+            with runtime.export_lock:
+                runtime.export_inflight.pop(key, None)
+                runtime.export_workers.discard(worker)
+
+    def test_contest_export_worker_consumes_only_the_frozen_native_package(self) -> None:
+        export_service = Mock()
+        export_service.require_job_format.return_value = "domjudge"
+        export_service.create_export.return_value = (
+            "e-frozen",
+            Path("frozen.zip"),
+            "",
+        )
+        native_workflow = Mock()
+        frozen_runtime = SimpleNamespace(
+            export_service=export_service,
+            problem_package_service=SimpleNamespace(
+                native_package=Mock(
+                    return_value={
+                        "problem_id": 17,
+                        "status": "available",
+                        "source_commit": "b" * 40,
+                        "archive_sha256": "c" * 64,
+                    }
+                )
+            ),
+            native_package_workflow=native_workflow,
+        )
+
+        workspace_context_job._run_ready_external_export_worker(
+            frozen_runtime,
+            "owner/problem",
+            problem_id=17,
+            requested_format="domjudge",
+            source_commit="b" * 40,
+            native_package_id="np-frozen",
+            native_archive_sha256="c" * 64,
+            export_job_id="export-frozen",
+        )
+
+        native_workflow.ensure.assert_not_called()
+        export_service.create_export.assert_called_once_with(
+            "owner/problem",
+            "domjudge",
+            native_package_id="np-frozen",
+            expected_archive_sha256="c" * 64,
+        )
 
     def test_native_package_contains_source_payloads_and_statement_build(self) -> None:
         workspace, problem_id, commit = self._publish_problem()
@@ -996,6 +1153,31 @@ class TestPublishedRevisionExport(E2ETestBase):
             [verified["id"], "domjudge", "icpc-2025-09"],
         )
         self.assertEqual(int(rows["c"]), 2)
+
+    def test_cached_external_package_discards_a_corrupt_archive(self) -> None:
+        problem_id, _commit, verified = self._native_package()
+        with patch.object(
+            runtime.tex_compile_service,
+            "compile_pdf",
+            side_effect=self._compile_statement,
+        ):
+            export_id, archive_path, _warning = runtime.export_service.create_export(
+                self.problem,
+                "domjudge",
+                native_package_id=verified["id"],
+            )
+        archive_path.write_bytes(b"corrupt external package")
+
+        cached = runtime.export_service.cached_external_package(
+            problem_id=problem_id,
+            native_package_id=verified["id"],
+            package_format="domjudge",
+        )
+
+        self.assertIsNone(cached)
+        self.assertIsNone(
+            db_fetch_one("SELECT id FROM exports WHERE id=?", [export_id])
+        )
 
     def test_qoj_adapter_publishes_a_root_test_data_archive(self) -> None:
         _problem_id, _commit, verified = self._native_package()

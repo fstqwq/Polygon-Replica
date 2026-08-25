@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import uuid
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from pathlib import Path
@@ -255,21 +256,43 @@ class ContestStatementPreviewService:
         username: str,
         source_kind: StatementPreviewSource,
         language: str,
+        native_package_ids: Mapping[int, str] | None = None,
     ) -> StatementPreviewRow:
-        groups = self.link_groups(
-            contest_id,
-            user_id=user_id,
-            username=username,
-        )
-        available = {
-            item["source"]: set(item["languages"])
-            for item in groups
-        }
-        if language not in available.get(source_kind, set()):
-            raise ValueError(
-                f"{language} is not available for every accessible Contest problem"
-            )
         rows = self._contests.contest_problems(contest_id)
+        pinned_packages = {
+            int(problem_id): str(native_package_id)
+            for problem_id, native_package_id in (native_package_ids or {}).items()
+        }
+        if pinned_packages:
+            if source_kind != "native_package":
+                raise ValueError("pinned Native Packages require the package source")
+            expected_problem_ids = {row["problem_id"] for row in rows}
+            if set(pinned_packages) != expected_problem_ids:
+                raise ValueError("pinned Native Package set is incomplete")
+            if any(
+                language
+                not in self._packages.statement_languages(
+                    pinned_packages[row["problem_id"]]
+                )
+                for row in rows
+            ):
+                raise ValueError(
+                    f"{language} is not available for every Contest problem"
+                )
+        else:
+            groups = self.link_groups(
+                contest_id,
+                user_id=user_id,
+                username=username,
+            )
+            available = {
+                item["source"]: set(item["languages"])
+                for item in groups
+            }
+            if language not in available.get(source_kind, set()):
+                raise ValueError(
+                    f"{language} is not available for every accessible Contest problem"
+                )
         access = self._access.problem_contexts(
             [row["problem_id"] for row in rows],
             user_id,
@@ -295,6 +318,7 @@ class ContestStatementPreviewService:
                 source_kind=source_kind,
                 output_kind="pdf",
                 language=language,
+                native_package_id=pinned_packages.get(row["problem_id"], ""),
             )
             for row in rows
         ]
@@ -331,6 +355,10 @@ class ContestStatementPreviewService:
                         username,
                         source_kind=source_kind,
                         language=language,
+                        native_package_id=pinned_packages.get(
+                            row["problem_id"],
+                            "",
+                        ),
                     )
                 )
                 for row in rows

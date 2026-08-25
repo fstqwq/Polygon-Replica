@@ -60,7 +60,7 @@ Package export creates or reuses a native package for the current published revi
 
 ## Contest package download
 
-Contest roster, indices, statement source, and attachments are durable authoring state. `idx` is both display identity and canonical order. A contest bundle uses each current native package in that order and remains a temporary response.
+Contest roster, indices, statement source, and attachments are durable authoring state. `idx` is both display identity and canonical order. A contest download freezes the ready native packages, prepares or reuses their external packages, and returns a temporary outer bundle in that order.
 
 ## Invalidation and cleanup
 

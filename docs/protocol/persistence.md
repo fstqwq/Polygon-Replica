@@ -32,7 +32,7 @@ Activation, completion, cancellation, and sanity finalization serialize their co
 | `export_jobs` | Individual package export requests and terminal summaries. |
 | `statement_previews` | User-scoped disposable HTML/PDF preview request and terminal summary. |
 
-Native package downloads do not create export records. Contest package bundles create no durable build or artifact rows. Preview payloads live below the cache root and are invalidated at startup; renderer and tool versions are excluded from preview identity.
+Native package downloads read their materialization records directly. A contest download records ordinary `export_jobs` and `exports` when it prepares missing external packages; the outer bundle lives only in request-scoped temporary storage. Preview payloads live below the cache root and are invalidated at startup; renderer and tool versions are excluded from preview identity.
 
 ## Contest rows
 

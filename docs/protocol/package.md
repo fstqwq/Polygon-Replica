@@ -70,7 +70,7 @@ A native package remains usable after `main` advances. A missing or corrupt arch
 
 ## Package export
 
-Package export is the only workflow that creates a native package. A request freezes the current published `main` commit, and only one creation flow may run for the same problem and commit at a time.
+Package export is the only workflow that creates a native package. A request freezes the current published `main` commit. External adapters coordinate work by problem, commit, and format, so requests for the same format share one in-flight build while different formats can build independently.
 
 | Request | Behavior |
 | --- | --- |
@@ -146,13 +146,18 @@ The `nowcoder` adapter emits the Nowcoder testcase archive.
 
 ## Contest package bundle
 
-A contest bundle requires an available native package for the current published revision of every roster problem. It applies one selected external adapter to each problem in canonical `idx` order. A missing or unavailable package rejects the request; the bundle does not select an older revision or start verification. Failure of any child package aborts the entire bundle.
+A contest bundle freezes the canonical problem order and the ready native package for every current published revision. A missing or unavailable native package rejects the request. `Build All Packages` and the single-problem package workflow own native package creation and verification.
+
+The download resolves and verifies the selected external package cache for every frozen native package. It submits every missing external package before waiting, then assembles the contest only from verified cache archives. A failed child prevents the outer archive, while successful child packages remain reusable. Before assembly, the download confirms that the contest, native packages, and caller access still match the frozen state.
 
 | Area | Contract |
 | --- | --- |
 | Children | `packages/<idx>-<problem>.zip`, one per roster problem. |
-| Placement | DOMjudge receives the contest `idx` and canonical ordinal for its short name and balloon color. ICPC, QOJ, and Nowcoder output is independent of contest placement. |
-| Outer archive | Contains only the child packages and no manifest, Git commit, native package identity, or checksum metadata. |
+| Statements | Every statement language shared by all frozen native packages produces one complete contest PDF at `statements.<language-code>.pdf`. An empty language intersection or a failed PDF prevents the bundle. |
+| Placement | Assembly rewrites only DOMjudge `short-name` and balloon color from the contest `idx` and canonical ordinal. The reusable cached package remains unchanged. ICPC, QOJ, and Nowcoder require no placement overlay. |
+| Outer archive | Contains the complete contest statement PDFs and child packages, with no manifest, Git commit, native package identity, or checksum metadata. |
+
+Statement compilation retains the established template contract and engine detection. The contest PDF path uses the frozen native package sources and the existing preview cache. External adapters project the first LaTeX `!` diagnostic from the generated log, then fall back to stdout and stderr. Export job and HTTP diagnostics use the configured display-text limit.
 
 ## Contest import
 

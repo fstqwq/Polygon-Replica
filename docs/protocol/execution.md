@@ -6,7 +6,7 @@
 | --- | --- |
 | Problem statement HTML/PDF | Synchronous request with preview-cache reuse. |
 | Contest statement HTML/PDF | Synchronous request; HTML may render problems through a bounded pool. |
-| Contest package bundle | Synchronous request. |
+| Contest package bundle | Synchronous request that submits missing external exports to the worker queue, waits for them, and assembles verified cache archives. |
 | Verification, custom run, and package export | Bounded process-local worker queue with durable summary state. |
 
 Process-local work does not resume after restart. Startup reconciles interrupted durable records to terminal failure before accepting new work.

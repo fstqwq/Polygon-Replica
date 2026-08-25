@@ -5,6 +5,7 @@ import re
 import shutil
 import threading
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 from app.config import ConfigValues
@@ -24,6 +25,7 @@ from app.service.platform.archive_integrity import (
     ArchiveDescriptor,
     ArchiveIntegrityVerifier,
 )
+from app.service.platform.error_text import bounded_display_text
 from app.service.platform.fs.layout import StorageLayout
 from app.service.platform.fs.op import extract_git_archive, remove_symlinks
 from app.service.platform.hashing import sha256_file
@@ -43,6 +45,15 @@ class PackageBuildBusy(RuntimeError):
     """An external package build for this Native Package is already running."""
 
 
+@dataclass(frozen=True)
+class CachedExternalPackage:
+    export_id: str
+    native_package_id: str
+    package_format: PackageFormat
+    filename: str
+    path: Path
+
+
 class ExportService:
     """Persist user-visible package jobs and cache their archives."""
 
@@ -56,6 +67,7 @@ class ExportService:
         config_values: ConfigValues,
     ) -> None:
         self.storage_layout = storage_layout
+        self._config_values = config_values
         self._archive_integrity = archive_integrity
         self.problem_package_service = problem_package_service
         self.package_adapters = PackageAdapterRegistry(
@@ -211,7 +223,15 @@ class ExportService:
         )
 
     def mark_export_job_failed(self, job_id: str, error: str) -> None:
-        self._store.mark_export_job_failed(job_id, error)
+        self._store.mark_export_job_failed(
+            job_id,
+            bounded_display_text(
+                error,
+                limit_bytes=self._config_values.integer(
+                    "AUX_DISPLAY_TEXT_LIMIT_BYTES"
+                ),
+            ),
+        )
 
     def fail_interrupted_export_jobs(self) -> int:
         return self._store.fail_interrupted_export_jobs()
@@ -246,15 +266,15 @@ class ExportService:
             filename,
         )
 
-    def _cached_export_path(
+    def cached_external_package(
         self,
         *,
         problem_id: int,
-        materialization_id: str,
+        native_package_id: str,
         package_format: PackageFormat,
-    ) -> tuple[str, Path] | None:
+    ) -> CachedExternalPackage | None:
         export_id = self._store.cached_export(
-            materialization_id=materialization_id,
+            materialization_id=native_package_id,
             export_type=package_format,
         )
         if not export_id:
@@ -263,7 +283,13 @@ class ExportService:
         if row is not None:
             path = self._verified_archive_row(row)
             if path is not None:
-                return (export_id, path)
+                return CachedExternalPackage(
+                    export_id=export_id,
+                    native_package_id=native_package_id,
+                    package_format=package_format,
+                    filename=row["filename"],
+                    path=path,
+                )
         self._store.delete_export(export_id)
         return None
 
@@ -329,13 +355,13 @@ class ExportService:
                 expected_archive_sha256=expected_archive_sha256,
             ) as reader:
                 adapter_plan = adapter.plan(reader)
-                cached = self._cached_export_path(
+                cached = self.cached_external_package(
                     problem_id=problem_row["id"],
-                    materialization_id=native_package_id,
+                    native_package_id=native_package_id,
                     package_format=package_format,
                 )
                 if cached is not None:
-                    return (*cached, adapter_plan.warning)
+                    return (cached.export_id, cached.path, adapter_plan.warning)
                 adapter.build(
                     reader,
                     target=package_root,

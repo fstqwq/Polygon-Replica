@@ -27,8 +27,12 @@ def latex_error_excerpt(
     *,
     max_bytes: int,
     path_prefixes: Sequence[tuple[str, str]] = (),
+    require_error: bool = False,
 ) -> str:
-    """Return bounded context beginning at the first real LaTeX error."""
+    """Return bounded context beginning at the first real LaTeX error.
+
+    When ``require_error`` is true, the result begins at a TeX ``!`` diagnostic.
+    """
 
     lines = [
         line.rstrip()
@@ -52,6 +56,8 @@ def latex_error_excerpt(
         ),
         None,
     )
+    if require_error and error_line is None:
+        return ""
     relevant = lines[error_line:] if error_line is not None else lines
     return truncate_utf8_text_bytes(
         "\n".join(relevant),

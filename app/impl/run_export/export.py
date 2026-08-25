@@ -368,7 +368,10 @@ def _start_current_package(
     if not started:
         raise HTTPException(
             status_code=409,
-            detail="another package export is already running for this revision",
+            detail=(
+                "another package export is already running for this revision "
+                "and format"
+            ),
         )
 
 

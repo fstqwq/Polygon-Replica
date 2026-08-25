@@ -72,6 +72,14 @@ from app.service.repository import workspace
 from app.setting import Settings
 
 
+@dataclass(frozen=True)
+class ExportInFlight:
+    """Identify one shared external-export job and its completion signal."""
+
+    export_job_id: str
+    future: WorkerFuture
+
+
 @dataclass
 class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invalid-name
     """Own every concrete service and process-scoped coordination primitive."""
@@ -142,7 +150,7 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
     )
     export_lock: threading.Lock = field(default_factory=threading.Lock)
     export_workers: set[WorkerFuture] = field(default_factory=set)
-    export_inflight: set[str] = field(default_factory=set)
+    export_inflight: dict[str, ExportInFlight] = field(default_factory=dict)
     verification_lock: threading.Lock = field(default_factory=threading.Lock)
     verification_workers: set[WorkerFuture] = field(default_factory=set)
     verification_inflight: set[str] = field(default_factory=set)
@@ -393,6 +401,9 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
             self.contest_service,
             self.export_service.package_adapters,
             self.problem_package_service,
+            problem_zip_max_expanded_bytes=self.config_values.integer(
+                "PROBLEM_ZIP_MAX_EXPANDED_BYTES"
+            ),
         )
         self.contest_snapshot_service = ContestSourceSnapshotService(
             self.storage_layout,

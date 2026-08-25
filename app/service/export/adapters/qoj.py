@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Literal
 
 from app.service.export.adapters.shared import (
-    ContestPackagePlacement,
     PackageAdapterPlan,
     PackageAdapterSupport,
     PackageFormat,
@@ -145,12 +144,11 @@ class QOJPackageAdapter(PackageAdapterSupport):
         *,
         target: Path,
         canonical_problem_slug: str,
-        placement: ContestPackagePlacement | None = None,
         plan: PackageAdapterPlan | None = None,
     ) -> str:
         """Build one QOJ Sync Test Data source archive tree."""
 
-        del canonical_problem_slug, placement
+        del canonical_problem_slug
         adapter_plan = plan or self.plan(reader)
         if adapter_plan.package_format != self.format:
             raise ValueError("package adapter plan format does not match request")
@@ -418,11 +416,7 @@ class QOJPackageAdapter(PackageAdapterSupport):
             )
         result = self._tex_compile_service.compile_pdf(entrypoint)
         if result.proc.returncode != 0:
-            error = str(
-                result.proc.stderr
-                or result.proc.stdout
-                or "statement compiler failed"
-            ).strip()
+            error = self.statement_compile_error(result)
             raise ValueError(f"failed to compile {language} statement: {error}")
         pdf_path = result.pdf_path
         if pdf_path.is_symlink() or not pdf_path.is_file():

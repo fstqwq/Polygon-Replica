@@ -772,7 +772,10 @@ async def agent_export_start(request: Request):
             export_job_id=export_job_id,
         )
         if not started:
-            return json_error_response("export already running for this source", status_code=409)
+            return json_error_response(
+                "export already running for this source and format",
+                status_code=409,
+            )
         return _json_body({"job_id": export_job_id, "status": "queued"})
     except ValueError as exc:
         return json_error_response(str(exc), status_code=400)

@@ -24,11 +24,12 @@ from app.service.problem_package.statement_samples import (
     hydrate_native_package_statement_samples,
 )
 from app.service.statement.context import statement_languages
+from app.service.statement.latex_error import latex_error_excerpt
 from app.service.statement.render import (
     render_statement_main,
     statement_title_from_snapshot,
 )
-from app.service.statement.tex_compile import TexCompileService
+from app.service.statement.tex_compile import TexCompileResult, TexCompileService
 
 
 type PackageFormat = str
@@ -61,9 +62,16 @@ class PackageAdapter(Protocol):
         *,
         target: Path,
         canonical_problem_slug: str,
-        placement: ContestPackagePlacement | None = None,
         plan: PackageAdapterPlan | None = None,
     ) -> str: ...
+
+    def apply_contest_placement(
+        self,
+        target: Path,
+        *,
+        canonical_problem_slug: str,
+        placement: ContestPackagePlacement,
+    ) -> None: ...
 
 
 _LANGUAGE_CODES = {
@@ -331,6 +339,43 @@ class PackageAdapterSupport:
             return
         target.mkdir(parents=True)
 
+    def apply_contest_placement(
+        self,
+        target: Path,
+        *,
+        canonical_problem_slug: str,
+        placement: ContestPackagePlacement,
+    ) -> None:
+        """Apply the format-neutral no-op Contest placement."""
+
+        del self, target, canonical_problem_slug, placement
+
+    def statement_compile_error(
+        self,
+        result: TexCompileResult,
+    ) -> str:
+        """Project the real bounded LaTeX failure before noisy tool stderr."""
+
+        max_bytes = self._config_values.integer("AUX_DISPLAY_TEXT_LIMIT_BYTES")
+        path_prefixes = [(str(result.pdf_path.parent), ".")]
+        log_excerpt = latex_error_excerpt(
+            result.log_text,
+            max_bytes=max_bytes,
+            path_prefixes=path_prefixes,
+            require_error=True,
+        )
+        if log_excerpt:
+            return log_excerpt
+        for raw in (str(result.proc.stdout or ""), str(result.proc.stderr or "")):
+            excerpt = latex_error_excerpt(
+                raw,
+                max_bytes=max_bytes,
+                path_prefixes=path_prefixes,
+            )
+            if excerpt:
+                return excerpt
+        return "statement compiler failed"
+
     def hydrate_statement_samples(self, reader: NativePackageReader) -> None:
         hydrate_native_package_statement_samples(
             reader,
@@ -382,11 +427,7 @@ class PackageAdapterSupport:
                 ) from exc
             compile_result = self._tex_compile_service.compile_pdf(rendered)
             if compile_result.proc.returncode != 0:
-                error = str(
-                    compile_result.proc.stderr
-                    or compile_result.proc.stdout
-                    or "statement compiler failed"
-                ).strip()
+                error = self.statement_compile_error(compile_result)
                 raise ValueError(
                     f"failed to compile {language} statement: {error}"
                 )
