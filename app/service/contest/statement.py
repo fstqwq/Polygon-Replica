@@ -33,7 +33,6 @@ from app.service.statement.tex_compile import TexCompileService
 
 _EXTRACTBB_SUFFIXES = {".bmp", ".jpeg", ".jpg", ".pdf", ".png"}
 _LATEX_JOB_NAME = "statements"
-_LATEX_WRAPPER_NAME = "__contest_wrapper__.tex"
 _CJK_ITALIC_OPTIONS = (
     r"[ItalicFont={[FandolKai-Regular.otf]},"
     r"BoldItalicFont={[FandolKai-Regular.otf]}]"
@@ -497,19 +496,6 @@ class ContestStatementService:
             )
         return statements_root
 
-    @staticmethod
-    def _latex_wrapper(statements_root: Path) -> Path:
-        wrapper = (statements_root / _LATEX_WRAPPER_NAME).resolve()
-        wrapper.write_text(
-            "\\AtBeginDocument{%\n"
-            "  \\providecommand{\\url}[1]{\\texttt{#1}}%\n"
-            "  \\providecommand{\\href}[2]{#2}%\n"
-            "}\n"
-            f"\\input{{{CONTEST_STATEMENT_OUTPUT_NAME}}}\n",
-            encoding="utf-8",
-        )
-        return wrapper
-
     def build_preview_pdf(
         self,
         *,
@@ -634,7 +620,7 @@ class ContestStatementService:
         if bounding_error:
             summary["error"] = bounding_error
             return summary
-        wrapper = self._latex_wrapper(statements_root)
+        statements_tex = statements_root / CONTEST_STATEMENT_OUTPUT_NAME
         for pass_number in (1, 2):
             title = f"xelatex pass {pass_number}"
             result = self._run_tex(
@@ -643,7 +629,7 @@ class ContestStatementService:
                     "-interaction=nonstopmode",
                     "-halt-on-error",
                     f"-jobname={_LATEX_JOB_NAME}",
-                    wrapper.name,
+                    statements_tex.name,
                 ],
                 statements_root,
                 log_path,

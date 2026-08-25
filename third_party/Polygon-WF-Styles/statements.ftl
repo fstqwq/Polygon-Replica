@@ -28,7 +28,7 @@
 \usepackage {multirow}
 \usepackage {siunitx}
 \usepackage [normalem] {ulem}
-%\usepackage {hyperref}
+\usepackage {hyperref}
 \usepackage {import}
 \usepackage {xparse}
 \usepackage {wrapfig}

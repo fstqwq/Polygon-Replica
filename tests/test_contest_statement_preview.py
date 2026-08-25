@@ -242,6 +242,7 @@ class TestContestStatementPreview(unittest.TestCase):
         )
         self.assertIn(r"\intentionallyblankpagestrue", rendered_entrypoint)
         self.assertIn(r"\renewcommand{\StatementBanner}", rendered_entrypoint)
+        self.assertIn(r"\usepackage {hyperref}", rendered_entrypoint)
         self.assertIn(r"\textbf{Preview only}", rendered_entrypoint)
         self.assertIn("% sponsor=Example Foundation", rendered_entrypoint)
         self.assertIn("% nested-sponsor=Example Foundation", rendered_entrypoint)
@@ -257,6 +258,10 @@ class TestContestStatementPreview(unittest.TestCase):
         self.assertEqual(
             [command[0] for command in compiler.commands],
             ["xelatex", "xelatex"],
+        )
+        self.assertEqual(
+            [command[-1] for command in compiler.commands],
+            ["statements.tex", "statements.tex"],
         )
         self.assertFalse(any(command[0] == "pdfunite" for command in compiler.commands))
 
