@@ -18,7 +18,6 @@ on:
       - "tests/simulation/**"
       - "tests/scripts/*.py"
       - "tests/scripts/check*.sh"
-      - "tests/scripts/import-smoke.sh"
       - "tests/scripts/test.sh"
       - ".githooks/pre-push"
       - ".github/workflows/pylint.yml"
