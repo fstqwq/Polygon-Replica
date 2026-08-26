@@ -112,7 +112,7 @@ def problem_statement_html_page(
             row["id"],
             actor_user_id=int(user_row["id"]),
         )
-    return template_response(
+    response = template_response(
         request,
         "statement_html_preview.html",
         {
@@ -131,6 +131,9 @@ def problem_statement_html_page(
             ),
         },
     )
+    if row is not None and row["status"] == "failed":
+        response.status_code = 422
+    return response
 
 
 def problem_statement_pdf_page(

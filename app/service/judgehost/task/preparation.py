@@ -46,6 +46,9 @@ from app.service.judgehost.domjudge import task_plan
 from app.service.repository.workspace import WorkspaceService
 
 
+_ACCEPT_ALL_VALIDATOR_SOURCE = b"int main(int, char **) { return 0; }\n"
+
+
 class JudgehostPayloadPreparation:
     _TASK_KIND_COMPILE_ONLY = "compile-only"
     _TASK_KIND_GENERATE_INPUT = "generate-input"
@@ -586,6 +589,8 @@ class JudgehostPayloadPreparation:
         validator_source_bytes = _source_bytes("validator.cpp")
         interactor_source_bytes = _source_bytes("interactor.cpp")
         testlib_header_bytes = _source_bytes("testlib.h")
+        if generate_mode and not validator_source_bytes:
+            validator_source_bytes = _ACCEPT_ALL_VALIDATOR_SOURCE
         if checker_source_bytes:
             checker_source_bytes = task_plan.force_cpp_define(checker_source_bytes)
         if validator_source_bytes:

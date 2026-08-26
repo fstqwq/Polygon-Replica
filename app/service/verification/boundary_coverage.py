@@ -4,6 +4,10 @@ from dataclasses import dataclass
 from app.service.verification.plan import VerificationTestPlan
 
 BOUNDARY_COVERAGE_CHECK = "boundary_coverage"
+MISSING_VALIDATOR_MESSAGE = (
+    "No validator is configured; generated inputs use the accept-all fallback, "
+    "so boundary-hit coverage cannot be checked."
+)
 
 _HIT_RE = re.compile(r'^"(?P<name>[^"]+)":(?P<hits>.*)$')
 _BOUNDS_RE = re.compile(r'^constant-bounds "(?P<name>[^"]+)":\s+(?P<lower>\S+)\s+(?P<upper>\S+)\s*$')
@@ -16,6 +20,7 @@ class BoundaryCoverageResult:
     checked_count: int
     error: str
     missing: list[str]
+    messages: list[str]
 
 
 @dataclass
@@ -114,7 +119,16 @@ def boundary_coverage_from_feedback(
     *,
     feedback_by_test: dict[str, str],
     test_plans: list[VerificationTestPlan],
+    validator_configured: bool = True,
 ) -> BoundaryCoverageResult:
+    if not validator_configured:
+        return BoundaryCoverageResult(
+            status="warning",
+            checked_count=0,
+            error=MISSING_VALIDATOR_MESSAGE,
+            missing=[],
+            messages=[MISSING_VALIDATOR_MESSAGE],
+        )
     selected_names = {plan.test_name for plan in test_plans if plan.test_name}
     states: dict[str, _VariableCoverage] = {}
     for test_name, feedback_text in feedback_by_test.items():
@@ -147,10 +161,12 @@ def boundary_coverage_from_feedback(
             checked_count=checked_count,
             error=boundary_coverage_missing_message(f"{shown}{suffix}"),
             missing=missing,
+            messages=[boundary_coverage_missing_message(item) for item in missing],
         )
     return BoundaryCoverageResult(
         status="passed",
         checked_count=checked_count,
         error="",
         missing=[],
+        messages=[],
     )

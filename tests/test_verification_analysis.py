@@ -295,6 +295,23 @@ class TestVerificationAnalysis(unittest.TestCase):
         self.assertEqual(result.missing, ["n max=3", "x max=9"])
         self.assertEqual(result.error, "Test data did not hit: n max=3, x max=9")
 
+    def test_boundary_coverage_warns_when_validator_is_not_configured(self) -> None:
+        from app.service.verification.boundary_coverage import (
+            MISSING_VALIDATOR_MESSAGE,
+        )
+
+        result = boundary_coverage_from_feedback(
+            feedback_by_test={},
+            test_plans=[_test_plan()],
+            validator_configured=False,
+        )
+
+        self.assertEqual(result.status, "warning")
+        self.assertEqual(result.checked_count, 0)
+        self.assertEqual(result.missing, [])
+        self.assertEqual(result.error, MISSING_VALIDATOR_MESSAGE)
+        self.assertEqual(result.messages, [MISSING_VALIDATOR_MESSAGE])
+
     def test_boundary_coverage_ignores_wrapped_or_plain_messages(self) -> None:
         wrapped = (
             "__POLYGON_TESTLIB_OVERVIEW_BEGIN__\n"

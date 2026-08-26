@@ -18,6 +18,7 @@ from app.service.platform.hashing import sha256_hex_json
 from app.service.problem.runtime_config import problem_config_limits
 from app.service.problem_package.service import (
     NativePackage,
+    NativePackageOperationBusy,
     ProblemPackageService,
 )
 from app.service.repository.workspace import WorkspaceService
@@ -151,56 +152,74 @@ class StatementPreviewService:
         )
         if cached is not None:
             return cached
-        with self.prepare_render_tree(
-            problem,
-            username,
-            source_kind=source_kind,
-            language=safe_language,
-            native_package_id=native_package_id,
-        ) as prepared:
-            identity = self._preview_identity(
-                prepared.problem_id,
+        prepared_ready = False
+        try:
+            with self.prepare_render_tree(
+                problem,
+                username,
                 source_kind=source_kind,
-                output_kind=output_kind,
                 language=safe_language,
-                source_identity=prepared.source_identity,
-            )
-            cached = self._cached_problem(
-                prepared.problem_id,
-                actor_user_id=actor_user_id,
-                source_kind=source_kind,
-                output_kind=output_kind,
-                language=safe_language,
-                identity=identity,
-            )
-            if cached is not None:
-                return cached
-            preview_id = self._insert_problem(
-                prepared.problem_id,
-                actor_user_id=actor_user_id,
-                source_kind=source_kind,
-                output_kind=output_kind,
-                language=safe_language,
-                identity=identity,
-            )
-            try:
-                return self._render_result(
-                    preview_id,
-                    prepared.root,
+                native_package_id=native_package_id,
+            ) as prepared:
+                prepared_ready = True
+                identity = self._preview_identity(
+                    prepared.problem_id,
+                    source_kind=source_kind,
                     output_kind=output_kind,
-                    subject_token=f"problem-{prepared.problem_id}",
-                    sample_count=prepared.sample_count,
+                    language=safe_language,
+                    source_identity=prepared.source_identity,
                 )
-            except Exception as exc:
-                self._store.finish(
-                    preview_id,
-                    status="failed",
-                    summary={"error": str(exc)},
+                cached = self._cached_problem(
+                    prepared.problem_id,
+                    actor_user_id=actor_user_id,
+                    source_kind=source_kind,
+                    output_kind=output_kind,
+                    language=safe_language,
+                    identity=identity,
                 )
-                row = self._store.row(preview_id)
-                if row is None:
-                    raise RuntimeError("statement preview result disappeared") from exc
-                return row
+                if cached is not None:
+                    return cached
+                preview_id = self._insert_problem(
+                    prepared.problem_id,
+                    actor_user_id=actor_user_id,
+                    source_kind=source_kind,
+                    output_kind=output_kind,
+                    language=safe_language,
+                    identity=identity,
+                )
+                try:
+                    return self._render_result(
+                        preview_id,
+                        prepared.root,
+                        output_kind=output_kind,
+                        subject_token=f"problem-{prepared.problem_id}",
+                        sample_count=prepared.sample_count,
+                    )
+                except Exception as exc:
+                    self._store.finish(
+                        preview_id,
+                        status="failed",
+                        summary={"error": str(exc)},
+                    )
+                    row = self._store.row(preview_id)
+                    if row is None:
+                        raise RuntimeError(
+                            "statement preview result disappeared"
+                        ) from exc
+                    return row
+        except NativePackageOperationBusy:
+            raise
+        except RuntimeError as exc:
+            if prepared_ready:
+                raise
+            return self._failed_problem_preparation(
+                preview_input,
+                actor_user_id=actor_user_id,
+                source_kind=source_kind,
+                output_kind=output_kind,
+                language=safe_language,
+                error=str(exc),
+            )
 
     def problem_input(
         self,
@@ -740,6 +759,34 @@ class StatementPreviewService:
             options={},
         )
         return preview_id
+
+    def _failed_problem_preparation(
+        self,
+        preview_input: StatementPreviewInput,
+        *,
+        actor_user_id: int,
+        source_kind: StatementPreviewSource,
+        output_kind: StatementPreviewOutput,
+        language: str,
+        error: str,
+    ) -> StatementPreviewRow:
+        preview_id = self._insert_problem(
+            preview_input.problem_id,
+            actor_user_id=actor_user_id,
+            source_kind=source_kind,
+            output_kind=output_kind,
+            language=language,
+            identity=preview_input.identity,
+        )
+        self._store.finish(
+            preview_id,
+            status="failed",
+            summary={"error": error},
+        )
+        row = self._store.row(preview_id)
+        if row is None:
+            raise RuntimeError("statement preview result disappeared")
+        return row
 
     def _preview_root(self, preview_id: str) -> Path:
         return self._storage.resolve_preview_root(preview_id)

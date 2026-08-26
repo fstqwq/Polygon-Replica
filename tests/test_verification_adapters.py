@@ -260,7 +260,12 @@ class TestVerificationAdapters(E2ETestBase):
         )
         self.assertIn("empty_output_stability 001.in: ok - WA", (logs_dir / "stability.log").read_text(encoding="utf-8"))
 
-    def test_sanity_boundary_coverage_warning_keeps_verification_ok(self) -> None:
+    def test_sanity_missing_validator_boundary_warning_keeps_verification_ok(
+        self,
+    ) -> None:
+        from app.service.verification.boundary_coverage import (
+            MISSING_VALIDATOR_MESSAGE,
+        )
         from app.service.verification.sanity import BOUNDARY_COVERAGE_CHECK
 
         verification_id = canonical_test_verification_id(
@@ -274,11 +279,6 @@ class TestVerificationAdapters(E2ETestBase):
         def _fake_wait_for_task_case_result(_task_id: str, test_name: str) -> dict[str, object]:
             return {"summary": {"tests": [{"test": test_name, "verdict": "WA", "message": "rejected"}]}}
 
-        feedback = (
-            '"n": min-value-hit\n'
-            'constant-bounds "n": 1 3\n'
-            'variable "n"\n'
-        )
         with patch.object(runtime.judgehost_task_service, "enqueue_task", side_effect=_fake_enqueue_task), patch.object(
             runtime.judgehost_task_service,
             "wait_for_task_case_result",
@@ -290,17 +290,23 @@ class TestVerificationAdapters(E2ETestBase):
                 verification_id=verification_id,
                 logs_dir=logs_dir,
                 test_plans=[sanity_test_plan()],
-                generate_feedback_by_test={"001.in": feedback},
+                validator_configured=False,
             )
 
         self.assertEqual(result.status, "warning")
         self.assertEqual(result.check_name, BOUNDARY_COVERAGE_CHECK)
-        self.assertEqual(result.checked_count, 3)
-        self.assertEqual(result.error, "Test data did not hit: n max=3")
+        self.assertEqual(result.checked_count, 2)
+        self.assertEqual(result.error, MISSING_VALIDATOR_MESSAGE)
         boundary_result = next(item for item in result.check_results if item.name == BOUNDARY_COVERAGE_CHECK)
         self.assertEqual(boundary_result.status, "warning")
-        self.assertEqual([message.message for message in boundary_result.messages], ["Test data did not hit: n max=3"])
-        self.assertIn("Test data did not hit: n max=3", (logs_dir / "boundary.log").read_text(encoding="utf-8"))
+        self.assertEqual(
+            [message.message for message in boundary_result.messages],
+            [MISSING_VALIDATOR_MESSAGE],
+        )
+        self.assertIn(
+            MISSING_VALIDATOR_MESSAGE,
+            (logs_dir / "boundary.log").read_text(encoding="utf-8"),
+        )
 
     def test_sanity_runtime_threshold_warning_uses_answer_correct_summary(self) -> None:
         from app.service.verification.sanity import BOUNDARY_COVERAGE_CHECK, SUMMARY_RUNTIME_THRESHOLD_CHECK

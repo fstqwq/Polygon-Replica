@@ -254,6 +254,47 @@ class TestStatementHtmlRender(BackendE2ETestBase):
             service_class="foreground",
         )
 
+    def test_preview_preparation_failure_returns_diagnostic_response(self) -> None:
+        workspace = Path(
+            runtime.workspace_service.workspace_context(
+                self.problem,
+                self.user,
+                include_recent=False,
+            )["workspace"]["path"]
+        )
+        manual_root = workspace / "tests" / "manual"
+        manual_root.mkdir(parents=True, exist_ok=True)
+        (manual_root / "001.in").write_text("1\n", encoding="utf-8")
+        (workspace / "tests" / "spec.json").write_text(
+            '{"tests":[{"id":"001","kind":"manual","sample":true}]}\n',
+            encoding="utf-8",
+        )
+        failure = "sample verification could not prepare input evidence"
+
+        with patch.object(
+            runtime.statement_preview_service._verification,
+            "run_workspace",
+            side_effect=RuntimeError(failure),
+        ), bind_application(app):
+            html_response = problem_statement_html_page(
+                _request(f"/problems/{self.problem}/statement/html"),
+                self.problem,
+                self.user,
+                source="workspace",
+                language="english",
+            )
+            pdf_response = problem_statement_pdf_page(
+                self.problem,
+                self.user,
+                source="workspace",
+                language="english",
+            )
+
+        self.assertEqual(html_response.status_code, 422)
+        self.assertIn(failure, html_response.body.decode("utf-8"))
+        self.assertEqual(pdf_response.status_code, 422)
+        self.assertEqual(pdf_response.body.decode("utf-8"), failure + "\n")
+
     def test_problem_and_contest_html_reuse_source_identity_cache(self) -> None:
         workspace = Path(
             runtime.workspace_service.workspace_context(

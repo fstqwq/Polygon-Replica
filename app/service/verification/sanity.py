@@ -9,7 +9,6 @@ from app.service.verification.types import VerificationStatus
 
 from app.service.verification.boundary_coverage import (
     BOUNDARY_COVERAGE_CHECK,
-    boundary_coverage_missing_message,
     boundary_coverage_from_feedback,
 )
 from app.service.verification.sample_output import (
@@ -331,6 +330,7 @@ def run_verification_sanity_checks(
     accepted_source_file: PayloadFile | None = None,
     run_verification_payload_base: dict[str, object] | None = None,
     generate_feedback_by_test: dict[str, str] | None = None,
+    validator_configured: bool = True,
     runtime_columns: list[dict[str, object]] | None = None,
     time_limit_ms: int = 0,
     bypass_case_result_cache: bool = False,
@@ -394,6 +394,7 @@ def run_verification_sanity_checks(
     boundary_result = boundary_coverage_from_feedback(
         feedback_by_test=dict(generate_feedback_by_test or {}),
         test_plans=test_plans,
+        validator_configured=validator_configured,
     )
     boundary_log = logs_dir / "boundary.log"
     boundary_log.parent.mkdir(parents=True, exist_ok=True)
@@ -401,9 +402,9 @@ def run_verification_sanity_checks(
         VerificationSanityMessage(
             severity=SANITY_WARNING,
             test_name="",
-            message=boundary_coverage_missing_message(item),
+            message=message,
         )
-        for item in boundary_result.missing
+        for message in boundary_result.messages
     )
     if boundary_result.status == SANITY_WARNING:
         boundary_log.write_text(
@@ -481,6 +482,7 @@ class VerificationSanityService:
         accepted_source_file: PayloadFile | None = None,
         run_verification_payload_base: dict[str, object] | None = None,
         generate_feedback_by_test: dict[str, str] | None = None,
+        validator_configured: bool = True,
         runtime_columns: list[dict[str, object]] | None = None,
         time_limit_ms: int = 0,
         bypass_case_result_cache: bool = False,
@@ -497,6 +499,7 @@ class VerificationSanityService:
             accepted_source_file=accepted_source_file,
             run_verification_payload_base=run_verification_payload_base,
             generate_feedback_by_test=generate_feedback_by_test,
+            validator_configured=validator_configured,
             runtime_columns=runtime_columns,
             time_limit_ms=time_limit_ms,
             bypass_case_result_cache=bypass_case_result_cache,

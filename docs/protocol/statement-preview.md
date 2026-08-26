@@ -57,6 +57,10 @@ same diagnostic projection: a bounded excerpt beginning at the first LaTeX `!`
 error, followed by the complete sanitized `latex.log`. Preview payloads and logs
 remain cache.
 
+Problem render-tree preparation and renderer failures produce a failed preview
+record. Problem HTML and PDF endpoints return HTTP 422 with the recorded
+diagnostic instead of exposing the failure as an unhandled server error.
+
 ## Identity and invalidation
 
 A preview identity contains the subject, source, language, output kind, source revision or content, statement resources, sample evidence, and explicit output options. Tool, renderer, package, executable, container, and toolchain versions are excluded.

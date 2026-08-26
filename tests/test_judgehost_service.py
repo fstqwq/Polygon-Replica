@@ -2386,6 +2386,69 @@ class TestJudgehostService(E2ETestBase):
         self.assertNotIn("checker.cpp", compare_names)
         self.assertNotIn("interactor.cpp", compare_names)
 
+    def test_domjudge_generate_verification_materializes_accept_all_validator(
+        self,
+    ) -> None:
+        service = runtime.judgehost_task_service
+        override_config_values(
+            self,
+            runtime.config_values,
+            JUDGEHOST_ENABLE=True,
+            JUDGEHOST_API_TOKEN="test-token",
+            JUDGEHOST_API_USERNAME="judgehost",
+        )
+
+        verification_id = canonical_test_verification_id(
+            f"b-jh-generate-default-validator-{uuid.uuid4().hex[:8]}"
+        )
+        run_id = f"r-jh-generate-default-validator-{uuid.uuid4().hex[:8]}"
+        self._seed_build_verification(verification_id)
+        workspace = Path(self._workspace_path())
+        build_path = workspace / "config" / "build.json"
+        build_config = json.loads(build_path.read_text(encoding="utf-8"))
+        build_config.pop("validator_source", None)
+        build_path.write_text(
+            json.dumps(build_config, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        task_id = service.enqueue_task(
+            problem=self.problem,
+            username=self.user,
+            artifact_verification_id=verification_id,
+            submission_path="solutions/ac.cpp",
+            upload_content=None,
+            upload_filename=None,
+            run_id=run_id,
+            selected_tests=["001.in"],
+            verification_id=_canonical_verification_id(
+                "inv-jh-generate-default-validator"
+            ),
+            verification_program_id=_GENERATOR_PROGRAM_ID,
+            expected_behavior="accepted",
+            verification_source="generate-input",
+            task_kind="generate-input",
+            compile_only=False,
+        )
+        host = "judgehost-generate-default-validator"
+        service.domjudge_register_host(host)
+        tasks = service.domjudge_fetch_work(host, max_batchsize=8)
+        task_row = next(iter(self._work_rows_for_task(service, tasks, task_id)), None)
+        self.assertIsNotNone(task_row)
+        assert task_row is not None
+
+        compare_files = service.domjudge_get_executable_files(
+            "compare",
+            str(task_row.get("compare_script_id") or ""),
+        )
+        validator = next(
+            item for item in compare_files if item.filename == "validator.cpp"
+        )
+        self.assertIn(
+            "int main(int, char **) { return 0; }",
+            validator.payload.path.read_text(encoding="utf-8"),
+        )
+
     def test_domjudge_generate_verification_interactive_mode_does_not_require_interactor_payload(
         self,
     ) -> None:

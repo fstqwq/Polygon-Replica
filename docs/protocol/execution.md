@@ -30,6 +30,8 @@ A problem reader may start `all` verification or rejudge visible evidence into t
 
 `pending` is a display projection, not a persisted parent state. An `ok` verification has terminal tasks and completed sanity processing. Sanity warnings remain attached to an otherwise successful verification. A pre-activation failure may have no task graph.
 
+Full verification reports a `boundary_coverage` warning when no validator is configured. Generated inputs still use the accept-all fallback, but no problem-specific validator overview exists from which to check boundary hits.
+
 ## Task graph
 
 | Task | Behavior |
@@ -45,7 +47,7 @@ Prepared payloads carry canonical `problem_mode`. Execution mode is derived from
 | Task | Execution mode | Components |
 | --- | --- | --- |
 | `compile-only` | `pass-fail` | Submitted source and explicit extra sources. |
-| `generate-input` | `pass-fail` | Generator, validator, and required `testlib.h`. |
+| `generate-input` | `pass-fail` | Generator and the configured validator with its required `testlib.h`; an unconfigured validator is materialized as an accept-all validator. |
 | `main-correct`, `solution-run` for pass-fail | `pass-fail` | Solution, checker, and required `testlib.h`. |
 | `main-correct`, `solution-run` for interactive | `interactive` | Solution, interactor, and required `testlib.h`. |
 

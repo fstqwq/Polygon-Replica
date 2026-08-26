@@ -761,6 +761,9 @@ def run_workspace_verification_dag(
             and sanity_checks
         ):
             accepted_source_file = source_file_by_path.get(execution_plan.accepted_source_path)
+            generate_source_files = (
+                execution_plan.generate_verification_payload_base.get("source_files")
+            )
             sanity_result = sanity_service.run(
                 problem=problem,
                 user=user,
@@ -772,6 +775,8 @@ def run_workspace_verification_dag(
                 accepted_source_file=accepted_source_file,
                 run_verification_payload_base=execution_plan.run_verification_payload_base,
                 generate_feedback_by_test=_generate_feedback_by_test(rows, judgehost),
+                validator_configured=isinstance(generate_source_files, dict)
+                and "validator.cpp" in generate_source_files,
                 runtime_columns=runtime_threshold_columns_from_tasks(
                     artifact_verification_id=verification_id,
                     mode=verification_mode,
