@@ -128,6 +128,21 @@ def _pass_fail_files() -> dict[str, str]:
                 "#include <iostream>\nint main(){long long x;std::cin>>x;"
                 "std::cout<<x*2<<'\\n';}\n"
             ),
+            "solutions/java-reference.java": (
+                "import java.io.BufferedReader;\n"
+                "import java.io.InputStreamReader;\n"
+                "\n"
+                "public class Main {\n"
+                "    public static void main(String[] args) throws Exception {\n"
+                "        BufferedReader reader = new BufferedReader(\n"
+                "            new InputStreamReader(System.in)\n"
+                "        );\n"
+                "        long value = Long.parseLong(reader.readLine().trim());\n"
+                "        System.out.println(value * 2);\n"
+                "    }\n"
+                "}\n"
+            ),
+            "solutions/java-reference.java.desc": "expected: accepted\n",
             "solutions/wrong.cpp": "#include <iostream>\nint main(){std::cout<<0<<'\\n';}\n",
             "solutions/wrong.cpp.desc": "expected: wrong_answer\n",
             "solutions/timeout.cpp": "int main(){for(;;){} }\n",
@@ -413,7 +428,33 @@ def _export_fixture(client: httpx.Client, problem: str, files: dict[str, str]) -
     output_root.mkdir(parents=True, exist_ok=True)
     destination = output_root / f"{problem.rsplit('/', 1)[-1]}.zip"
     shutil.copy2(archive, destination)
+    if problem == "e2e/pass-fail":
+        _verify_java_submission_archive(destination)
     return destination
+
+
+def _verify_java_submission_archive(archive: Path) -> None:
+    required_members = {
+        "submissions/accepted/java-reference/",
+        "submissions/accepted/java-reference/Main.java",
+        "submissions.json",
+    }
+    with zipfile.ZipFile(archive) as package:
+        members = set(package.namelist())
+        missing = sorted(required_members - members)
+        if missing:
+            raise RuntimeError(
+                f"DOMjudge Java submission members are missing: {missing!r}"
+            )
+        metadata = json.loads(package.read("submissions.json"))
+    expected_metadata = {
+        "submissions/accepted/java-reference/": {"entry_point": "Main"}
+    }
+    if metadata != expected_metadata:
+        raise RuntimeError(
+            "DOMjudge Java submission metadata differs: "
+            f"{metadata!r} != {expected_metadata!r}"
+        )
 
 
 def _expected_mismatch_messages(archive: Path) -> set[str]:
@@ -658,17 +699,17 @@ def run() -> None:
         polygon_archive, converted_archive = _export_polygon_and_convert()
         archives.append(converted_archive)
         _import_problem(domserver, converted_archive)
-        judgements = _wait_jury_results(domserver, expected_count=10)
+        judgements = _wait_jury_results(domserver, expected_count=11)
         results = Counter(_judgement_result(row) for row in judgements)
-        expected = Counter({"AC": 5, "CE": 1, "RTE": 2, "TLE": 1, "WA": 1})
+        expected = Counter({"AC": 6, "CE": 1, "RTE": 2, "TLE": 1, "WA": 1})
         if results != expected:
             raise RuntimeError(f"DOMjudge jury results differ: {results!r} != {expected!r}")
         first_verifier_page = _login_and_verify(domserver)
         second_verifier_page = domserver.get("/jury/judging-verifier")
         second_verifier_page.raise_for_status()
-        if "10 verified earlier" not in second_verifier_page.text.lower():
+        if "11 verified earlier" not in second_verifier_page.text.lower():
             raise RuntimeError(
-                "DOMjudge Judging verifier did not persist all ten decisions: "
+                "DOMjudge Judging verifier did not persist all eleven decisions: "
                 f"{first_verifier_page[:500]!r}"
             )
     print(

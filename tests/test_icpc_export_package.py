@@ -390,22 +390,90 @@ class TestICPCExportPackage(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 42)
 
+    def test_domjudge_java_submissions_use_entry_point_directories(self) -> None:
+        reader = self._adapter_reader(mode="interactive", pass_limit=2)
+
+        def write_statements(
+            _snapshot: Path,
+            destination: Path,
+            *,
+            problem_name: str,
+            include_sample_tests: bool,
+            keep_all_languages: bool,
+        ) -> dict[str, str]:
+            del _snapshot, include_sample_tests
+            destination.mkdir(parents=True)
+            filename = "problem.en.pdf" if keep_all_languages else "problem.pdf"
+            (destination / filename).write_bytes(b"%PDF-1.4\n")
+            return {"en": problem_name}
+
+        domjudge = self.root / "domjudge"
+        domjudge_adapter = PackageAdapterRegistry(
+            self._adapter_config_values(),
+            mock.Mock(),
+        ).require("domjudge")
+        with mock.patch.object(
+            domjudge_adapter,
+            "write_statements",
+            side_effect=write_statements,
+        ):
+            warning = domjudge_adapter.build(
+                reader,
+                target=domjudge,
+                canonical_problem_slug="owner/projected-problem",
+            )
+
+        self.assertEqual(warning, "")
+        reference_source = reader.root / "solutions" / "reference.java"
+        alternative_source = reader.root / "solutions" / "alternative.java"
+        self.assertEqual(
+            (
+                domjudge
+                / "submissions"
+                / "accepted"
+                / "reference"
+                / "Main.java"
+            ).read_bytes(),
+            reference_source.read_bytes(),
+        )
+        self.assertEqual(
+            (
+                domjudge
+                / "submissions"
+                / "mixed"
+                / "alternative"
+                / "TranslateMain.java"
+            ).read_bytes(),
+            b"// @EXPECTED_RESULTS@: WRONG-ANSWER,TIMELIMIT,RUN-ERROR,COMPILER-ERROR\n"
+            + alternative_source.read_bytes(),
+        )
+        submissions_json = (domjudge / "submissions.json").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(
+            json.loads(submissions_json),
+            {
+                "submissions/accepted/reference/": {"entry_point": "Main"},
+                "submissions/mixed/alternative/": {
+                    "entry_point": "TranslateMain"
+                },
+            },
+        )
+        self.assertEqual(
+            submissions_json,
+            "{\n"
+            '  "submissions/accepted/reference/": {\n'
+            '    "entry_point": "Main"\n'
+            "  },\n"
+            '  "submissions/mixed/alternative/": {\n'
+            '    "entry_point": "TranslateMain"\n'
+            "  }\n"
+            "}\n",
+        )
+
     def test_adapters_publish_disjoint_strict_and_domjudge_layouts(self) -> None:
         reader = self._adapter_reader(mode="interactive", pass_limit=2)
-        values = ConfigValues(
-            {
-                "GENERAL_TIME_LIMIT_MIN_MS": 1,
-                "GENERAL_TIME_LIMIT_MAX_MS": 60_000,
-                "GENERAL_MEMORY_LIMIT_MIN_MB": 1,
-                "GENERAL_MEMORY_LIMIT_MAX_MB": 2048,
-                "GENERAL_PASS_LIMIT_MIN": 1,
-                "GENERAL_PASS_LIMIT_MAX": 32,
-                "TEXTAREA_MAX_BYTES": 1024 * 1024,
-                "STATEMENT_SAMPLE_MAX_BYTES": 1024 * 1024,
-            },
-            normalizer=lambda raw: raw,
-        )
-        adapters = PackageAdapterRegistry(values, mock.Mock())
+        adapters = PackageAdapterRegistry(self._adapter_config_values(), mock.Mock())
 
         def write_statements(
             _snapshot: Path,
@@ -532,6 +600,22 @@ class TestICPCExportPackage(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 42)
 
+    @staticmethod
+    def _adapter_config_values() -> ConfigValues:
+        return ConfigValues(
+            {
+                "GENERAL_TIME_LIMIT_MIN_MS": 1,
+                "GENERAL_TIME_LIMIT_MAX_MS": 60_000,
+                "GENERAL_MEMORY_LIMIT_MIN_MB": 1,
+                "GENERAL_MEMORY_LIMIT_MAX_MB": 2048,
+                "GENERAL_PASS_LIMIT_MIN": 1,
+                "GENERAL_PASS_LIMIT_MAX": 32,
+                "TEXTAREA_MAX_BYTES": 1024 * 1024,
+                "STATEMENT_SAMPLE_MAX_BYTES": 1024 * 1024,
+            },
+            normalizer=lambda raw: raw,
+        )
+
     def _adapter_reader(
         self,
         *,
@@ -599,6 +683,20 @@ class TestICPCExportPackage(unittest.TestCase):
             "int main() {}\n",
             encoding="utf-8",
         )
+        (package_root / "solutions" / "reference.java").write_text(
+            "public class Main {\n"
+            "    public static void main(String[] args) {}\n"
+            "}\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        (package_root / "solutions" / "alternative.java").write_text(
+            "public class TranslateMain {\n"
+            "    public static void main(String[] args) {}\n"
+            "}\n",
+            encoding="utf-8",
+            newline="\n",
+        )
         (package_root / "solutions" / "mixed.cpp").write_text(
             "int mixed;\n",
             encoding="utf-8",
@@ -648,6 +746,14 @@ class TestICPCExportPackage(unittest.TestCase):
                 {
                     "source_path": "solutions/accepted.cpp",
                     "expected_behavior": "accepted",
+                },
+                {
+                    "source_path": "solutions/reference.java",
+                    "expected_behavior": "accepted",
+                },
+                {
+                    "source_path": "solutions/alternative.java",
+                    "expected_behavior": "rejected",
                 },
                 {
                     "source_path": "solutions/compile.cpp",

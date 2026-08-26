@@ -19,6 +19,7 @@ from app.service.judgehost.domjudge.result import parse_bool, parse_int
 from app.service.platform.hashing import sha256_hex_json
 from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
 from app.service.problem.build_config import load_build_config
+from app.service.problem.java_entry_point import detect_java_entry_point
 from app.service.problem.runtime_config import (
     load_problem_config,
 )
@@ -62,14 +63,6 @@ class JudgehostPayloadPreparation:
         self._execution_port = execution_port
         self._scripts = scripts
         self._configuration = configuration
-
-    _JAVA_CLASS_DECL_RE = re.compile(
-        r"\b(?P<public>public\s+)?(?:(?:abstract|final|static|strictfp|sealed|non-sealed)\s+)*class\s+(?P<name>[A-Za-z_$][A-Za-z0-9_$]*)\b"
-    )
-    _JAVA_MAIN_METHOD_RE = re.compile(
-        r"\b(?:(?:public|protected|private|static|final|synchronized|strictfp|native)\s+)*void\s+main\s*\(",
-        re.MULTILINE,
-    )
 
     @staticmethod
     def _normalize_text(value: object) -> str:
@@ -116,187 +109,7 @@ class JudgehostPayloadPreparation:
         return self._normalize_list(values, matcher=RUN_TEST_NAME_RE)
 
     @staticmethod
-    def _strip_java_noncode(source_text: str) -> str:
-        text = str(source_text or "")
-        out: list[str] = []
-        index = 0
-        size = len(text)
-        while index < size:
-            current = text[index]
-            next_char = text[index + 1] if (index + 1) < size else ""
-            if current == "/" and next_char == "/":
-                out.append(" ")
-                out.append(" ")
-                index += 2
-                while index < size and text[index] not in "\r\n":
-                    out.append(" ")
-                    index += 1
-                continue
-            if current == "/" and next_char == "*":
-                out.append(" ")
-                out.append(" ")
-                index += 2
-                while index < size:
-                    char = text[index]
-                    tail = text[index + 1] if (index + 1) < size else ""
-                    if char == "*" and tail == "/":
-                        out.append(" ")
-                        out.append(" ")
-                        index += 2
-                        break
-                    out.append("\n" if char == "\n" else " ")
-                    index += 1
-                continue
-            if current in {'"', "'"}:
-                quote = current
-                out.append(" ")
-                index += 1
-                escaped = False
-                while index < size:
-                    char = text[index]
-                    if char == "\n":
-                        out.append("\n")
-                        index += 1
-                        break
-                    out.append(" ")
-                    if escaped:
-                        escaped = False
-                    elif char == "\\":
-                        escaped = True
-                    elif char == quote:
-                        index += 1
-                        break
-                    index += 1
-                continue
-            out.append(current)
-            index += 1
-        return "".join(out)
-
-    @classmethod
-    def _java_top_level_classes(cls, source_text: str) -> list[tuple[str, bool, str]]:
-        stripped = cls._strip_java_noncode(source_text)
-        values: list[tuple[str, bool, str]] = []
-        index = 0
-        size = len(stripped)
-        brace_depth = 0
-        while index < size:
-            char = stripped[index]
-            if char == "{":
-                brace_depth += 1
-                index += 1
-                continue
-            if char == "}":
-                brace_depth = max(0, brace_depth - 1)
-                index += 1
-                continue
-            if brace_depth != 0:
-                index += 1
-                continue
-            match = cls._JAVA_CLASS_DECL_RE.match(stripped, index)
-            if match is None:
-                index += 1
-                continue
-            class_name = str(match.group("name") or "")
-            if not class_name:
-                index = match.end()
-                continue
-            body_open = stripped.find("{", match.end())
-            if body_open < 0:
-                index = match.end()
-                continue
-            nested_depth = 1
-            body_index = body_open + 1
-            while body_index < size and nested_depth > 0:
-                token = stripped[body_index]
-                if token == "{":
-                    nested_depth += 1
-                elif token == "}":
-                    nested_depth -= 1
-                body_index += 1
-            if nested_depth != 0:
-                index = body_index
-                continue
-            class_body = stripped[body_open + 1 : body_index - 1]
-            values.append((class_name, bool(match.group("public")), class_body))
-            index = body_index
-        return values
-
-    @classmethod
-    def _java_class_has_main(cls, class_body: str) -> bool:
-        stripped = cls._strip_java_noncode(class_body)
-        index = 0
-        size = len(stripped)
-        brace_depth = 0
-        while index < size:
-            char = stripped[index]
-            if char == "{":
-                brace_depth += 1
-                index += 1
-                continue
-            if char == "}":
-                brace_depth = max(0, brace_depth - 1)
-                index += 1
-                continue
-            if brace_depth != 0:
-                index += 1
-                continue
-            match = cls._JAVA_MAIN_METHOD_RE.search(stripped, index)
-            if match is None:
-                return False
-            method_start = match.start()
-            if method_start < index:
-                index += 1
-                continue
-            open_paren = stripped.find("(", match.end() - 1)
-            if open_paren < 0:
-                return False
-            nested_depth = 1
-            close_index = open_paren + 1
-            while close_index < size and nested_depth > 0:
-                token = stripped[close_index]
-                if token == "(":
-                    nested_depth += 1
-                elif token == ")":
-                    nested_depth -= 1
-                close_index += 1
-            if nested_depth != 0:
-                return False
-            params = stripped[open_paren + 1 : close_index - 1]
-            modifiers = stripped[max(index, method_start - 128) : method_start]
-            modifier_tokens = set(re.findall(r"[A-Za-z_$][A-Za-z0-9_$]*", modifiers))
-            if "static" in modifier_tokens and "String" in params:
-                return True
-            index = close_index
-        return False
-
-    @classmethod
-    def _detect_java_entry_point(cls, source_name: str, source_bytes: bytes) -> str:
-        safe_source_name = Path(source_name).name
-        source_text = source_bytes.decode("utf-8", errors="replace")
-        top_level_classes = cls._java_top_level_classes(source_text)
-        if not top_level_classes:
-            raise RuntimeError(
-                f"java entry point detection failed for {safe_source_name}: no top-level classes found"
-            )
-        public_classes = [name for name, is_public, _body in top_level_classes if is_public]
-        if len(public_classes) == 1:
-            return public_classes[0]
-        runnable_classes = [
-            name for name, _is_public, body in top_level_classes if cls._java_class_has_main(body)
-        ]
-        if len(runnable_classes) == 1:
-            return runnable_classes[0]
-        if len(runnable_classes) > 1:
-            raise RuntimeError(
-                f"java entry point detection failed for {safe_source_name}: multiple runnable classes found ({', '.join(runnable_classes)})"
-            )
-        raise RuntimeError(
-            f"java entry point detection failed for {safe_source_name}: no runnable main class found"
-        )
-
-    @classmethod
     def _normalize_submission_source(
-        cls,
         *,
         source_name: str,
         source_bytes: bytes,
@@ -304,7 +117,7 @@ class JudgehostPayloadPreparation:
         safe_source_name = decode_basename(raw=source_name, default="submission.cpp")
         if not safe_source_name.lower().endswith(".java"):
             return (safe_source_name, "")
-        entry_point = cls._detect_java_entry_point(safe_source_name, source_bytes)
+        entry_point = detect_java_entry_point(safe_source_name, source_bytes)
         return (f"{entry_point}.java", entry_point)
 
     @staticmethod
@@ -924,7 +737,7 @@ class JudgehostPayloadPreparation:
             "language_id": language_extensions(source_name)[0],
         }
         if source_name.lower().endswith(".java") and (not entry_point):
-            entry_point = self._detect_java_entry_point(source_name, source_bytes)
+            entry_point = detect_java_entry_point(source_name, source_bytes)
             run_config["entry_point"] = entry_point
         full_compile_key = compile_key(
             source_hash=source_hash,

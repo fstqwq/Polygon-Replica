@@ -114,7 +114,7 @@ The `domjudge` adapter emits the DOMjudge package layout.
 | Metadata | `problem.yaml` uses DOMjudge-compatible scalar problem type and validation metadata. |
 | Statement | The selected PDF is stored as `problem_statement/problem.pdf`. |
 | Tests and programs | Testcase data, validators, checker or interactor, and authored attachments use the DOMjudge layout. |
-| Submissions | Standard accepted, wrong-answer, time-limit, and runtime-error submissions use their conventional directories. Mixed expected behaviors use a language-appropriate `@EXPECTED_RESULTS@` source annotation. |
+| Submissions | Non-Java jury submissions are stored as `submissions/<verdict>/<filename>`. Each single-file, default-package Java submission is stored as `submissions/<verdict>/<source-stem>/<entry-point>.java`; root `submissions.json` maps that complete directory path, including its trailing `/`, to the detected `entry_point`. Mixed expected behaviors use a language-appropriate `@EXPECTED_RESULTS@` source annotation. |
 | Excluded | `statement/` and `submissions/submissions.yaml`. |
 | Balloon color | Standalone export selects a stable color from the problem external ID. Contest export assigns colors by canonical roster ordinal and repeats after 18 problems. |
 

@@ -1,7 +1,9 @@
 """DOMjudge-compatible problem package adapter."""
 
 import hashlib
+import json
 import re
+import shutil
 from pathlib import Path
 
 import yaml
@@ -12,7 +14,11 @@ from app.service.export.adapters.shared import (
     PackageAdapterPlan,
     PackageAdapterSupport,
     PackageFormat,
+    SUBMISSION_RULES,
+    annotated_submission,
 )
+from app.service.problem.java_entry_point import detect_java_entry_point
+from app.service.problem_package.manifest import NativePackageSolutionEntry
 from app.service.problem_package.service import NativePackageReader
 from app.service.statement.render import statement_title_from_snapshot
 from app.service.statement.tex_compile import TexCompileService
@@ -184,15 +190,69 @@ class DOMjudgePackageAdapter(PackageAdapterSupport):
             validator=validator,
             output_validator=interactor if mode == "interactive" else checker,
         )
-        self.copy_submissions(
+        submission_metadata = self._copy_domjudge_submissions(
             snapshot,
             target,
             solutions=adapter_plan.solutions,
-            collect_metadata=False,
-            annotate_mixed=True,
         )
+        if submission_metadata:
+            (target / "submissions.json").write_text(
+                json.dumps(
+                    submission_metadata,
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+                newline="\n",
+            )
         self.copy_attachments(snapshot, target)
         return adapter_plan.warning
+
+    @staticmethod
+    def _copy_domjudge_submissions(
+        snapshot: Path,
+        package_root: Path,
+        *,
+        solutions: tuple[NativePackageSolutionEntry, ...],
+    ) -> dict[str, dict[str, str]]:
+        submissions = package_root / "submissions"
+        submissions.mkdir(parents=True)
+        metadata: dict[str, dict[str, str]] = {}
+        for solution in solutions:
+            source_file = snapshot / solution["source_path"]
+            expected = solution["expected_behavior"]
+            rule = SUBMISSION_RULES.get(expected)
+            if rule is None:
+                continue
+            target_dir = submissions / rule["domjudge_directory"]
+            target_dir.mkdir(parents=True, exist_ok=True)
+            if source_file.suffix.lower() == ".java":
+                entry_point = detect_java_entry_point(
+                    source_file.name,
+                    source_file.read_bytes(),
+                )
+                submission_dir = PackageAdapterSupport.unique_path(
+                    target_dir,
+                    source_file.stem,
+                )
+                submission_dir.mkdir()
+                target = submission_dir / f"{entry_point}.java"
+                relative_dir = submission_dir.relative_to(package_root).as_posix()
+                metadata[f"{relative_dir}/"] = {"entry_point": entry_point}
+            else:
+                target = PackageAdapterSupport.unique_path(
+                    target_dir,
+                    source_file.name,
+                )
+            if expected in {"tle_or_correct", "tle_or_re", "rejected"}:
+                target.write_bytes(
+                    annotated_submission(source_file, rule["domjudge_results"])
+                )
+            else:
+                shutil.copy2(source_file, target)
+        return metadata
 
     def apply_contest_placement(
         self,
