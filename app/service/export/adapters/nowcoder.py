@@ -2,6 +2,7 @@
 
 import shutil
 from pathlib import Path
+from typing import cast
 
 from app.service.export.adapters.shared import (
     ContestPackagePlacement,
@@ -9,7 +10,6 @@ from app.service.export.adapters.shared import (
     PackageAdapterSupport,
     PackageFormat,
 )
-from app.service.problem.build_config import load_build_config
 from app.service.problem_package.service import NativePackageReader
 
 
@@ -46,13 +46,8 @@ class NowcoderPackageAdapter:
         PackageAdapterSupport.prepare_target(target)
 
         for number, test in enumerate(reader.manifest["tests"], start=1):
-            test_id = test["id"]
-            input_source = reader.payload(test, "input")
-            if input_source is None:
-                raise ValueError(f"Native Package test input is missing: {test_id}")
-            answer_source = reader.payload(test, "answer")
-            if answer_source is None:
-                raise ValueError(f"Native Package test answer is missing: {test_id}")
+            input_source = cast(Path, reader.payload(test, "input"))
+            answer_source = cast(Path, reader.payload(test, "answer"))
             shutil.copy2(input_source, target / f"{number}.in")
             shutil.copy2(answer_source, target / f"{number}.ans")
 
@@ -81,7 +76,7 @@ class NowcoderPackageAdapter:
             )
 
     def _checker(self, reader: NativePackageReader) -> Path | None:
-        build_config = load_build_config(
+        build_config = PackageAdapterSupport.native_build_config(
             reader.root,
             problem_mode="pass-fail",
         )

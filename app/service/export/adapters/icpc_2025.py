@@ -11,11 +11,6 @@ from app.service.export.adapters.shared import (
     PackageAdapterSupport,
     PackageFormat,
 )
-from app.service.problem.build_config import load_build_config
-from app.service.problem.runtime_config import (
-    load_problem_config,
-    problem_config_limits,
-)
 from app.service.problem_package.service import NativePackageReader
 from app.service.statement.render import statement_title_from_snapshot
 from app.service.statement.tex_compile import TexCompileService
@@ -149,7 +144,7 @@ class ICPC2025PackageAdapter(PackageAdapterSupport):
         )
         checker, interactor, validator = self.package_programs(
             snapshot,
-            load_build_config(snapshot),
+            self.native_build_config(snapshot, problem_mode=mode),
             mode=mode,
         )
         self.hydrate_statement_samples(reader)
@@ -160,10 +155,7 @@ class ICPC2025PackageAdapter(PackageAdapterSupport):
             include_sample_tests=not self.samples_are_secret(mode, pass_limit),
             keep_all_languages=True,
         )
-        problem_config = load_problem_config(
-            snapshot,
-            limits=problem_config_limits(self._config_values),
-        )
+        problem_config = self.native_problem_config(snapshot)
         (target / "problem.yaml").write_text(
             render_problem_yaml(
                 problem_slug=canonical_problem_slug,

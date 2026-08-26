@@ -84,6 +84,10 @@ Package export always targets the published revision frozen at admission. Histor
 
 ## External package formats
 
+External adapters receive checksum-verified, safely extracted
+`NativePackageReader` snapshots. They consume canonical Native Package paths
+without repeating source archive integrity or filesystem-entry checks.
+
 The ICPC and DOMjudge adapters provide executable `build` and `run` files for C++ validators and interactors. `build` defines `DOMJUDGE` and compiles the copied source for `run`. C component sources are unsupported.
 
 ### ICPC Problem Package 2025-09

@@ -1,21 +1,16 @@
 """QOJ test-data package adapter."""
 
-import os
 import shutil
 from pathlib import Path
-from typing import Literal
+from typing import cast
 
 from app.service.export.adapters.shared import (
     PackageAdapterPlan,
     PackageAdapterSupport,
     PackageFormat,
 )
-from app.service.problem.build_config import BuildConfig, load_build_config
-from app.service.problem.runtime_config import (
-    ProblemConfig,
-    load_problem_config,
-    problem_config_limits,
-)
+from app.service.problem.build_config import BuildConfig
+from app.service.problem.runtime_config import ProblemConfig
 from app.service.problem.standard_checker import detect_standard_checker
 from app.service.problem_package.layout import STATEMENT_BUILD_DIR
 from app.service.problem_package.manifest import NativePackageTestEntry
@@ -121,7 +116,7 @@ class QOJPackageAdapter(PackageAdapterSupport):
         """Validate QOJ support and report advisory source omissions."""
 
         self._problem_config(reader)
-        build_config = load_build_config(
+        build_config = self.native_build_config(
             reader.root,
             problem_mode=reader.manifest["mode"],
         )
@@ -153,7 +148,7 @@ class QOJPackageAdapter(PackageAdapterSupport):
         if adapter_plan.package_format != self.format:
             raise ValueError("package adapter plan format does not match request")
         problem_config = self._problem_config(reader)
-        build_config = load_build_config(
+        build_config = self.native_build_config(
             reader.root,
             problem_mode=reader.manifest["mode"],
         )
@@ -183,20 +178,10 @@ class QOJPackageAdapter(PackageAdapterSupport):
         return adapter_plan.warning
 
     def _problem_config(self, reader: NativePackageReader) -> ProblemConfig:
-        tests = reader.manifest["tests"]
-        if not tests:
-            raise ValueError("QOJ package requires at least one test")
         pass_limit = reader.manifest["pass_limit"]
         if pass_limit > 2:
             raise ValueError("QOJ package supports at most two passes")
-        config = load_problem_config(
-            reader.root,
-            limits=problem_config_limits(self._config_values),
-        )
-        if config["mode"] != reader.manifest["mode"]:
-            raise ValueError("QOJ package mode does not match the Native Package")
-        if config["pass_limit"] != pass_limit:
-            raise ValueError("QOJ package pass limit does not match the Native Package")
+        config = self.native_problem_config(reader.root)
         if config["memory_limit_mb"] > QOJ_MEMORY_LIMIT_MB:
             raise ValueError(
                 f"QOJ package memory limit exceeds {QOJ_MEMORY_LIMIT_MB} MiB"
@@ -231,12 +216,13 @@ class QOJPackageAdapter(PackageAdapterSupport):
             self._copy_cpp_source(validator, target / "val.cpp", role="validator")
 
         if reader.manifest["mode"] == "interactive":
-            interactor = self.configured_source(
-                snapshot,
-                build_config.get("interactor_source"),
+            interactor = cast(
+                Path,
+                self.configured_source(
+                    snapshot,
+                    build_config.get("interactor_source"),
+                ),
             )
-            if interactor is None:
-                raise ValueError("interactive QOJ package requires an interactor")
             self._copy_cpp_source(
                 interactor,
                 target / "interactor.cpp",
@@ -304,99 +290,28 @@ class QOJPackageAdapter(PackageAdapterSupport):
         answer_target: Path,
         use_sample_payload: bool,
     ) -> None:
-        test_id = test["id"]
         input_source = None
         if use_sample_payload:
-            input_source = QOJPackageAdapter._payload(
-                reader,
-                test,
-                "sample_input",
-            )
+            input_source = reader.payload(test, "sample_input")
         if input_source is None:
-            input_source = QOJPackageAdapter._payload(reader, test, "input")
-        if input_source is None:
-            raise ValueError(f"Native Package test input is missing: {test_id}")
+            input_source = cast(Path, reader.payload(test, "input"))
         shutil.copy2(input_source, input_target)
         answer_source = None
         if use_sample_payload:
-            answer_source = QOJPackageAdapter._payload(
-                reader,
-                test,
-                "sample_output",
-            )
+            answer_source = reader.payload(test, "sample_output")
         if answer_source is None:
-            answer_source = QOJPackageAdapter._payload(reader, test, "answer")
+            answer_source = reader.payload(test, "answer")
         if answer_source is None:
-            if reader.manifest["mode"] != "interactive":
-                raise ValueError(f"Native Package test answer is missing: {test_id}")
             answer_target.write_bytes(b"")
             return
         shutil.copy2(answer_source, answer_target)
 
     @staticmethod
-    def _payload(
-        reader: NativePackageReader,
-        test: NativePackageTestEntry,
-        key: Literal["input", "answer", "sample_input", "sample_output"],
-    ) -> Path | None:
-        source = reader.payload(test, key)
-        if source is None:
-            return None
-        root = reader.root.resolve()
-        resolved = source.resolve()
-        try:
-            resolved.relative_to(root)
-        except ValueError as exc:
-            raise ValueError(
-                f"Native Package test {key} escapes the package: {test['id']}"
-            ) from exc
-        if source.is_symlink() or not source.is_file():
-            raise ValueError(
-                f"Native Package test {key} artifact is missing: {test['id']}"
-            )
-        return source
-
-    @staticmethod
     def _copy_download_attachments(snapshot: Path, destination: Path) -> None:
         source_root = snapshot / "attachments"
-        if not source_root.exists():
+        if not source_root.is_dir():
             return
-        if source_root.is_symlink() or not source_root.is_dir():
-            raise ValueError("QOJ participant attachments must be a directory")
-        source_resolved = source_root.resolve()
-        for directory, directories, filenames in os.walk(
-            source_root,
-            topdown=True,
-            followlinks=False,
-        ):
-            current = Path(directory)
-            for name in sorted(directories):
-                child = current / name
-                if child.is_symlink():
-                    raise ValueError(
-                        "QOJ participant attachment must not be a symbolic link: "
-                        f"{child.relative_to(source_root).as_posix()}"
-                    )
-            directories[:] = sorted(directories)
-            for name in sorted(filenames):
-                source = current / name
-                relative = source.relative_to(source_root)
-                if source.is_symlink() or not source.is_file():
-                    raise ValueError(
-                        "QOJ participant attachment must be a regular file: "
-                        f"{relative.as_posix()}"
-                    )
-                resolved = source.resolve()
-                try:
-                    resolved.relative_to(source_resolved)
-                except ValueError as exc:
-                    raise ValueError(
-                        "QOJ participant attachment escapes download/: "
-                        f"{relative.as_posix()}"
-                    ) from exc
-                target = destination / relative
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source, target)
+        shutil.copytree(source_root, destination)
 
     def _write_statement_pdf(
         self,
@@ -404,16 +319,10 @@ class QOJPackageAdapter(PackageAdapterSupport):
         destination: Path,
     ) -> None:
         languages = statement_languages(reader.root)
-        if not languages:
-            raise ValueError("QOJ package requires at least one problem statement")
         language = "english" if "english" in languages else languages[0]
         entrypoint = (
             reader.root / STATEMENT_BUILD_DIR / language / "statements.tex"
         )
-        if entrypoint.is_symlink() or not entrypoint.is_file():
-            raise ValueError(
-                f"QOJ package statement build is missing for {language}"
-            )
         result = self._tex_compile_service.compile_pdf(entrypoint)
         if result.proc.returncode != 0:
             error = self.statement_compile_error(result)

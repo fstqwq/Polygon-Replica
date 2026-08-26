@@ -3,21 +3,31 @@
 Format policy belongs in the individual adapter modules. This module only
 contains operations that have identical meaning for every supported package:
 reading Native Package test payloads, compiling statements, copying source files,
-and preparing a safe caller-owned target directory.
+and preparing a safe caller-owned target directory. NativePackageReader owns
+source archive integrity and path validation; adapters consume its materialized
+snapshot without repeating those checks.
 """
 
-import os
 import shlex
 import shutil
 import stat
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, TypedDict
+from typing import Protocol, TypedDict, cast
 
 from app.config import ConfigValues
-from app.service.problem.build_config import BuildConfig
-from app.service.problem.runtime_config import problem_config_limits
-from app.service.problem.source_file import resolve_source
+from app.service.problem.build_config import (
+    BUILD_CONFIG_REL,
+    BuildConfig,
+    parse_build_config,
+)
+from app.service.problem.runtime_config import (
+    PROBLEM_CONFIG_REL,
+    ProblemConfig,
+    ProblemMode,
+    parse_problem_config,
+    problem_config_limits,
+)
 from app.service.problem_package.manifest import NativePackageSolutionEntry
 from app.service.problem_package.service import NativePackageReader
 from app.service.problem_package.statement_samples import (
@@ -209,10 +219,6 @@ def _write_executable(path: Path, text: str) -> None:
 
 def _copy_testlib(snapshot: Path, target_dir: Path) -> None:
     testlib = snapshot / "third_party" / "testlib" / "testlib.h"
-    if testlib.is_symlink() or not testlib.is_file():
-        raise ValueError(
-            "export missing testlib header: third_party/testlib/testlib.h"
-        )
     shutil.copy2(testlib, target_dir / "testlib.h")
 
 
@@ -475,11 +481,9 @@ class PackageAdapterSupport:
                 if samples_as_secret or not row["sample"]
                 else sample_dir
             )
-            input_source = reader.payload(row, "input")
+            input_source = cast(Path, reader.payload(row, "input"))
             if destination == sample_dir:
                 input_source = reader.payload(row, "sample_input") or input_source
-            if input_source is None:
-                raise ValueError(f"Native Package test input is missing: {test_id}")
             shutil.copy2(input_source, destination / f"{test_id}.in")
             answer_source = reader.payload(row, "answer")
             if destination == sample_dir:
@@ -488,13 +492,26 @@ class PackageAdapterSupport:
                 )
             answer_target = destination / f"{test_id}.ans"
             if answer_source is None:
-                if reader.manifest["mode"] != "interactive":
-                    raise ValueError(
-                        f"Native Package test answer is missing: {test_id}"
-                    )
                 answer_target.write_bytes(b"")
             else:
                 shutil.copy2(answer_source, answer_target)
+
+    @staticmethod
+    def native_build_config(
+        snapshot: Path,
+        *,
+        problem_mode: ProblemMode,
+    ) -> BuildConfig:
+        return parse_build_config(
+            (snapshot / BUILD_CONFIG_REL).read_text(encoding="utf-8"),
+            problem_mode=problem_mode,
+        )
+
+    def native_problem_config(self, snapshot: Path) -> ProblemConfig:
+        return parse_problem_config(
+            (snapshot / PROBLEM_CONFIG_REL).read_text(encoding="utf-8"),
+            limits=problem_config_limits(self._config_values),
+        )
 
     def package_programs(
         self,
@@ -510,10 +527,6 @@ class PackageAdapterSupport:
                 snapshot,
                 build_config.get("interactor_source"),
             )
-            if interactor is None:
-                raise ValueError(
-                    "interactive package adapter requires an interactor"
-                )
         else:
             checker = self.configured_source(
                 snapshot,
@@ -529,10 +542,7 @@ class PackageAdapterSupport:
     def configured_source(snapshot: Path, rel_path: str | None) -> Path | None:
         if rel_path is None:
             return None
-        try:
-            return resolve_source(snapshot, rel_path)
-        except RuntimeError as exc:
-            raise ValueError(str(exc)) from exc
+        return snapshot / rel_path
 
     @staticmethod
     def write_validators(
@@ -565,9 +575,8 @@ class PackageAdapterSupport:
         submissions = package_root / "submissions"
         submissions.mkdir(parents=True)
         metadata: dict[str, dict[str, object]] = {}
-        accepted_count = 0
         for solution in solutions:
-            source_file = resolve_source(snapshot, solution["source_path"])
+            source_file = snapshot / solution["source_path"]
             expected = solution["expected_behavior"]
             rule = SUBMISSION_RULES.get(expected)
             if rule is None:
@@ -599,12 +608,6 @@ class PackageAdapterSupport:
                     "permitted": list(rule["permitted"]),
                     "required": list(rule["required"]),
                 }
-            if expected == "accepted":
-                accepted_count += 1
-        if accepted_count == 0:
-            raise ValueError(
-                "package adapter requires at least one accepted submission"
-            )
         return metadata
 
     @staticmethod
@@ -623,31 +626,10 @@ class PackageAdapterSupport:
     @staticmethod
     def copy_attachments(snapshot: Path, package_root: Path) -> None:
         source_root = snapshot / "attachments"
-        if source_root.is_symlink() or not source_root.is_dir():
+        if not source_root.is_dir():
             return
         destination_root = package_root / "attachments"
-        source_resolved = source_root.resolve()
-        for directory, directories, filenames in os.walk(
-            source_root,
-            topdown=True,
-            followlinks=False,
-        ):
-            current = Path(directory)
-            directories[:] = sorted(
-                name
-                for name in directories
-                if not (current / name).is_symlink()
-            )
-            for name in sorted(filenames):
-                source = current / name
-                if source.is_symlink() or not source.is_file():
-                    continue
-                resolved = source.resolve()
-                if source_resolved not in resolved.parents:
-                    continue
-                target = destination_root / source.relative_to(source_root)
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source, target)
+        shutil.copytree(source_root, destination_root)
 
     @staticmethod
     def problem_slug_leaf(canonical_problem_slug: str) -> str:

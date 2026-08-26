@@ -310,7 +310,7 @@ class TestQOJExportPackage(unittest.TestCase):
             b"%PDF-1.4\nchinese\n",
         )
 
-    def test_rejects_unsupported_passes_memory_and_missing_statement(self) -> None:
+    def test_rejects_unsupported_passes_and_memory(self) -> None:
         adapter = QOJPackageAdapter(self.values, self.tex_compile)
         unsupported_passes = self._reader(
             name="three-pass",
@@ -330,59 +330,6 @@ class TestQOJExportPackage(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "exceeds 6144 MiB"):
             adapter.plan(excess_memory)
-
-        without_statement = self._reader(
-            name="without-statement",
-            mode="pass-fail",
-            pass_limit=1,
-            checker=None,
-            include_statement=False,
-        )
-        with self.assertRaisesRegex(ValueError, "problem statement"):
-            adapter.build(
-                without_statement,
-                target=self.root / "without-statement-package",
-                canonical_problem_slug="owner/problem",
-            )
-
-    def test_rejects_missing_and_escaping_native_test_payloads(self) -> None:
-        adapter = QOJPackageAdapter(self.values, self.tex_compile)
-        missing = self._reader(
-            name="missing-input",
-            mode="pass-fail",
-            pass_limit=1,
-            checker=None,
-        )
-        first_test = missing.manifest["tests"][0]
-        input_path = missing.payload(first_test, "input")
-        self.assertIsNotNone(input_path)
-        input_path.unlink()
-        with self.assertRaisesRegex(ValueError, "input artifact is missing"):
-            adapter.build(
-                missing,
-                target=self.root / "missing-input-package",
-                canonical_problem_slug="owner/problem",
-            )
-
-        escaping = self._reader(
-            name="escaping-input",
-            mode="pass-fail",
-            pass_limit=1,
-            checker=None,
-        )
-        outside = self.root / "outside-input"
-        outside.write_bytes(b"outside\n")
-        escaping.manifest["tests"][0]["input"] = {
-            "path": "../outside-input",
-            "sha256": "0" * 64,
-            "size": outside.stat().st_size,
-        }
-        with self.assertRaisesRegex(ValueError, "escapes the package"):
-            adapter.build(
-                escaping,
-                target=self.root / "escaping-input-package",
-                canonical_problem_slug="owner/problem",
-            )
 
     def test_registry_places_qoj_before_nowcoder(self) -> None:
         registry = PackageAdapterRegistry(self.values, self.tex_compile)
@@ -409,7 +356,6 @@ class TestQOJExportPackage(unittest.TestCase):
         include_answers: bool = True,
         include_accepted: bool = True,
         include_validator: bool = True,
-        include_statement: bool = True,
         memory_limit_mb: int = 512,
         accepted_suffix: str = ".cpp",
     ) -> NativePackageReader:
@@ -485,17 +431,16 @@ class TestQOJExportPackage(unittest.TestCase):
             + "\n",
             encoding="utf-8",
         )
-        if include_statement:
-            for language in ("english", "chinese"):
-                (package_root / "statement-sections" / language).mkdir(
-                    parents=True
-                )
-                statement_build = package_root / "statement-build" / language
-                statement_build.mkdir(parents=True)
-                (statement_build / "statements.tex").write_text(
-                    "statement\n",
-                    encoding="utf-8",
-                )
+        for language in ("english", "chinese"):
+            (package_root / "statement-sections" / language).mkdir(
+                parents=True
+            )
+            statement_build = package_root / "statement-build" / language
+            statement_build.mkdir(parents=True)
+            (statement_build / "statements.tex").write_text(
+                "statement\n",
+                encoding="utf-8",
+            )
 
         tests: list[NativePackageTestEntry] = []
         test_payloads = (
