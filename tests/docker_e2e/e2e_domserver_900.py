@@ -1,9 +1,10 @@
-"""Import three DOMjudge projections and execute their jury submissions on 9.0.0."""
+"""Execute direct and Polygon2DOMjudge projections on DOMserver 9.0.0."""
 
 import argparse
 import json
 import os
 import shutil
+import subprocess
 import time
 import zipfile
 from collections import Counter
@@ -21,6 +22,7 @@ DOMSERVER_TIMEOUT_SEC = 240.0
 JUDGEHOST_TIMEOUT_SEC = 180.0
 IMPORT_TIMEOUT_SEC = 120.0
 JURY_TIMEOUT_SEC = 360.0
+P2D_PROBLEM = "e2e/interactive"
 
 
 def _json_text(value: object) -> str:
@@ -459,6 +461,107 @@ def _import_problem(client: httpx.Client, archive: Path) -> str:
     return problem_id
 
 
+def _convert_with_latest_polygon2domjudge(polygon_archive: Path) -> Path:
+    output_root = Path(os.environ["POLYGON_REPLICA_E2E_OUTPUT_ROOT"])
+    site_root = Path(os.environ["POLYGON_REPLICA_E2E_P2D_SITE"])
+    commit = os.environ["POLYGON_REPLICA_E2E_P2D_COMMIT"]
+    if len(commit) != 40 or any(ch not in "0123456789abcdef" for ch in commit):
+        raise RuntimeError(f"Polygon2DOMjudge commit is invalid: {commit!r}")
+    if not site_root.is_dir():
+        raise RuntimeError(f"Polygon2DOMjudge installation is missing: {site_root}")
+    output = output_root / "interactive-p2d-latest.zip"
+    log_path = output_root / "polygon2domjudge-latest.log"
+    environment = dict(os.environ)
+    python_path = environment.get("PYTHONPATH", "")
+    environment["PYTHONPATH"] = (
+        f"{site_root}:{python_path}" if python_path else str(site_root)
+    )
+    command = [
+        "python3",
+        "-m",
+        "p2d",
+        "--code",
+        "P2D",
+        "--color",
+        "#46d9e6",
+        "--external-id",
+        "polygon2domjudge-latest-interactive",
+        "--with-statement",
+        "--yes",
+        "--output",
+        str(output),
+        str(polygon_archive),
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=environment,
+            timeout=IMPORT_TIMEOUT_SEC,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout or ""
+        stderr = exc.stderr or ""
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode("utf-8", errors="replace")
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        log_path.write_text(
+            f"commit={commit}\ncommand={command!r}\n"
+            f"timeout={IMPORT_TIMEOUT_SEC}\n"
+            f"stdout:\n{stdout}\nstderr:\n{stderr}",
+            encoding="utf-8",
+            newline="\n",
+        )
+        raise RuntimeError(
+            "latest Polygon2DOMjudge conversion exceeded 120 seconds: "
+            f"commit={commit}"
+        ) from exc
+    log_path.write_text(
+        f"commit={commit}\ncommand={command!r}\n"
+        f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}",
+        encoding="utf-8",
+        newline="\n",
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            "latest Polygon2DOMjudge conversion failed: "
+            f"commit={commit} returncode={completed.returncode}\n"
+            f"stdout={completed.stdout[-2000:]!r}\n"
+            f"stderr={completed.stderr[-4000:]!r}"
+        )
+    if not output.is_file():
+        raise RuntimeError("latest Polygon2DOMjudge did not produce an archive")
+    with zipfile.ZipFile(output) as archive:
+        members = set(archive.namelist())
+        required = {
+            "domjudge-problem.ini",
+            "problem.yaml",
+            "problem_statement/problem.pdf",
+        }
+        if not required.issubset(members) or archive.testzip() is not None:
+            raise RuntimeError(
+                "latest Polygon2DOMjudge produced an incomplete archive: "
+                f"{sorted(members)!r}"
+            )
+    return output
+
+
+def _export_polygon_and_convert() -> tuple[Path, Path]:
+    _set_agent_problem(P2D_PROBLEM)
+    _job_id, archive = product._agent_export("polygon-linux")
+    output_root = Path(os.environ["POLYGON_REPLICA_E2E_OUTPUT_ROOT"])
+    polygon_archive = output_root / "interactive-polygon-linux.zip"
+    shutil.copy2(archive, polygon_archive)
+    return polygon_archive, _convert_with_latest_polygon2domjudge(
+        polygon_archive
+    )
+
+
 def _wait_judgehosts(product_client: httpx.Client, domserver: httpx.Client) -> None:
     product._wait_for_real_judgehost(product_client, timeout_sec=JUDGEHOST_TIMEOUT_SEC)
     deadline = time.monotonic() + JUDGEHOST_TIMEOUT_SEC
@@ -552,22 +655,28 @@ def run() -> None:
             archive = _export_fixture(product_client, problem, files)
             archives.append(archive)
             _import_problem(domserver, archive)
-        judgements = _wait_jury_results(domserver, expected_count=9)
+        polygon_archive, converted_archive = _export_polygon_and_convert()
+        archives.append(converted_archive)
+        _import_problem(domserver, converted_archive)
+        judgements = _wait_jury_results(domserver, expected_count=10)
         results = Counter(_judgement_result(row) for row in judgements)
-        expected = Counter({"AC": 4, "CE": 1, "RTE": 2, "TLE": 1, "WA": 1})
+        expected = Counter({"AC": 5, "CE": 1, "RTE": 2, "TLE": 1, "WA": 1})
         if results != expected:
             raise RuntimeError(f"DOMjudge jury results differ: {results!r} != {expected!r}")
         first_verifier_page = _login_and_verify(domserver)
         second_verifier_page = domserver.get("/jury/judging-verifier")
         second_verifier_page.raise_for_status()
-        if "9 verified earlier" not in second_verifier_page.text.lower():
+        if "10 verified earlier" not in second_verifier_page.text.lower():
             raise RuntimeError(
-                "DOMjudge Judging verifier did not persist all nine decisions: "
+                "DOMjudge Judging verifier did not persist all ten decisions: "
                 f"{first_verifier_page[:500]!r}"
             )
     print(
         "DOMserver 9.0.0 imported and judged pass-fail, interactive-only, "
-        f"and multi-pass-only packages: {[path.name for path in archives]!r}"
+        "multi-pass-only, and latest Polygon2DOMjudge packages: "
+        f"{[path.name for path in archives]!r}; "
+        f"Polygon source={polygon_archive.name}; "
+        f"Polygon2DOMjudge commit={os.environ['POLYGON_REPLICA_E2E_P2D_COMMIT']}"
     )
 
 

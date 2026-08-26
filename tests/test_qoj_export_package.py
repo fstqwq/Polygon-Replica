@@ -389,7 +389,13 @@ class TestQOJExportPackage(unittest.TestCase):
 
         self.assertEqual(
             registry.formats,
-            ("domjudge", "icpc-2025-09", "qoj", "nowcoder"),
+            (
+                "domjudge",
+                "icpc-2025-09",
+                "qoj",
+                "polygon-linux",
+                "nowcoder",
+            ),
         )
         self.assertEqual(registry.require("qoj").display_name, "QOJ")
 

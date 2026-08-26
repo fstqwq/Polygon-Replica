@@ -148,7 +148,7 @@ jobs:
         if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
         fi
-    - name: Import and execute three DOMjudge 9.0.0 package modes
+    - name: Import direct and latest Polygon2DOMjudge packages into DOMserver 9.0.0
       run: bash tests/scripts/e2e-domserver-900.sh
     - name: Upload failure diagnostics
       if: failure()

@@ -144,6 +144,23 @@ The `nowcoder` adapter emits the Nowcoder testcase archive.
 | Checker | Custom checker source is copied to `checker.cc`; the adapter does not compile it. |
 | Compatibility warning | Nowcoder uses an older `testlib.h` with C++14. A literal `setTestCase` reference produces an advisory warning but does not block publication. |
 
+### Polygon full package for Linux
+
+The `polygon-linux` adapter emits a root-level Polygon full package. It records
+the native positive `pass_limit` unchanged as `judging.run-count` and adds the
+`multipass` property when the value is greater than one. A downstream
+converter's narrower pass support produces an advisory warning and never
+changes or rejects the Polygon run count.
+
+| Area | Contract |
+| --- | --- |
+| Metadata | Root `problem.xml` contains standard names, statement declarations, one testset, limits in milliseconds and bytes, ordered manual materialized tests, assets, solutions, and the exact positive run count. |
+| Statements | Every authored language has rendered TeX, `problem-properties.json`, `statement-sections`, globally indexed `example.NN` pairs, and `statements/.pdf/<language>/problem.pdf`. Metadata is repeated in XML and JSON for consumers that implement only one representation. |
+| Tests | Canonical inputs and answers use `tests/%02d` and `tests/%02d.a`. An interactive test without a canonical answer receives an empty `.a`. |
+| Programs | Selected checker, interactor, and validator sources use Polygon asset declarations below `files/`. A checker is also copied to root `check.cpp`; a missing pass-fail checker receives a byte-exact testlib checker. Interactive multi-pass assets contain one declared run per pass. |
+| Solutions and attachments | Authored solution sources with declared behavior use Polygon expected tags, and participant attachments are declared at their copied root-relative paths. A solution with unknown behavior is omitted with a warning because some downstream converters interpret unknown Polygon tags as accepted. |
+| Compatibility warnings | Polygon2DOMjudge's current two-pass and multi-pass-interactor restrictions, and the run-count and language limits of some downstream converters, are advisory target capabilities. The exported Polygon package retains the full native format semantics. |
+
 ## Contest package bundle
 
 A contest bundle freezes the canonical problem order and the ready native package for every current published revision. A missing or unavailable native package rejects the request. `Build All Packages` and the single-problem package workflow own native package creation and verification.
@@ -154,7 +171,7 @@ The download resolves and verifies the selected external package cache for every
 | --- | --- |
 | Children | `packages/<idx>-<problem>.zip`, one per roster problem. |
 | Statements | Every statement language shared by all frozen native packages produces one complete contest PDF at `statements.<language-code>.pdf`. An empty language intersection or a failed PDF prevents the bundle. |
-| Placement | Assembly rewrites only DOMjudge `short-name` and balloon color from the contest `idx` and canonical ordinal. The reusable cached package remains unchanged. ICPC, QOJ, and Nowcoder require no placement overlay. |
+| Placement | Assembly rewrites only DOMjudge `short-name` and balloon color from the contest `idx` and canonical ordinal. The reusable cached package remains unchanged. ICPC, QOJ, Polygon, and Nowcoder require no placement overlay. |
 | Outer archive | Contains the complete contest statement PDFs and child packages, with no manifest, Git commit, native package identity, or checksum metadata. |
 
 Statement compilation retains the established template contract and engine detection. The contest PDF path uses the frozen native package sources and the existing preview cache. External adapters project the first LaTeX `!` diagnostic from the generated log, then fall back to stdout and stderr. Export job and HTTP diagnostics use the configured display-text limit.

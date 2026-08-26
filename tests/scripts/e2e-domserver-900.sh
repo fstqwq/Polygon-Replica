@@ -10,6 +10,7 @@ run_suffix="$(date -u +%Y%m%d%H%M%S)-$$-${RANDOM}"
 export POLYGON_REPLICA_E2E_IMAGE="${POLYGON_REPLICA_E2E_IMAGE:-polygon-replica-e2e-domserver:${run_suffix}}"
 export POLYGON_REPLICA_E2E_SKILLS_HOST_ROOT="${POLYGON_REPLICA_E2E_SKILLS_HOST_ROOT:-$REPO_ROOT/.e2e/polygon-skills}"
 export POLYGON_REPLICA_E2E_SKILLS_COMMIT
+export POLYGON_REPLICA_E2E_P2D_COMMIT="pending"
 export POLYGON_REPLICA_E2E_JUDGEHOST_TOKEN="e2e-${run_suffix}-app-judgehost"
 export POLYGON_REPLICA_E2E_ADMIN_PASSWORD="e2e-${run_suffix}-Password-9"
 export POLYGON_REPLICA_E2E_DOMSERVER_ADMIN_PASSWORD="pending"
@@ -27,6 +28,8 @@ project_name="polygon-replica-e2e-domserver-${run_suffix}"
 output_root="$REPO_ROOT/.e2e/e2e-domserver-900"
 controller_log="$output_root/controller.log"
 export POLYGON_REPLICA_E2E_OUTPUT_HOST_ROOT="$output_root/output"
+p2d_runtime_root="$REPO_ROOT/.e2e/polygon2domjudge-runtime-${run_suffix}"
+export POLYGON_REPLICA_E2E_P2D_SITE_HOST_ROOT="$p2d_runtime_root/site"
 image_owned=0
 
 compose() {
@@ -82,14 +85,27 @@ cleanup() {
   if (( image_owned )); then
     docker image rm --force "$POLYGON_REPLICA_E2E_IMAGE" >/dev/null 2>&1 || true
   fi
+  rm -rf -- "$p2d_runtime_root"
   exit "$status"
 }
 trap cleanup EXIT
 
 cd -- "$REPO_ROOT"
 rm -rf -- "$output_root"
+rm -rf -- "$p2d_runtime_root"
 mkdir -p "$POLYGON_REPLICA_E2E_OUTPUT_HOST_ROOT"
 chmod 0777 "$POLYGON_REPLICA_E2E_OUTPUT_HOST_ROOT"
+p2d_source="$p2d_runtime_root/source"
+p2d_site="$POLYGON_REPLICA_E2E_P2D_SITE_HOST_ROOT"
+git clone --depth 1 \
+  https://github.com/cn-xcpc-tools/Polygon2DOMjudge.git \
+  "$p2d_source"
+POLYGON_REPLICA_E2E_P2D_COMMIT=$(git -C "$p2d_source" rev-parse HEAD)
+echo "Testing Polygon2DOMjudge latest commit $POLYGON_REPLICA_E2E_P2D_COMMIT"
+printf '%s\n' "$POLYGON_REPLICA_E2E_P2D_COMMIT" \
+  >"$POLYGON_REPLICA_E2E_OUTPUT_HOST_ROOT/polygon2domjudge.commit"
+mkdir -p "$p2d_site"
+chmod 0777 "$p2d_site"
 docker compose version >/dev/null
 
 if [[ "${POLYGON_REPLICA_E2E_IMAGE_PREBUILT:-0}" == "1" ]]; then
@@ -98,6 +114,19 @@ else
   image_owned=1
   compose build app
 fi
+
+docker run --rm \
+  --entrypoint python3 \
+  --user "$(id -u):$(id -g)" \
+  --volume "$p2d_source:/opt/polygon2domjudge" \
+  --volume "$p2d_site:/opt/polygon2domjudge-site" \
+  "$POLYGON_REPLICA_E2E_IMAGE" \
+  -m pip install \
+  --disable-pip-version-check \
+  --no-cache-dir \
+  --target /opt/polygon2domjudge-site \
+  /opt/polygon2domjudge
+chmod -R a+rwX "$p2d_source" "$p2d_site"
 
 docker pull mariadb:10.11
 docker pull domjudge/domserver:9.0.0

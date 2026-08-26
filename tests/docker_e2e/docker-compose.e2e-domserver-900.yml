@@ -96,10 +96,13 @@ services:
       POLYGON_REPLICA_E2E_DOMSERVER_ADMIN_PASSWORD: >-
         ${POLYGON_REPLICA_E2E_DOMSERVER_ADMIN_PASSWORD:?set by script}
       POLYGON_REPLICA_E2E_OUTPUT_ROOT: /opt/e2e-output
+      POLYGON_REPLICA_E2E_P2D_COMMIT: ${POLYGON_REPLICA_E2E_P2D_COMMIT:?set by script}
+      POLYGON_REPLICA_E2E_P2D_SITE: /opt/polygon2domjudge-site
     volumes:
       - .:/opt/e2e:ro
       - ${POLYGON_REPLICA_E2E_SKILLS_HOST_ROOT:?set by script}:/opt/polygon-skills:ro
       - ${POLYGON_REPLICA_E2E_OUTPUT_HOST_ROOT:?set by script}:/opt/e2e-output
+      - ${POLYGON_REPLICA_E2E_P2D_SITE_HOST_ROOT:?set by script}:/opt/polygon2domjudge-site:ro
       - state:/var/backups/polygon-replica
     networks:
       - e2e

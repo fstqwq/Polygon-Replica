@@ -51,6 +51,7 @@
     "test_install_host_contract.py",
     "test_judgehost_scripts.py",
     "test_nowcoder_export_package.py",
+    "test_polygon_export_package.py",
     "test_qoj_export_package.py",
     "test_tex_sandbox.py"
   ],

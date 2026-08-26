@@ -1717,11 +1717,28 @@ def _agent_export(package_format: str) -> tuple[str, Path]:
         raise RuntimeError(f"Agent {package_format} download is inconsistent: {downloaded!r}")
     with zipfile.ZipFile(output) as archive:
         members = set(archive.namelist())
-        required_members = (
-            {"problem.yaml", "domjudge-problem.ini", "problem_statement/problem.pdf"}
-            if package_format == "domjudge"
-            else {"problem.yaml", "submissions/submissions.yaml"}
-        )
+        required_by_format = {
+            "domjudge": {
+                "problem.yaml",
+                "domjudge-problem.ini",
+                "problem_statement/problem.pdf",
+            },
+            "icpc-2025-09": {
+                "problem.yaml",
+                "submissions/submissions.yaml",
+            },
+            "polygon-linux": {
+                "problem.xml",
+                "statements/.pdf/english/problem.pdf",
+                "tests/01",
+                "tests/01.a",
+            },
+        }
+        required_members = required_by_format.get(package_format)
+        if required_members is None:
+            raise RuntimeError(
+                f"Agent E2E has no archive contract for {package_format}"
+            )
         if not required_members.issubset(members):
             raise RuntimeError(
                 f"Agent {package_format} archive omitted required members: {sorted(members)!r}"

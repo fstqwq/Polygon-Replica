@@ -127,7 +127,13 @@ class _Adapter:
 
 
 class _Registry:
-    formats = ("domjudge", "icpc-2025-09", "qoj", "nowcoder")
+    formats = (
+        "domjudge",
+        "icpc-2025-09",
+        "qoj",
+        "polygon-linux",
+        "nowcoder",
+    )
 
     def __init__(self) -> None:
         self.adapters = {
