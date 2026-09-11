@@ -25,6 +25,19 @@ problem.tex
 
 Includes and resources must remain inside the render tree. The renderer supports pair, multi-pass, interactive, and multi-pass interactive samples. Unknown macros produce visible warnings. PDF images use Poppler and SVG conversion uses librsvg. External URLs, traversal, unsafe raw HTML, scripts, event attributes, and dangerous URL schemes are rejected or removed; the output loads no external MathJax or CDN resource.
 
+Presentation conversion preserves standard TeX size declarations and size
+environments (`tiny` through `Huge`), explicit `fontsize`/`selectfont`, nested
+groups, paragraph alignment, and caption font sizes. Minipages retain their
+width and vertical alignment in wrapping rows, with horizontal separators.
+Sample text inherits the enclosing font scope. Verbatim text and mathematics
+retain their source commands for their respective readers.
+
+The HTML boundary accepts only bounded numeric dimensions and recognized
+alignment values for presentation styles. It preserves image dimensions,
+table alignment, and the supported MathML font, accent, and spacing attributes.
+Boxed formulas use a bordered MathML Core node for browser rendering. All
+other style declarations remain subject to removal.
+
 ## Problem outputs
 
 The Statement editor exposes `Preview: PDF HTML LaTeX` to problem readers. LaTeX opens rendered workspace source directly. HTML and PDF synchronously reuse a matching `statement_previews` cache entry or generate the result before returning it; there is no asynchronous workspace compile or status endpoint. Dynamic workspace samples may create foreground `sample` verification evidence in the actor's own workspace, but cannot certify a native package. Cache identity is checked before expensive source preparation and again before publication. Historical package links carry the exact native package identity.

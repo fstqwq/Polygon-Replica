@@ -4,6 +4,7 @@ local max_include_count = 64
 local max_include_bytes = 2 * 1024 * 1024
 local include_count = 0
 local include_bytes = 0
+local presentation = dofile(PANDOC_SCRIPT_FILE:match('^(.*[/\\])') .. 'pandoc_presentation.lua')
 
 
 local function attr(classes, identifier)
@@ -161,7 +162,7 @@ end
 
 
 local function parse_latex(text)
-  return pandoc.read(text, "latex+raw_tex+latex_macros").blocks
+  return pandoc.read(presentation.prepare(text), "latex+raw_tex+latex_macros").blocks
 end
 
 
@@ -495,12 +496,11 @@ function RawBlock(element)
   body = normalize_legacy_note_guard(body)
   body = remove_empty_trailing_note_marker(body)
   body = translate_standalone_section_commands(body)
-  body = body:gsub("\\par%s*", "")
 
   local output = pandoc.Blocks({
     pandoc.Header(2, name, attr({}, problem_id .. "-title")),
     pandoc.Div({pandoc.Plain({pandoc.Str(time_limit .. " · " .. memory_limit)})}, attr({"statement-meta"})),
   })
   append_all(output, render_body(body))
-  return pandoc.Div(output, attr({"statement-fragment"}))
+  return pandoc.Div(presentation.render(output), attr({"statement-fragment"}))
 end

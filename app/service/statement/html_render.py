@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from html import escape
-from importlib import import_module
 import json
 import re
 import shutil
@@ -12,39 +11,16 @@ from pathlib import Path, PurePosixPath
 
 from app.config import ConfigValues
 from app.service.sandbox.base import ExecResult, ExecSpec, SandboxBackend
+from app.service.statement.html_sanitize import sanitize_statement_html
 
-
-nh3 = import_module("nh3")
 
 RESOURCE_PLACEHOLDER = "__STATEMENT_PREVIEW_RESOURCE__/"
 _FILTER_PATH = Path(__file__).with_name("pandoc_statement.lua")
+_PRESENTATION_PATH = Path(__file__).with_name("pandoc_presentation.lua")
 _PANDOC_SINGLE_CAPABILITY = ("+RTS", "-N1", "-RTS")
 _SAFE_RASTER_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 _MAX_IMAGE_COUNT = 128
 _STATEMENT_TITLE_START = re.compile(r"<h2(?:\s[^>]*)?>", re.IGNORECASE)
-_MATHML_TAGS = {
-    "annotation",
-    "math",
-    "mfrac",
-    "mi",
-    "mn",
-    "mo",
-    "mover",
-    "mroot",
-    "mrow",
-    "mspace",
-    "msqrt",
-    "msub",
-    "msubsup",
-    "msup",
-    "mtable",
-    "mtd",
-    "mtext",
-    "mtr",
-    "munder",
-    "munderover",
-    "semantics",
-}
 
 
 @dataclass(frozen=True)
@@ -123,7 +99,7 @@ class StatementHtmlRenderer:
                 f"--output={ast_path}",
             ],
             cwd=output,
-            read_only_mounts=(source_root, _FILTER_PATH),
+            read_only_mounts=(source_root, _FILTER_PATH, _PRESENTATION_PATH),
             env=env,
         )
         if parse_result.returncode != 0 or parse_result.timed_out:
@@ -383,27 +359,8 @@ class StatementHtmlRenderer:
 
     @staticmethod
     def _sanitize(fragment: str) -> str:
-        return nh3.clean(
-            fragment,
-            tags={
-                "a", "article", "blockquote", "br", "code", "div", "em",
-                "figure", "figcaption", "h2", "h3", "h4", "h5", "img",
-                "li", "ol", "p", "pre", "section", "span", "strong",
-                "sub", "sup", "table", "tbody", "td", "th", "thead", "tr",
-                "ul", "var",
-            } | _MATHML_TAGS,
-            attributes={
-                "*": {"class", "id"},
-                "a": {"href", "title"},
-                "img": {"alt", "height", "src", "title", "width"},
-                "math": {"display", "xmlns"},
-                "annotation": {"encoding"},
-                "mo": {"form", "stretchy"},
-                "mtable": {"columnalign", "columnspacing", "rowspacing"},
-                "mtd": {"columnalign"},
-            },
-            url_schemes=set(),
-        )
+        return sanitize_statement_html(fragment)
+
 
     @staticmethod
     def _safe_relative_resource(value: str) -> PurePosixPath:

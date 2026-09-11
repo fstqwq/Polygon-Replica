@@ -23,6 +23,7 @@
     "test_runpipe_transcript.py",
     "test_runtime_blob_store.py",
     "test_statement_style.py",
+    "test_statement_html_sanitize.py",
     "test_statement_examples.py",
     "test_verification_analysis.py",
     "test_verification_runtime_coordinator.py",

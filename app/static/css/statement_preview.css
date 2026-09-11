@@ -49,8 +49,36 @@
   line-height: 1.4;
 }
 
-.statement-preview-document p { margin: 0; line-height: 1.4; }
-.statement-preview-document p + p { margin-top: 21px; }
+.statement-preview-document p { margin: 0; line-height: inherit; }
+.statement-preview-document :is(p, .statement-paragraph, .center, .flushleft, .flushright)
+  + :is(p, .statement-paragraph, .center, .flushleft, .flushright) { margin-top: 21px; }
+
+.statement-preview-document img { max-width: 100%; height: auto; }
+.statement-preview-document .center { text-align: center; }
+.statement-preview-document .flushleft { text-align: left; }
+.statement-preview-document .flushright { text-align: right; }
+.statement-preview-document .statement-font { line-height: inherit; }
+.statement-preview-document .statement-hspace { display: inline-block; }
+.statement-preview-document .statement-columns {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: inherit;
+  max-width: 100%;
+}
+.statement-preview-document .center > .statement-columns { justify-content: center; }
+.statement-preview-document .statement-minipage {
+  box-sizing: border-box;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+.statement-preview-document .statement-minipage[style*="vertical-align:top"] { align-self: flex-start; }
+.statement-preview-document .statement-minipage[style*="vertical-align:middle"] { align-self: center; }
+.statement-preview-document .statement-minipage[style*="vertical-align:bottom"] { align-self: flex-end; }
+.statement-preview-document .statement-fill { flex: 1 1 1em; }
+.statement-preview-document .statement-gap { flex: 0 1 auto; }
+.statement-preview-document .statement-math-box { border: 1px solid currentColor; padding: 0.1em 0.2em; }
 
 .statement-preview-document math[display="block"] {
   display: block;
@@ -90,7 +118,9 @@
   overflow-wrap: anywhere;
   white-space: pre-wrap;
   color: var(--text);
-  font: 14px/1.5 Consolas, "Lucida Console", "Andale Mono", "Courier New", monospace;
+  font-family: Consolas, "Lucida Console", "Andale Mono", "Courier New", monospace;
+  font-size: inherit;
+  line-height: inherit;
 }
 
 .statement-preview-document .interaction-heading {
@@ -115,7 +145,6 @@
 .statement-preview-document .interaction-event-interactor { margin-right: auto; }
 .statement-preview-document .interaction-event-solution { margin-left: auto; }
 .statement-preview-document .interaction-event pre.sample-content { min-height: 0; padding-block: 3px; }
-.statement-preview-document img { display: block; max-width: 100%; height: auto; margin: 14px auto; }
 
 .statement-preview-warning { margin-bottom: 12px; }
 
