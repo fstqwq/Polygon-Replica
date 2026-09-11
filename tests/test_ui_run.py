@@ -2445,13 +2445,11 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
     def test_package_certification_requires_explicit_worker_admission(self) -> None:
         commit = "a" * 40
         worker_kwargs = {
-            "actor_user_id": 1,
             "problem_id": 1,
             "workspace_id": 1,
             "workspace_head": commit,
             "workspace_dirty": False,
             "targets": [],
-            "signature": "",
             "source_commit": commit,
             "kind": Kind.ALL.value,
         }
