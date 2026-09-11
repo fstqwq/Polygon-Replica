@@ -1,10 +1,9 @@
-import json
 import re
 from collections import deque
+from copy import deepcopy
 from dataclasses import dataclass
-from typing import Literal, TypedDict, cast
+from typing import Literal, TypedDict
 
-from app.service.platform.hashing import canonical_json
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.execution.model import ExecutionResult
 from app.service.execution.policy import normalize_execution_result
@@ -123,7 +122,7 @@ class PlannedTask:
 @dataclass(frozen=True)
 class ActivationPlan:
     verification_id: str
-    detail_json: str
+    detail: dict[str, object]
     programs: tuple[VerificationProgram, ...]
     tasks: tuple[PlannedTask, ...]
 
@@ -138,18 +137,14 @@ class ActivationPlan:
     ) -> "ActivationPlan":
         return cls(
             verification_id=verification_id,
-            detail_json=canonical_json(dict(detail), ensure_ascii=False),
+            detail=deepcopy(detail),
             programs=tuple(programs),
             tasks=tuple(tasks),
         )
 
-    def detail(self) -> dict[str, object]:
-        payload = json.loads(self.detail_json)
-        if not isinstance(payload, dict):
-            raise ValueError("verification activation detail must be an object")
-        return cast(dict[str, object], payload)
+    def ordered_tasks(self) -> tuple[PlannedTask, ...]:
+        """Validate the graph and order parents before children in one traversal."""
 
-    def validate(self) -> None:
         if not self.verification_id:
             raise ValueError("verification activation id is required")
         if not self.tasks:
@@ -257,43 +252,8 @@ class ActivationPlan:
                 )
             children_by_parent.setdefault(predecessor, []).append(task.task_id)
             indegree[task.task_id] += 1
-        ready = [task_id for task_id, count in indegree.items() if count == 0]
-        visited = 0
-        while ready:
-            task_id = ready.pop()
-            visited += 1
-            for child_id in children_by_parent.get(task_id, ()):
-                indegree[child_id] -= 1
-                if indegree[child_id] == 0:
-                    ready.append(child_id)
-        if visited != len(task_ids):
-            raise ValueError("verification activation graph contains a cycle")
-        task_program_ids = {task.program_id for task in self.tasks}
-        unused_program_ids = set(program_by_id).difference(task_program_ids)
-        if unused_program_ids:
-            raise ValueError(
-                "verification activation contains a program without tasks"
-            )
-        self.detail()
-
-    def ordered_tasks(self) -> tuple[PlannedTask, ...]:
-        """Return parents before children for immediate SQLite foreign keys."""
-
-        self.validate()
         by_id = {task.task_id: task for task in self.tasks}
-        children_by_parent: dict[str, list[str]] = {}
-        indegree = {task.task_id: 0 for task in self.tasks}
-        for task in self.tasks:
-            predecessor = task.predecessor_task_id
-            if predecessor is None:
-                continue
-            children_by_parent.setdefault(predecessor, []).append(task.task_id)
-            indegree[task.task_id] += 1
-        ready = deque(
-            task.task_id
-            for task in self.tasks
-            if indegree[task.task_id] == 0
-        )
+        ready = deque(task_id for task_id in task_ids if indegree[task_id] == 0)
         ordered: list[PlannedTask] = []
         while ready:
             task_id = ready.popleft()
@@ -302,6 +262,14 @@ class ActivationPlan:
                 indegree[child_id] -= 1
                 if indegree[child_id] == 0:
                     ready.append(child_id)
+        if len(ordered) != len(task_ids):
+            raise ValueError("verification activation graph contains a cycle")
+        task_program_ids = {task.program_id for task in self.tasks}
+        unused_program_ids = set(program_by_id).difference(task_program_ids)
+        if unused_program_ids:
+            raise ValueError(
+                "verification activation contains a program without tasks"
+            )
         return tuple(ordered)
 
 
@@ -323,7 +291,7 @@ class VerificationTransitionCommit:
 @dataclass(frozen=True)
 class SanityFinish:
     verification_id: str
-    detail_json: str
+    detail: dict[str, object]
 
     @classmethod
     def build(
@@ -334,14 +302,8 @@ class SanityFinish:
     ) -> "SanityFinish":
         return cls(
             verification_id=verification_id,
-            detail_json=canonical_json(dict(detail), ensure_ascii=False),
+            detail=deepcopy(detail),
         )
-
-    def detail(self) -> dict[str, object]:
-        payload = json.loads(self.detail_json)
-        if not isinstance(payload, dict):
-            raise ValueError("verification sanity detail must be an object")
-        return cast(dict[str, object], payload)
 
 
 @dataclass(frozen=True)

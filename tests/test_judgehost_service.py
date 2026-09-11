@@ -676,20 +676,8 @@ class TestJudgehostService(E2ETestBase):
                     expected_behavior="accepted",
                 )
             )
-            input_ref = runtime.verification_service.store_verification_blob(
-                verification_id=verification_id,
-                test_name=test_name,
-                role="input",
-                file_name=test_name,
-                payload=input_text.encode("utf-8"),
-            )
-            answer_ref = runtime.verification_service.store_verification_blob(
-                verification_id=verification_id,
-                test_name=test_name,
-                role="answer",
-                file_name=f"{Path(test_name).stem}.ans",
-                payload=answer_text.encode("utf-8"),
-            )
+            input_ref = (runtime.runtime_blob_store.put_bytes(input_text.encode("utf-8")).blob_ref or "")
+            answer_ref = (runtime.runtime_blob_store.put_bytes(answer_text.encode("utf-8")).blob_ref or "")
             completions.append(
                 TaskCompletion(
                     task_id=task_id,

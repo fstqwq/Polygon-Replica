@@ -1,8 +1,6 @@
 from dataclasses import dataclass
 
-from app.service.execution.codec import compile_diagnostics_payload
 from app.service.execution.model import ExecutionResult
-from app.service.platform.hashing import canonical_json
 from app.service.verification.lifecycle import ParentTransition
 from app.service.verification.types import VerificationTaskStatus
 
@@ -41,13 +39,6 @@ class TaskCompletion:
     @property
     def compile_log(self) -> str:
         return self.result.compile.log
-
-    @property
-    def diagnostics_json(self) -> str:
-        return canonical_json(
-            compile_diagnostics_payload(self.result.compile.diagnostics),
-            ensure_ascii=False,
-        )
 
     @property
     def error_text(self) -> str:

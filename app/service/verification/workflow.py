@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from app.config import ConfigValues
 from app.service.execution.identity import new_run_id
 from app.service.execution.policy import normalize_execution_result
 from app.service.judgehost.api import Judgehost
@@ -39,7 +38,6 @@ from app.service.verification.plan import VerificationTestPlan
 from app.service.verification.runtime_threshold import time_limit_ms_from_run_config_json
 from app.service.verification.sanity import (
     SANITY_FAILED,
-    SANITY_PASSED,
     SANITY_RUNNING,
     SANITY_SKIPPED,
     SANITY_WARNING,
@@ -55,12 +53,10 @@ from app.service.verification.task_scheduler import TaskPublishResult
 from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
 from app.service.verification.types import Kind, VerificationStatus, VerificationTaskStatus
 from app.service.verification.workflow_policy import (
-    VerificationTaskCounts,
     build_graph,
     effective_verification_kind,
     runtime_threshold_columns_from_tasks,
     sanity_plan_for_verification_kind,
-    verification_summary_from_tasks,
     visible_programs,
 )
 
@@ -516,16 +512,12 @@ def run_workspace_verification_dag(
     problem: str,
     user: str,
     *,
-    actor_user_id: int,
     problem_id: int,
     workspace_id: int | None,
     workspace_head: str,
     workspace_dirty: bool,
     targets: list[dict[str, object]],
     verification_id: str,
-    signature: str = "",
-    source_commit: str = "",
-    kind: str = Kind.ALL.value,
     sample_only: bool = False,
     snapshot_root_override: Path | None = None,
     retain_snapshot_override: bool = False,
@@ -543,9 +535,7 @@ def run_workspace_verification_dag(
     storage_layout: StorageLayout,
     runtime_blob_store: RuntimeBlobStore,
     task_store: VerificationTaskStore,
-    config_values: ConfigValues,
 ) -> None:
-    del actor_user_id, signature, source_commit, kind
     snapshot_root: Path | None = snapshot_root_override
     execution_plan = None
     try:
@@ -693,47 +683,6 @@ def run_workspace_verification_dag(
             task_store=task_store,
         )
 
-        def _refresh_state() -> tuple[
-            str,
-            dict[str, object],
-            VerificationTaskCounts,
-            list[VerificationTaskRow],
-            bool,
-            str,
-        ]:
-            snapshot = verification_service.verification_snapshot(
-                verification_id
-            )
-            if snapshot is None:
-                raise RuntimeError("verification disappeared while running")
-            rows = cast(list[VerificationTaskRow], snapshot["tasks"])
-            record = snapshot["record"]
-            parent_status = VerificationStatus(record["status"])
-            status = parent_status.value
-            fail_reason = str(record["fail_reason"])
-            fail_flag = parent_status == VerificationStatus.FAILED
-            _task_status, summary, counts = verification_summary_from_tasks(
-                verification_id=verification_id,
-                artifact_verification_id=verification_id,
-                mode=verification_mode,
-                pass_limit=verification_pass_limit,
-                programs=graph.programs,
-                rows=rows,
-                test_names=test_names,
-                parent_status=parent_status,
-                fail_reason=fail_reason,
-                display_limit=config_values.integer(
-                    "AUX_DISPLAY_TEXT_LIMIT_BYTES"
-                ),
-            )
-            if rows and counts["total"] <= 0:
-                raise RuntimeError("verification task graph has rows but computed zero task counts")
-            summary["status"] = status
-            if fail_reason:
-                summary["error"] = fail_reason
-            return status, summary, counts, rows, fail_flag, fail_reason
-
-        _refresh_state()
         callbacks = VerificationExecutionCallbacks(
             publish_task=lambda row: _publish_task(row, execution=execution),
             probe_task_case_cache=judgehost.probe_task_case_cache,
@@ -750,13 +699,14 @@ def run_workspace_verification_dag(
             callbacks=callbacks,
             edges=graph.edges,
         )
-        _status, summary, _counts, rows, fail_flag, fail_reason = _refresh_state()
         snapshot = verification_service.verification_snapshot(verification_id)
         if snapshot is None:
             raise RuntimeError("verification disappeared after scheduling")
         detail = snapshot["detail"]
+        rows = cast(list[VerificationTaskRow], snapshot["tasks"])
+        parent_status = snapshot["record"]["status"]
         if (
-            _status == VerificationStatus.RUNNING.value
+            parent_status == VerificationStatus.RUNNING
             and str(detail.get("sanity_status") or "") == SANITY_RUNNING
             and sanity_checks
         ):
@@ -784,7 +734,7 @@ def run_workspace_verification_dag(
                     programs=graph.programs,
                     rows=rows,
                     test_names=test_names,
-                    fail_flag=fail_flag,
+                    fail_flag=parent_status == VerificationStatus.FAILED,
                 ),
                 time_limit_ms=time_limit_ms_from_run_config_json(
                     str(execution_plan.run_verification_payload_base.get("run_config_json") or ""),
@@ -813,35 +763,26 @@ def run_workspace_verification_dag(
                 }
                 for item in sanity_result.check_results
             ]
-            if sanity_result.status == SANITY_PASSED:
-                updated_detail.pop("failed_step", None)
-                updated_detail.pop("failed_check", None)
-                updated_detail.pop("failed_test", None)
-                updated_detail.pop("error", None)
-            else:
-                updated_detail.pop("failed_step", None)
-                updated_detail.pop("failed_test", None)
-                updated_detail.pop("failed_check", None)
-                updated_detail.pop("error", None)
+            updated_detail.pop("failed_step", None)
+            updated_detail.pop("failed_check", None)
+            updated_detail.pop("failed_test", None)
+            updated_detail.pop("error", None)
             if sanity_result.status in {SANITY_WARNING, SANITY_FAILED}:
                 updated_detail["failed_step"] = "sanity"
                 updated_detail["failed_check"] = sanity_result.check_name
                 updated_detail["failed_test"] = sanity_result.failed_test
                 updated_detail["error"] = sanity_result.error
-            finished = verification_service.finish_sanity(
+            verification_service.finish_sanity(
                 SanityFinish.build(
                     verification_id,
                     detail=updated_detail,
                 )
             )
-            _status, summary, _counts, rows, fail_flag, fail_reason = _refresh_state()
             snapshot = verification_service.verification_snapshot(
                 verification_id
             )
             if snapshot is None:
                 raise RuntimeError("verification disappeared after sanity checks")
-            if finished.outcome == "transitioned":
-                summary["error"] = ""
         # Schedule only after final detail and status writes are durable.
         judgehost.schedule_verification_cleanup(verification_id)
     except VerificationCoordinatorFailure:
@@ -880,7 +821,6 @@ class VerificationWorkflow:
         storage_layout: StorageLayout,
         runtime_blob_store: RuntimeBlobStore,
         task_store: VerificationTaskStore,
-        config_values: ConfigValues,
     ) -> None:
         self._planner = planner
         self._sanity_service = sanity_service
@@ -891,7 +831,6 @@ class VerificationWorkflow:
         self._storage_layout = storage_layout
         self._runtime_blob_store = runtime_blob_store
         self._task_store = task_store
-        self._config_values = config_values
 
     def run_workspace(
         self,
@@ -913,7 +852,6 @@ class VerificationWorkflow:
         workspace = Path(str(context["workspace"]["path"])).resolve()
         problem_id = int(context["problem"]["id"])
         workspace_id = int(context["workspace"]["id"])
-        actor_user_id = self._workspace_service.global_user_context(username)["id"]
         status = self._workspace_service.read_workspace_status(workspace)
         workspace_head = str(status.get("head_commit") or "")
         workspace_dirty = bool(status.get("dirty"))
@@ -959,16 +897,12 @@ class VerificationWorkflow:
         self.run(
             problem,
             username,
-            actor_user_id=actor_user_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
             workspace_head=source_commit or workspace_head,
             workspace_dirty=workspace_dirty,
             targets=[],
             verification_id=target_id,
-            signature=manifest.signature,
-            source_commit=source_commit,
-            kind=kind,
             sample_only=sample_only,
             snapshot_root_override=snapshot,
             manifest=manifest,
@@ -981,16 +915,12 @@ class VerificationWorkflow:
         problem: str,
         user: str,
         *,
-        actor_user_id: int,
         problem_id: int,
         workspace_id: int | None,
         workspace_head: str,
         workspace_dirty: bool,
         targets: list[dict[str, object]],
         verification_id: str,
-        signature: str = "",
-        source_commit: str = "",
-        kind: str = Kind.ALL.value,
         sample_only: bool = False,
         snapshot_root_override: Path | None = None,
         retain_snapshot_override: bool = False,
@@ -1003,16 +933,12 @@ class VerificationWorkflow:
         run_workspace_verification_dag(
             problem,
             user,
-            actor_user_id=actor_user_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
             workspace_head=workspace_head,
             workspace_dirty=workspace_dirty,
             targets=targets,
             verification_id=verification_id,
-            signature=signature,
-            source_commit=source_commit,
-            kind=kind,
             sample_only=sample_only,
             snapshot_root_override=snapshot_root_override,
             retain_snapshot_override=retain_snapshot_override,
@@ -1030,5 +956,4 @@ class VerificationWorkflow:
             storage_layout=self._storage_layout,
             runtime_blob_store=self._runtime_blob_store,
             task_store=self._task_store,
-            config_values=self._config_values,
         )

@@ -216,7 +216,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
         self.assertEqual(final_result.verdict, "CE")
         self.assertEqual(final_result.error_text, detailed_error)
         self.assertEqual(final_result.compile_log, detailed_error)
-        diagnostics_rows = json.loads(final_result.diagnostics_json)
+        diagnostics_rows = final_result.result.compile.diagnostics
         self.assertEqual(diagnostics_rows[0]["message"], detailed_error)
         self.assertEqual(
             final_result.fail_reason,
@@ -379,7 +379,7 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
             value = str(row[key] or "")
             self.assertLessEqual(len(value.encode("utf-8")), limit)
             self.assertTrue(value.endswith("..."))
-        diagnostics_rows = json.loads(str(row["diagnostics_json"] or "[]"))
+        diagnostics_rows = row["result"].compile.diagnostics
         self.assertEqual(len(diagnostics_rows), 1)
         self.assertTrue(bool(diagnostics_rows[0].get("message_truncated")))
         self.assertLessEqual(

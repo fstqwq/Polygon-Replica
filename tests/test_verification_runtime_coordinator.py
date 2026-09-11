@@ -117,7 +117,7 @@ def _task_row(
         "memory_kb": None,
         "answer_correct": False,
         "compile_log": "",
-        "diagnostics_json": "[]",
+        "result": ExecutionResult(),
         "error_text": "",
         "feedback_text": "",
         "output_ref": "",
@@ -240,7 +240,6 @@ class _InMemoryTaskStore:
                 row["wall_sec"] = result.wall_sec
                 row["memory_kb"] = result.memory_kb
                 row["compile_log"] = result.compile.log
-                row["diagnostics_json"] = "[]"
                 row["error_text"] = result.outcome.error
                 row["feedback_text"] = result.outcome.feedback
                 row["output_ref"] = result.output_run_ref

@@ -1,5 +1,6 @@
 import json
 
+from app.service.execution.model import ExecutionResult
 from app.service.verification.diagnostic import (
     TaskDiagnosticSnapshot,
     merge_task_diagnostic_snapshot,
@@ -12,7 +13,7 @@ from app.service.verification.task_metadata import (
     canonical_truncated_text,
     diagnostics_json_text,
 )
-from app.service.verification.types import VerificationStatus, VerificationTaskStatus
+from app.service.verification.types import VerificationTaskStatus
 
 from tests.identity_helpers import canonical_test_verification_id
 from tests.verification_policy_fixture import VerificationPolicyTestBase
@@ -184,7 +185,7 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
                 "memory_kb": 1024,
                 "answer_correct": True,
                 "compile_log": "",
-                "diagnostics_json": "[]",
+                "result": ExecutionResult(),
                 "error_text": "",
                 "feedback_text": "",
                 "output_ref": "",
@@ -398,153 +399,6 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
         )
 
         self.assertTrue(task_id.endswith(f"~accepted~{test_name}"))
-
-    def test_verification_summary_from_tasks_preserves_cancelled_parent(self) -> None:
-        from app.service.verification.workflow_policy import verification_summary_from_tasks
-
-        rows = [
-            {
-                "id": "vt-solution",
-                "verification_id": "ver-cancel-summary",
-                "task_kind": "solution-run",
-                "source_path": "solutions/a.cpp",
-                "program_id": "solution-0",
-                "test_name": "001.in",
-                "expected_behavior": "accepted",
-                "queue_index": 1,
-                "status": VerificationTaskStatus.CANCELLED,
-                "verdict": "",
-                "run_id": "",
-                "judgehost_task_id": "",
-                "runtime_sec": None,
-                "cpu_sec": None,
-                "wall_sec": None,
-                "memory_kb": None,
-                "compile_log": "",
-                "diagnostics_json": "[]",
-                "error_text": "",
-                "feedback_text": "",
-                "output_ref": "",
-                "started_at": "2026-03-23T00:00:00Z",
-                "finished_at": "2026-03-23T00:00:01Z",
-                "cancel_reason": "verification cancelled by user",
-                "created_at": "2026-03-23T00:00:00Z",
-                "updated_at": "2026-03-23T00:00:01Z",
-            }
-        ]
-        status, summary, counts = verification_summary_from_tasks(
-            verification_id="ver-cancel-summary",
-            artifact_verification_id="ver-cancel-summary",
-            mode="pass-fail",
-            pass_limit=1,
-            programs=[
-                self._verification_program(
-                    program_id="solution-0",
-                    source_path="solutions/a.cpp",
-                    expected_behavior="accepted",
-                    kind="solution-run",
-                )
-            ],
-            rows=rows,
-            test_names=["001.in"],
-            parent_status=VerificationStatus.CANCELLED,
-            fail_reason="",
-            display_limit=65536,
-        )
-        self.assertEqual(status, "cancelled")
-        self.assertEqual(str(summary["status"]), "cancelled")
-        self.assertEqual(int(counts["cancelled"]), 1)
-
-    def test_verification_summary_from_tasks_excludes_main_correct_runs_from_solution_columns(self) -> None:
-        from app.service.verification.workflow_policy import verification_summary_from_tasks
-
-        rows = [
-            {
-                "id": "vt-main",
-                "verification_id": "ver-graph-summary",
-                "task_kind": "main-correct",
-                "source_path": "solutions/accepted.cpp",
-                "program_id": "accepted",
-                "test_name": "001.in",
-                "expected_behavior": "accepted",
-                "queue_index": 1,
-                "status": VerificationTaskStatus.DONE,
-                "verdict": "AC",
-                "run_id": "r-main-task",
-                "judgehost_task_id": "jt-main",
-                "runtime_sec": 0.01,
-                "cpu_sec": 0.01,
-                "wall_sec": 0.01,
-                "memory_kb": 1,
-                "compile_log": "",
-                "diagnostics_json": "[]",
-                "error_text": "",
-                "feedback_text": "",
-                "output_ref": "",
-                "started_at": None,
-                "finished_at": None,
-                "cancel_reason": "",
-                "created_at": "",
-                "updated_at": "",
-            },
-            {
-                "id": "vt-solution",
-                "verification_id": "ver-graph-summary",
-                "task_kind": "solution-run",
-                "source_path": "solutions/wa.cpp",
-                "program_id": "solution-0",
-                "test_name": "001.in",
-                "expected_behavior": "wrong_answer",
-                "queue_index": 2,
-                    "status": VerificationTaskStatus.LEASED,
-                "verdict": "",
-                "run_id": "",
-                "judgehost_task_id": "",
-                "runtime_sec": None,
-                "cpu_sec": None,
-                "wall_sec": None,
-                "memory_kb": None,
-                "compile_log": "",
-                "diagnostics_json": "[]",
-                "error_text": "",
-                "feedback_text": "",
-                "output_ref": "",
-                "started_at": None,
-                "finished_at": None,
-                "cancel_reason": "",
-                "created_at": "",
-                "updated_at": "",
-            },
-        ]
-        status, summary, counts = verification_summary_from_tasks(
-            verification_id="ver-graph-summary",
-            artifact_verification_id="ver-artifact-summary",
-            mode="pass-fail",
-            pass_limit=1,
-            programs=[
-                self._verification_program(
-                    program_id="accepted",
-                    source_path="solutions/accepted.cpp",
-                    expected_behavior="accepted",
-                    kind="main-correct",
-                ),
-                self._verification_program(
-                    program_id="solution-0",
-                    source_path="solutions/wa.cpp",
-                    expected_behavior="wrong_answer",
-                    kind="solution-run",
-                ),
-            ],
-            rows=rows,
-            test_names=["001.in"],
-            parent_status=VerificationStatus.RUNNING,
-            fail_reason="",
-            display_limit=65536,
-        )
-        self.assertEqual(status, "running")
-        self.assertEqual(int(counts["total"]), 2)
-        self.assertTrue(bool(summary.get("task_graph")))
-        self.assertEqual(summary.get("source_paths"), ["solutions/wa.cpp"])
 
     def test_truncated_metadata_helpers_mark_oversized_values(self) -> None:
         compile_meta = canonical_truncated_text("x" * 32, limit=8)

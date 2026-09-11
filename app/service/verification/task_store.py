@@ -6,7 +6,6 @@ from typing import TypeVar, TypedDict, cast
 
 from app.db import DB, now_iso
 from app.service.execution.codec import (
-    compile_diagnostics_payload,
     execution_result_from_json,
     execution_result_json,
 )
@@ -16,7 +15,6 @@ from app.service.execution.policy import (
     normalize_execution_result,
 )
 from app.service.platform.error_text import aux_display_text_limit_bytes, bounded_display_text
-from app.service.platform.hashing import canonical_json
 from app.service.platform.rwlock import WriterPriorityRWLock
 from app.service.verification.diagnostic import (
     DiagnosticMergeOutcome,
@@ -71,7 +69,6 @@ class VerificationTaskRow(TypedDict):
     memory_kb: int | None
     answer_correct: bool
     compile_log: str
-    diagnostics_json: str
     error_text: str
     feedback_text: str
     output_ref: str
@@ -235,7 +232,7 @@ class VerificationTaskStore:
         ],
     ) -> ActivationCommit:
         ordered_tasks = plan.ordered_tasks()
-        detail = plan.detail()
+        detail = plan.detail
         now_text = now_iso()
         test_names = {task.task_id: task.test_name for task in ordered_tasks}
 
@@ -378,10 +375,6 @@ class VerificationTaskStore:
             "memory_kb": result.memory_kb,
             "answer_correct": result.answer_correct,
             "compile_log": result.compile.log,
-            "diagnostics_json": canonical_json(
-                compile_diagnostics_payload(result.compile.diagnostics),
-                ensure_ascii=False,
-            ),
             "error_text": result.outcome.error,
             "feedback_text": result.feedback_text,
             "output_ref": result.output_run_ref,
@@ -1352,7 +1345,7 @@ class VerificationTaskStore:
             None,
         ],
     ) -> VerificationTransitionCommit:
-        detail = finish.detail()
+        detail = finish.detail
         with self._runtime_lock.write_lock():
             def _tx(conn: sqlite3.Connection) -> VerificationTransitionCommit:
                 cursor = conn.execute(

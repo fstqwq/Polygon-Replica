@@ -550,7 +550,6 @@ def _start_run_verification(
         upload_content=upload_content,
     )
     workspace_context = _context_section(ctx, "workspace")
-    user_context = _context_section(ctx, "user")
     problem_context = _context_section(ctx, "problem")
     workspace_head = str(workspace_context.get("head_commit") or "")
     workspace_dirty = bool(workspace_context.get("dirty"))
@@ -559,7 +558,6 @@ def _start_run_verification(
             runtime(),
             problem,
             user,
-            actor_user_id=_context_int(user_context, "id"),
             problem_id=_context_int(problem_context, "id"),
             workspace_id=_context_int(workspace_context, "id"),
             workspace_head=workspace_head,

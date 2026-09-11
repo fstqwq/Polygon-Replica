@@ -65,7 +65,6 @@ def verification_start(problem: str, user: Annotated[str, Depends(require_sessio
             runtime(),
             problem,
             user,
-            actor_user_id=int(ctx['user']['id']),
             problem_id=int(ctx['problem']['id']),
             workspace_id=int(ctx['workspace']['id']),
             workspace_head=workspace_head,

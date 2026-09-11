@@ -206,20 +206,8 @@ class TestVerificationStoreService(VerificationServiceTestBase):
             kind="all",
             detail={"status": "running", "selected_test_names": ["001.in"]},
         )
-        input_ref = self.verification_service.store_verification_blob(
-            verification_id=verification_id,
-            test_name="001.in",
-            role="input",
-            file_name="001.in",
-            payload=b"1 2 3\n",
-        )
-        answer_ref = self.verification_service.store_verification_blob(
-            verification_id=verification_id,
-            test_name="001.in",
-            role="answer",
-            file_name="001.ans",
-            payload=b"6\n",
-        )
+        input_ref = (self.runtime_blob_store.put_bytes(b"1 2 3\n").blob_ref or "")
+        answer_ref = (self.runtime_blob_store.put_bytes(b"6\n").blob_ref or "")
         self.verification_task_store.commit_task_completions(
             (
                 TaskCompletion(

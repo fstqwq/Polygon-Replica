@@ -324,7 +324,6 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
             storage_layout=self.storage_layout,
             runtime_blob_store=self.runtime_blob_store,
             task_store=self.verification_task_store,
-            config_values=self.config_values,
         )
         self.statement_examples_producer = StatementExamplesProducer(
             self.verification_service

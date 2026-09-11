@@ -329,7 +329,6 @@ async def agent_verification_start(request: Request):
             runtime(),
             identity.problem_slug,
             identity.username,
-            actor_user_id=int(identity.user_id),
             problem_id=int(identity.problem_id),
             workspace_id=int(ctx["workspace"]["id"]),
             workspace_head=str(ctx["workspace"].get("head_commit") or ""),

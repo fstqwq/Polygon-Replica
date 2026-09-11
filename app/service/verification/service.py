@@ -602,17 +602,6 @@ class VerificationService:
             clear_existing=clear_existing,
         )
 
-    def store_verification_blob(
-        self,
-        *,
-        verification_id: str,
-        test_name: str,
-        role: str,
-        file_name: str,
-        payload: bytes,
-    ) -> str:
-        return self.runtime_blob_store.put_bytes(payload).blob_ref or ""
-
     def verification_test_artifacts(self, verification_id: str) -> dict[str, dict[str, str]]:
         safe_verification_id = str(verification_id or "").strip()
         if not safe_verification_id:

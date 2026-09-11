@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from app.service.execution.model import ExecutionResult
 from app.service.verification.lifecycle import (
     VerificationCompileSpec,
     VerificationProgram,
@@ -60,7 +61,7 @@ def task_row(
         "memory_kb": None,
         "answer_correct": False,
         "compile_log": "",
-        "diagnostics_json": "[]",
+        "result": ExecutionResult(),
         "error_text": "",
         "feedback_text": "",
         "output_ref": "",

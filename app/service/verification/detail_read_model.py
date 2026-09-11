@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from typing import TypedDict, cast
 
+from app.service.execution.codec import compile_diagnostics_payload
 from app.service.judgehost.domjudge.case_result import decode_case_test_row
 from app.service.platform.error_text import bounded_display_text
 from app.service.verification.lifecycle import (
@@ -182,12 +183,9 @@ def _program_rows(
                 )
             if not compile_log and row["compile_log"]:
                 compile_log = row["compile_log"]
-            try:
-                diagnostics = json.loads(row["diagnostics_json"])
-            except (TypeError, ValueError):
-                diagnostics = []
-            if isinstance(diagnostics, list):
-                compile_diagnostics.extend(cast(list[dict[str, object]], diagnostics))
+            compile_diagnostics.extend(
+                compile_diagnostics_payload(row["result"].compile.diagnostics)
+            )
             if not error_text and row["error_text"]:
                 error_text = row["error_text"]
             late = _late_diagnostic_text(row, display_limit)

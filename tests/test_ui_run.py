@@ -1573,7 +1573,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             runtime.verification_workflow.run(
                 problem,
                 user,
-                actor_user_id=int(context["user"]["id"]),
                 problem_id=problem_id,
                 workspace_id=workspace_id,
                 workspace_head="",
@@ -2425,7 +2424,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 runtime,
                 problem,
                 "alice",
-                actor_user_id=int(ctx["user"]["id"]),
                 problem_id=problem_id,
                 workspace_id=workspace_id,
                 workspace_head=str(ctx["workspace"].get("head_commit") or ""),
@@ -2517,22 +2515,16 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             detail={"mode": "pass-fail", "pass_limit": 2},
         )
 
-        def store(role: str, payload: bytes) -> str:
-            return runtime.verification_service.store_verification_blob(
-                verification_id=verification_id,
-                test_name="001.in",
-                role=role,
-                file_name=f"{role}.txt",
-                payload=payload,
-            )
+        def store(payload: bytes) -> str:
+            return (runtime.runtime_blob_store.put_bytes(payload).blob_ref or "")
 
-        original_input_ref = store("input", b"original input\n")
-        answer_ref = store("answer", b"canonical answer\n")
-        first_input_ref = store("pass-one-input", b"original input\n")
-        second_input_ref = store("pass-two-input", b"next pass input\n")
-        first_output_ref = store("pass-one-output", b"first pass output\n")
-        second_output_ref = store("pass-two-output", b"second pass output\n")
-        common_ref = store("metadata", b"metadata\n")
+        original_input_ref = store(b"original input\n")
+        answer_ref = store(b"canonical answer\n")
+        first_input_ref = store(b"original input\n")
+        second_input_ref = store(b"next pass input\n")
+        first_output_ref = store(b"first pass output\n")
+        second_output_ref = store(b"second pass output\n")
+        common_ref = store(b"metadata\n")
         task_id = verification_task_id(
             verification_id,
             "solution-0",
@@ -2663,22 +2655,16 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             detail={"mode": "interactive"},
         )
 
-        def store(role: str, payload: bytes) -> str:
-            return runtime.verification_service.store_verification_blob(
-                verification_id=verification_id,
-                test_name="001.in",
-                role=role,
-                file_name=f"{role}.bin",
-                payload=payload,
-            )
+        def store(payload: bytes) -> str:
+            return (runtime.runtime_blob_store.put_bytes(payload).blob_ref or "")
 
-        input_ref = store("input", b"testcase seed\n")
-        answer_ref = store("answer", b"accepted\n")
-        input_one_ref = store("pass-one-input", b"first pass input\n")
-        input_two_ref = store("pass-two-input", b"second pass input\n")
-        common_ref = store("metadata", b"metadata\n")
-        jury_one_ref = store("jury-one", b"first pass accepted\n")
-        jury_two_ref = store("jury-two", b"second pass accepted\n")
+        input_ref = store(b"testcase seed\n")
+        answer_ref = store(b"accepted\n")
+        input_one_ref = store(b"first pass input\n")
+        input_two_ref = store(b"second pass input\n")
+        common_ref = store(b"metadata\n")
+        jury_one_ref = store(b"first pass accepted\n")
+        jury_two_ref = store(b"second pass accepted\n")
         transcript_one = (
             b"[  0.019s/5]>: ping\n\n"
             b"[  0.024s/4]<: pong\n"
@@ -2686,10 +2672,10 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             + b"[  0.026s/1]>: x\n" * 998
         )
         transcript_two = b"[  0.031s/5]>: final\n" + b"broken"
-        transcript_one_ref = store("transcript-one", transcript_one)
-        transcript_two_ref = store("transcript-two", transcript_two)
-        other_transcript_ref = store("transcript-other", b"[  0.001s/4]>: trap\n")
-        other_jury_ref = store("jury-other", b"must not be read\n")
+        transcript_one_ref = store(transcript_one)
+        transcript_two_ref = store(transcript_two)
+        other_transcript_ref = store(b"[  0.001s/4]>: trap\n")
+        other_jury_ref = store(b"must not be read\n")
         passes = (
             ExecutionPassResult(
                 number=1,
@@ -2910,27 +2896,9 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 ],
             },
         )
-        output_ref = runtime.verification_service.store_verification_blob(
-            verification_id=verification_id,
-            test_name="001.in",
-            role="output",
-            file_name="001.out",
-            payload=b"6\n",
-        )
-        input_ref = runtime.verification_service.store_verification_blob(
-            verification_id=verification_id,
-            test_name="001.in",
-            role="input",
-            file_name="001.in",
-            payload=b"1 2 3\n",
-        )
-        answer_ref = runtime.verification_service.store_verification_blob(
-            verification_id=verification_id,
-            test_name="001.in",
-            role="answer",
-            file_name="001.ans",
-            payload=b"6\n",
-        )
+        output_ref = (runtime.runtime_blob_store.put_bytes(b"6\n").blob_ref or "")
+        input_ref = (runtime.runtime_blob_store.put_bytes(b"1 2 3\n").blob_ref or "")
+        answer_ref = (runtime.runtime_blob_store.put_bytes(b"6\n").blob_ref or "")
         task_id = verification_task_id(
             verification_id,
             "solution-0",

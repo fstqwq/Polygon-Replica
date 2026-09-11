@@ -1,14 +1,11 @@
-import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypedDict, cast
 
-from app.db import now_iso
+from app.service.execution.codec import compile_diagnostics_payload
 from app.service.execution.policy import normalize_execution_result
 from app.service.execution.test_rows import build_execution_test_row
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.problem.solution_metadata import normalize_expected_behavior
-from app.service.verification.failure_display import verification_solution_failure_hint
 from app.service.verification.lifecycle import (
     PlannedTask,
     TASK_GENERATE_INPUT,
@@ -247,91 +244,6 @@ def build_graph(
         accepted_source_path=accepted_source_path,
     )
 
-def _task_kind_label(task_kind: str) -> str:
-    if task_kind == TASK_GENERATE_INPUT:
-        return "Generate input"
-    if task_kind == TASK_MAIN_CORRECT:
-        return "Main correct"
-    return "Solution run"
-
-
-def _task_running_entry(row: VerificationTaskRow) -> dict[str, str]:
-    source_path = str(row["source_path"] or "")
-    source_label = Path(source_path).name if source_path else "-"
-    test_name = str(row["test_name"] or "")
-    kind = str(row["task_kind"] or "")
-    if source_path:
-        label = f"{_task_kind_label(kind)}: {source_label} / {test_name}"
-    else:
-        label = f"{_task_kind_label(kind)}: {test_name}"
-    return {
-        "task_id": str(row["id"]),
-        "task_kind": kind,
-        "task_kind_label": _task_kind_label(kind),
-        "source_path": source_path,
-        "source_label": source_label,
-        "test_name": test_name,
-        "label": label,
-    }
-
-
-class VerificationTaskCounts(TypedDict):
-    total: int
-    pending: int
-    queued: int
-    running: int
-    done: int
-    failed: int
-    cancelled: int
-    by_kind: dict[str, dict[str, int]]
-
-
-def _empty_counts() -> VerificationTaskCounts:
-    by_kind = {
-        TASK_GENERATE_INPUT: {status: 0 for status in ("pending", "queued", "running", "done", "failed", "cancelled")},
-        TASK_MAIN_CORRECT: {status: 0 for status in ("pending", "queued", "running", "done", "failed", "cancelled")},
-        TASK_SOLUTION_RUN: {status: 0 for status in ("pending", "queued", "running", "done", "failed", "cancelled")},
-    }
-    return {
-        "total": 0,
-        "pending": 0,
-        "queued": 0,
-        "running": 0,
-        "done": 0,
-        "failed": 0,
-        "cancelled": 0,
-        "by_kind": by_kind,
-    }
-
-
-def _task_counts(rows: list[VerificationTaskRow]) -> VerificationTaskCounts:
-    counts = _empty_counts()
-    by_kind = counts["by_kind"]
-    for row in rows:
-        status = str(row["status"])
-        display_status = status
-        if status == VerificationTaskStatus.LEASED:
-            display_status = "running"
-        task_kind = str(row["task_kind"])
-        counts["total"] += 1
-        if display_status == "pending":
-            counts["pending"] += 1
-        elif display_status == "queued":
-            counts["queued"] += 1
-        elif display_status == "running":
-            counts["running"] += 1
-        elif display_status == "done":
-            counts["done"] += 1
-        elif display_status == "failed":
-            counts["failed"] += 1
-        elif display_status == "cancelled":
-            counts["cancelled"] += 1
-        kind_counts = by_kind.get(task_kind)
-        if kind_counts is not None and display_status in kind_counts:
-            kind_counts[display_status] = int(kind_counts[display_status]) + 1
-    return counts
-
-
 def visible_programs(
     programs: tuple[VerificationProgram, ...],
 ) -> list[VerificationProgram]:
@@ -373,7 +285,7 @@ def _program_summary(
     pass_limit: int,
     artifact_verification_id: str,
     fail_flag: bool,
-) -> tuple[dict[str, object], str, bool, bool, bool, str]:
+) -> tuple[dict[str, object], str]:
     ordered_rows = sorted(rows, key=lambda item: (str(item["test_name"]), str(item["id"])))
     tests: list[dict[str, object]] = []
     compile_log = ""
@@ -418,11 +330,7 @@ def _program_summary(
             max_memory_kb = max(max_memory_kb, memory_kb)
         if (not compile_log) and str(row["compile_log"] or ""):
             compile_log = str(row["compile_log"] or "")
-        task_diagnostics_json = str(row["diagnostics_json"] or "[]")
-        try:
-            task_diagnostics = cast(list[dict[str, object]], json.loads(task_diagnostics_json))
-        except Exception:
-            task_diagnostics = []
+        task_diagnostics = compile_diagnostics_payload(row["result"].compile.diagnostics)
         if task_diagnostics:
             remaining = max(0, _COMPILE_DIAGNOSTICS_LIMIT - len(compile_diagnostics))
             if remaining > 0:
@@ -467,111 +375,7 @@ def _program_summary(
             "memory_kb_peak": max_memory_kb,
         },
     }
-    completed = run_status in {VerificationStatus.OK.value, VerificationStatus.FAILED.value}
-    matched = completed and run_status == VerificationStatus.OK.value
-    observed_pass = bool(
-        matched
-        and tests
-        and all(str(item.get("verdict") or "").upper() in {"OK", "AC"} for item in tests)
-    )
-    reason = "" if matched or not completed else error_text or "program task failed"
-    return (summary, run_status, bool(matched), bool(completed), bool(observed_pass), reason)
-
-
-def verification_summary_from_tasks(
-    *,
-    verification_id: str,
-    artifact_verification_id: str,
-    mode: str,
-    pass_limit: int,
-    programs: tuple[VerificationProgram, ...],
-    rows: list[VerificationTaskRow],
-    test_names: list[str],
-    parent_status: VerificationStatus,
-    fail_reason: str,
-    display_limit: int,
-) -> tuple[str, dict[str, object], VerificationTaskCounts]:
-    solution_programs = visible_programs(programs)
-    counts = _task_counts(rows)
-    running_tasks = [
-        _task_running_entry(row)
-        for row in rows
-        if row["status"] == VerificationTaskStatus.LEASED
-    ]
-    first_solution_error = ""
-    has_pending_or_running = bool(
-        counts["pending"] or counts["queued"] or counts["running"]
-    )
-    all_matched = True
-    for program in solution_programs:
-        grouped_rows = [row for row in rows if str(row["program_id"] or "") == program.program_id]
-        run_summary, run_status, matched, completed, observed_pass, reason = _program_summary(
-            program=program,
-            rows=grouped_rows,
-            test_names=test_names,
-            mode=mode,
-            pass_limit=pass_limit,
-            artifact_verification_id=artifact_verification_id,
-            fail_flag=parent_status == VerificationStatus.FAILED,
-        )
-        reason_text = reason
-        if (not matched) and completed and (not reason_text):
-            reason_text = verification_solution_failure_hint(
-                program.source_path,
-                "",
-                str(run_summary.get("error") or ""),
-                limit_bytes=display_limit,
-            )
-        if (not matched) and completed and (not first_solution_error):
-            first_solution_error = reason_text or verification_solution_failure_hint(
-                program.source_path,
-                "",
-                str(run_summary.get("error") or ""),
-                limit_bytes=display_limit,
-            )
-        all_matched = all_matched and bool(matched)
-    if parent_status in {VerificationStatus.FAILED, VerificationStatus.CANCELLED}:
-        verification_status = parent_status.value
-        verification_error = (
-            fail_reason
-            or first_solution_error
-            or f"verification {parent_status.value}"
-        )
-    elif has_pending_or_running:
-        verification_status = VerificationStatus.RUNNING.value
-        verification_error = ""
-    elif counts["cancelled"] > 0:
-        verification_status = VerificationStatus.FAILED.value
-        verification_error = fail_reason or "verification task cancelled"
-    elif solution_programs and all_matched:
-        verification_status = VerificationStatus.OK.value
-        verification_error = ""
-    elif (not solution_programs) and counts["total"] > 0:
-        verification_status = VerificationStatus.OK.value
-        verification_error = ""
-    else:
-        verification_status = VerificationStatus.FAILED.value
-        verification_error = first_solution_error or "verification failed"
-    summary = {
-        "verification_id": verification_id,
-        "artifact_verification_id": artifact_verification_id,
-        "task_graph": True,
-        "status": verification_status,
-        "error": verification_error,
-        "task_counts": counts,
-        "running_tasks": running_tasks,
-        "fail_flag": parent_status == VerificationStatus.FAILED,
-        "fail_reason": fail_reason,
-        "source_paths": [item.source_path for item in solution_programs],
-        "test_names": list(test_names),
-        "mode": mode,
-        "pass_limit": pass_limit,
-        "updated_at": now_iso(),
-        "finished_at": now_iso() if parent_status not in {
-            VerificationStatus.QUEUED, VerificationStatus.RUNNING
-        } and not has_pending_or_running else "",
-    }
-    return (verification_status, summary, counts)
+    return summary, run_status
 
 
 def runtime_threshold_columns_from_tasks(
@@ -587,7 +391,7 @@ def runtime_threshold_columns_from_tasks(
     columns: list[dict[str, object]] = []
     for program in _runtime_programs(programs):
         grouped_rows = [row for row in rows if str(row["program_id"] or "") == program.program_id]
-        run_summary, run_status, _matched, _completed, _observed_pass, _reason = _program_summary(
+        run_summary, run_status = _program_summary(
             program=program,
             rows=grouped_rows,
             test_names=test_names,

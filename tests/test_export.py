@@ -189,7 +189,6 @@ class TestPublishedRevisionExport(E2ETestBase):
 
             native_package = service.ensure(
                 revision=revision,
-                actor_user_id=11,
                 actor_username="alice",
                 standard_solution_only=True,
             )
@@ -198,7 +197,8 @@ class TestPublishedRevisionExport(E2ETestBase):
         self.assertEqual(captured_reuse, [True])
         verification_workflow.run.assert_called_once()
         run_kwargs = verification_workflow.run.call_args.kwargs
-        self.assertEqual(run_kwargs["kind"], "package")
+        admission = verification_service.admit_verification.call_args.args[0]
+        self.assertEqual(admission.kind, "package")
         self.assertEqual(run_kwargs["service_class"], "background")
         self.assertTrue(run_kwargs["skip_sanity"])
         self.assertEqual(
@@ -329,22 +329,10 @@ class TestPublishedRevisionExport(E2ETestBase):
             run_completions: list[TaskCompletion] = []
             for ordinal, test_id in enumerate(test_ids, start=1):
                 test_name = f"{ordinal:03d}.in"
-                input_ref = runtime.verification_service.store_verification_blob(
-                    verification_id=verification_id,
-                    test_name=test_name,
-                    role="input",
-                    file_name=test_name,
-                    payload=input_bytes,
-                )
+                input_ref = (runtime.runtime_blob_store.put_bytes(input_bytes).blob_ref or "")
                 answer_ref = ""
                 if answer_bytes is not None:
-                    answer_ref = runtime.verification_service.store_verification_blob(
-                        verification_id=verification_id,
-                        test_name=test_name,
-                        role="answer",
-                        file_name=f"{ordinal:03d}.ans",
-                        payload=answer_bytes,
-                    )
+                    answer_ref = (runtime.runtime_blob_store.put_bytes(answer_bytes).blob_ref or "")
                 generator_id = verification_task_id(
                     verification_id,
                     f"generator-{ordinal}",

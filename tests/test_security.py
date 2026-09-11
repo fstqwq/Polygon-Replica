@@ -179,13 +179,7 @@ class TestSecurity(E2ETestBase):
                 "2026-02-25T00:00:01Z",
             ],
         )
-        token = runtime.verification_service.store_verification_blob(
-            verification_id=verification_id,
-            test_name="001.in",
-            role="output",
-            file_name="001.out",
-            payload=b"visible-output\n",
-        )
+        token = (runtime.runtime_blob_store.put_bytes(b"visible-output\n").blob_ref or "")
         task_id = f"task-reader-artifact-{uuid.uuid4().hex[:8]}"
         db_execute(
             """
@@ -382,13 +376,7 @@ class TestSecurity(E2ETestBase):
                 ],
             )
 
-        token = runtime.verification_service.store_verification_blob(
-            verification_id=foreign_verification_id,
-            test_name="001.in",
-            role="output",
-            file_name="program.out",
-            payload=b"secret-output\n",
-        )
+        token = (runtime.runtime_blob_store.put_bytes(b"secret-output\n").blob_ref or "")
         foreign_task_id = "task-foreign-artifact"
         db_execute(
             """
