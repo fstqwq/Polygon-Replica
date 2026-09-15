@@ -1,4 +1,5 @@
 .statement-preview-document {
+  container-type: inline-size;
   box-sizing: border-box;
   width: 100%;
   max-width: 52rem;
@@ -55,6 +56,13 @@
 
 .statement-preview-document img { max-width: 100%; height: auto; }
 .statement-preview-document .center { text-align: center; }
+.statement-preview-document .center > table,
+.statement-preview-document [style*="text-align:center"] > table,
+.statement-preview-document table[style*="text-align:center"] { margin-inline: auto; }
+.statement-preview-document .statement-tabular { border-spacing: 0; }
+.statement-preview-document .statement-tabular > :is(thead, tbody, tfoot) > tr > :is(td, th) {
+  padding-inline: 0.5em;
+}
 .statement-preview-document .flushleft { text-align: left; }
 .statement-preview-document .flushright { text-align: right; }
 .statement-preview-document .statement-font { line-height: inherit; }
@@ -68,11 +76,20 @@
 }
 .statement-preview-document .center > .statement-columns { justify-content: center; }
 .statement-preview-document .statement-minipage {
+  container-type: inline-size;
   box-sizing: border-box;
   flex: 0 1 auto;
   min-width: 0;
   max-width: 100%;
 }
+.statement-preview-document .statement-parbox {
+  display: inline-block;
+  container-type: inline-size;
+  max-width: 100%;
+}
+.statement-preview-document .statement-parbox-t { align-content: start; }
+.statement-preview-document .statement-parbox-c { align-content: center; }
+.statement-preview-document .statement-parbox-b { align-content: end; }
 .statement-preview-document .statement-minipage[style*="vertical-align:top"] { align-self: flex-start; }
 .statement-preview-document .statement-minipage[style*="vertical-align:middle"] { align-self: center; }
 .statement-preview-document .statement-minipage[style*="vertical-align:bottom"] { align-self: flex-end; }

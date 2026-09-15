@@ -27,6 +27,33 @@ from tests.common import suite_root
 from tests.ui_support import _request
 
 
+class _TableCollector(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.rows: list[list[str]] = []
+        self.images: list[dict[str, str | None]] = []
+        self._cell: list[str] = []
+        self._in_cell = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "tr":
+            self.rows.append([])
+        elif tag in {"td", "th"}:
+            self._cell = []
+            self._in_cell = True
+        elif tag == "img":
+            self.images.append(dict(attrs))
+
+    def handle_data(self, data: str) -> None:
+        if self._in_cell:
+            self._cell.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"td", "th"}:
+            self.rows[-1].append(" ".join("".join(self._cell).split()))
+            self._in_cell = False
+
+
 class _HeadingCollector(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -71,6 +98,43 @@ def _headings(fragment: str) -> list[tuple[str, dict[str, str | None], str]]:
 
 
 class TestStatementHtmlRender(BackendE2ETestBase):
+    def test_parbox_captions_stay_in_their_table_cells_with_inline_images(self) -> None:
+        root = Path(tempfile.mkdtemp(prefix="statement-table-", dir=suite_root()))
+        self.addCleanup(shutil.rmtree, root, True)
+        render_root = root / "render"
+        render_root.mkdir()
+        image_names = ("red-hearts.png", "blue-hearts.png", "red-heart-icon.png", "soul-heart-icon.png")
+        for name in image_names:
+            (render_root / name).write_bytes(b"PNG fixture")
+        source = r"""\begin{problem}{Table layout}{stdin}{stdout}{1 second}{256 megabytes}
+\begin{center}
+\begin{tabular}{@{}c@{\qquad}c@{}}
+\includegraphics[width=0.27\textwidth]{red-hearts.png} &
+\includegraphics[width=0.27\textwidth]{blue-hearts.png} ROWBREAK
+\parbox[t]{0.27\textwidth}{\centering Pay one \includegraphics[width=0.8em]{red-heart-icon.png}.} &
+\parbox[t]{0.27\textwidth}{\centering Pay up to three \includegraphics[width=0.8em]{soul-heart-icon.png}.}
+\end{tabular}
+\end{center}
+\end{problem}
+"""
+        for breaks in (2, 4):
+            with self.subTest(row_break_backslashes=breaks):
+                (render_root / "problem.tex").write_text(
+                    source.replace("ROWBREAK", "\\" * breaks), encoding="utf-8",
+                )
+                result = runtime.statement_html_renderer.render(
+                    render_root, root / f"html-{breaks}", subject_token=f"parbox-{breaks}",
+                )
+                table = _TableCollector()
+                table.feed(result.fragment)
+                self.assertEqual(table.rows[-1], ["Pay one .", "Pay up to three ."])
+                self.assertEqual(len(result.resources), 4)
+                self.assertEqual(
+                    [image["style"] for image in table.images],
+                    ["width:27cqw", "width:27cqw", "width:0.8em", "width:0.8em"],
+                )
+                self.assertEqual(result.warnings, ())
+
     def test_problem_reader_can_render_own_workspace_html_and_pdf(self) -> None:
         reader = "statement-reader"
         runtime.workspace_service.ensure_user(reader)

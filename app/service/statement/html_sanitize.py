@@ -14,19 +14,19 @@ MATHML_TAGS = {
     "mtd", "mtext", "mtr", "munder", "munderover", "semantics", "mpadded",
     "mphantom", "mstyle",
 }
-_LENGTH = re.compile(r"(?P<number>\d+(?:\.\d+)?|\.\d+)(?:px|pt|pc|cm|mm|in|em|ex|rem|%)?")
+_LENGTH = re.compile(r"(?P<number>\d+(?:\.\d+)?|\.\d+)(?:px|pt|pc|cm|mm|in|em|ex|rem|cqw|%)?")
 _HTML_VOID_TAGS = {
     "area", "base", "br", "col", "embed", "hr", "img", "input",
     "link", "meta", "param", "source", "track", "wbr",
 }
 _STYLE_PROPERTIES = {
     "img": {"width", "height"},
-    "span": {"font-size", "line-height", "width", "height", "margin-left"},
-    "div": {"font-size", "line-height", "width", "text-align", "margin-top", "vertical-align"},
+    "span": {"font-size", "line-height", "width", "height", "margin-left", "text-align", "vertical-align"},
+    "div": {"font-size", "line-height", "width", "height", "text-align", "margin-top", "vertical-align"},
     "p": {"text-align"},
     "figure": {"text-align"},
-    "td": {"text-align"},
-    "th": {"text-align"},
+    "td": {"text-align", "vertical-align", "padding-left", "padding-right"},
+    "th": {"text-align", "vertical-align", "padding-left", "padding-right"},
     "mtd": {"text-align"},
 }
 

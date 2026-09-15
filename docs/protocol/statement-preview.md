@@ -29,6 +29,12 @@ Presentation conversion preserves standard TeX size declarations and size
 environments (`tiny` through `Huge`), explicit `fontsize`/`selectfont`, nested
 groups, paragraph alignment, and caption font sizes. Minipages retain their
 width and vertical alignment in wrapping rows, with horizontal separators.
+Parboxes preserve their content and width within individual table cells.
+Tables in centered environments are centered as a whole, while cell alignment
+remains independent. Explicit `@{}` column spacing supports empty separators,
+`quad`, `qquad`, and bounded `hspace` lengths. Relative image and parbox
+dimensions use the enclosing statement or text box width, including inside
+table cells; inline icons retain font-relative dimensions.
 Sample text inherits the enclosing font scope. Verbatim text and mathematics
 retain their source commands for their respective readers.
 

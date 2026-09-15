@@ -19,14 +19,14 @@ class TestStatementHtmlSanitize(TestCase):
     def test_dimensions_survive_without_active_or_unbounded_css(self) -> None:
         result = sanitize_statement_html(
             '<img src="image.png" onerror="alert(1)" '
-            'style="width:9cm;height:999999px;position:fixed;'
+            'style="width:27cqw;height:999999px;position:fixed;'
             'background:url(https://example.com/tracker)">'
             '<span style="font-size:10pt;line-height:11pt;'
             'color:expression(alert(1))">caption</span>'
         )
         self.assertEqual(
             result,
-            '<img src="image.png" style="width:9cm">'
+            '<img src="image.png" style="width:27cqw">'
             '<span style="font-size:10pt;line-height:11pt">caption</span>',
         )
 

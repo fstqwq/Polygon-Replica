@@ -1,5 +1,8 @@
 -- Own TeX presentation scope and layout; emit only bounded HTML attributes.
 local M = {}
+local boxes = {}
+local box_serial = 0
+local box_prefix = 'StatementParbox'..pandoc.utils.sha1(tostring({}))..'-'
 local sizes = {tiny=7.64, scriptsize=10.18, footnotesize=11.45, small=12.73,
   normalsize=14, large=15.27, Large=18.33, LARGE=21.99, huge=26.40, Huge=31.67}
 
@@ -28,7 +31,26 @@ local function dimension(text, default_unit)
   return nil
 end
 
--- Keep minipage boundaries before Pandoc's LaTeX reader flattens them.
+local function argument(text, cursor, opening, closing)
+  cursor = text:find('%S', cursor) or (#text + 1)
+  if text:sub(cursor,cursor) ~= opening then return nil,cursor end
+  local start, depth = cursor + 1, 1
+  cursor = start
+  while cursor <= #text do
+    local char = text:sub(cursor,cursor)
+    if char == '\\' then cursor = cursor + 2
+    elseif char == '%' then cursor = text:find('\n',cursor,true) or (#text+1)
+    else
+      if char == opening then depth=depth+1 end
+      if char == closing then depth=depth-1 end
+      if depth == 0 then return text:sub(start,cursor-1),cursor+1 end
+      cursor=cursor+1
+    end
+  end
+  error('unterminated presentation argument')
+end
+
+-- Keep box and table boundaries before Pandoc's LaTeX reader flattens them.
 function M.prepare(text)
   local output, cursor = {}, 1
   while cursor <= #text do
@@ -48,13 +70,30 @@ function M.prepare(text)
         local _,finish=text:find('\\end{'..name..'}',cursor+#opening,true)
         if not finish then error('unterminated verbatim environment') end
         table.insert(output,text:sub(cursor,finish)); cursor=finish+1
-      elseif opening and name == 'minipage' then
-        table.insert(output,'\\'..command..'{StatementMinipage}')
+      elseif opening and (name == 'minipage' or name == 'tabular') then
+        local replacement = name == 'minipage' and 'StatementMinipage' or 'StatementTabular'
+        table.insert(output,'\\'..command..'{'..replacement..'}')
         cursor=cursor+#opening
-        if command == 'begin' and not text:sub(cursor):match('^%s*%[') then table.insert(output,'[c]') end
+        if name == 'minipage' and command == 'begin' and not text:sub(cursor):match('^%s*%[') then table.insert(output,'[c]') end
       else
         table.insert(output,'\\'..command); cursor=cursor+#command+1
       end
+    elseif command == 'parbox' then
+      local finish = cursor+#command+1
+      for _=1,3 do
+        local option,next_cursor=argument(text,finish,'[',']')
+        if not option then break end
+        finish=next_cursor
+      end
+      local width,next_cursor=argument(text,finish,'{','}')
+      local body,end_cursor=argument(text,next_cursor,'{','}')
+      if not width or not body then error('incomplete parbox') end
+      -- Code nodes survive even readers that flatten raw TeX in table cells.
+      box_serial=box_serial+1
+      local token=box_prefix..tostring(box_serial)
+      boxes[token]=text:sub(cursor,end_cursor-1)
+      table.insert(output,'\\texttt{'..token..'}')
+      cursor=end_cursor
     elseif command then table.insert(output,'\\'..command); cursor=cursor+#command+1
     elseif tail:sub(1,1) == '\\' then table.insert(output,tail:sub(1,2)); cursor=cursor+2
     else
@@ -103,6 +142,7 @@ end
 
 local blocks
 local inlines
+local parbox
 
 inlines = function(content, state, groups)
   local output, run = pandoc.Inlines({}), pandoc.Inlines({})
@@ -118,6 +158,11 @@ inlines = function(content, state, groups)
   end
   for _, item in ipairs(content) do
     local handled = false
+    if item.t == 'Code' and boxes[item.text] then
+      local box=parbox(boxes[item.text],state)
+      run:insert(pandoc.Span(pandoc.utils.blocks_to_inlines(box.content),box.attr))
+      handled=true
+    end
     if item.t == 'RawInline' and item.format == 'latex' then
       local command = item.text:match('^\\([A-Za-z]+)%s*$')
       if command == 'begingroup' then
@@ -147,7 +192,17 @@ inlines = function(content, state, groups)
       end
     end
     if not handled then
-      if item.t == 'Note' then item.content = blocks(item.content, copy(state))
+      if item.t == 'Image' then
+        -- Pandoc expresses TeX textwidth/linewidth dimensions as percentages.
+        -- Tables must not make those percentages relative to a cell.
+        for _,key in ipairs({'width','height'}) do
+          local value = item.attributes[key]
+          if value and value:match('^[%d.]+%%$') then
+            item.attributes.style = (item.attributes.style or '')..';'..key..':'..value:gsub('%%$','cqw')
+            item.attributes[key] = nil
+          end
+        end
+      elseif item.t == 'Note' then item.content = blocks(item.content, copy(state))
       elseif item.t == 'Span' or item.t == 'Strong' or item.t == 'Emph' or
           item.t == 'Strikeout' or item.t == 'SmallCaps' or item.t == 'Superscript' or
           item.t == 'Subscript' or item.t == 'Link' or item.t == 'Quoted' or item.t == 'Cite' then
@@ -158,6 +213,87 @@ inlines = function(content, state, groups)
   end
   flush()
   return output
+end
+
+parbox = function(text, state)
+  local command = text:match('^\\parbox%s*')
+  if not command then return nil end
+  local cursor, options = #command+1, {}
+  for index=1,3 do
+    local option, next_cursor = argument(text,cursor,'[',']')
+    if not option then break end
+    options[index],cursor = option,next_cursor
+  end
+  local width, next_cursor = argument(text,cursor,'{','}')
+  local body, finish = argument(text,next_cursor,'{','}')
+  if not width or not body or text:sub(finish):match('%S') then return nil end
+  local size = dimension(width,'pt')
+  if not size then error('unsupported parbox width: '..width) end
+  size = size:gsub('%%$','cqw')
+  local alignment = ({t='top',c='middle',b='bottom'})[options[1] or 'c']
+  if not alignment then error('unsupported parbox alignment') end
+  local scoped = copy(state)
+  local content = blocks(pandoc.read(M.prepare(body),'latex+raw_tex+latex_macros').blocks,scoped)
+  local styles = 'width:'..size..';vertical-align:'..alignment
+  if scoped.align then styles=styles..';text-align:'..scoped.align end
+  if options[2] then
+    local height = dimension(options[2],'pt')
+    if not height then error('unsupported parbox height: '..options[2]) end
+    styles=styles..';height:'..height:gsub('%%$','cqw')
+  end
+  local inner = options[3] or options[1] or 'c'
+  if not ({t=true,c=true,b=true,s=true})[inner] then error('unsupported parbox inner alignment') end
+  return pandoc.Div(content,pandoc.Attr('',{'statement-parbox','statement-parbox-'..inner},{style=styles}))
+end
+
+local function tabular(text)
+  local opening = text:match('^\\begin{StatementTabular}')
+  if not opening then return nil end
+  local position,cursor = argument(text,#opening+1,'[',']')
+  local spec,body_start = argument(text,cursor,'{','}')
+  if not spec then return nil end
+  local body = text:sub(body_start):match('^(.*)\\end{StatementTabular}%s*$')
+  if not body then return nil end
+  local parsed = pandoc.read('\\begin{tabular}'..(position and '['..position..']' or '')..
+    '{'..spec..'}'..body..'\\end{tabular}','latex+raw_tex+latex_macros').blocks
+  if #parsed ~= 1 or parsed[1].t ~= 'Table' then error('unsupported tabular structure') end
+  local result = parsed[1]
+  result.classes:insert('statement-tabular')
+  -- @{...} replaces the padding on both sides of this column boundary.
+  local boundaries, column, index = {}, 0, 1
+  while index <= #spec do
+    local token=spec:sub(index,index)
+    if token == '@' then
+      local spacing, next_index = argument(spec,index+1,'{','}')
+      if not spacing then break end
+      spacing=spacing:match('^%s*(.-)%s*$')
+      local value = ({['']='0pt',['\\quad']='1em',['\\qquad']='2em'})[spacing]
+      local explicit = spacing:match('^\\hspace%*?%s*{(.-)}$')
+      if explicit then value=dimension(explicit,'pt') end
+      if value then boundaries[column]=value end
+      index=next_index
+    elseif token:match('[lcrpmb]') then
+      column=column+1; index=index+1
+      if token:match('[pmb]') then local _,finish=argument(spec,index,'{','}'); index=finish end
+    elseif token == '{' then local _,finish=argument(spec,index,'{','}'); index=finish
+    else index=index+1 end
+  end
+  if column ~= #result.colspecs then return result end
+  local function rows(entries)
+    for _,row in ipairs(entries) do
+      local start=0
+      for _,cell in ipairs(row.cells) do
+        local styles={}
+        if boundaries[start] then table.insert(styles,'padding-left:'..boundaries[start]) end
+        start=start+cell.col_span
+        if boundaries[start] then table.insert(styles,'padding-right:0pt') end
+        if #styles>0 then cell.attributes.style=table.concat(styles,';') end
+      end
+    end
+  end
+  rows(result.head.rows); rows(result.foot.rows)
+  for _,body_part in ipairs(result.bodies) do rows(body_part.head); rows(body_part.body) end
+  return result
 end
 
 local function minipage(text, state)
@@ -202,9 +338,11 @@ blocks = function(content, state)
     local prepared = false
     if item.t == 'RawBlock' and item.format == 'latex' then
       local page = minipage(item.text,state)
+      local table_block = tabular(item.text)
       local vertical = item.text:match('^\\vspace%*?%s*(%b{})%s*$')
       local font, body, ending = item.text:match('^\\begin%s*{([A-Za-z]+)}(.*)\\end%s*{([A-Za-z]+)}%s*$')
       if page then item = page; prepared = true
+      elseif table_block then item=table_block
       elseif sizes[font] and ending == font then
         local scoped=copy(state)
         declaration('\\'..font,scoped)
@@ -224,6 +362,11 @@ blocks = function(content, state)
       if raw:match('^\\begingroup%s*$') then table.insert(stack,copy(state)); handled=true
       elseif raw:match('^\\endgroup%s*$') and #stack > 0 then state=table.remove(stack); handled=true
       end
+    end
+    if not handled and (item.t == 'Para' or item.t == 'Plain') and #item.content == 1 and
+        item.content[1].t == 'Code' and boxes[item.content[1].text] then
+      local box = parbox(boxes[item.content[1].text],state)
+      if box then item=box; prepared=true end
     end
     if not handled then
       if item.t == 'Para' or item.t == 'Plain' or item.t == 'Header' then
@@ -255,9 +398,17 @@ blocks = function(content, state)
         item.caption.long=blocks(item.caption.long,caption_state)
         if scoped.align then item.attributes.style='text-align:'..scoped.align end
       elseif item.t == 'Table' then
+        if state.align then item.attributes.style='text-align:'..state.align end
         local function rows(entries)
           for _,row in ipairs(entries) do
-            for _,cell in ipairs(row.cells) do cell.contents=blocks(cell.contents,copy(state)) end
+            for _,cell in ipairs(row.cells) do
+              cell.contents=blocks(cell.contents,copy(state))
+              local box=cell.contents[1]
+              if #cell.contents == 1 and box.t == 'Div' and box.classes:includes('statement-parbox') then
+                local alignment=box.attributes.style:match('vertical%-align:([^;]+)')
+                cell.attributes.style=(cell.attributes.style or '')..';vertical-align:'..alignment
+              end
+            end
           end
         end
         rows(item.head.rows); rows(item.foot.rows)
