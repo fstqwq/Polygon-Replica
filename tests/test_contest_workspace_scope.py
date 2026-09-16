@@ -176,6 +176,23 @@ class TestContestWorkspaceScope(ContestActionBase):
         )
         self.assertEqual(unquote(detail.fragment), "selected row")
         self.assertEqual(detail.query.count("contest="), 1)
+        second_detail = urlsplit(scoped_builder(
+            "files_download", query={"path": "other.txt", "line": 9}, fragment="another row"
+        ))
+        self.assertEqual(second_detail.path, detail.path)
+        self.assertEqual(
+            parse_qs(second_detail.query),
+            {"contest": [contest_slug], "path": ["other.txt"], "line": ["9"]},
+        )
+        self.assertEqual(unquote(second_detail.fragment), "another row")
+        for verification_id in ("ver-first", "ver-second"):
+            artifact = urlsplit(scoped_builder(
+                "artifact_file", verification_id=verification_id, rel_path="notes/a +%.txt"
+            ))
+            self.assertEqual(
+                unquote(artifact.path),
+                f"/problems/{problem_slug}/artifacts/{verification_id}/notes/a +%.txt",
+            )
         with self.assertRaisesRegex(ValueError, "managed by the builder"):
             scoped_builder(
                 "problem_files",
