@@ -916,7 +916,11 @@ class VerificationTaskStore:
                     raise RuntimeError("task completion batch crosses verifications")
                 verification_id = next(iter(verification_ids))
                 owner_by_output_ref: dict[str, tuple[str, str]] = {}
-                if any(not str(row["final_status"] or "") for row in rows):
+                if any(
+                    not str(row["final_status"] or "")
+                    and str(row["task_kind"] or "") == "generate-input"
+                    for row in rows
+                ):
                     owner_rows = conn.execute(
                         """
                         SELECT id,test_name,result_json

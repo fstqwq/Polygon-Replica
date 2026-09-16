@@ -529,6 +529,77 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
             ],
         )
 
+    def test_mixed_completion_batch_deduplicates_only_generated_inputs(self) -> None:
+        verification_id = canonical_test_verification_id(f"mixed-dedup:{self.test_id}")
+        self._insert_verification_row(verification_id)
+        owner_id = verification_task_id(verification_id, "generator-0", "001.in")
+        duplicate_id = verification_task_id(verification_id, "generator-0", "002.in")
+        main_id = verification_task_id(verification_id, "accepted", "001.in")
+        self._activate_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": task_id,
+                    "task_kind": task_kind,
+                    "source_path": source_path,
+                    "program_id": program_id,
+                    "test_name": test_name,
+                    "expected_behavior": "accepted",
+                }
+                for task_id, task_kind, source_path, program_id, test_name in (
+                    (owner_id, "generate-input", "generators/gen.cpp", "generator-0", "001.in"),
+                    (duplicate_id, "generate-input", "generators/gen.cpp", "generator-0", "002.in"),
+                    (main_id, "main-correct", "solutions/accepted.cpp", "accepted", "001.in"),
+                )
+            ],
+            edges=[(owner_id, main_id)],
+        )
+        shared_ref = str(self.runtime_blob_store.put_bytes(b"1\n").blob_ref)
+        completions = tuple(
+            TaskCompletion(
+                task_id=task_id,
+                status=VerificationTaskStatus.DONE,
+                run_id=f"r-{task_id}",
+                judgehost_task_id=f"jt-{task_id}",
+                result=make_execution_result(verdict="OK", output_ref=shared_ref),
+                input_ref=shared_ref if task_id != main_id else "",
+                answer_ref=shared_ref if task_id == main_id else "",
+            )
+            for task_id in (owner_id, main_id, duplicate_id)
+        )
+        self.verification_task_store.commit_task_completions(completions)
+        retry = self.verification_task_store.commit_task_completions(completions)
+
+        self.assertEqual(
+            retry.already_terminal_task_ids,
+            frozenset({owner_id, duplicate_id, main_id}),
+        )
+        rows = {
+            str(row["id"]): row
+            for row in self.verification_task_store.list_rows(verification_id)
+        }
+        self.assertEqual(
+            {task_id: str(row["verdict"]) for task_id, row in rows.items()},
+            {owner_id: "OK", main_id: "OK", duplicate_id: "SK"},
+        )
+        ownership = isolated_db_fetch_all(
+            self.db,
+            """
+            SELECT task_id,role FROM verification_task_artifacts
+            WHERE verification_id=? AND artifact_ref=?
+              AND role IN ('generated-input','accepted-answer')
+            """,
+            [verification_id, shared_ref],
+        )
+        self.assertEqual(
+            {(str(row["task_id"]), str(row["role"])) for row in ownership},
+            {
+                (owner_id, "generated-input"),
+                (duplicate_id, "generated-input"),
+                (main_id, "accepted-answer"),
+            },
+        )
+
     def test_completion_commit_persists_refs_failure_and_full_result_together(self) -> None:
         verification_id = canonical_test_verification_id(f"completion-evidence:{self.test_id}")
         self._insert_verification_row(verification_id)
