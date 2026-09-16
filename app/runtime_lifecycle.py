@@ -79,3 +79,5 @@ def shutdown(runtime: ApplicationRuntime) -> None:
         runtime.worker_queue_service.stop()
     except Exception as exc:  # pylint: disable=broad-exception-caught
         warnings.warn(f"shutdown worker queue stop failed: {exc}", RuntimeWarning)
+    finally:
+        runtime.db.close_connections()

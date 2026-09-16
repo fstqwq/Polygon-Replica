@@ -1,4 +1,5 @@
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from unittest.mock import patch
 
@@ -93,9 +94,57 @@ class TestDatabaseService(DBTestBase):
 
     def test_db_conn_enables_foreign_keys(self) -> None:
         with isolated_db_connection(self.db) as conn:
+            conn.execute("PRAGMA foreign_keys=OFF")
+        with isolated_db_connection(self.db) as conn:
             row = conn.execute("PRAGMA foreign_keys").fetchone()
         self.assertIsNotNone(row)
         self.assertEqual(int(row[0]), 1)
+
+    def test_nested_connection_leases_isolate_and_rollback_uncommitted_writes(self) -> None:
+        isolated_db_execute(self.db, "CREATE TABLE lease_probe(value INTEGER NOT NULL)")
+        with isolated_db_connection(self.db) as outer:
+            outer.execute("INSERT INTO lease_probe(value) VALUES(7)")
+            with isolated_db_connection(self.db) as inner:
+                self.assertEqual(inner.execute("SELECT COUNT(*) FROM lease_probe").fetchone()[0], 0)
+            self.assertEqual(outer.execute("SELECT value FROM lease_probe").fetchone()[0], 7)
+        with isolated_db_connection(self.db) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM lease_probe").fetchone()[0], 0)
+
+    def test_connection_leases_preserve_concurrent_transaction_updates(self) -> None:
+        isolated_db_execute(self.db, "CREATE TABLE lease_counter(value INTEGER NOT NULL)")
+        isolated_db_execute(self.db, "INSERT INTO lease_counter(value) VALUES(0)")
+
+        def increment() -> None:
+            for _index in range(10):
+                isolated_db_write_transaction(
+                    self.db,
+                    lambda connection: connection.execute("UPDATE lease_counter SET value=value+1"),
+                )
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = [executor.submit(increment) for _index in range(4)]
+            for future in futures:
+                future.result(timeout=10)
+        row = isolated_db_fetch_one(self.db, "SELECT value FROM lease_counter")
+        assert row is not None
+        self.assertEqual(row["value"], 40)
+
+    def test_connection_drain_allows_database_replacement(self) -> None:
+        isolated_db_execute(self.db, "CREATE TABLE replacement_probe(value INTEGER NOT NULL)")
+        isolated_db_execute(self.db, "INSERT INTO replacement_probe VALUES(1)")
+        replacement = self.db.path.with_name("replacement.db")
+        connection = sqlite3.connect(replacement)
+        try:
+            connection.execute("CREATE TABLE replacement_probe(value INTEGER NOT NULL)")
+            connection.execute("INSERT INTO replacement_probe VALUES(2)")
+            connection.commit()
+        finally:
+            connection.close()
+        self.db.close_connections()
+        replacement.replace(self.db.path)
+        row = isolated_db_fetch_one(self.db, "SELECT value FROM replacement_probe")
+        assert row is not None
+        self.assertEqual(row["value"], 2)
 
     def test_db_execute_retries_on_locked_error(self) -> None:
         state = {"failed_once": False}

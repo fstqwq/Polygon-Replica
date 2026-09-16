@@ -315,6 +315,7 @@ def _initialize_database_template() -> None:
 
 def _restore_database_template() -> None:
     _assert_test_runtime_paths()
+    db.close_connections()
     for sidecar in _database_sidecars(db.path):
         sidecar.unlink(missing_ok=True)
     replacement = db.path.with_name(f".{db.path.name}.{uuid.uuid4().hex}.tmp")

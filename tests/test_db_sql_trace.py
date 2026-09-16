@@ -66,3 +66,16 @@ class TestDBSqlTrace(DBTestBase):
         value_text = next((text for text in sql_texts if "json_fields=value_json" in text), "")
         self.assertTrue(value_text, sql_texts)
         self.assertNotIn('"blob": "', value_text)
+
+    def test_db_trace_can_be_disabled_after_a_traced_request(self) -> None:
+        values = dict(self.config_values.snapshot())
+        values["DB_SQL_TRACE_ENABLED"] = True
+        self.config_values.replace(values)
+        self._fetch_one(self.db, "SELECT 1")
+        values["DB_SQL_TRACE_ENABLED"] = False
+        self.config_values.replace(values)
+        with patch("app.db.logger.info") as info:
+            row = self._fetch_one(self.db, "SELECT 2 AS value")
+        assert row is not None
+        self.assertEqual(row["value"], 2)
+        info.assert_not_called()

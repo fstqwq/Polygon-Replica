@@ -2,6 +2,8 @@
 
 The canonical schema and required-object manifest live in `app/db.py`. SQLite stores identities, relationships, configuration, lifecycle state, summaries, and filesystem locators. Committed source and large payloads remain in their owning filesystem roots.
 
+Each database connection lease has exclusive ownership and an independent transaction. Up to 16 idle connections are retained per database instance. Returning a lease rolls back any uncommitted transaction; the next lease restores foreign-key enforcement, the busy timeout, and current SQL tracing settings. Runtime shutdown drains the idle connections and retires outstanding leases when they return. Callers close the database's connections before replacing its file.
+
 ## Execution rows
 
 | Table | Authority |

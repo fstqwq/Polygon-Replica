@@ -91,6 +91,7 @@ class TestArtifactCleanup(unittest.TestCase):
         self.storage_layout = StorageLayout.from_settings(self.settings)
         self.settings.contest_source_root.mkdir(parents=True)
         self.db = DB(self.settings.db_path, config_values=self.config_values)
+        self.addCleanup(self.db.close_connections)
         self.db.init()
         self.verification_task_store = VerificationTaskStore(self.db)
         self.access_query = AccessQuery(self.db)

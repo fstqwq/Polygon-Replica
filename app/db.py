@@ -9,7 +9,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Callable
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -958,11 +958,19 @@ class DB:
     path: Path
     config_values: ConfigValues
     _database_was_present: bool = field(init=False, repr=False)
+    _idle_connections: list[sqlite3.Connection] = field(
+        default_factory=list, init=False, repr=False, compare=False
+    )
+    _connection_lock: threading.Lock = field(
+        default_factory=threading.Lock, init=False, repr=False, compare=False
+    )
+    _connection_generation: int = field(default=0, init=False, repr=False, compare=False)
 
     LOCK_RETRY_ATTEMPTS = 3
     LOCK_RETRY_BASE_SEC = 0.05
     SQLITE_BUSY_TIMEOUT_MS = 5000
     SQL_TRACE_TEXT_LIMIT = 256
+    MAX_IDLE_CONNECTIONS = 16
 
     def __post_init__(self) -> None:
         self._database_was_present = self._db_file_exists()
@@ -984,11 +992,11 @@ class DB:
     def _init_current_schema(self) -> None:
         if self._database_was_present:
             database_uri = f"{self.path.absolute().resolve().as_uri()}?mode=ro"
-            with sqlite3.connect(database_uri, uri=True) as conn:
+            with closing(sqlite3.connect(database_uri, uri=True)) as conn:
                 self._prepare_connection(conn)
                 self._validate_existing_schema(conn)
             return
-        with sqlite3.connect(self.path) as conn:
+        with closing(sqlite3.connect(self.path)) as conn:
             self._prepare_connection(conn)
             conn.executescript(SCHEMA)
             conn.executescript(SCHEMA_INDEXES)
@@ -1035,20 +1043,51 @@ class DB:
 
     @contextmanager
     def conn(self):
-        """Open a configured SQLite connection."""
+        """Lease one connection exclusively, with an independent transaction."""
 
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self.path)
-        self._prepare_connection(conn)
+        with self._connection_lock:
+            generation = self._connection_generation
+            conn = self._idle_connections.pop() if self._idle_connections else None
+        if conn is None:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            conn = sqlite3.connect(self.path, check_same_thread=False)
+        reusable = False
         try:
+            self._prepare_connection(conn)
             yield conn
+            reusable = True
         finally:
+            try:
+                if conn.in_transaction:
+                    conn.rollback()
+            except BaseException:
+                conn.close()
+                raise
+            with self._connection_lock:
+                if (
+                    reusable
+                    and generation == self._connection_generation
+                    and len(self._idle_connections) < self.MAX_IDLE_CONNECTIONS
+                ):
+                    self._idle_connections.append(conn)
+                    conn = None
+            if conn is not None:
+                conn.close()
+
+    def close_connections(self) -> None:
+        """Drain idle connections and retire active leases when they return."""
+
+        with self._connection_lock:
+            self._connection_generation += 1
+            connections, self._idle_connections = self._idle_connections, []
+        for conn in connections:
             conn.close()
 
     def _install_sql_trace(self, conn: sqlite3.Connection) -> None:
         snapshot = self.config_values.snapshot()
         enabled = snapshot["DB_SQL_TRACE_ENABLED"]
         if not bool(enabled):
+            conn.set_trace_callback(None)
             return
         conn_id = id(conn)
         pid = os.getpid()
