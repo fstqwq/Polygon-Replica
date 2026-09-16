@@ -180,6 +180,8 @@ def create_app(application_runtime: ApplicationRuntime) -> FastAPI:
     )
     application.add_middleware(RuntimeBindingMiddleware, application=application)
     for router in (
+        # This disjoint prefix handles the high-volume execution callbacks.
+        judgehost_route.router,
         root_auth_route.router,
         admin_route.router,
         contest_route.router,
@@ -188,7 +190,6 @@ def create_app(application_runtime: ApplicationRuntime) -> FastAPI:
         tests_route.router,
         preview_route.router,
         run_export_route.router,
-        judgehost_route.router,
         maintenance_route.router,
     ):
         application.include_router(router)
