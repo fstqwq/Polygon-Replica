@@ -471,6 +471,85 @@ class TestJudgehostBatchRuntimeLifecycle(unittest.TestCase):
         self.assertTrue(self.store.complete_batch_finalization(next_claim))
         self.assertEqual(self.store.due_batch_finalizations(limit=1), [])
 
+    def test_finalization_abort_retries_after_completion_was_acknowledged(self) -> None:
+        batch_id = _create_batch(
+            self.store,
+            task_id="task-publication-retry",
+            run_id="run-publication-retry",
+            case_rows=[_case_row("task-publication-retry", "run-publication-retry", "001.in", 1)],
+        )
+        _finish_pending_case(self.store, batch_id, "001.in")
+        claim = self.store.claim_batch_finalization(batch_id, now_text=_NOW)
+        assert claim is not None
+        case_id = claim.cases[0]["id"]
+        self.assertTrue(self.store.acknowledge_case_completion(case_id))
+
+        # Persistence succeeded, but the subsequent task finalization failed.
+        self.assertTrue(
+            self.store.abort_batch_finalization(claim, now_text=_NOW, delay_sec=0.0)
+        )
+        self.assertEqual(self.store.due_batch_finalizations(limit=1), [batch_id])
+        retry = self.store.claim_batch_finalization(batch_id, now_text=_NOW)
+        assert retry is not None
+        self.assertEqual([row["id"] for row in retry.cases], [case_id])
+        self.assertTrue(retry.cases[0]["completion_acknowledged"])
+        self.assertTrue(self.store.complete_batch_finalization(retry))
+        self.assertEqual(self.store.due_batch_finalizations(limit=1), [])
+        self.assertEqual(self.store.fetch_case(case_id)["status"], "reported")
+
+    def test_diagnostic_arriving_during_finalization_is_retried(self) -> None:
+        for terminal_transition in (False, True):
+            with self.subTest(terminal_transition=terminal_transition):
+                task_id = f"task-diagnostic-race-{terminal_transition}"
+                run_id = f"run-diagnostic-race-{terminal_transition}"
+                case_spec = _case_row(task_id, run_id, "001.in", 1)
+                case_spec["verification_task_id"] = f"verification-{task_id}"
+                batch_id = _create_batch(
+                    self.store, task_id=task_id, run_id=run_id, case_rows=[case_spec]
+                )
+                _finish_pending_case(self.store, batch_id, "001.in")
+                if terminal_transition:
+                    self.store.finish_programs(
+                        "ver-1", [f"program-{task_id}"], now_text=_NOW
+                    )
+                claim = self.store.claim_batch_finalization(batch_id, now_text=_NOW)
+                assert claim is not None
+                self.assertEqual(claim.terminal_transition, terminal_transition)
+                case_id = claim.cases[0]["id"]
+                self.assertTrue(self.store.acknowledge_case_completion(case_id))
+                self.assertEqual(
+                    self.store.record_case_diagnostic(
+                        case_id,
+                        kind="debug-info",
+                        hostname="host-001.in",
+                        text="diagnostic arriving during publication",
+                        receipt_generation=_receipt_generation(self.store, case_id),
+                        diagnostic_limit_bytes=2048,
+                        now_text=_NOW,
+                    ),
+                    "pending",
+                )
+                if terminal_transition:
+                    self.assertTrue(
+                        self.store.set_batch_terminal_status(
+                            claim, status="completed", completed_at=_NOW, updated_at=_NOW
+                        )
+                    )
+                else:
+                    self.assertTrue(self.store.complete_batch_finalization(claim))
+                self.assertEqual(self.store.due_batch_finalizations(limit=1), [batch_id])
+                retry = self.store.claim_batch_finalization(batch_id, now_text=_NOW)
+                assert retry is not None
+                self.assertEqual([row["id"] for row in retry.cases], [case_id])
+                diagnostics = self.store.pending_case_diagnostics(case_id)
+                self.assertEqual(
+                    [item.text for item in diagnostics],
+                    ["diagnostic arriving during publication"],
+                )
+                self.assertTrue(self.store.acknowledge_case_diagnostic(case_id, diagnostics[0]))
+                self.assertTrue(self.store.complete_batch_finalization(retry))
+                self.assertEqual(self.store.due_batch_finalizations(limit=1), [])
+
     def test_batch_identity_is_program_not_execution_signature(self) -> None:
         first_batch = _create_batch(
             self.store,

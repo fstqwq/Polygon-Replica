@@ -16,12 +16,23 @@ class BatchFinalization:
         self._state = state
 
     def _has_terminal_work_locked(self, batch_id: int) -> bool:
-        return any(
-            case.status in {"reported", "cancelled"}
-            and (not case.completion_acknowledged or bool(case.pending_diagnostics))
-            for case_id in self._state._case_ids_by_batch[batch_id]
-            if (case := self._state._cases.get(case_id)) is not None
-        )
+        return bool(self._state._finalization_case_ids_by_batch.get(batch_id))
+
+    def _restore_claim_work_locked(
+        self, claim: FinalizationClaim, *, retry_all: bool
+    ) -> None:
+        for row in claim.cases:
+            case = self._state._cases.get(row["id"])
+            if (
+                case is not None
+                and case.status in self._state._TERMINAL_CASE_STATUSES
+                and (
+                    retry_all
+                    or not case.completion_acknowledged
+                    or bool(case.pending_diagnostics)
+                )
+            ):
+                self._state._finalization_case_ids_by_batch[claim.batch_id].add(case.id)
 
     def _needs_another_finalization_locked(self, batch_id: int) -> bool:
         batch = self._state._batches[batch_id]
@@ -100,15 +111,21 @@ class BatchFinalization:
                 and counts.terminal == counts.total
                 and batch.materialization_state != "materializing"
             )
+            if not terminal_transition and not self._has_terminal_work_locked(batch.batch_id):
+                return None
+            pending_case_ids = self._state._finalization_case_ids_by_batch[batch.batch_id]
+            case_ids = (
+                self._state._case_ids_by_batch[batch.batch_id]
+                if terminal_transition or batch.failure_runresult
+                else pending_case_ids
+            )
             cases = tuple(
                 case_snapshot(row)
-                for row in self._state._sorted_cases_locked(
-                    self._state._case_ids_by_batch[batch.batch_id]
-                )
+                for row in self._state._sorted_cases_locked(case_ids)
             )
-            has_terminal_work = self._has_terminal_work_locked(batch.batch_id)
-            if not terminal_transition and not has_terminal_work:
-                return None
+            # Drain this snapshot only. A concurrent callback or diagnostic can
+            # enqueue the same case again while publication runs outside the lock.
+            pending_case_ids.difference_update(row["id"] for row in cases)
             if terminal_transition:
                 batch.status = "finalizing"
                 batch.updated_at = now_text
@@ -147,6 +164,7 @@ class BatchFinalization:
             self._state._active_finalization_generation_by_batch.pop(
                 claim.batch_id, None
             )
+            self._restore_claim_work_locked(claim, retry_all=True)
             if claim.terminal_transition and batch.status == "finalizing":
                 batch.status = "finalize-pending"
                 batch.updated_at = now_text
@@ -171,7 +189,7 @@ class BatchFinalization:
             self._state._active_finalization_generation_by_batch.pop(
                 claim.batch_id, None
             )
-
+            self._restore_claim_work_locked(claim, retry_all=False)
             if self._needs_another_finalization_locked(batch.batch_id):
                 # The claim contains an immutable snapshot. A callback or cache
                 # probe can publish another terminal Case while the snapshot is
@@ -271,5 +289,8 @@ class BatchFinalization:
             self._state._active_finalization_generation_by_batch.pop(
                 batch.batch_id, None
             )
+            self._restore_claim_work_locked(claim, retry_all=False)
+            if self._has_terminal_work_locked(batch.batch_id):
+                self._schedule_retry_locked(batch.batch_id, delay_sec=0.0)
             self._state._discard_batch_telemetry_locked(batch.batch_id)
             return True

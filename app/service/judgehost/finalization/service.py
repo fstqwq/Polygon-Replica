@@ -284,6 +284,14 @@ class JudgehostBatchFinalizer:
             int(batch_row["batch_id"])
         ):
             return False
+        task_row = self._tasks.get(safe_task_id)
+        if task_row is None:
+            return False
+        task_status = decode_text(lower=True, raw=task_row["status"])
+        if task_status in {"completed", "failed"}:
+            return True
+        if task_status not in {self.STATUS_QUEUED, self.STATUS_LEASED}:
+            return False
         if not self._batch_runtime.task_cases_terminal(safe_task_id):
             return False
         case_results = self._batch_runtime.task_case_results(safe_task_id)
@@ -292,14 +300,6 @@ class JudgehostBatchFinalizer:
             case["status"] == "reported" and not bool(case["completion_acknowledged"])
             for case in cases
         ):
-            return False
-        task_row = self._tasks.get(safe_task_id)
-        if task_row is None:
-            return False
-        task_status = decode_text(lower=True, raw=task_row["status"])
-        if task_status in {"completed", "failed"}:
-            return True
-        if task_status not in {self.STATUS_QUEUED, self.STATUS_LEASED}:
             return False
         payload = self._task_result_payload(
             task_id=safe_task_id,

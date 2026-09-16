@@ -115,6 +115,7 @@ class BatchState:
         self._materialization_generation_by_batch: dict[int, int] = {}
         self._finalization_generation_by_batch: dict[int, int] = {}
         self._active_finalization_generation_by_batch: dict[int, int] = {}
+        self._finalization_case_ids_by_batch: dict[int, set[int]] = defaultdict(set)
         # Materialization replaces the descriptor in this canonical map. Keeping
         # raw and materialized copies separately made warm program appends
         # observe a compile key without its submission.
@@ -186,6 +187,7 @@ class BatchState:
             self._materialization_generation_by_batch.clear()
             self._finalization_generation_by_batch.clear()
             self._active_finalization_generation_by_batch.clear()
+            self._finalization_case_ids_by_batch.clear()
             self._compile_submissions_by_key.clear()
             self._compile_key_by_submit_id.clear()
             self._batch_ids_by_compile_key.clear()
@@ -455,6 +457,8 @@ class BatchState:
             if not leased_ids:
                 self._leased_case_ids_by_host.pop(old_owner, None)
         case.status = status
+        if status in self._TERMINAL_CASE_STATUSES:
+            self._finalization_case_ids_by_batch[case.batch_id].add(case.id)
         case.lease_owner = lease_owner
         if lease_owner:
             case.last_callback_hostname = lease_owner
@@ -552,6 +556,8 @@ class BatchState:
             updated_at=created_at,
         )
         self._cases[case_id] = case
+        if case.status in self._TERMINAL_CASE_STATUSES:
+            self._finalization_case_ids_by_batch[batch_id].add(case_id)
         self._case_ids_by_batch[batch_id].add(case_id)
         self._case_ids_by_task[source.task_id].add(case_id)
         self._case_ids_by_run[source.run_id].add(case_id)
@@ -863,6 +869,7 @@ class BatchState:
                     self._case_ids_by_testcase.pop(case.testcase_id, None)
 
         for batch_id in affected_batch_ids:
+            self._finalization_case_ids_by_batch[batch_id].difference_update(case_ids)
             retained = self._case_ids_by_batch[batch_id].difference(case_ids)
             self._case_ids_by_batch[batch_id] = retained
             if retained:
@@ -928,6 +935,7 @@ class BatchState:
         self._materialization_generation_by_batch.pop(batch_id, None)
         self._finalization_generation_by_batch.pop(batch_id, None)
         self._active_finalization_generation_by_batch.pop(batch_id, None)
+        self._finalization_case_ids_by_batch.pop(batch_id, None)
         self._cache_heaps_by_batch.pop(batch_id, None)
         self._runnable_heaps_by_batch.pop(batch_id, None)
         self._empty_batch_ids.discard(batch_id)

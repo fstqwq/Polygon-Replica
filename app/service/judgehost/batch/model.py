@@ -195,6 +195,8 @@ class CaseExecutionRow(TypedDict):
 
 @dataclass(frozen=True, slots=True)
 class FinalizationClaim:
+    """Pending cases for publication; all cases for terminal/failure processing."""
+
     batch_id: int
     generation: int
     terminal_transition: bool
