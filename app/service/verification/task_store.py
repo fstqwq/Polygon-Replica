@@ -773,15 +773,30 @@ class VerificationTaskStore:
     ) -> str:
         if not program_ids:
             return ""
+        completed_program_ids = tuple(
+            program_id
+            for program_id in program_ids
+            if conn.execute(
+                """
+                SELECT 1 FROM verification_tasks
+                WHERE verification_id=? AND final_status=''
+                  AND task_kind='solution-run' AND program_id=?
+                LIMIT 1
+                """,
+                [verification_id, program_id],
+            ).fetchone() is None
+        )
+        if not completed_program_ids:
+            return ""
         rows = conn.execute(
             f"""
             SELECT id,program_id,source_path,test_name,expected_behavior,
                    final_status,result_json
             FROM verification_tasks
             WHERE verification_id=? AND task_kind='solution-run'
-              AND program_id IN ({','.join('?' for _ in program_ids)})
+              AND program_id IN ({','.join('?' for _ in completed_program_ids)})
             """,
-            [verification_id, *program_ids],
+            [verification_id, *completed_program_ids],
         ).fetchall()
         rows_by_program: dict[str, list[dict[str, object]]] = {}
         for row in rows:
@@ -790,7 +805,7 @@ class VerificationTaskStore:
                 str(task_row["program_id"] or ""), []
             ).append(task_row)
 
-        for program_id in program_ids:
+        for program_id in completed_program_ids:
             program_rows = rows_by_program.get(program_id)
             if not program_rows:
                 raise RuntimeError(
@@ -875,6 +890,7 @@ class VerificationTaskStore:
             active_task_ids = set(self._runtime_by_task_id)
 
             def _tx(conn: sqlite3.Connection) -> CompletionCommit:
+                # Only a replay needs the previously committed artifact refs.
                 rows = conn.execute(
                     f"""
                     SELECT t.id,t.verification_id,t.task_kind,t.program_id,
@@ -883,7 +899,8 @@ class VerificationTaskStore:
                            COALESCE((
                                SELECT artifact.artifact_ref
                                FROM verification_task_artifacts artifact
-                               WHERE artifact.verification_id=t.verification_id
+                               WHERE t.final_status<>''
+                                 AND artifact.verification_id=t.verification_id
                                  AND artifact.test_name=t.test_name
                                  AND artifact.role='generated-input'
                                ORDER BY artifact.task_id
@@ -892,7 +909,8 @@ class VerificationTaskStore:
                            COALESCE((
                                SELECT artifact.artifact_ref
                                FROM verification_task_artifacts artifact
-                               WHERE artifact.verification_id=t.verification_id
+                               WHERE t.final_status<>''
+                                 AND artifact.verification_id=t.verification_id
                                  AND artifact.test_name=t.test_name
                                  AND artifact.role='accepted-answer'
                                ORDER BY artifact.task_id

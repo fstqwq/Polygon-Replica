@@ -73,8 +73,8 @@ def index_task_artifacts(
         accepted_answer_ref=accepted_answer_ref,
     )
     connection.execute(
-        "DELETE FROM verification_task_artifacts WHERE task_id=?",
-        [task_id],
+        "DELETE FROM verification_task_artifacts WHERE verification_id=? AND task_id=?",
+        [verification_id, task_id],
     )
     connection.executemany(
         """
