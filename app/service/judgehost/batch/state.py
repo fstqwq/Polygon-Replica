@@ -85,6 +85,7 @@ class BatchState:
     ):
         self._lock = threading.RLock() if lock is None else lock
         self._ready_condition = threading.Condition(self._lock)
+        self._publication_condition = threading.Condition(self._lock)
         self._id_base = max(1, int(id_base if id_base is not None else time.time_ns()))
         self._next_entity_id_value = self._id_base + 1
         self._batches: dict[int, ExecutionBatchRecord] = {}
@@ -208,6 +209,7 @@ class BatchState:
             self._stolen_batch_by_host.clear()
             self._compile_owner_by_batch.clear()
             self._ready_condition.notify_all()
+            self._publication_condition.notify_all()
 
     def activity_counts(self) -> dict[str, int]:
         with self._lock:

@@ -134,18 +134,25 @@ class TestJudgehostService(E2ETestBase):
             batch_id = case["batch_id"]
             publication = service._batch_runtime.claim_case_publications(batch_id)
             self.assertEqual([row["id"] for row in publication], [first])
-            try:
-                response = client.put(
-                    f"/api/v4/judgehosts/update-judging/{hostname}/{second}",
-                    data={"compile_success": "1"}, headers=headers,
-                )
-                self.assertEqual(response.status_code, 200, response.text)
-                self.assertEqual(response.json(), {})
-                self.assertFalse(judgehost_fetch_case(service, first)["completion_acknowledged"])
-                self.assertEqual(judgehost_fetch_batch(service, batch_id)["compile_success"], 1)
-                self.assertEqual(judgehost_fetch_case(service, second)["status"], "leased")
-            finally:
-                service._batch_runtime.complete_case_publications(batch_id, publication, retry=True)
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                try:
+                    response = client.put(
+                        f"/api/v4/judgehosts/update-judging/{hostname}/{second}",
+                        data={"compile_success": "1"}, headers=headers,
+                    )
+                    self.assertEqual(response.status_code, 200, response.text)
+                    self.assertEqual(response.json(), {})
+                    self.assertFalse(judgehost_fetch_case(service, first)["completion_acknowledged"])
+                    self.assertEqual(judgehost_fetch_batch(service, batch_id)["compile_success"], 1)
+                    self.assertEqual(judgehost_fetch_case(service, second)["status"], "leased")
+                    response = pool.submit(
+                        client.post, f"/api/v4/judgehosts/add-judging-run/{hostname}/{second}",
+                        data=result, headers=headers,
+                    ).result(timeout=3)
+                    self.assertEqual(response.status_code, 200, response.text)
+                    self.assertTrue(judgehost_fetch_case(service, second)["completion_acknowledged"])
+                finally:
+                    service._batch_runtime.complete_case_publications(batch_id, publication, retry=True)
             for case_id in (first, second):
                 response = client.post(
                     f"/api/v4/judgehosts/add-judging-run/{hostname}/{case_id}",
@@ -154,6 +161,97 @@ class TestJudgehostService(E2ETestBase):
                 self.assertEqual(response.status_code, 200, response.text)
                 self.assertEqual(response.json(), 1)
                 self.assertTrue(judgehost_fetch_case(service, case_id)["completion_acknowledged"])
+
+    def test_duplicate_result_waits_for_durable_publication_or_retries_failed_owner(self) -> None:
+        from app.main import app
+
+        service = runtime.judgehost_task_service
+        override_config_values(
+            self, runtime.config_values, JUDGEHOST_ENABLE=True,
+            JUDGEHOST_API_TOKEN="test-token", JUDGEHOST_API_USERNAME="judgehost",
+        )
+        ctx = runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        headers = {"Authorization": "Bearer test-token"}
+        with TestClient(app, raise_server_exceptions=False) as client:
+            for outcome in ("committed", "retry", "cancelled"):
+                with self.subTest(outcome=outcome):
+                    verification_id = _canonical_verification_id(f"publication-{uuid.uuid4().hex}")
+                    build_id = _canonical_verification_id(f"build-{uuid.uuid4().hex}")
+                    fixture_text = verification_id + "\n"
+                    self.assertEqual(admit_test_verification(
+                        verification_id=verification_id,
+                        problem_id=int(ctx["problem"]["id"]),
+                        workspace_id=int(ctx["workspace"]["id"]),
+                    ).outcome, "admitted")
+                    task_id = verification_task_id(verification_id, _ACCEPTED_PROGRAM_ID, "001.in")
+                    tasks = [PlannedTask(
+                        task_id=task_id, predecessor_task_id=None,
+                        task_kind="main-correct", source_path="solutions/ac.cpp",
+                        program_id=_ACCEPTED_PROGRAM_ID, test_name="001.in",
+                        expected_behavior="accepted",
+                    )]
+                    self.assertEqual(activate_test_verification(
+                        verification_id, programs=verification_programs_for_tasks(tasks), tasks=tasks,
+                    ).outcome, "activated")
+                    self._seed_build_verification(build_id, [("001.in", fixture_text, fixture_text)])
+                    service.enqueue_task(
+                        problem=self.problem, username=self.user, artifact_verification_id=build_id,
+                        submission_path="solutions/ac.cpp", upload_content=None, upload_filename=None,
+                        run_id=f"r-{uuid.uuid4().hex}", selected_tests=["001.in"],
+                        verification_id=verification_id, verification_task_id=task_id,
+                        verification_program_id=_ACCEPTED_PROGRAM_ID, expected_behavior="accepted",
+                        verification_source="run.execute", task_kind="main-correct",
+                        persist_verification_run=False,
+                    )
+                    hostname = f"publication-{outcome}"
+                    service.domjudge_register_host(hostname)
+                    leased = service.domjudge_fetch_work(hostname, max_batchsize=1)
+                    self.assertEqual(len(leased), 1)
+                    case_id = int(leased[0]["judgetaskid"])
+                    service.domjudge_update_judging(hostname, case_id, {"compile_success": "1"})
+                    payload = {"runresult": "correct", "runtime": "0.001",
+                               "output_run": base64.b64encode(fixture_text.encode()).decode("ascii")}
+                    service._result.domjudge_add_judging_run(hostname, case_id, payload)
+                    batch_id = judgehost_fetch_case(service, case_id)["batch_id"]
+                    publication = service._batch_runtime.claim_case_publications(batch_id, case_ids=(case_id,))
+                    self.assertEqual([row["id"] for row in publication], [case_id])
+                    waiting = threading.Event()
+                    condition = service._batch_runtime._state._publication_condition
+                    original_wait = condition.wait
+
+                    def observed_wait(timeout=None):
+                        waiting.set()
+                        return original_wait(timeout)
+
+                    with patch.object(condition, "wait", side_effect=observed_wait):
+                        with ThreadPoolExecutor(max_workers=1) as pool:
+                            pending = pool.submit(
+                                client.post, f"/api/v4/judgehosts/add-judging-run/{hostname}/{case_id}",
+                                data=payload, headers=headers,
+                            )
+                            try:
+                                self.assertTrue(waiting.wait(timeout=3))
+                                self.assertFalse(pending.done())
+                                self.assertEqual(db_fetch_one(
+                                    "SELECT final_status FROM verification_tasks WHERE id=?", [task_id],
+                                )["final_status"], "")
+                                if outcome == "committed":
+                                    service._batch_finalizer._publish_cases(publication)
+                                elif outcome == "cancelled":
+                                    runtime.verification_service.cancel_verification(
+                                        verification_id, reason="cancel while publication waits",
+                                    )
+                            finally:
+                                service._batch_runtime.complete_case_publications(
+                                    batch_id, publication, retry=outcome != "committed",
+                                )
+                            response = pending.result(timeout=5)
+                    self.assertEqual(response.status_code, 200, response.text)
+                    self.assertEqual(response.json(), 1)
+                    self.assertEqual(db_fetch_one(
+                        "SELECT final_status FROM verification_tasks WHERE id=?", [task_id],
+                    )["final_status"], "cancelled" if outcome == "cancelled" else "done")
+                    self.assertTrue(judgehost_fetch_case(service, case_id)["completion_acknowledged"])
 
     def test_unknown_judging_run_callback_is_idempotently_acknowledged(self) -> None:
         service = runtime.judgehost_task_service

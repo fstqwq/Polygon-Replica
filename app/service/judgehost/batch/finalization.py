@@ -19,10 +19,15 @@ class BatchFinalization:
         return bool(self._state._pending_publication_case_ids_by_batch.get(batch_id))
 
     def claim_case_publications(
-        self, batch_id: int, *, case_ids: tuple[int, ...] | None = None
+        self, batch_id: int, *, case_ids: tuple[int, ...] | None = None,
+        wait_for_active: bool = False,
     ) -> tuple[JudgehostCaseRow, ...]:
         """Own only the selected cases; other cases can publish concurrently."""
-        with self._state._lock:
+        with self._state._publication_condition:
+            if wait_for_active:
+                self._state._publication_condition.wait_for(
+                    lambda: self._selected_publications_idle_locked(batch_id, case_ids)
+                )
             pending = self._state._pending_publication_case_ids_by_batch.get(batch_id)
             if not pending:
                 return ()
@@ -38,11 +43,19 @@ class BatchFinalization:
             active.update(selected)
             return rows
 
+    def _selected_publications_idle_locked(
+        self, batch_id: int, case_ids: tuple[int, ...] | None,
+    ) -> bool:
+        active = self._state._publishing_case_ids_by_batch.get(batch_id)
+        return not active or (case_ids is not None and active.isdisjoint(case_ids))
+
     def complete_case_publications(
         self, batch_id: int, cases: tuple[JudgehostCaseRow, ...], *, retry: bool = False
     ) -> bool:
         """Release cases, retaining failed publication and concurrently added diagnostics."""
-        with self._state._lock:
+        with self._state._publication_condition:
+            # Waiters recheck ownership after this critical section releases.
+            self._state._publication_condition.notify_all()
             batch = self._state._batches.get(batch_id)
             if batch is None:
                 return False

@@ -349,7 +349,9 @@ class JudgehostBatchFinalizer:
         require_completion_ack: bool = False,
         defer_task_finalization: bool = False,
     ) -> None:
-        cases = self._batch_runtime.claim_case_publications(batch_id, case_ids=case_ids)
+        cases = self._batch_runtime.claim_case_publications(
+            batch_id, case_ids=case_ids, wait_for_active=require_completion_ack,
+        )
         if not cases:
             if require_completion_ack and not self._batch_runtime.publications_acknowledged(
                 batch_id, case_ids=case_ids,

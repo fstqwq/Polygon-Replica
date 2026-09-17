@@ -339,9 +339,12 @@ class JudgehostBatchRuntime:
         )
 
     def claim_case_publications(
-        self, batch_id: int, *, case_ids: tuple[int, ...] | None = None
+        self, batch_id: int, *, case_ids: tuple[int, ...] | None = None,
+        wait_for_active: bool = False,
     ) -> tuple[JudgehostCaseRow, ...]:
-        return self._finalization.claim_case_publications(batch_id, case_ids=case_ids)
+        return self._finalization.claim_case_publications(
+            batch_id, case_ids=case_ids, wait_for_active=wait_for_active,
+        )
 
     def complete_case_publications(
         self, batch_id: int, cases: tuple[JudgehostCaseRow, ...], *, retry: bool = False

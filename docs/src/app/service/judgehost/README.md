@@ -21,6 +21,9 @@ admission -> lease -> callback normalization
 Case publication and batch closure have separate ownership. Publication takes
 the pending cases under a short state lock, persists their results independently
 of other cases in the batch, acknowledges them, and notifies coordination.
+A callback awaiting durable acknowledgement waits for an existing publisher of
+its selected cases, then acknowledges the stored result or takes over a failed
+publication. Waiting releases the state lock; other cases remain independent.
 Failed publication and late diagnostics use the pending-case index for retries.
 The coordinator closes completed programs; the runtime closes a batch after its
 cases are terminal and acknowledged and active publication has released them.
