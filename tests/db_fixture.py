@@ -48,7 +48,7 @@ def _create_template() -> None:
     _PROCESS_ROOT.mkdir(parents=True, exist_ok=True)
     database = DB(_DB_PATH, config_values=build_config_values())
     database.init()
-    with database.conn() as connection:
+    with database.writer_connection() as connection:
         connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     database.close_connections()
     shutil.copy2(_DB_PATH, _DB_TEMPLATE)

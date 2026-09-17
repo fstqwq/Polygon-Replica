@@ -298,7 +298,7 @@ _DB_TEMPLATE_PATH = suite_root() / "fixture-template" / "metadata.db"
 
 def _checkpoint_database() -> None:
     _assert_test_runtime_paths()
-    with db.conn() as conn:
+    with db.writer_connection() as conn:
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
 

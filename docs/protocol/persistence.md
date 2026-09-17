@@ -2,7 +2,24 @@
 
 The canonical schema and required-object manifest live in `app/db.py`. SQLite stores identities, relationships, configuration, lifecycle state, summaries, and filesystem locators. Committed source and large payloads remain in their owning filesystem roots.
 
-Each database connection lease has exclusive ownership and an independent transaction. Up to 16 idle connections are retained per database instance. Returning a lease rolls back any uncommitted transaction; the next lease restores foreign-key enforcement, the busy timeout, and current SQL tracing settings. Runtime shutdown drains the idle connections and retires outstanding leases when they return. Callers close the database's connections before replacing its file.
+Each database instance owns one reusable write connection. A non-reentrant mutex
+covers its complete transaction or maintenance operation, including commit or
+rollback. Callers execute on their own threads. Writer admission has no FIFO
+guarantee. Write transactions use the same connection for their reads and writes.
+SQLite busy timeouts are zero; operations return errors without sleeping or
+replaying transaction callbacks. Other processes must coordinate database writes
+with the service operationally.
+
+Independent queries exclusively lease query-only connections from a pool retaining
+up to 16 idle connections. WAL permits these readers to run alongside the writer.
+Returning a read lease rolls back its open transaction. Each lease restores
+foreign-key enforcement, busy timeout, and current SQL tracing settings.
+
+Connection draining waits for the active writer, closes idle connections and the
+writer, and retires outstanding read leases on return. File replacement requires
+quiescing readers before draining. Runtime shutdown permanently closes the
+database to new reads and writes. Failed write operations close their connection,
+rolling back uncommitted work; subsequent operations create a fresh writer.
 
 ## Execution rows
 

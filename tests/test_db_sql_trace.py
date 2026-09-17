@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from app.db import DB, now_iso, sqlite3
 from tests.db_fixture import DBTestBase
+from tests.isolated_db_helpers import isolated_db_execute
 
 
 class TestDBSqlTrace(DBTestBase):
@@ -15,9 +16,7 @@ class TestDBSqlTrace(DBTestBase):
 
     @staticmethod
     def _execute(db: DB, sql: str, params: tuple[object, ...] = ()) -> None:
-        with db.conn() as conn:
-            conn.execute(sql, params)
-            conn.commit()
+        isolated_db_execute(db, sql, params)
 
     @staticmethod
     def _trace_sql_texts(info_mock) -> list[str]:

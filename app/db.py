@@ -7,8 +7,7 @@ import logging
 import os
 import sqlite3
 import threading
-import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -16,7 +15,7 @@ from pathlib import Path
 from typing import Any, Iterable, TypeVar
 
 from app.config.model import ConfigValues
-from app.main_util import is_sqlite_locked_error, summarize_traced_sql
+from app.main_util import summarize_traced_sql
 logger = logging.getLogger("uvicorn.error")
 logger.setLevel(logging.INFO)
 
@@ -952,7 +951,7 @@ def now_iso() -> str:
 
 
 @dataclass
-class DB:
+class DB:  # pylint: disable=too-many-instance-attributes
     """Small SQLite wrapper used by services and request handlers."""
 
     path: Path
@@ -966,9 +965,16 @@ class DB:
     )
     _connection_generation: int = field(default=0, init=False, repr=False, compare=False)
 
-    LOCK_RETRY_ATTEMPTS = 3
-    LOCK_RETRY_BASE_SEC = 0.05
-    SQLITE_BUSY_TIMEOUT_MS = 5000
+    _write_lock: threading.Lock = field(
+        default_factory=threading.Lock, init=False, repr=False, compare=False
+    )
+    _writer_thread: int | None = field(default=None, init=False, repr=False, compare=False)
+    _write_connection: sqlite3.Connection | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+    _closed: bool = field(default=False, init=False, repr=False, compare=False)
+
+    SQLITE_BUSY_TIMEOUT_MS = 0
     SQL_TRACE_TEXT_LIMIT = 256
     MAX_IDLE_CONNECTIONS = 16
 
@@ -978,25 +984,18 @@ class DB:
     def init(self) -> None:
         """Initialize a new database or validate an existing one without mutation."""
 
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        for attempt in range(max(1, int(self.LOCK_RETRY_ATTEMPTS))):
-            try:
-                self._init_current_schema()
-                return
-            except sqlite3.OperationalError as exc:
-                if is_sqlite_locked_error(exc) and attempt + 1 < int(self.LOCK_RETRY_ATTEMPTS):
-                    time.sleep(self.LOCK_RETRY_BASE_SEC * float(attempt + 1))
-                    continue
-                raise
+        with self._exclusive_writer():
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._init_current_schema()
 
     def _init_current_schema(self) -> None:
         if self._database_was_present:
             database_uri = f"{self.path.absolute().resolve().as_uri()}?mode=ro"
-            with closing(sqlite3.connect(database_uri, uri=True)) as conn:
+            with closing(sqlite3.connect(database_uri, uri=True, timeout=0)) as conn:
                 self._prepare_connection(conn)
                 self._validate_existing_schema(conn)
             return
-        with closing(sqlite3.connect(self.path)) as conn:
+        with closing(sqlite3.connect(self.path, timeout=0)) as conn:
             self._prepare_connection(conn)
             conn.executescript(SCHEMA)
             conn.executescript(SCHEMA_INDEXES)
@@ -1042,18 +1041,21 @@ class DB:
             )
 
     @contextmanager
-    def conn(self):
-        """Lease one connection exclusively, with an independent transaction."""
+    def conn(self) -> Iterator[sqlite3.Connection]:
+        """Lease an independent, query-only connection without taking the write lock."""
 
         with self._connection_lock:
+            if self._closed:
+                raise RuntimeError("database is closed")
             generation = self._connection_generation
             conn = self._idle_connections.pop() if self._idle_connections else None
         if conn is None:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            conn = sqlite3.connect(self.path, check_same_thread=False)
+            conn = sqlite3.connect(self.path, check_same_thread=False, timeout=0)
         reusable = False
         try:
             self._prepare_connection(conn)
+            conn.execute("PRAGMA query_only=ON")
             yield conn
             reusable = True
         finally:
@@ -1074,14 +1076,65 @@ class DB:
             if conn is not None:
                 conn.close()
 
-    def close_connections(self) -> None:
-        """Drain idle connections and retire active leases when they return."""
+    @contextmanager
+    def _exclusive_writer(self) -> Iterator[None]:
+        thread_id = threading.get_ident()
+        if self._writer_thread == thread_id:
+            raise RuntimeError("nested database writer access")
+        with self._write_lock:
+            if self._closed:
+                raise RuntimeError("database is closed")
+            self._writer_thread = thread_id
+            try:
+                yield
+            finally:
+                self._writer_thread = None
 
-        with self._connection_lock:
-            self._connection_generation += 1
-            connections, self._idle_connections = self._idle_connections, []
-        for conn in connections:
-            conn.close()
+    @contextmanager
+    def writer_connection(self) -> Iterator[sqlite3.Connection]:
+        """Exclusively lease the writer, including transaction or maintenance work.
+
+        Callers commit explicitly. Uncommitted work is rolled back on return;
+        failures retire the connection. Nested writer access is rejected.
+        """
+
+        with self._exclusive_writer():
+            if self._write_connection is None:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                self._write_connection = sqlite3.connect(
+                    self.path, check_same_thread=False, timeout=0
+                )
+            conn = self._write_connection
+            try:
+                self._prepare_connection(conn)
+                yield conn
+                if conn.in_transaction:
+                    conn.rollback()
+            except BaseException:
+                self._write_connection = None
+                # Closing rolls back and also retires unusable connections.
+                conn.close()
+                raise
+
+    def close_connections(self, *, permanent: bool = False) -> None:
+        """Wait for the writer, drain connections, and optionally reject new work.
+
+        File replacement requires callers to quiesce readers before draining.
+        Active read leases are retired when returned.
+        """
+
+        if self._writer_thread == threading.get_ident():
+            raise RuntimeError("cannot close database inside a write operation")
+        with self._write_lock:
+            with self._connection_lock:
+                self._closed = self._closed or permanent
+                self._connection_generation += 1
+                connections, self._idle_connections = self._idle_connections, []
+            if self._write_connection is not None:
+                connections.append(self._write_connection)
+                self._write_connection = None
+            for conn in connections:
+                conn.close()
 
     def _install_sql_trace(self, conn: sqlite3.Connection) -> None:
         snapshot = self.config_values.snapshot()
@@ -1110,120 +1163,56 @@ class DB:
         self,
         transaction_fn: Callable[[sqlite3.Connection], _TxResult],
     ) -> _TxResult:
-        """Run a write transaction with lock retry handling."""
+        """Run one complete transaction under the writer mutex, without replay."""
 
-        for attempt in range(max(1, int(self.LOCK_RETRY_ATTEMPTS))):
-            try:
-                with self.conn() as conn:
-                    conn.execute("BEGIN IMMEDIATE")
-                    try:
-                        result = transaction_fn(conn)
-                    except Exception:
-                        conn.rollback()
-                        raise
-                    conn.commit()
-                    return result
-            except sqlite3.OperationalError as exc:
-                if is_sqlite_locked_error(exc) and attempt + 1 < int(self.LOCK_RETRY_ATTEMPTS):
-                    time.sleep(self.LOCK_RETRY_BASE_SEC * float(attempt + 1))
-                    continue
-                raise
-        raise RuntimeError("write transaction failed")
+        with self.writer_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            result = transaction_fn(conn)
+            conn.commit()
+            return result
 
     def write_schema_reset_transaction(
         self,
         transaction_fn: Callable[[sqlite3.Connection], _TxResult],
     ) -> _TxResult:
-        """Atomically replace tables, validating foreign keys before commit.
+        """Replace tables atomically and validate foreign keys before commit.
 
-        SQLite implements ``DROP TABLE`` as an implicit row delete while foreign
-        keys are enabled. A cleanup that replaces whole tables therefore needs a
-        dedicated connection with enforcement disabled before its transaction
-        begins. Every normal connection still enables enforcement in
-        :meth:`_prepare_connection`.
+        Foreign-key enforcement is disabled before BEGIN because DROP TABLE
+        otherwise performs implicit deletes. The next writer lease restores it;
+        failures close the connection and roll back the transaction.
         """
 
-        for attempt in range(max(1, int(self.LOCK_RETRY_ATTEMPTS))):
-            try:
-                with self.conn() as conn:
-                    conn.execute("PRAGMA foreign_keys=OFF")
-                    foreign_keys = conn.execute("PRAGMA foreign_keys").fetchone()
-                    if foreign_keys is None or int(foreign_keys[0]) != 0:
-                        raise RuntimeError(
-                            "could not disable SQLite foreign keys for schema reset"
-                        )
-                    conn.execute("BEGIN IMMEDIATE")
-                    try:
-                        result = transaction_fn(conn)
-                        violations = conn.execute(
-                            "PRAGMA foreign_key_check"
-                        ).fetchmany(10)
-                        if violations:
-                            details = [tuple(row) for row in violations]
-                            raise RuntimeError(
-                                "foreign key violations after schema reset: "
-                                f"{details!r}"
-                            )
-                        conn.commit()
-                    except Exception:
-                        conn.rollback()
-                        raise
-                    conn.execute("PRAGMA foreign_keys=ON")
-                    return result
-            except sqlite3.OperationalError as exc:
-                if is_sqlite_locked_error(exc) and attempt + 1 < int(self.LOCK_RETRY_ATTEMPTS):
-                    time.sleep(self.LOCK_RETRY_BASE_SEC * float(attempt + 1))
-                    continue
-                raise
-        raise RuntimeError("schema reset transaction failed")
+        with self.writer_connection() as conn:
+            conn.execute("PRAGMA foreign_keys=OFF")
+            foreign_keys = conn.execute("PRAGMA foreign_keys").fetchone()
+            if foreign_keys is None or int(foreign_keys[0]) != 0:
+                raise RuntimeError("could not disable SQLite foreign keys for schema reset")
+            conn.execute("BEGIN IMMEDIATE")
+            result = transaction_fn(conn)
+            violations = conn.execute("PRAGMA foreign_key_check").fetchmany(10)
+            if violations:
+                details = [tuple(row) for row in violations]
+                raise RuntimeError(f"foreign key violations after schema reset: {details!r}")
+            conn.commit()
+            conn.execute("PRAGMA foreign_keys=ON")
+            return result
 
     def execute(self, sql: str, params: Iterable[Any] = ()) -> None:
-        """Execute a write statement with lock retry handling."""
+        """Execute and commit one statement on the exclusive writer."""
 
         values = tuple(params)
-        for attempt in range(max(1, int(self.LOCK_RETRY_ATTEMPTS))):
-            try:
-                with self.conn() as conn:
-                    conn.execute(sql, values)
-                    conn.commit()
-                    return
-            except sqlite3.OperationalError as exc:
-                if is_sqlite_locked_error(exc) and attempt + 1 < int(self.LOCK_RETRY_ATTEMPTS):
-                    time.sleep(self.LOCK_RETRY_BASE_SEC * float(attempt + 1))
-                    continue
-                raise
+        with self.writer_connection() as conn:
+            conn.execute(sql, values)
+            conn.commit()
 
     def fetch_one(self, sql: str, params: Iterable[Any] = ()) -> sqlite3.Row | None:
-        """Fetch one row with lock retry handling."""
+        """Fetch one row on an independent read connection."""
 
-        values = tuple(params)
-        for attempt in range(max(1, int(self.LOCK_RETRY_ATTEMPTS))):
-            try:
-                with self.conn() as conn:
-                    cursor = conn.execute(sql, values)
-                    row = cursor.fetchone()
-                    if row is None:
-                        return None
-                    return row
-            except sqlite3.OperationalError as exc:
-                if is_sqlite_locked_error(exc) and attempt + 1 < int(self.LOCK_RETRY_ATTEMPTS):
-                    time.sleep(self.LOCK_RETRY_BASE_SEC * float(attempt + 1))
-                    continue
-                raise
-        return None
+        with self.conn() as conn:
+            return conn.execute(sql, tuple(params)).fetchone()
 
     def fetch_all(self, sql: str, params: Iterable[Any] = ()) -> list[sqlite3.Row]:
-        """Fetch all rows with lock retry handling."""
+        """Fetch all rows on an independent read connection."""
 
-        values = tuple(params)
-        for attempt in range(max(1, int(self.LOCK_RETRY_ATTEMPTS))):
-            try:
-                with self.conn() as conn:
-                    cursor = conn.execute(sql, values)
-                    return list(cursor.fetchall())
-            except sqlite3.OperationalError as exc:
-                if is_sqlite_locked_error(exc) and attempt + 1 < int(self.LOCK_RETRY_ATTEMPTS):
-                    time.sleep(self.LOCK_RETRY_BASE_SEC * float(attempt + 1))
-                    continue
-                raise
-        return []
+        with self.conn() as conn:
+            return list(conn.execute(sql, tuple(params)).fetchall())

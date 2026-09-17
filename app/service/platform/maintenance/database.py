@@ -66,13 +66,13 @@ class ArtifactCleanupDatabase:
         return total
 
     def checkpoint_truncate(self) -> None:
-        with self._db.conn() as connection:
+        with self._db.writer_connection() as connection:
             row = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
         if row is None or int(row[0]) != 0:
             raise RuntimeError(f"SQLite WAL checkpoint remained busy: {row!r}")
 
     def vacuum(self) -> None:
         self.checkpoint_truncate()
-        with self._db.conn() as connection:
+        with self._db.writer_connection() as connection:
             connection.execute("VACUUM")
         self.checkpoint_truncate()

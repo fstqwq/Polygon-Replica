@@ -423,7 +423,7 @@ class TestArtifactCleanup(unittest.TestCase):
 
     def test_cleanup_deletes_derived_epoch_and_preserves_durable_data(self) -> None:
         durable_files = self._seed_generated_data()
-        with isolated_db_connection(self.db) as connection:
+        with self.db.writer_connection() as connection:
             redundant_index_statements = (
                 "CREATE INDEX idx_workspaces_problem_user "
                 "ON workspaces(problem_id,user_id)",
