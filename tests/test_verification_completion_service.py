@@ -7,6 +7,7 @@ from app.service.verification.judgehost_adapter import VerificationJudgehostAdap
 from app.service.verification.runtime_registry import VerificationRuntimeRegistry
 from app.service.verification.lifecycle import verification_task_id
 from app.service.verification.task_completion import TaskCompletion
+from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.types import VerificationTaskStatus
 
 from tests.identity_helpers import canonical_test_verification_id
@@ -20,6 +21,72 @@ from tests.verification_service_fixture import (
 
 
 class TestVerificationCompletionService(VerificationServiceTestBase):
+    def test_generated_input_owner_survives_rollback_and_runtime_rebuild(self) -> None:
+        verification_id = canonical_test_verification_id(f"owner-rollback:{self.test_id}")
+        self._insert_verification_row(verification_id)
+        task_ids = tuple(
+            verification_task_id(verification_id, "generator-0", f"{i:03}.in")
+            for i in range(1, 6)
+        )
+        self._activate_graph(
+            verification_id,
+            tasks=[
+                {
+                    "id": task_id,
+                    "task_kind": "generate-input",
+                    "source_path": "generators/gen.cpp",
+                    "program_id": "generator-0",
+                    "test_name": f"{i:03}.in",
+                    "expected_behavior": "accepted",
+                    "status": VerificationTaskStatus.PENDING,
+                }
+                for i, task_id in enumerate(task_ids, start=1)
+            ],
+            edges=[],
+        )
+        ref = str(self.runtime_blob_store.put_bytes(b"same generated input\n").blob_ref)
+        other_ref = str(self.runtime_blob_store.put_bytes(b"other generated input\n").blob_ref)
+        completions = tuple(
+            TaskCompletion(
+                task_id=task_id,
+                status=VerificationTaskStatus.DONE,
+                run_id=f"r-{task_id}",
+                judgehost_task_id=f"jt-{task_id}",
+                result=make_execution_result(
+                    verdict="OK", output_ref=other_ref if i in (2, 3) else ref,
+                ),
+                input_ref=other_ref if i in (2, 3) else ref,
+            )
+            for i, task_id in enumerate(task_ids)
+        )
+        self._install_completion_ref_abort()
+        try:
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "forced artifact ref failure"):
+                self.verification_task_store.commit_task_completions((completions[0],))
+        finally:
+            self._clear_completion_ref_abort()
+        self.verification_task_store.commit_task_completions((completions[1],))
+        self._install_completion_ref_abort()
+        try:
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "forced artifact ref failure"):
+                self.verification_task_store.commit_task_completions((completions[2],))
+        finally:
+            self._clear_completion_ref_abort()
+        self.verification_task_store.commit_task_completions((completions[3],))
+        self.verification_task_store.commit_task_completions((completions[2],))
+        self.verification_task_store.commit_task_completions((completions[0],))
+        rebuilt = VerificationTaskStore(self.db)
+        rebuilt.commit_task_completions((completions[4],))
+        rows = {row["id"]: row for row in rebuilt.list_rows(verification_id)}
+        self.assertEqual(rows[task_ids[1]]["verdict"], "OK")
+        self.assertEqual(rows[task_ids[3]]["verdict"], "OK")
+        self.assertEqual(rows[task_ids[2]]["verdict"], "SK")
+        self.assertIn("same as 004.in", rows[task_ids[2]]["feedback_text"])
+        for task_id in (task_ids[0], task_ids[4]):
+            self.assertEqual(rows[task_id]["verdict"], "SK")
+            self.assertIn("same as 002.in", rows[task_id]["feedback_text"])
+            self.assertEqual(rows[task_id]["output_ref"], ref)
+
     def test_judgehost_adapter_requires_the_exact_durable_case_binding(self) -> None:
         verification_id = canonical_test_verification_id(f"binding:{self.test_id}")
         self._insert_verification_row(verification_id)

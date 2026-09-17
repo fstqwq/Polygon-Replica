@@ -177,6 +177,7 @@ class VerificationTaskStore:
         self._runtime_lock = WriterPriorityRWLock()
         self._runtime_by_task_id: dict[str, _RuntimeTaskState] = {}
         self._test_name_by_task_id: dict[str, str] = {}
+        self._input_owners: dict[str, dict[str, tuple[str, str]]] = {}
 
     def _limit_bytes(self) -> int:
         return aux_display_text_limit_bytes(self.db.config_values.snapshot())
@@ -196,12 +197,13 @@ class VerificationTaskStore:
         """Delete one problem under the verification lifecycle lock order."""
 
         deleted_task_ids: tuple[str, ...] = ()
+        deleted_verification_ids: set[str] = set()
         with self._runtime_lock.write_lock():
             def _tx(conn: sqlite3.Connection) -> _SnapshotValue:
                 nonlocal deleted_task_ids
                 rows = conn.execute(
                     """
-                    SELECT task.id
+                    SELECT task.id,task.verification_id
                     FROM verification_tasks task
                     JOIN verifications verification
                       ON verification.id=task.verification_id
@@ -214,6 +216,7 @@ class VerificationTaskStore:
                     for row in rows
                     if str(row["id"] or "")
                 )
+                deleted_verification_ids.update(str(row["verification_id"]) for row in rows)
                 if any(
                     task_id in self._runtime_by_task_id
                     for task_id in deleted_task_ids
@@ -226,6 +229,8 @@ class VerificationTaskStore:
             result = self.db.write_transaction(_tx)
             for task_id in deleted_task_ids:
                 self._test_name_by_task_id.pop(task_id, None)
+            for verification_id in deleted_verification_ids:
+                self._input_owners.pop(verification_id, None)
             return result
 
     def activate_plan(
@@ -915,7 +920,14 @@ class VerificationTaskStore:
             raise ValueError("failed or cancelled task completion needs a reason")
 
         with self._runtime_lock.write_lock():
+            input_owners: dict[str, tuple[str, str]] | None = None
+            new_input_owners: dict[str, tuple[str, str]] = {}
+
             def _tx(conn: sqlite3.Connection) -> CompletionCommit:
+                nonlocal input_owners
+                # Each transaction retry starts with only committed state.
+                input_owners = None
+                new_input_owners.clear()
                 # Only a replay needs the previously committed artifact refs.
                 rows = conn.execute(
                     f"""
@@ -959,36 +971,37 @@ class VerificationTaskStore:
                 if len(verification_ids) != 1:
                     raise RuntimeError("task completion batch crosses verifications")
                 verification_id = next(iter(verification_ids))
-                owner_by_output_ref: dict[str, tuple[str, str]] = {}
                 if any(
                     not str(row["final_status"] or "")
                     and str(row["task_kind"] or "") == "generate-input"
                     for row in rows
                 ):
-                    owner_rows = conn.execute(
-                        """
-                        SELECT id,test_name,result_json
-                        FROM verification_tasks
-                        WHERE verification_id=? AND task_kind='generate-input'
-                          AND final_status=?
-                        ORDER BY finished_at ASC,id ASC
-                        """,
-                        [verification_id, VerificationTaskStatus.DONE.value],
-                    ).fetchall()
-                    for owner_row in owner_rows:
-                        owner_result = execution_result_from_json(
-                            str(owner_row["result_json"] or "{}")
-                        )
-                        output_ref = owner_result.output_run_ref
-                        if output_ref and owner_result.verdict.upper() != "SK":
-                            owner_by_output_ref.setdefault(
-                                output_ref,
-                                (
-                                    str(owner_row["id"]),
-                                    str(owner_row["test_name"] or ""),
-                                ),
+                    input_owners = self._input_owners.get(verification_id)
+                    if input_owners is None:
+                        input_owners = {}
+                        owner_rows = conn.execute(
+                            """
+                            SELECT id,test_name,result_json
+                            FROM verification_tasks
+                            WHERE verification_id=? AND task_kind='generate-input'
+                              AND final_status=?
+                            ORDER BY finished_at ASC,id ASC
+                            """,
+                            [verification_id, VerificationTaskStatus.DONE.value],
+                        ).fetchall()
+                        for owner_row in owner_rows:
+                            owner_result = execution_result_from_json(
+                                str(owner_row["result_json"] or "{}")
                             )
-
+                            output_ref = owner_result.output_run_ref
+                            if output_ref and owner_result.verdict.upper() != "SK":
+                                input_owners.setdefault(
+                                    output_ref,
+                                    (
+                                        str(owner_row["id"]),
+                                        str(owner_row["test_name"] or ""),
+                                    ),
+                                )
                 effective: list[TaskCompletion] = []
                 committed_task_ids: set[str] = set()
                 already_terminal_task_ids: set[str] = set()
@@ -1046,9 +1059,10 @@ class VerificationTaskStore:
                         and result.verdict.upper() != "SK"
                         and output_ref
                     ):
-                        owner = owner_by_output_ref.get(output_ref)
+                        assert input_owners is not None
+                        owner = new_input_owners.get(output_ref) or input_owners.get(output_ref)
                         if owner is None:
-                            owner_by_output_ref[output_ref] = (
+                            new_input_owners[output_ref] = (
                                 task_id,
                                 str(row["test_name"] or ""),
                             )
@@ -1308,7 +1322,15 @@ class VerificationTaskStore:
                     failure_reason=failure_reason,
                 )
 
-            return self.db.write_transaction(_tx)
+            committed = self.db.write_transaction(_tx)
+            # Publish only durable owners. A failed or retried transaction
+            # must never introduce a duplicate-input owner into the runtime map.
+            if input_owners is not None:
+                input_owners.update(new_input_owners)
+                self._input_owners[committed.verification_id] = input_owners
+            if committed.parent_transition:
+                self._input_owners.pop(committed.verification_id, None)
+            return committed
 
     def transition_verification_terminal(
         self,
@@ -1382,7 +1404,9 @@ class VerificationTaskStore:
                     cancelled_task_ids=frozenset(cancelled),
                 )
 
-            return self.db.write_transaction(_tx)
+            committed = self.db.write_transaction(_tx)
+            self._input_owners.pop(verification_id, None)
+            return committed
 
     def finish_sanity(
         self,
@@ -1578,6 +1602,7 @@ class VerificationTaskStore:
             summary = self.db.write_transaction(_tx)
             self._runtime_by_task_id.clear()
             self._test_name_by_task_id.clear()
+            self._input_owners.clear()
             return summary
 
     def verification_is_running(self, verification_id: str) -> bool:
@@ -1593,3 +1618,4 @@ class VerificationTaskStore:
         with self._runtime_lock.write_lock():
             self._runtime_by_task_id.clear()
             self._test_name_by_task_id.clear()
+            self._input_owners.clear()

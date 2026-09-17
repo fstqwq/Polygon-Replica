@@ -8,4 +8,9 @@ The task graph contains input generation, main-correct execution, and checked so
 
 History and detail reads combine one consistent SQLite snapshot with a process-local runtime overlay. Workspace-owned records and published problem-level records have distinct visibility and cancellation rules. Rejudge creates a new verification in the viewer's current workspace.
 
+The task store retains generated-input owners by content-addressed output reference
+within each active verification. Completion publishes new owners after its database
+transaction commits; missing runtime indexes rebuild from durable results. Graph
+completion, terminalization, and runtime reset discard the owner index.
+
 The [execution protocol](../../../../protocol/execution.md) defines lifecycle, graph, verdict, cache, and evidence semantics.
