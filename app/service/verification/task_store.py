@@ -26,7 +26,7 @@ from app.service.verification.diagnostic import (
     task_diagnostic_snapshot_from_json,
     task_diagnostic_snapshot_json,
 )
-from app.service.verification.artifact import replace_task_artifact_rows, task_artifact_rows
+from app.service.verification.artifact import insert_task_artifact_rows, task_artifact_rows
 from app.service.verification.lifecycle import (
     ActivationCommit,
     ActivationOutcome,
@@ -1211,8 +1211,8 @@ class VerificationTaskStore:
 
                     # Duplicate input changes only the verdict/feedback; its
                     # artifact ownership remains the prepared execution evidence.
-                    replace_task_artifact_rows(
-                        conn, verification_id=verification_id, task_id=task_id,
+                    insert_task_artifact_rows(
+                        conn,
                         rows=prepared_artifacts[task_id],
                     )
                     if (

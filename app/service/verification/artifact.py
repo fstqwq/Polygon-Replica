@@ -52,19 +52,13 @@ def _pass_filename(test_name: str, pass_number: int, kind: str) -> str:
     return kind
 
 
-def replace_task_artifact_rows(
+def insert_task_artifact_rows(
     connection: sqlite3.Connection,
     *,
-    verification_id: str,
-    task_id: str,
     rows: list[tuple[object, ...]],
 ) -> None:
-    """Replace prepared ownership rows inside their completion transaction."""
+    """Insert ownership rows atomically with the task's first terminal decision."""
 
-    connection.execute(
-        "DELETE FROM verification_task_artifacts WHERE verification_id=? AND task_id=?",
-        [verification_id, task_id],
-    )
     connection.executemany(
         """
         INSERT INTO verification_task_artifacts(
