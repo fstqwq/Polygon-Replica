@@ -1,9 +1,11 @@
+import json
 import unittest
 import uuid
 from pathlib import Path
 from unittest.mock import patch
 
 from app.service.judgehost.api import Judgehost
+from app.service.judgehost.task.model import ExecutionTemplate, PreparedTest
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.verification.completion import VerificationTaskCompletionService
 from app.service.verification.runtime_registry import VerificationRuntimeRegistry
@@ -193,7 +195,8 @@ class TestJudgehostRuntimeService(DBTestBase):
 
         verification_payload = dict(payload["verification_payload"])
         tests = list(verification_payload["tests"])
-        prepared_test = dict(tests[0])
+        self.assertIsInstance(tests[0], PreparedTest)
+        prepared_test = tests[0].to_payload()
         for field in ("input_file", "answer_file"):
             descriptor = dict(prepared_test[field])
             blob_ref = str(descriptor["blob_ref"])
@@ -351,8 +354,9 @@ class TestJudgehostRuntimeService(DBTestBase):
         )
         self.assertEqual(payload["source_name"], "TranslateMain.java")
         self.assertEqual(payload["entry_point"], "TranslateMain")
-        precomputed = dict(payload["precomputed"])
-        run_config = dict(precomputed["run_config"])
+        precomputed = payload["precomputed"]
+        self.assertIsInstance(precomputed, ExecutionTemplate)
+        run_config = json.loads(precomputed.run_config_json)
         self.assertEqual(run_config["entry_point"], "TranslateMain")
 
     def test_prepare_java_payload_rejects_missing_main_class(self) -> None:

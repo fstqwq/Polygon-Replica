@@ -3,6 +3,7 @@ import secrets
 import threading
 from typing import BinaryIO, TypeVar
 
+from app.service.judgehost.task.model import ExecutionTemplate, PreparedTest
 from app.db import now_iso
 from app.config import ConfigValues
 from app.service.platform.maintenance.admission import MaintenanceAdmissionGate
@@ -162,7 +163,6 @@ class Judgehost:
         self._task_batch_admission = TaskBatchAdmission(
             self._batch_runtime,
             self._tasks,
-            self._runtime_blob_store,
         )
         self._payload_preparation = JudgehostPayloadPreparation(
             self._workspace_service,
@@ -269,7 +269,8 @@ class Judgehost:
         extra_source_files: dict[str, PayloadFile] | None = None,
         manual_validate_only: bool = False,
         compile_only: bool = False,
-    ) -> dict[str, object]:
+        bypass_case_result_cache: bool = False,
+    ) -> ExecutionTemplate:
         return self._payload_preparation.prepare_execution_template(
             upload_file=upload_file,
             upload_filename=upload_filename,
@@ -280,6 +281,20 @@ class Judgehost:
             extra_source_files=extra_source_files,
             manual_validate_only=manual_validate_only,
             compile_only=compile_only,
+            bypass_case_result_cache=bypass_case_result_cache,
+        )
+
+    def prepare_test(
+        self,
+        *,
+        test_name: str,
+        answer_name: str,
+        input_file: PayloadFile,
+        answer_file: PayloadFile,
+    ) -> PreparedTest:
+        return self._payload_preparation.prepare_test(
+            test_name=test_name, answer_name=answer_name,
+            input_file=input_file, answer_file=answer_file,
         )
 
     def enqueue_task(
@@ -304,7 +319,7 @@ class Judgehost:
         compile_only: bool = False,
         persist_verification_run: bool = False,
         prepared_payload: dict[str, object] | None = None,
-        execution_template: dict[str, object] | None = None,
+        execution_template: ExecutionTemplate | None = None,
         service_class: str = "background",
     ) -> str:
         task_id = self._enqueue.enqueue_task(

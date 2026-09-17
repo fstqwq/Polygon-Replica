@@ -25,6 +25,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from app.service.verification.payload import prepared_payload_for_uploaded_source
+from app.service.judgehost.task.model import ExecutionTemplate
 from app.service.verification.plan import VerificationTestPlan
 from app.service.judgehost.cache.executable import ExecutableCache
 from app.service.judgehost.cache.case_result import CaseResultCache
@@ -2198,13 +2199,12 @@ class TestJudgehostService(E2ETestBase):
             expected_behavior="accepted",
             verification_source="run.execute",
         )
-        precomputed = payload.get("precomputed") if isinstance(payload, dict) else {}
-        run_cfg = precomputed.get("run_config") if isinstance(precomputed, dict) else {}
+        precomputed = payload["precomputed"]
+        self.assertIsInstance(precomputed, ExecutionTemplate)
+        run_cfg = json.loads(precomputed.run_config_json)
         self.assertIsInstance(run_cfg, dict)
         self.assertEqual(int(run_cfg.get("pass_limit") or 0), 7)
-        run_files = (
-            precomputed.get("run_files") if isinstance(precomputed, dict) else []
-        )
+        run_files = precomputed.batch_spec.run_files
         self.assertIn("pass-capture", {item[0] for item in run_files})
 
     def test_domjudge_pass_fail_multi_pass_uses_configured_pass_limit(self) -> None:
@@ -2236,16 +2236,13 @@ class TestJudgehostService(E2ETestBase):
             expected_behavior="accepted",
             verification_source="run.execute",
         )
-        precomputed = payload.get("precomputed") if isinstance(payload, dict) else {}
-        run_cfg = precomputed.get("run_config") if isinstance(precomputed, dict) else {}
+        precomputed = payload["precomputed"]
+        self.assertIsInstance(precomputed, ExecutionTemplate)
+        run_cfg = json.loads(precomputed.run_config_json)
         self.assertIsInstance(run_cfg, dict)
         self.assertEqual(int(run_cfg.get("pass_limit") or 0), 7)
-        run_files = (
-            precomputed.get("run_files") if isinstance(precomputed, dict) else []
-        )
-        compare_files = (
-            precomputed.get("compare_files") if isinstance(precomputed, dict) else []
-        )
+        run_files = precomputed.batch_spec.run_files
+        compare_files = precomputed.batch_spec.compare_files
         self.assertIn("pass-capture", {item[0] for item in run_files})
         self.assertIn("pass-capture", {item[0] for item in compare_files})
 
@@ -5958,6 +5955,15 @@ class TestJudgehostService(E2ETestBase):
         run_id_b = f"r-jh-grouped-generate-b-{uuid.uuid4().hex[:8]}"
         self.assertNotEqual(run_id_a, run_id_b)
 
+        template = service.prepare_execution_template(
+            upload_file=generator_file,
+            upload_filename="gen.cpp",
+            verification_payload=payload_base,
+            expected_behavior="accepted",
+            verification_source="generate-input",
+            task_kind="generate-input",
+            extra_source_files=plan_a.extra_source_files,
+        )
         prepared_a = prepared_payload_for_uploaded_source(
             source_label="gen.cpp",
             run_id=run_id_a,
@@ -5972,7 +5978,9 @@ class TestJudgehostService(E2ETestBase):
             username=self.user,
             artifact_verification_id=verification_id,
             submission_path=None,
-            upload_content=generator_source,
+            upload_content=None,
+            upload_file=generator_file,
+            execution_template=template,
             upload_filename="gen.cpp",
             run_id=run_id_a,
             selected_tests=[],
@@ -6022,7 +6030,9 @@ class TestJudgehostService(E2ETestBase):
             username=self.user,
             artifact_verification_id=verification_id,
             submission_path=None,
-            upload_content=generator_source,
+            upload_content=None,
+            upload_file=generator_file,
+            execution_template=template,
             upload_filename="gen.cpp",
             run_id=run_id_b,
             selected_tests=[],
