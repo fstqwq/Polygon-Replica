@@ -85,7 +85,6 @@ class BatchState:
     ):
         self._lock = threading.RLock() if lock is None else lock
         self._ready_condition = threading.Condition(self._lock)
-        self._ready_generation = 0
         self._id_base = max(1, int(id_base if id_base is not None else time.time_ns()))
         self._next_entity_id_value = self._id_base + 1
         self._batches: dict[int, ExecutionBatchRecord] = {}
@@ -206,7 +205,6 @@ class BatchState:
             self._case_id_by_callback_receipt.clear()
             self._stolen_batch_by_host.clear()
             self._compile_owner_by_batch.clear()
-            self._ready_generation += 1
             self._ready_condition.notify_all()
 
     def activity_counts(self) -> dict[str, int]:
@@ -376,7 +374,6 @@ class BatchState:
         key = self._batch_heap_key_locked(batch)
         self._refresh_prerequisite_index_locked(batch, ready=key is not None)
         if self._ready_batches.update(batch.batch_id, key):
-            self._ready_generation += 1
             self._ready_condition.notify_all()
 
     def _touch_batch_locked(self, batch: ExecutionBatchRecord) -> None:

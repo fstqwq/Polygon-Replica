@@ -1959,7 +1959,7 @@ class TestJudgehostScheduler(unittest.TestCase):
         self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], batch_id)
         self.assertEqual(scheduler.select_ready_batch("host-b")["batch_id"], batch_id)
 
-    def test_ready_wait_uses_generation_without_lost_wakeup(self) -> None:
+    def test_ready_wait_observes_work_without_lost_wakeup(self) -> None:
         scheduler = JudgehostBatchRuntime(id_base=260)
         _batch_id, now_text = _create_staged_batch(
             scheduler,
@@ -1982,6 +1982,90 @@ class TestJudgehostScheduler(unittest.TestCase):
         self.assertFalse(thread.is_alive())
         self.assertEqual(outcomes, [True])
         self.assertEqual(scheduler.select_ready_batch("host-b")["batch_id"], _batch_id)
+
+    def test_ready_wait_continues_when_other_host_takes_notified_work(self) -> None:
+        scheduler = JudgehostBatchRuntime(id_base=265)
+        waiting = threading.Event()
+        finished = threading.Event()
+        outcomes: list[bool] = []
+        condition = scheduler._state._ready_condition
+        original_wait = condition.wait
+
+        def observed_wait(timeout: float | None = None) -> bool:
+            waiting.set()
+            return original_wait(timeout)
+
+        def wait_for_work() -> None:
+            outcomes.append(scheduler.wait_for_ready_batch(1.0))
+            finished.set()
+
+        with patch.object(condition, "wait", side_effect=observed_wait):
+            thread = threading.Thread(target=wait_for_work)
+            thread.start()
+            try:
+                self.assertTrue(waiting.wait(timeout=0.5))
+                with condition:
+                    first_batch = _create_ready_batch(
+                        scheduler, task_id="contended", run_id="run-contended",
+                        ordinals=[1],
+                    )
+                    _lease_cases(
+                        scheduler, first_batch, hostname="other-host", limit=1,
+                        now_text="leased",
+                    )
+                self.assertFalse(finished.wait(timeout=0.03))
+                next_batch = _create_ready_batch(
+                    scheduler, task_id="available", run_id="run-available",
+                    ordinals=[2],
+                )
+                self.assertTrue(finished.wait(timeout=0.5))
+            finally:
+                thread.join(timeout=2.0)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(outcomes, [True])
+        self.assertEqual(scheduler.select_ready_batch("waiting-host")["batch_id"], next_batch)
+
+    def test_async_reports_keep_their_leases_without_blocking_other_batches(self) -> None:
+        scheduler = JudgehostBatchRuntime(id_base=270)
+        batches = [
+            _create_ready_batch(
+                scheduler, task_id=f"async-{i}", run_id=f"run-async-{i}",
+                ordinals=[i + 1], verification_id=f"ver-{i + 10:x}",
+            )
+            for i in range(3)
+        ]
+        cases = []
+        for batch_id in batches:
+            selected = scheduler.select_ready_batch("host-a")
+            self.assertIsNotNone(selected)
+            assert selected is not None
+            self.assertEqual(selected["batch_id"], batch_id)
+            cases.extend(_lease_cases(
+                scheduler, batch_id, hostname="host-a", limit=1, now_text="leased",
+            ))
+        self.assertEqual(scheduler.host_leased_case_count("host-a"), 3)
+        claims = [scheduler.claim_case_reporting(
+            int(case["id"]), hostname="host-a",
+            receipt_generation=_receipt_generation(scheduler, int(case["id"])),
+            now_text="reporting",
+        ) for case in cases]
+        self.assertTrue(all(claim is not None for claim in claims))
+        # Cancel one verification while other batches are still uploading.
+        scheduler.close_verification_admission("ver-a")
+        scheduler.drain_verification_cancel_slice(
+            "ver-a", now_text="cancelled", limit=16,
+        )
+        for index in (2, 0, 1):
+            claim = claims[index]
+            assert claim is not None
+            scheduler.commit_case_result(
+                claim.case_id, generation=claim.generation,
+                result=_case_result(f"{index + 1:03}.in"), updated_at="reported",
+            )
+        self.assertEqual(scheduler.host_leased_case_count("host-a"), 0)
+        self.assertEqual([
+            scheduler.fetch_case(int(case["id"]))["status"] for case in cases
+        ], ["cancelled", "reported", "reported"])
 
     def test_reporting_claim_serializes_duplicate_and_defers_cancel(self) -> None:
         scheduler = JudgehostBatchRuntime(id_base=250)

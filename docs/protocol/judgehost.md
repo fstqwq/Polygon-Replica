@@ -32,6 +32,18 @@ The hostname supplied by registration, work fetch, version reporting, and host-s
 
 Registration releases leases previously owned by the hostname and returns workdirs that may be removed. Fetch-work leases ready cases to that host. A final callback from another hostname or a concurrent callback claim returns non-2xx.
 
+Each fetch requests another execution packet. A host can receive another batch
+while earlier results upload asynchronously. Outstanding cases retain their
+individual leases and callback identities; ready cases in those batches retain
+scheduling preference. Completion or cancellation in one verification preserves
+the host's leases in other verifications.
+
+Fetch-work retries selection after another request consumes the selected work
+or claims its materialization. Empty-queue waits share a five-second long-poll
+budget, and each maintenance admission lock attempt waits at most 50 milliseconds.
+Long polling releases scheduler and admission locks while waiting. Disabled hosts
+and closed admission return empty work; draining admission skips empty-queue waits.
+
 Successful and idempotent `add-judging-run` responses are the JSON integer `1`. A new result bound to a verification task receives `1` only after its canonical result and task completion are durable. Persistence failure returns non-2xx for retry. A retry for an already-terminal, cancelled, or retired case also receives `1`.
 
 The active verification coordinator performs result-cache publication and runtime

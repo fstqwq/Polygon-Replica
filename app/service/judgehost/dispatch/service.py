@@ -46,6 +46,7 @@ class JudgehostDispatch:
     _TASK_KIND_COMPILE_ONLY = "compile-only"
     _TASK_KIND_MAIN_CORRECT = "main-correct"
     _CACHE_PROBE_BUDGET_SEC = 0.25
+    _ADMISSION_LOCK_TIMEOUT_SEC = 0.05
     _COORDINATOR_CACHE_OWNER = "verification-coordinator-cache"
 
     def __init__(
@@ -146,7 +147,9 @@ class JudgehostDispatch:
         if batch_row["materialization_state"] == "failed":
             return False
         admission_scope = (
-            nullcontext(True) if admission_gate is None else admission_gate.try_locked()
+            nullcontext(True)
+            if admission_gate is None
+            else admission_gate.try_locked(timeout_sec=self._ADMISSION_LOCK_TIMEOUT_SEC)
         )
         with admission_scope as admission_acquired:
             if not admission_acquired or (
@@ -216,7 +219,9 @@ class JudgehostDispatch:
                 batch_row["source_name"]
             )
         admission_scope = (
-            nullcontext(True) if admission_gate is None else admission_gate.try_locked()
+            nullcontext(True)
+            if admission_gate is None
+            else admission_gate.try_locked(timeout_sec=self._ADMISSION_LOCK_TIMEOUT_SEC)
         )
         with admission_scope as admission_acquired:
             if not admission_acquired or (
@@ -278,7 +283,9 @@ class JudgehostDispatch:
         if batch_row["status"] != "open":
             return []
         admission_scope = (
-            nullcontext(True) if admission_gate is None else admission_gate.try_locked()
+            nullcontext(True)
+            if admission_gate is None
+            else admission_gate.try_locked(timeout_sec=self._ADMISSION_LOCK_TIMEOUT_SEC)
         )
         with admission_scope as admission_acquired:
             if not admission_acquired or (
@@ -404,13 +411,15 @@ class JudgehostDispatch:
         )
         deadline = time.monotonic() + self._CACHE_PROBE_BUDGET_SEC
         first_transition = True
-        long_poll_used = False
+        long_poll_deadline: float | None = None
         initialized = False
         affected_batch_ids: dict[int, None] = {}
         while first_transition or time.monotonic() < deadline:
             first_transition = False
             admission_scope = (
-                nullcontext(True) if admission_gate is None else admission_gate.try_locked()
+                nullcontext(True)
+                if admission_gate is None
+                else admission_gate.try_locked(timeout_sec=self._ADMISSION_LOCK_TIMEOUT_SEC)
             )
             batch_row = None
             with admission_scope as admission_acquired:
@@ -428,7 +437,7 @@ class JudgehostDispatch:
             if batch_row is not None:
                 batch_id = int(batch_row["batch_id"])
                 affected_batch_ids[batch_id] = None
-                processed = self._apply_cache_shortcuts_for_batch(
+                self._apply_cache_shortcuts_for_batch(
                     batch_id,
                     hostname=safe_host,
                     limit=VERIFICATION_RUNTIME_BATCH_SIZE,
@@ -451,7 +460,7 @@ class JudgehostDispatch:
                     batch_id,
                     admission_gate=admission_gate,
                 ):
-                    return self._outcome((), affected_batch_ids)
+                    continue
                 leased_cases = self._lease_cases(
                     batch_id,
                     safe_host,
@@ -460,20 +469,24 @@ class JudgehostDispatch:
                 )
                 if leased_cases:
                     return self._outcome(tuple(leased_cases), affected_batch_ids)
-                if processed == 0:
-                    return self._outcome((), affected_batch_ids)
+                # A concurrent fetch can consume the selected cases or own
+                # materialization. Select again within this request's budget.
                 continue
 
             if admission_gate is not None and admission_gate.state() == "draining":
                 return self._outcome((), affected_batch_ids)
-            if not long_poll_used:
-                long_poll_used = True
-                if self._batch_runtime.wait_for_ready_batch(self._fetch_long_poll_sec):
+            if long_poll_deadline is None:
+                long_poll_deadline = time.monotonic() + self._fetch_long_poll_sec
+            remaining = long_poll_deadline - time.monotonic()
+            if remaining > 0:
+                if self._batch_runtime.wait_for_ready_batch(remaining):
                     deadline = time.monotonic() + self._CACHE_PROBE_BUDGET_SEC
                     first_transition = True
                     continue
             admission_scope = (
-                nullcontext(True) if admission_gate is None else admission_gate.try_locked()
+                nullcontext(True)
+                if admission_gate is None
+                else admission_gate.try_locked(timeout_sec=self._ADMISSION_LOCK_TIMEOUT_SEC)
             )
             with admission_scope as admission_acquired:
                 if not admission_acquired or (

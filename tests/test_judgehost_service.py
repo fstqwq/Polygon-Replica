@@ -5622,7 +5622,7 @@ class TestJudgehostService(E2ETestBase):
         self.assertEqual(str(case_row_a["lease_owner"] or ""), "judgehost-share-a")
         self.assertEqual(str(case_row_b["lease_owner"] or ""), "judgehost-share-b")
 
-    def test_domjudge_fetch_work_defers_preemption_until_inflight_case_reports(
+    def test_domjudge_fetch_work_allows_next_batch_during_async_result_upload(
         self,
     ) -> None:
         service = runtime.judgehost_task_service
@@ -5683,7 +5683,11 @@ class TestJudgehostService(E2ETestBase):
             service_class="foreground",
         )
         second_tasks = service.domjudge_fetch_work(host, max_batchsize=1)
-        self.assertEqual(second_tasks, [])
+        self.assertEqual(len(second_tasks), 1)
+        self.assertEqual(
+            len(self._work_rows_for_task(service, second_tasks, high_task_id)), 1
+        )
+        second_case_id = int(second_tasks[0]["judgetaskid"])
         first_case_id = int(first_tasks[0].get("judgetaskid") or 0)
         first_case = judgehost_fetch_case(service, first_case_id)
         self.assertIsNotNone(first_case)
@@ -5718,11 +5722,10 @@ class TestJudgehostService(E2ETestBase):
         self.assertIsNotNone(reported_case)
         self.assertEqual(str(reported_case["status"] or ""), "reported")
 
-        second_tasks = service.domjudge_fetch_work(host, max_batchsize=1)
-        self.assertEqual(len(second_tasks), 1)
-        self.assertEqual(
-            len(self._work_rows_for_task(service, second_tasks, high_task_id)), 1
-        )
+        second_case = judgehost_fetch_case(service, second_case_id)
+        self.assertIsNotNone(second_case)
+        self.assertEqual(second_case["status"], "leased")
+        self.assertEqual(second_case["lease_owner"], host)
 
     def test_domjudge_add_debug_info_preserves_result_and_appends_diagnostic(
         self,
