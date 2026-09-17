@@ -382,6 +382,8 @@ class Judgehost:
         return task_id
 
     def _publish_admitted_task(self, task_id: str) -> None:
+        if not self._batch_runtime.task_has_pending_publication(task_id):
+            return
         batch = self._batch_runtime.batch_for_task(task_id)
         if batch is not None:
             self._publish_batches((batch["batch_id"],))
@@ -584,7 +586,8 @@ class Judgehost:
             except Exception:
                 self._batch_runtime.retry_task_publication(task_id)
                 logger.exception("post-commit task finalization failed task_id=%s", task_id)
-            batches[batch["batch_id"]] = None
+            if batch["status"] == "finalize-pending":
+                batches[batch["batch_id"]] = None
         for batch_id in batches:
             try:
                 self._batch_finalizer.finalize_batch_if_ready(batch_id)

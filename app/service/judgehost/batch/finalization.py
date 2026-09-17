@@ -167,6 +167,13 @@ class BatchFinalization:
                 for case_id in selected
             )
 
+    def task_has_pending_publication(self, task_id: str) -> bool:
+        with self._state._lock:
+            batch_id = self._state._batch_id_by_task.get(task_id)
+            if batch_id is None:
+                return False
+            pending = self._state._pending_publication_case_ids_by_batch.get(batch_id, set())
+            return not pending.isdisjoint(self._state._case_ids_by_task.get(task_id, ()))
 
     def verification_cancellation_requested(self, batch_id: int) -> bool:
         with self._state._lock:

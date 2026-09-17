@@ -359,6 +359,8 @@ class JudgehostBatchRuntime:
     ) -> bool:
         return self._finalization.publications_acknowledged(batch_id, case_ids=case_ids)
 
+    def task_has_pending_publication(self, task_id: str) -> bool:
+        return self._finalization.task_has_pending_publication(task_id)
 
     def set_batch_terminal_status(
         self,
