@@ -1529,8 +1529,13 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
                 self,
                 runtime_verification_id: str,
                 handle: VerificationRuntimeHandle,
+                *,
+                defers_finalization: bool = False,
             ) -> None:
-                super().register(runtime_verification_id, handle)
+                super().register(
+                    runtime_verification_id, handle,
+                    defers_finalization=defers_finalization,
+                )
                 lifecycle.cancel_verification(
                     runtime_verification_id,
                     reason="cancelled during registration",

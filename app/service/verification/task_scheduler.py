@@ -28,6 +28,7 @@ class VerificationRuntimeCallbacks:
     cancel_execution: Callable[[str], None]
     close_programs: Callable[[list[str]], None]
     reconcile_expired_leases: Callable[[], list[str]] = lambda: []
+    finish_tasks: Callable[[tuple[str, ...]], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -255,6 +256,7 @@ class VerificationRuntimeCoordinator:
             try:
                 event = self._events.get(timeout=_IDLE_RECONCILIATION_SEC)
             except queue.Empty:
+                changed = self._reconcile_persisted_tasks()
                 if not self._task_store.verification_is_running(
                     self.verification_id
                 ):
@@ -264,7 +266,6 @@ class VerificationRuntimeCoordinator:
                         "verification is no longer running"
                     )
                     return
-                changed = self._reconcile_persisted_tasks()
                 if changed:
                     self._publish_ready_rows()
                 self._reconcile_expired_leases()
@@ -273,6 +274,12 @@ class VerificationRuntimeCoordinator:
                     return
                 continue
             terminal = self._handle_event(event)
+            if event.completion_commit is not None:
+                self._finish_tasks(tuple(
+                    item.judgehost_task_id
+                    for item in event.completion_commit.effective_completions
+                    if item.judgehost_task_id
+                ))
             if not terminal:
                 self._reconcile_expired_leases()
             self._close_completed_programs()
@@ -301,6 +308,7 @@ class VerificationRuntimeCoordinator:
 
     def _reconcile_persisted_tasks(self) -> bool:
         changed = False
+        finished: list[str] = []
         for row in self._task_store.list_rows(self.verification_id):
             task_id = str(row["id"])
             status = row["status"]
@@ -320,7 +328,14 @@ class VerificationRuntimeCoordinator:
                 feedback_text=str(row["feedback_text"]),
             )
             changed = self._dag.transition(task_id, status) or changed
+            if row["judgehost_task_id"]:
+                finished.append(row["judgehost_task_id"])
+        self._finish_tasks(tuple(finished))
         return changed
+
+    def _finish_tasks(self, task_ids: tuple[str, ...]) -> None:
+        if task_ids and self._callbacks.finish_tasks is not None:
+            self._callbacks.finish_tasks(task_ids)
 
     def _apply_completion_commit(self, commit: CompletionCommit) -> bool:
         if commit.verification_id != self.verification_id:

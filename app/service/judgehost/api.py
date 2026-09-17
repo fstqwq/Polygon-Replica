@@ -123,7 +123,9 @@ class Judgehost:
             self._execution_port,
             self._tasks,
             diagnostic_publisher,
+            discard_cache_case=lambda case_id: self._result.discard_pending_case(case_id),
         )
+        self._completion_publisher = completion_publisher
         self._batch_finalizer = JudgehostBatchFinalizer(
             self._batch_runtime,
             self._tasks,
@@ -413,7 +415,7 @@ class Judgehost:
             "callbacks": max(active_callbacks, attempts["callbacks"]),
             "cache_probes": attempts["cache_probes"],
             "materializations": attempts["materializations"],
-            "finalizations": attempts["finalizations"],
+            "finalizations": attempts["finalizations"] + self._result.pending_cache_count(),
         }
 
     def wait_for_task_result(
@@ -483,6 +485,7 @@ class Judgehost:
         if not reason:
             raise RuntimeError("judgehost cancellation reason is required")
         self._batch_runtime.close_verification_admission(verification_id)
+        self._result.discard_pending_cache(verification_id)
         try:
             self._cancellation_drain.schedule(verification_id, reason=reason)
         except Exception:
@@ -553,6 +556,26 @@ class Judgehost:
         for batch_id in ready_batch_ids:
             self._batch_finalizer.finalize_batch_if_ready(batch_id)
 
+    def finish_reported_tasks(self, task_ids: tuple[str, ...]) -> None:
+        """Run post-commit work on the existing verification coordinator."""
+        batches: dict[int, None] = {}
+        for task_id in dict.fromkeys(task_ids):
+            self._result.publish_pending_cache(task_id)
+            batch = self._batch_runtime.batch_for_task(task_id)
+            if batch is None:
+                continue
+            try:
+                self._batch_finalizer.finalize_task_if_ready(task_id, batch_row=batch)
+            except Exception:
+                self._batch_runtime.schedule_batch_finalization_retry(batch["batch_id"])
+                logger.exception("post-commit task finalization failed task_id=%s", task_id)
+            batches[batch["batch_id"]] = None
+        for batch_id in batches:
+            try:
+                self._batch_finalizer.finalize_batch_if_ready(batch_id)
+            except Exception:
+                logger.exception("post-commit batch finalization failed batch_id=%s", batch_id)
+
     def reconcile_expired_verification_leases(self, verification_id: str) -> list[str]:
         outcome = self._maintenance.reconcile_expired_leases(verification_id)
         for release in outcome.releases:
@@ -614,19 +637,27 @@ class Judgehost:
         for batch_id in batch_ids:
             if self._batch_runtime.batch_verification_cancellation_requested(batch_id):
                 continue
+            batch = self._batch_runtime.fetch_batch(batch_id)
+            defer = bool(
+                batch is not None and not batch["failure_runresult"]
+                and self._execution_port.defers_finalization(batch["verification_id"])
+            )
             self._batch_finalizer.finalize_batch_if_ready(
                 batch_id,
                 require_completion_ack=(
                     require_completion_ack
                     and self._batch_runtime.batch_requires_completion_ack(batch_id)
                 ),
+                defer_task_finalization=defer,
             )
 
     def _complete_callback(
         self,
         outcome: CallbackOutcome[Acknowledgement],
+        *,
+        finalize: bool = True,
     ) -> Acknowledgement:
-        if outcome.terminal_batch_ids:
+        if finalize and outcome.terminal_batch_ids:
             self._finalize_batches(
                 outcome.terminal_batch_ids,
                 require_completion_ack=True,
@@ -710,7 +741,18 @@ class Judgehost:
             judgetask_id,
             payload,
         )
-        return self._complete_callback(outcome)
+        case = self._batch_runtime.fetch_case(judgetask_id)
+        batch = None if case is None else self._batch_runtime.fetch_batch(case["batch_id"])
+        if case is not None and batch is not None and not batch["failure_runresult"]:
+            if not self._completion_publisher.acknowledge_terminal_case(judgetask_id):
+                raise RuntimeError("verification task completion is not durably acknowledged")
+            if not self._execution_port.defers_finalization(batch["verification_id"]):
+                self.finish_reported_tasks((case["task_id"],))
+            return self._complete_callback(outcome, finalize=False)
+        result = self._complete_callback(outcome)
+        if case is not None:
+            self._result.publish_pending_cache(case["task_id"])
+        return result
 
     def domjudge_internal_error(
         self,
@@ -861,6 +903,7 @@ class Judgehost:
         self._cancellation_drain.pause()
         try:
             self._terminal_cleanup.reset()
+            self._result.discard_pending_cache()
             self._tasks.reset()
             self._hosts.clear()
             self._batch_runtime.reset()

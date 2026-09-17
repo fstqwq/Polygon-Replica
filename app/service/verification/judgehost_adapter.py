@@ -145,11 +145,16 @@ class VerificationJudgehostAdapter:
             judgehost_task_id=judgehost_task_id,
         )
 
+    def defers_finalization(self, verification_id: str) -> bool:
+        return self._runtime_registry.defers_finalization(verification_id)
+
     def reported_many(
         self,
         reports: tuple[CaseCompletionReport, ...],
+        *,
+        after_commit: Callable[[frozenset[str]], None] | None = None,
     ) -> bool:
-        return self._completion_service.reported_many(reports)
+        return self._completion_service.reported_many(reports, after_commit=after_commit)
 
     def cancelled(
         self,

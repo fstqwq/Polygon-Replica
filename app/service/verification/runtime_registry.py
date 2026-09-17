@@ -24,11 +24,14 @@ class VerificationRuntimeRegistry:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._handles_by_verification_id: dict[str, VerificationRuntimeHandle] = {}
+        self._deferred_finalizations: set[str] = set()
 
     def register(
         self,
         verification_id: str,
         handle: VerificationRuntimeHandle,
+        *,
+        defers_finalization: bool = False,
     ) -> None:
         with self._lock:
             if verification_id in self._handles_by_verification_id:
@@ -36,6 +39,12 @@ class VerificationRuntimeRegistry:
                     f"verification runtime is already registered: {verification_id}"
                 )
             self._handles_by_verification_id[verification_id] = handle
+            if defers_finalization:
+                self._deferred_finalizations.add(verification_id)
+
+    def defers_finalization(self, verification_id: str) -> bool:
+        with self._lock:
+            return verification_id in self._deferred_finalizations
 
     def unregister(
         self,
@@ -47,6 +56,7 @@ class VerificationRuntimeRegistry:
             if current is not handle:
                 return False
             self._handles_by_verification_id.pop(verification_id)
+            self._deferred_finalizations.discard(verification_id)
             return True
 
     def _handle(self, verification_id: str) -> VerificationRuntimeHandle | None:

@@ -18,6 +18,7 @@ import threading
 import time
 import tarfile
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
@@ -255,8 +256,17 @@ class TestJudgehostService(E2ETestBase):
             )
         return Path(artifact_path).resolve()
 
-    def test_domjudge_add_judging_run_survives_result_cache_publication_failure(
-        self,
+    def test_domjudge_add_judging_run_survives_result_cache_publication_failure(self) -> None:
+        self._assert_result_cache_failure(deferred=False)
+
+    def test_result_ack_is_durable_while_deferred_cache_write_is_blocked(self) -> None:
+        self._assert_result_cache_failure(deferred=True)
+
+    def test_result_losing_to_durable_cancel_does_not_publish_cache(self) -> None:
+        self._assert_result_cache_failure(deferred=True, cancel_before_publication=True)
+
+    def _assert_result_cache_failure(
+        self, *, deferred: bool, cancel_before_publication: bool = False,
     ) -> None:
         service = runtime.judgehost_task_service
         override_config_values(
@@ -330,6 +340,7 @@ class TestJudgehostService(E2ETestBase):
         task_store = runtime.verification_task_store
 
         callbacks = VerificationRuntimeCallbacks(
+            finish_tasks=service.finish_reported_tasks if deferred else None,
             publish_task=lambda _row: (_ for _ in ()).throw(
                 RuntimeError("unexpected publish")
             ),
@@ -347,7 +358,9 @@ class TestJudgehostService(E2ETestBase):
             callbacks=callbacks,
             edges=[],
         )
-        runtime.verification_runtime_registry.register(verification_id, coordinator)
+        runtime.verification_runtime_registry.register(
+            verification_id, coordinator, defers_finalization=deferred,
+        )
         coordinator_thread = threading.Thread(target=coordinator.run, daemon=True)
         coordinator_thread.start()
         try:
@@ -370,25 +383,74 @@ class TestJudgehostService(E2ETestBase):
                     "compile_metadata": "",
                 },
             )
-            with patch.object(
-                CaseResultCache,
-                "try_store",
-                side_effect=OSError("result cache unavailable"),
-            ):
-                ack = service.domjudge_add_judging_run(
-                    "judgehost-immediate-finalize",
-                    case_id,
-                    {
-                        "runresult": "correct",
-                        "runtime": "0.001",
-                        "output_run": base64.b64encode(b"ok\n").decode("ascii"),
-                        "output_diff": "",
-                        "output_error": "",
-                        "output_system": "",
-                        "metadata": base64.b64encode(metadata).decode("ascii"),
-                        "compare_metadata": "",
-                    },
+            cache_entered = threading.Event()
+            release_cache = threading.Event()
+
+            def fail_cache(*_args, **_kwargs):
+                cache_entered.set()
+                if deferred:
+                    release_cache.wait(timeout=5.0)
+                raise OSError("result cache unavailable")
+
+            payload = {
+                "runresult": "correct",
+                "runtime": "0.001",
+                "output_run": base64.b64encode(b"ok\n").decode("ascii"),
+                "output_diff": "",
+                "output_error": "",
+                "output_system": "",
+                "metadata": base64.b64encode(metadata).decode("ascii"),
+                "compare_metadata": "",
+            }
+
+            def report():
+                return service.domjudge_add_judging_run(
+                    "judgehost-immediate-finalize", case_id, payload,
                 )
+
+            if cancel_before_publication:
+                # Stop between receiving the result and its durable publication.
+                # Cancellation has committed, but runtime cancellation has not run yet.
+                service._result.domjudge_add_judging_run(
+                    "judgehost-immediate-finalize", case_id, payload,
+                )
+                runtime.verification_service.cancel_verification(
+                    verification_id, reason="cancel before result publication",
+                )
+                cache_before = self._judge_index_entry_count(RuntimeCacheIndex.RESULT)
+                self.assertEqual(report(), 1)
+                coordinator_thread.join(timeout=3.0)
+                self.assertFalse(coordinator_thread.is_alive())
+                self.assertEqual(self._judge_index_entry_count(RuntimeCacheIndex.RESULT), cache_before)
+                self.assertEqual(service.busy_counts()["finalizations"], 0)
+                persisted = db_fetch_one(
+                    "SELECT final_status FROM verification_tasks WHERE id=?", [task_id],
+                )
+                self.assertEqual(persisted["final_status"], "cancelled")
+                return
+
+            with patch.object(CaseResultCache, "try_store", side_effect=fail_cache):
+                if deferred:
+                    with ThreadPoolExecutor(max_workers=1) as executor:
+                        pending = executor.submit(report)
+                        try:
+                            self.assertTrue(cache_entered.wait(timeout=3.0))
+                            ack = pending.result(timeout=1.0)
+                            persisted = db_fetch_one(
+                                "SELECT final_status,result_json FROM verification_tasks WHERE id=?",
+                                [task_id],
+                            )
+                            self.assertEqual(persisted["final_status"], "done")
+                            self.assertEqual(json.loads(persisted["result_json"])["outcome"]["verdict"], "OK")
+                            self.assertEqual(report(), 1)
+                            self.assertGreater(service.busy_counts()["finalizations"], 0)
+                        finally:
+                            release_cache.set()
+                        coordinator_thread.join(timeout=3.0)
+                        self.assertFalse(coordinator_thread.is_alive())
+                    self.assertEqual(service.busy_counts()["finalizations"], 0)
+                else:
+                    ack = report()
             self.assertEqual(ack, 1)
 
             deadline = time.monotonic() + 2.0

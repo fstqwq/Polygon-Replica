@@ -58,6 +58,7 @@ class VerificationExecutionCallbacks:
     probe_task_case_cache: Callable[[list[str]], set[str]]
     close_programs: Callable[[list[str]], None]
     reconcile_expired_leases: Callable[[], list[str]] = lambda: []
+    finish_tasks: Callable[[tuple[str, ...]], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -196,6 +197,7 @@ class VerificationExecutionService:
             cancel_execution=_cancel_execution,
             close_programs=callbacks.close_programs,
             reconcile_expired_leases=callbacks.reconcile_expired_leases,
+            finish_tasks=callbacks.finish_tasks,
         )
         try:
             coordinator = VerificationRuntimeCoordinator(
@@ -215,7 +217,10 @@ class VerificationExecutionService:
                 ) from exc
             raise VerificationCoordinatorFailure(reason) from exc
         try:
-            self._registry.register(verification_id, coordinator)
+            self._registry.register(
+                verification_id, coordinator,
+                defers_finalization=callbacks.finish_tasks is not None,
+            )
         except VerificationRuntimeAlreadyRegistered as exc:
             raise VerificationCoordinatorFailure(str(exc)) from exc
         try:

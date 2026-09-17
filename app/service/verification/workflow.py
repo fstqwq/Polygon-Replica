@@ -684,6 +684,7 @@ def run_workspace_verification_dag(
         )
 
         callbacks = VerificationExecutionCallbacks(
+            finish_tasks=judgehost.finish_reported_tasks,
             publish_task=lambda row: _publish_task(row, execution=execution),
             probe_task_case_cache=judgehost.probe_task_case_cache,
             close_programs=lambda program_ids: judgehost.close_programs(

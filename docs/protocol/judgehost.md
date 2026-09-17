@@ -34,6 +34,13 @@ Registration releases leases previously owned by the hostname and returns workdi
 
 Successful and idempotent `add-judging-run` responses are the JSON integer `1`. A new result bound to a verification task receives `1` only after its canonical result and task completion are durable. Persistence failure returns non-2xx for retry. A retry for an already-terminal, cancelled, or retired case also receives `1`.
 
+The active verification coordinator performs result-cache publication and runtime
+task/batch finalization after durable publication. Runtime completion is
+acknowledged before the coordinator receives its completion event. Pending cache
+publication participates in maintenance activity counts, and cancellation
+discards unpublished cache candidates. Executions without a coordinating
+verification finish these operations in the callback.
+
 Sources, auxiliary sources, inputs, and answers are fixed in content-addressed runtime storage before a case becomes fetchable. Cases sharing one verification program and compile specification share compilation.
 
 Each lease has a monotonic deadline covering remaining compilation, configured execution and comparison limits, pass count, earlier cases returned in the same fetch, and callback grace. A successful report rebases later cases from that fetch. Heartbeats, fetches, and failed callbacks do not extend deadlines.

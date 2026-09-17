@@ -331,6 +331,8 @@ class VerificationTaskCompletionService:
     def reported_many(
         self,
         reports: tuple[CaseCompletionReport, ...],
+        *,
+        after_commit: Callable[[frozenset[str]], None] | None = None,
     ) -> bool:
         completions: list[TaskCompletion] = []
         verification_ids: set[str] = set()
@@ -361,7 +363,15 @@ class VerificationTaskCompletionService:
         if len(verification_ids) > 1:
             return False
         if completions:
-            self.commit(completions)
+            committed = self.commit(completions, notify=False)
+            if after_commit is not None:
+                after_commit(frozenset(
+                    item.task_id for item in committed.effective_completions
+                    if item.status == VerificationTaskStatus.CANCELLED
+                ))
+            self._post_commit_notifier(committed.verification_id, committed)
+        elif after_commit is not None:
+            after_commit(frozenset())
         return True
 
     def cancelled(

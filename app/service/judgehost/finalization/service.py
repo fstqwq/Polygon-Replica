@@ -339,6 +339,7 @@ class JudgehostBatchFinalizer:
         force_failed: bool,
         error_text: str,
         display_limit_bytes: int,
+        defer_task_finalization: bool = False,
     ) -> bool:
         if require_complete_batch and any(
             row["status"] not in {"reported", "cancelled"} for row in cases
@@ -378,6 +379,8 @@ class JudgehostBatchFinalizer:
                 )
                 return False
 
+        if defer_task_finalization:
+            return True
         task_ids = list(dict.fromkeys(task_id for row in cases if (task_id := row["task_id"])))
         for task_id in task_ids:
             try:
@@ -508,6 +511,7 @@ class JudgehostBatchFinalizer:
         force_failed: bool = False,
         error_text: str = "",
         require_completion_ack: bool = False,
+        defer_task_finalization: bool = False,
     ) -> None:
         display_limit = self._display_text_limit_bytes()
         current = self._batch_runtime.fetch_batch(int(batch_id))
@@ -566,6 +570,7 @@ class JudgehostBatchFinalizer:
                 force_failed=force_failed,
                 error_text=error_text,
                 display_limit_bytes=display_limit,
+                defer_task_finalization=defer_task_finalization,
             ):
                 if require_completion_ack:
                     raise RuntimeError(
@@ -573,7 +578,7 @@ class JudgehostBatchFinalizer:
                     )
                 self._schedule_retry(claim.batch_id, claim=claim)
                 return
-            if not claim.terminal_transition:
+            if defer_task_finalization or not claim.terminal_transition:
                 if not self._batch_runtime.complete_batch_finalization(claim):
                     raise RuntimeError(
                         "judgehost publication claim disappeared before commit"
