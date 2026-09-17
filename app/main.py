@@ -1,14 +1,13 @@
 """ASGI entry point for the Polygon Replica web application."""
 
 from contextlib import asynccontextmanager
-from time import monotonic
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-import app.impl.auth.middleware as auth_http
+from app.impl.auth.middleware import AuthenticationMiddleware
 from app import runtime_lifecycle
 from app.impl.auth.shared import (
     _apply_security_headers,
@@ -130,25 +129,6 @@ async def favicon(request: Request):
     )
 
 
-async def auth_middleware(request: Request, call_next):
-    """Apply authentication and common response headers to every request."""
-
-    request.state.request_started_at = monotonic()
-    try:
-        response = await auth_http.auth_middleware(request, call_next)
-    except HTTPException as exc:
-        response = PlainTextResponse(
-            str(exc.detail or "request failed"),
-            status_code=int(exc.status_code or 400),
-        )
-        _apply_security_headers(response)
-    started = getattr(request.state, "request_started_at", None)
-    if started is not None:
-        elapsed_ms = max(0, int(round((monotonic() - started) * 1000)))
-        response.headers["X-Backend-Render-Ms"] = str(elapsed_ms)
-    return response
-
-
 def create_app(application_runtime: ApplicationRuntime) -> FastAPI:
     """Create an ASGI application bound to one explicit runtime."""
 
@@ -173,7 +153,7 @@ def create_app(application_runtime: ApplicationRuntime) -> FastAPI:
         favicon,
         include_in_schema=False,
     )
-    application.middleware("http")(auth_middleware)
+    application.add_middleware(AuthenticationMiddleware)
     application.add_middleware(
         MaintenanceAdmissionMiddleware,
         application_runtime=application_runtime,

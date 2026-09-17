@@ -92,7 +92,6 @@ session_user = _api_attr("session_user")
 workspace_revision_info = _api_attr("workspace_revision_info")
 auth_password_meta = _api_attr("auth_password_meta")
 auth_password_envelope = _api_attr("auth_password_envelope")
-auth_middleware = _api_attr("auth_middleware")
 artifact_file = _api_attr("artifact_file")
 tests_page = tests_spec_module.render_tests_page
 tests_spec_add_gen = tests_spec_module.add_generator_test

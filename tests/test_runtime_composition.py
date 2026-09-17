@@ -29,3 +29,5 @@ class TestRuntimeComposition(unittest.TestCase):
             with TestClient(application) as client:
                 response = client.get("/login")
             self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
+            self.assertGreaterEqual(int(response.headers["X-Backend-Render-Ms"]), 0)
