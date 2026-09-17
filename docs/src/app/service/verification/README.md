@@ -8,6 +8,17 @@ The task graph contains input generation, main-correct execution, and checked so
 
 History and detail reads combine one consistent SQLite snapshot with a process-local runtime overlay. Workspace-owned records and published problem-level records have distinct visibility and cancellation rules. Rejudge creates a new verification in the viewer's current workspace.
 
+Activation installs a process-local admission index containing canonical task
+identities and metadata. Binding, exposure, and lease changes use a short memory
+lock. Completion transactions use a separate commit lock to order durable-result
+and input-owner cache updates; SQLite work leaves the memory lock available.
+Completed tasks leave the admission index. While cancellation commits, admission
+for that verification waits for its outcome. A committed cancellation rejects
+waiting admissions; rollback lets them continue. Fatal completions and duplicate-input
+subtree skipping also pause admission while they decide the affected tasks.
+Startup recovery
+and runtime reset discard the index with the other process-local state.
+
 The task store retains generated-input owners by content-addressed output reference
 within each active verification. Completion publishes new owners after its database
 transaction commits; missing runtime indexes rebuild from durable results. Graph

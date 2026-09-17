@@ -1,8 +1,8 @@
 import re
 import sqlite3
-from threading import Lock
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from threading import Condition, Lock, RLock
 from typing import TypeVar, TypedDict, cast
 
 from app.db import DB, now_iso
@@ -16,7 +16,6 @@ from app.service.execution.policy import (
     normalize_execution_result,
 )
 from app.service.platform.error_text import aux_display_text_limit_bytes, bounded_display_text
-from app.service.platform.rwlock import WriterPriorityRWLock
 from app.service.verification.diagnostic import (
     DiagnosticMergeOutcome,
     TaskDiagnosticSnapshot,
@@ -197,9 +196,11 @@ class VerificationTaskStore:
         # Commit order protects durable-result and input-owner caches.
         # Never hold the runtime map lock while waiting for SQLite.
         self._commit_lock = Lock()
-        self._runtime_lock = WriterPriorityRWLock()
+        self._runtime_lock = RLock()
+        self._admission_condition = Condition(self._runtime_lock)
+        self._paused_verifications: set[str] = set()
         self._runtime_by_task_id: dict[str, _RuntimeTaskState] = {}
-        self._test_name_by_task_id: dict[str, str] = {}
+        self._admissible_tasks: dict[str, VerificationTaskContext] = {}
         self._input_owners: dict[str, dict[str, tuple[str, str]]] = {}
 
     def _limit_bytes(self) -> int:
@@ -240,7 +241,7 @@ class VerificationTaskStore:
                     if str(row["id"] or "")
                 )
                 deleted_verification_ids.update(str(row["verification_id"]) for row in rows)
-                with self._runtime_lock.read_lock():
+                with self._runtime_lock:
                     has_runtime = any(
                         task_id in self._runtime_by_task_id
                         for task_id in deleted_task_ids
@@ -252,8 +253,9 @@ class VerificationTaskStore:
                 return delete_metadata(conn)
 
             result = self.db.write_transaction(_tx)
-            for task_id in deleted_task_ids:
-                self._test_name_by_task_id.pop(task_id, None)
+            with self._runtime_lock:
+                for task_id in deleted_task_ids:
+                    self._admissible_tasks.pop(task_id, None)
             for verification_id in deleted_verification_ids:
                 self._input_owners.pop(verification_id, None)
             return result
@@ -270,7 +272,6 @@ class VerificationTaskStore:
         ordered_tasks = plan.ordered_tasks()
         detail = plan.detail
         now_text = now_iso()
-        test_names = {task.task_id: task.test_name for task in ordered_tasks}
 
         with self._commit_lock:
             def _tx(conn: sqlite3.Connection) -> ActivationCommit:
@@ -338,11 +339,21 @@ class VerificationTaskStore:
             commit = self.db.write_transaction(_tx)
             if commit.outcome != "activated":
                 return commit
-            self._test_name_by_task_id.update(test_names)
+            with self._runtime_lock:
+                self._admissible_tasks.update({
+                    task.task_id: VerificationTaskContext(
+                        id=task.task_id, verification_id=plan.verification_id,
+                        program_id=task.program_id, test_name=task.test_name,
+                        task_kind=task.task_kind, source_path=task.source_path,
+                        expected_behavior=task.expected_behavior,
+                        run_id="", judgehost_task_id="",
+                    )
+                    for task in ordered_tasks
+                })
             return commit
 
     def _runtime_status(self, row: dict[str, object]) -> _RuntimeTaskState | None:
-        with self._runtime_lock.read_lock():
+        with self._runtime_lock:
             return self._runtime_by_task_id.get(str(row["id"]))
 
     def _row_order(self, row: dict[str, object]) -> tuple[object, ...]:
@@ -355,7 +366,7 @@ class VerificationTaskStore:
 
     def _decorate_row(self, index: int, row: dict[str, object]) -> VerificationTaskRow:
         task_id = str(row["id"] or "")
-        with self._runtime_lock.read_lock():
+        with self._runtime_lock:
             runtime = self._runtime_by_task_id.get(task_id)
         return self._decorate_row_with_runtime(
             index,
@@ -498,7 +509,7 @@ class VerificationTaskStore:
             """,
             [verification_id],
         ).fetchall()
-        with self._runtime_lock.read_lock():
+        with self._runtime_lock:
             runtimes = dict(self._runtime_by_task_id)
         ordered = sorted((dict(row) for row in rows), key=self._row_order)
         values: list[dict[str, object]] = []
@@ -541,7 +552,7 @@ class VerificationTaskStore:
     def runtime_row(self, task_id: str) -> VerificationTaskRow | None:
         if not task_id:
             return None
-        with self._runtime_lock.read_lock():
+        with self._runtime_lock:
             runtime = self._runtime_by_task_id.get(task_id)
             if runtime is None:
                 return None
@@ -562,9 +573,14 @@ class VerificationTaskStore:
     def bound_task_context(self, task_id: str) -> VerificationTaskContext | None:
         """Snapshot a validated binding; durable terminal state stays in SQLite."""
 
-        with self._runtime_lock.read_lock():
+        with self._runtime_lock:
             runtime = self._runtime_by_task_id.get(task_id)
         return None if runtime is None else runtime.context.copy()
+
+    def _wait_for_admission_locked(self, verification_id: str) -> None:
+        # Bulk terminal decisions pause admission until commit or rollback.
+        while verification_id in self._paused_verifications:
+            self._admission_condition.wait()
 
     def bind_and_expose_judgehost_runtime(
         self,
@@ -579,29 +595,17 @@ class VerificationTaskStore:
     ) -> bool:
         if not verification_task_id or not run_id or not judgehost_task_id:
             raise ValueError("verification Judgehost binding identities are required")
-        with self._commit_lock:
-            row = self.db.fetch_one(
-                """
-                SELECT task.final_status,task.verification_id,task.program_id,
-                       task.test_name,task.task_kind,task.source_path,task.expected_behavior,
-                       verification.status AS verification_status
-                FROM verification_tasks task
-                JOIN verifications verification ON verification.id=task.verification_id
-                WHERE task.id=?
-                """,
-                [verification_task_id],
-            )
+        with self._admission_condition:
+            self._wait_for_admission_locked(expected_verification_id)
+            context = self._admissible_tasks.get(verification_task_id)
             if (
-                row is None
-                or str(row["final_status"] or "")
-                or str(row["verification_status"] or "") != "running"
-                or str(row["verification_id"]) != expected_verification_id
-                or str(row["program_id"]) != expected_program_id
-                or str(row["test_name"]) != expected_test_name
+                context is None
+                or context["verification_id"] != expected_verification_id
+                or context["program_id"] != expected_program_id
+                or context["test_name"] != expected_test_name
             ):
                 return False
-            with self._runtime_lock.read_lock():
-                current = self._runtime_by_task_id.get(verification_task_id)
+            current = self._runtime_by_task_id.get(verification_task_id)
             if current is not None:
                 if (
                     current.run_id != run_id
@@ -610,30 +614,21 @@ class VerificationTaskStore:
                     return False
                 expose()
                 return True
+            bound_context = context.copy()
+            bound_context["run_id"] = run_id
+            bound_context["judgehost_task_id"] = judgehost_task_id
             runtime = _RuntimeTaskState(
                 status=VerificationTaskStatus.QUEUED,
                 run_id=run_id,
                 judgehost_task_id=judgehost_task_id,
                 started_at="",
-                context=VerificationTaskContext(
-                    id=verification_task_id,
-                    verification_id=expected_verification_id,
-                    program_id=expected_program_id,
-                    test_name=expected_test_name,
-                    task_kind=str(row["task_kind"]),
-                    source_path=str(row["source_path"]),
-                    expected_behavior=str(row["expected_behavior"]),
-                    run_id=run_id,
-                    judgehost_task_id=judgehost_task_id,
-                ),
+                context=bound_context,
             )
-            with self._runtime_lock.write_lock():
-                self._runtime_by_task_id[verification_task_id] = runtime
+            self._runtime_by_task_id[verification_task_id] = runtime
             try:
                 expose()
             except Exception:
-                with self._runtime_lock.write_lock():
-                    self._runtime_by_task_id.pop(verification_task_id, None)
+                self._runtime_by_task_id.pop(verification_task_id, None)
                 raise
             return True
 
@@ -643,7 +638,7 @@ class VerificationTaskStore:
         *,
         judgehost_task_id: str,
     ) -> bool:
-        with self._runtime_lock.write_lock():
+        with self._runtime_lock:
             current = self._runtime_by_task_id.get(verification_task_id)
             if current is None or current.judgehost_task_id != judgehost_task_id:
                 return False
@@ -651,40 +646,19 @@ class VerificationTaskStore:
             return True
 
     def set_task_leased(self, task_id: str) -> bool:
-        with self._commit_lock:
-            with self._runtime_lock.read_lock():
-                current = self._runtime_by_task_id.get(task_id)
+        with self._admission_condition:
+            current = self._runtime_by_task_id.get(task_id)
             if current is None:
                 return False
-            with self.db.conn() as conn:
-                conn.execute("BEGIN")
-                row = conn.execute(
-                    """
-                    SELECT task.final_status,
-                           verification.status AS verification_status
-                    FROM verification_tasks task
-                    JOIN verifications verification
-                      ON verification.id=task.verification_id
-                    WHERE task.id=?
-                    """,
-                    [task_id],
-                ).fetchone()
-            if (
-                row is None
-                or str(row["final_status"] or "")
-                or str(row["verification_status"] or "") != "running"
-            ):
+            self._wait_for_admission_locked(current.context["verification_id"])
+            current = self._runtime_by_task_id.get(task_id)
+            if current is None or task_id not in self._admissible_tasks:
                 return False
-            with self._runtime_lock.write_lock():
-                if self._runtime_by_task_id.get(task_id) is not current:
-                    return False
-                self._runtime_by_task_id[task_id] = _RuntimeTaskState(
-                    status=VerificationTaskStatus.LEASED,
-                    run_id=current.run_id,
-                    judgehost_task_id=current.judgehost_task_id,
-                    started_at=current.started_at or now_iso(),
-                    context=current.context,
-                )
+            self._runtime_by_task_id[task_id] = replace(
+                current,
+                status=VerificationTaskStatus.LEASED,
+                started_at=current.started_at or now_iso(),
+            )
             return True
 
     def requeue_leased_tasks(
@@ -692,50 +666,23 @@ class VerificationTaskStore:
         verification_id: str,
         judgehost_task_ids: list[str],
     ) -> list[str]:
-        allowed = {str(task_id) for task_id in judgehost_task_ids if str(task_id)}
+        allowed = set(judgehost_task_ids)
         if not allowed:
             return []
         changed: list[str] = []
-        with self._commit_lock:
-            with self._runtime_lock.read_lock():
-                candidates = [
-                    (task_id, runtime)
-                    for task_id, runtime in self._runtime_by_task_id.items()
-                    if runtime.status == VerificationTaskStatus.LEASED
+        with self._admission_condition:
+            self._wait_for_admission_locked(verification_id)
+            for task_id, runtime in self._runtime_by_task_id.items():
+                if (
+                    runtime.status == VerificationTaskStatus.LEASED
                     and runtime.judgehost_task_id in allowed
-                ]
-            with self.db.conn() as conn:
-                conn.execute("BEGIN")
-                for task_id, runtime in candidates:
-                    row = conn.execute(
-                        """
-                        SELECT task.verification_id,task.final_status,
-                               verification.status AS verification_status
-                        FROM verification_tasks task
-                        JOIN verifications verification
-                          ON verification.id=task.verification_id
-                        WHERE task.id=?
-                        """,
-                        [task_id],
-                    ).fetchone()
-                    if (
-                        row is None
-                        or str(row["verification_id"] or "") != verification_id
-                        or str(row["final_status"] or "")
-                        or str(row["verification_status"] or "") != "running"
-                    ):
-                        continue
-                    with self._runtime_lock.write_lock():
-                        if self._runtime_by_task_id.get(task_id) is not runtime:
-                            continue
-                        self._runtime_by_task_id[task_id] = _RuntimeTaskState(
-                            status=VerificationTaskStatus.QUEUED,
-                            run_id=runtime.run_id,
-                            judgehost_task_id=runtime.judgehost_task_id,
-                            started_at="",
-                            context=runtime.context,
-                        )
-                        changed.append(task_id)
+                    and runtime.context["verification_id"] == verification_id
+                    and task_id in self._admissible_tasks
+                ):
+                    self._runtime_by_task_id[task_id] = replace(
+                        runtime, status=VerificationTaskStatus.QUEUED, started_at="",
+                    )
+                    changed.append(task_id)
         return changed
 
     def _skip_pending_descendants(
@@ -959,9 +906,10 @@ class VerificationTaskStore:
             input_owners: dict[str, tuple[str, str]] | None = None
             new_input_owners: dict[str, tuple[str, str]] = {}
             stored_results: dict[str, tuple[str, ExecutionResult]] = {}
+            paused_verification_id = ""
 
             def _tx(conn: sqlite3.Connection) -> CompletionCommit:
-                nonlocal input_owners
+                nonlocal input_owners, paused_verification_id
                 # Each transaction retry starts with only committed state.
                 input_owners = None
                 new_input_owners.clear()
@@ -1055,7 +1003,7 @@ class VerificationTaskStore:
                     row = rows_by_id[task_id]
                     current_status = str(row["final_status"] or "")
                     if current_status:
-                        with self._runtime_lock.read_lock():
+                        with self._runtime_lock:
                             runtime = self._runtime_by_task_id.get(task_id)
                         current_result = _stored_result(
                             runtime, str(row["result_json"] or "{}")
@@ -1170,7 +1118,9 @@ class VerificationTaskStore:
                         skipped_task_ids.add(task_id)
 
                 if skipped_task_ids:
-                    with self._runtime_lock.read_lock():
+                    with self._runtime_lock:
+                        self._paused_verifications.add(verification_id)
+                        paused_verification_id = verification_id
                         active_task_ids = set(self._runtime_by_task_id)
                     skipped_task_ids.update(
                         self._skip_pending_descendants(
@@ -1249,6 +1199,9 @@ class VerificationTaskStore:
                         [new_failure_reason, verification_id],
                     )
                 if hard_failure_reason:
+                    with self._runtime_lock:
+                        self._paused_verifications.add(verification_id)
+                        paused_verification_id = verification_id
                     cursor = conn.execute(
                         """
                         UPDATE verifications
@@ -1365,22 +1318,38 @@ class VerificationTaskStore:
                     failure_reason=failure_reason,
                 )
 
-            committed = self.db.write_transaction(_tx)
-            # Publish only durable owners/results. A failed or retried transaction
-            # must never introduce a duplicate-input owner into the runtime map.
-            if input_owners is not None:
-                input_owners.update(new_input_owners)
-                self._input_owners[committed.verification_id] = input_owners
-            if committed.parent_transition:
-                self._input_owners.pop(committed.verification_id, None)
-            with self._runtime_lock.write_lock():
-                for task_id, (text, result) in stored_results.items():
-                    runtime = self._runtime_by_task_id.get(task_id)
-                    if runtime is not None:
-                        self._runtime_by_task_id[task_id] = replace(
-                            runtime, result_json=text, result=result,
-                        )
-            return committed
+            try:
+                committed = self.db.write_transaction(_tx)
+                # Publish only durable owners/results. A failed or retried transaction
+                # must never introduce a duplicate-input owner into the runtime map.
+                if input_owners is not None:
+                    input_owners.update(new_input_owners)
+                    self._input_owners[committed.verification_id] = input_owners
+                if committed.parent_transition:
+                    self._input_owners.pop(committed.verification_id, None)
+                with self._runtime_lock:
+                    for task_id in (
+                        committed.committed_task_ids | committed.already_terminal_task_ids
+                        | committed.skipped_task_ids | committed.cancelled_task_ids
+                    ):
+                        self._admissible_tasks.pop(task_id, None)
+                    for task_id, (text, result) in stored_results.items():
+                        runtime = self._runtime_by_task_id.get(task_id)
+                        incoming = normalized_by_id[task_id]
+                        if (
+                            runtime is not None
+                            and runtime.run_id == incoming.run_id
+                            and runtime.judgehost_task_id == incoming.judgehost_task_id
+                        ):
+                            self._runtime_by_task_id[task_id] = replace(
+                                runtime, result_json=text, result=result,
+                            )
+                return committed
+            finally:
+                if paused_verification_id:
+                    with self._admission_condition:
+                        self._paused_verifications.remove(paused_verification_id)
+                        self._admission_condition.notify_all()
 
     def transition_verification_terminal(
         self,
@@ -1394,6 +1363,9 @@ class VerificationTaskStore:
         )
         finished_at = now_iso()
         with self._commit_lock:
+            with self._runtime_lock:
+                self._paused_verifications.add(verification_id)
+
             def _tx(conn: sqlite3.Connection) -> VerificationTransitionCommit:
                 row = conn.execute(
                     "SELECT status FROM verifications WHERE id=?",
@@ -1454,9 +1426,17 @@ class VerificationTaskStore:
                     cancelled_task_ids=frozenset(cancelled),
                 )
 
-            committed = self.db.write_transaction(_tx)
-            self._input_owners.pop(verification_id, None)
-            return committed
+            try:
+                committed = self.db.write_transaction(_tx)
+                with self._runtime_lock:
+                    for task_id in committed.cancelled_task_ids:
+                        self._admissible_tasks.pop(task_id, None)
+                self._input_owners.pop(verification_id, None)
+                return committed
+            finally:
+                with self._admission_condition:
+                    self._paused_verifications.remove(verification_id)
+                    self._admission_condition.notify_all()
 
     def finish_sanity(
         self,
@@ -1530,7 +1510,7 @@ class VerificationTaskStore:
             limit_bytes=self._limit_bytes(),
         )
         with self._commit_lock:
-            with self._runtime_lock.read_lock():
+            with self._runtime_lock:
                 if task_id not in self._runtime_by_task_id:
                     return "not-applicable"
 
@@ -1651,9 +1631,9 @@ class VerificationTaskStore:
                 return StartupRecoverySummary(verification_ids, task_ids)
 
             summary = self.db.write_transaction(_tx)
-            with self._runtime_lock.write_lock():
+            with self._runtime_lock:
                 self._runtime_by_task_id.clear()
-            self._test_name_by_task_id.clear()
+                self._admissible_tasks.clear()
             self._input_owners.clear()
             return summary
 
@@ -1668,7 +1648,7 @@ class VerificationTaskStore:
         """Forget all process-local indexes after exclusive artifact cleanup."""
 
         with self._commit_lock:
-            with self._runtime_lock.write_lock():
+            with self._runtime_lock:
                 self._runtime_by_task_id.clear()
-            self._test_name_by_task_id.clear()
+                self._admissible_tasks.clear()
             self._input_owners.clear()
