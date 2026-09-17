@@ -26,7 +26,7 @@ from app.service.verification.diagnostic import (
     task_diagnostic_snapshot_from_json,
     task_diagnostic_snapshot_json,
 )
-from app.service.verification.artifact import index_task_artifacts
+from app.service.verification.artifact import replace_task_artifact_rows, task_artifact_rows
 from app.service.verification.lifecycle import (
     ActivationCommit,
     ActivationOutcome,
@@ -103,6 +103,13 @@ class VerificationTaskReadRow(TypedDict):
     program_id: str
     test_name: str
     status: VerificationTaskStatus
+
+
+@dataclass(frozen=True)
+class _CompletionMetadata:
+    verification_id: str
+    task_kind: str
+    test_name: str
 
 
 @dataclass
@@ -227,12 +234,12 @@ class VerificationTaskStore:
                 if not scope.users:
                     del self._coordination[verification_id]
 
-    def _completion_coordination(
+    def _completion_metadata(
         self, completions: dict[str, TaskCompletion],
-    ) -> str:
+    ) -> dict[str, _CompletionMetadata]:
         # Task metadata never changes. Prefer already admitted metadata; replay
         # and rebuilt-store callers can recover it without a write transaction.
-        metadata: dict[str, tuple[str, str]] = {}
+        metadata: dict[str, _CompletionMetadata] = {}
         with self._runtime_lock:
             for task_id in completions:
                 context = self._admissible_tasks.get(task_id)
@@ -240,30 +247,25 @@ class VerificationTaskStore:
                     runtime = self._runtime_by_task_id.get(task_id)
                     context = None if runtime is None else runtime.context
                 if context is not None:
-                    metadata[task_id] = (context["verification_id"], context["task_kind"])
+                    metadata[task_id] = _CompletionMetadata(
+                        context["verification_id"], context["task_kind"], context["test_name"],
+                    )
         missing = completions.keys() - metadata.keys()
         if missing:
             rows = self.db.fetch_all(
-                "SELECT id,verification_id,task_kind FROM verification_tasks "
+                "SELECT id,verification_id,task_kind,test_name FROM verification_tasks "
                 f"WHERE id IN ({','.join('?' for _ in missing)})", list(missing),
             )
             for row in rows:
-                metadata[str(row["id"])] = (str(row["verification_id"]), str(row["task_kind"]))
+                metadata[str(row["id"])] = _CompletionMetadata(
+                    str(row["verification_id"]), str(row["task_kind"]), str(row["test_name"]),
+                )
         if len(metadata) != len(completions):
             raise RuntimeError("unknown verification task completion")
-        verification_ids = {item[0] for item in metadata.values()}
+        verification_ids = {item.verification_id for item in metadata.values()}
         if len(verification_ids) != 1:
             raise RuntimeError("task completion batch crosses verifications")
-        for task_id, completion in completions.items():
-            task_kind = metadata[task_id][1]
-            if (
-                task_kind == "generate-input"
-                or completion.result.verdict.upper() == "SK"
-                or completion.status == VerificationTaskStatus.CANCELLED
-                or (completion.fail_reason and task_kind in _HARD_FAILURE_TASK_KINDS)
-            ):
-                return metadata[task_id][0]
-        return ""
+        return metadata
 
     def _limit_bytes(self) -> int:
         return aux_display_text_limit_bytes(self.db.config_values.snapshot())
@@ -956,14 +958,15 @@ class VerificationTaskStore:
         }
         if any(completion.status not in terminal_statuses for completion in completions):
             raise ValueError("task completion status must be terminal")
+        limit_bytes = self._limit_bytes()
         normalized_by_id = {
             completion.task_id: replace(
                 completion,
                 result=_bounded_result(
                     completion.result,
-                    limit_bytes=self._limit_bytes(),
+                    limit_bytes=limit_bytes,
                 ),
-                fail_reason=self._normalize_display_text(completion.fail_reason),
+                fail_reason=bounded_display_text(completion.fail_reason, limit_bytes=limit_bytes),
             )
             for completion in completions
         }
@@ -974,7 +977,28 @@ class VerificationTaskStore:
         ):
             raise ValueError("failed or cancelled task completion needs a reason")
 
-        coordinated_id = self._completion_coordination(normalized_by_id)
+        metadata = self._completion_metadata(normalized_by_id)
+        coordinated_id = next((
+            metadata[task_id].verification_id
+            for task_id, completion in normalized_by_id.items()
+            if metadata[task_id].task_kind == "generate-input"
+            or completion.status == VerificationTaskStatus.CANCELLED
+            or (completion.fail_reason and metadata[task_id].task_kind in _HARD_FAILURE_TASK_KINDS)
+        ), "")
+        prepared_json = {
+            task_id: execution_result_json(completion.result)
+            for task_id, completion in normalized_by_id.items()
+        }
+        prepared_artifacts = {
+            task_id: task_artifact_rows(
+                verification_id=metadata[task_id].verification_id,
+                task_id=task_id, test_name=metadata[task_id].test_name,
+                result=completion.result,
+                generated_input_ref=completion.input_ref,
+                accepted_answer_ref=completion.answer_ref,
+            )
+            for task_id, completion in normalized_by_id.items()
+        }
         scope = self._coordinate(coordinated_id) if coordinated_id else nullcontext()
         with scope:
             input_owners: dict[str, tuple[str, str]] | None = None
@@ -1137,9 +1161,10 @@ class VerificationTaskStore:
                                 ),
                             )
                     effective_completion = replace(incoming, result=result)
-                    result_json = execution_result_json(result)
+                    result_json = (prepared_json[task_id] if result is incoming.result
+                                   else execution_result_json(result))
                     stored_results[task_id] = (result_json, result)
-                    conn.execute(
+                    cursor = conn.execute(
                         """
                         UPDATE verification_tasks
                         SET final_status=?,result_json=?,finished_at=?
@@ -1152,7 +1177,7 @@ class VerificationTaskStore:
                             task_id,
                         ],
                     )
-                    if int(conn.execute("SELECT changes()").fetchone()[0]) != 1:
+                    if cursor.rowcount != 1:
                         raise RuntimeError(
                             f"verification task {task_id} completion update was lost"
                         )
@@ -1175,14 +1200,11 @@ class VerificationTaskStore:
                     ):
                         hard_failure_reason = effective_completion.fail_reason
 
-                    index_task_artifacts(
-                        conn,
-                        verification_id=verification_id,
-                        task_id=task_id,
-                        test_name=str(row["test_name"] or ""),
-                        result=effective_completion.result,
-                        generated_input_ref=effective_completion.input_ref,
-                        accepted_answer_ref=effective_completion.answer_ref,
+                    # Duplicate input changes only the verdict/feedback; its
+                    # artifact ownership remains the prepared execution evidence.
+                    replace_task_artifact_rows(
+                        conn, verification_id=verification_id, task_id=task_id,
+                        rows=prepared_artifacts[task_id],
                     )
                     if (
                         task_kind == "generate-input"
@@ -1532,6 +1554,7 @@ class VerificationTaskStore:
         ],
     ) -> VerificationTransitionCommit:
         detail = finish.detail
+
         def _tx(conn: sqlite3.Connection) -> VerificationTransitionCommit:
             cursor = conn.execute(
                 """
@@ -1648,6 +1671,7 @@ class VerificationTaskStore:
             reason or "interrupted by application restart"
         )
         finished_at = now_iso()
+
         def _tx(conn: sqlite3.Connection) -> StartupRecoverySummary:
             verification_rows = conn.execute(
                 """

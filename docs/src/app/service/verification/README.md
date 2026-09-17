@@ -12,7 +12,8 @@ Activation installs a process-local admission index containing canonical task
 identities and metadata. Binding, exposure, and lease changes use a short memory
 lock. SQLite transactions arbitrate ordinary task completions. Their post-commit
 updates remove admission entries idempotently and only cache the durable result
-in the existing matching execution binding. No database work holds the memory lock.
+in the existing matching execution binding. Result encoding and artifact row preparation happen before the write transaction,
+for the submitted completions only. No database work holds the memory lock.
 Activation, generated-input ownership, cancellation, and fatal completion coordinate
 per verification across the transaction and memory publication. Coordination is
 acquired before entering SQLite and released after publication; waiting users keep
