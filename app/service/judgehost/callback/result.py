@@ -277,6 +277,10 @@ class JudgehostCallbackIngestion:
         self, hostname: str, judgetask_id: int, payload: dict[str, object]
     ) -> CallbackOutcome[None]:
         settings = self._configuration.snapshot()
+        compile_success = (
+            parse_bool(payload["compile_success"], default=False)
+            if "compile_success" in payload else None
+        )
         receipt = self._batch_runtime.acquire_case_callback_receipt(int(judgetask_id))
         if receipt is None:
             logger.info(
@@ -288,6 +292,7 @@ class JudgehostCallbackIngestion:
                 hostname,
                 judgetask_id,
                 payload,
+                compile_success=compile_success,
                 receipt_generation=receipt.claim_generation,
                 settings=settings,
             )
@@ -295,7 +300,7 @@ class JudgehostCallbackIngestion:
             self._release_case_callback_receipt(receipt)
         return self._outcome(
             None,
-            (receipt.batch_id,),
+            (receipt.batch_id,) if compile_success is False else (),
             verification_ids=(receipt.verification_id,),
             host_contacts=() if host_contact is None else (host_contact,),
         )
@@ -306,6 +311,7 @@ class JudgehostCallbackIngestion:
         judgetask_id: int,
         payload: dict[str, object],
         *,
+        compile_success: bool | None,
         receipt_generation: int,
         settings: JudgehostSettings,
     ) -> HostContact | None:
@@ -325,16 +331,6 @@ class JudgehostCallbackIngestion:
         if not expected_hostname or expected_hostname != safe_host:
             raise RuntimeError("judgehost does not own judging run")
         batch_id = int(case_row["batch_id"])
-        compile_success = None
-        if "compile_success" in payload:
-            compile_success = (
-                1
-                if parse_bool(
-                    payload.get("compile_success"),
-                    default=False,
-                )
-                else 0
-            )
 
         def _payload_blob_as_b64(value: object) -> str:
             raw = decode_callback_blob(value)
@@ -351,7 +347,7 @@ class JudgehostCallbackIngestion:
         compile_meta = ""
         compile_updated_at = ""
         compile_success_recorded: bool | None = None
-        if compile_success == 1:
+        if compile_success is True:
             compile_output = _payload_blob_as_b64(payload.get("output_compile"))
             compile_meta = _payload_blob_as_b64(payload.get("compile_metadata"))
             compile_updated_at = now_iso()
@@ -384,7 +380,7 @@ class JudgehostCallbackIngestion:
                 "ignoring update for cancelled DOMjudge task case id: %s", case_id
             )
             return None
-        if compile_success == 0:
+        if compile_success is False:
             compile_output = _payload_blob_as_b64(payload.get("output_compile"))
             compile_meta = _payload_blob_as_b64(payload.get("compile_metadata"))
         host_contact = HostContact(
@@ -392,7 +388,7 @@ class JudgehostCallbackIngestion:
         )
         if compile_success is not None:
             updated_at = compile_updated_at or now_iso()
-            if compile_success == 0:
+            if compile_success is False:
                 compile_blob = decode_base64(compile_output)
                 compile_log = compile_blob.decode("utf-8", errors="replace").strip()
                 failure_text = (

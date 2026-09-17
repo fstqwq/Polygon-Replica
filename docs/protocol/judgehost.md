@@ -49,6 +49,10 @@ rechecks ready work, including dependencies released by those results.
 
 Successful and idempotent `add-judging-run` responses are the JSON integer `1`. A new result bound to a verification task receives `1` only after its canonical result and task completion are durable. Persistence failure returns non-2xx for retry. A retry for an already-terminal, cancelled, or retired case also receives `1`.
 
+Successful compilation and other progress updates acknowledge their own runtime
+update independently of case-result publication. Compilation failure produces
+terminal results and requires durable completion acknowledgement.
+
 The active verification coordinator performs result-cache publication and runtime
 task/batch finalization after durable publication. Runtime completion is
 acknowledged before the coordinator receives its completion event. Pending cache

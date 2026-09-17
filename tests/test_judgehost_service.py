@@ -94,6 +94,65 @@ def _pass_bundle_bytes(
 class TestJudgehostService(E2ETestBase):
     seed_default_workspace = True
 
+    def test_compile_progress_is_acknowledged_during_another_case_publication(self) -> None:
+        from app.main import app
+
+        service = runtime.judgehost_task_service
+        override_config_values(
+            self, runtime.config_values, JUDGEHOST_ENABLE=True,
+            JUDGEHOST_API_TOKEN="test-token", JUDGEHOST_API_USERNAME="judgehost",
+        )
+        verification_id = _canonical_verification_id(f"compile-progress-{uuid.uuid4().hex}")
+        headers = {"Authorization": "Bearer test-token"}
+        hostname = "compile-progress-host"
+        result = {"runresult": "correct", "runtime": "0.001",
+                  "output_run": base64.b64encode(b"ok\n").decode("ascii")}
+        with TestClient(app, raise_server_exceptions=False) as client:
+            self._seed_build_verification(
+                verification_id, [("001.in", "ok\n", "ok\n"), ("002.in", "ok\n", "ok\n")],
+            )
+            service.enqueue_task(
+                problem=self.problem, username=self.user,
+                artifact_verification_id=verification_id,
+                submission_path="solutions/ac.cpp", upload_content=None,
+                upload_filename=None, run_id=f"run-{uuid.uuid4().hex}",
+                selected_tests=["001.in", "002.in"],
+                verification_id=_canonical_verification_id("compile-progress-run"),
+                verification_program_id=_SOLUTION_PROGRAM_ID,
+                expected_behavior="accepted", verification_source="run.execute",
+            )
+            service.domjudge_register_host(hostname)
+            leased = service.domjudge_fetch_work(hostname, max_batchsize=2)
+            self.assertEqual(len(leased), 2)
+            first, second = [int(row["judgetaskid"]) for row in leased]
+            service.domjudge_update_judging(hostname, first, {"compile_success": "1"})
+            service._result.domjudge_add_judging_run(hostname, first, result)
+            case = judgehost_fetch_case(service, first)
+            self.assertIsNotNone(case)
+            batch_id = case["batch_id"]
+            publication = service._batch_runtime.claim_case_publications(batch_id)
+            self.assertEqual([row["id"] for row in publication], [first])
+            try:
+                response = client.put(
+                    f"/api/v4/judgehosts/update-judging/{hostname}/{second}",
+                    data={"compile_success": "1"}, headers=headers,
+                )
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json(), {})
+                self.assertFalse(judgehost_fetch_case(service, first)["completion_acknowledged"])
+                self.assertEqual(judgehost_fetch_batch(service, batch_id)["compile_success"], 1)
+                self.assertEqual(judgehost_fetch_case(service, second)["status"], "leased")
+            finally:
+                service._batch_runtime.complete_case_publications(batch_id, publication, retry=True)
+            for case_id in (first, second):
+                response = client.post(
+                    f"/api/v4/judgehosts/add-judging-run/{hostname}/{case_id}",
+                    data=result, headers=headers,
+                )
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json(), 1)
+                self.assertTrue(judgehost_fetch_case(service, case_id)["completion_acknowledged"])
+
     def test_unknown_judging_run_callback_is_idempotently_acknowledged(self) -> None:
         service = runtime.judgehost_task_service
         self.assertEqual(
