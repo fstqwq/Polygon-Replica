@@ -140,6 +140,7 @@ class Judgehost:
             self._batch_finalizer,
             self._terminal_cleanup,
         )
+        self._batch_runtime.set_cancellation_progress_notifier(self._cancellation_drain.wake)
         self._cancellation_drain.start()
         self._result = JudgehostCallbackIngestion(
             self._batch_runtime,

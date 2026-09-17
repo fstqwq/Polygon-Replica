@@ -1,4 +1,4 @@
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 from app.service.judgehost.batch.admission import BatchAdmission
 from app.service.judgehost.batch.completion import BatchCompletion
@@ -46,6 +46,9 @@ class JudgehostBatchRuntime:
         self._completion = BatchCompletion(self._state)
         self._finalization = BatchFinalization(self._state)
         self._maintenance = BatchMaintenance(self._state)
+
+    def set_cancellation_progress_notifier(self, notifier: Callable[[str], None]) -> None:
+        self._state.cancellation_progress_notifier = notifier
 
     def reset(self) -> None:
         self._maintenance.reset()

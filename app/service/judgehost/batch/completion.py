@@ -746,6 +746,11 @@ class BatchCompletion:
             if case is None or case.callback_receipt_count <= 0:
                 raise RuntimeError("judgehost callback receipt counter underflow")
             case.callback_receipt_count -= 1
+            verification_id = (
+                self._state._cancelled_verification_id_locked(case.batch_id)
+                if case.callback_receipt_count == 0 else ""
+            )
+        self._state.notify_cancellation_progress(verification_id)
 
     def claim_case_reporting(
         self,

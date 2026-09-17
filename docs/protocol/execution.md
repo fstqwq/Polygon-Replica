@@ -74,6 +74,8 @@ The canonical task result contains `outcome`, compile evidence, ordered passes, 
 
 Cancellation atomically marks the verification and every open task `cancelled`, closes judgehost admission for that verification, and returns before runtime cleanup finishes. A process-local drain retires its cases, batches, and registry entries without publishing per-case cancellation to SQLite.
 
+The cancellation drain processes ready verifications in bounded queue turns. Requests waiting for callback receipts or publication/finalization owners remain parked while other requests run. The last receipt release and publication/finalization release notify the drain after releasing the runtime state lock; a notification during a slice retains a later queue turn. Releases performed by the drain itself rely on that slice's progress decision. A periodic 0.5-second scan recovers missed scheduling, missed notifications, and failed slices even when the ready queue remains busy. Runtime reset discards parked requests and ignores late wake notifications until resume.
+
 A callback that loses the race to cancellation discards its result and cache candidate and receives the idempotent judgehost ACK. Leased or reporting cases may remain temporarily for callback and workdir cleanup, but they cannot change the durable decision. Repeating cancellation is safe. Startup may discard unfinished runtime drain state because SQLite already contains the authoritative cancellation.
 
 ## Identity and cache

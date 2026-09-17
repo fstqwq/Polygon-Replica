@@ -12,7 +12,7 @@ import statistics
 import threading
 import time
 from collections import defaultdict, deque
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 from app.service.judgehost.domjudge.identity import script_id
 from app.service.judgehost.batch.model import (
@@ -102,6 +102,7 @@ class BatchState:
         self._closed_program_keys: set[tuple[str, str]] = set()
         self._closed_verification_ids: set[str] = set()
         self._cancelled_verification_ids: set[str] = set()
+        self.cancellation_progress_notifier: Callable[[str], None] | None = None
         self._script_hash_refcounts: dict[tuple[str, int, str], int] = defaultdict(int)
         self._script_hashes_by_id: dict[tuple[str, int], set[str]] = defaultdict(set)
         self._leased_case_ids_by_host: dict[str, set[int]] = defaultdict(set)
@@ -147,6 +148,17 @@ class BatchState:
         )
         self._stolen_batch_by_host: dict[str, int] = {}
         self._compile_owner_by_batch: dict[int, str] = {}
+
+    def _cancelled_verification_id_locked(self, batch_id: int) -> str:
+        batch = self._batches.get(batch_id)
+        if batch is not None and batch.verification_id in self._cancelled_verification_ids:
+            return batch.verification_id
+        return ""
+
+    def notify_cancellation_progress(self, verification_id: str) -> None:
+        """Invoke the drain only after releasing the state lock."""
+        if verification_id and self.cancellation_progress_notifier is not None:
+            self.cancellation_progress_notifier(verification_id)
 
     def _next_entity_ids_locked(self, count: int) -> tuple[int, ...]:
         if count < 0:

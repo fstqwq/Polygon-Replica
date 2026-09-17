@@ -73,7 +73,10 @@ class BatchFinalization:
                 self._schedule_retry_locked(batch_id, delay_sec=0.25 if retry else 0.0)
             elif not active and batch.status != "finalize-pending":
                 self._state._finalization_retry_deadlines.pop(batch_id, None)
-            return batch.status == "finalize-pending" and not active and not pending
+            ready = batch.status == "finalize-pending" and not active and not pending
+            verification_id = self._state._cancelled_verification_id_locked(batch_id)
+        self._state.notify_cancellation_progress(verification_id)
+        return ready
 
     def retry_task_publication(self, task_id: str) -> None:
         with self._state._lock:
@@ -165,7 +168,9 @@ class BatchFinalization:
                 batch.updated_at = now_text
                 self._state._touch_batch_locked(batch)
             self._schedule_retry_locked(batch.batch_id, delay_sec=delay_sec)
-            return True
+            verification_id = self._state._cancelled_verification_id_locked(claim.batch_id)
+        self._state.notify_cancellation_progress(verification_id)
+        return True
 
     def publications_acknowledged(
         self, batch_id: int, *, case_ids: tuple[int, ...] | None = None
@@ -265,4 +270,6 @@ class BatchFinalization:
             if self._has_terminal_work_locked(batch.batch_id):
                 self._schedule_retry_locked(batch.batch_id, delay_sec=0.0)
             self._state._discard_batch_telemetry_locked(batch.batch_id)
-            return True
+            verification_id = self._state._cancelled_verification_id_locked(claim.batch_id)
+        self._state.notify_cancellation_progress(verification_id)
+        return True
