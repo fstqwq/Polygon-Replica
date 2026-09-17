@@ -1,5 +1,4 @@
 import shutil
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
@@ -61,9 +60,6 @@ from app.service.verification.workflow_policy import (
     visible_programs,
 )
 
-_ARTIFACT_READY_TIMEOUT_SEC = 2.0
-_ARTIFACT_READY_INTERVAL_SEC = 0.05
-
 
 @dataclass(frozen=True)
 class TaskExecutionContext:
@@ -109,31 +105,23 @@ def _verification_required_file(
     *,
     label: str,
     cache: dict[tuple[str, str], PayloadFile] | None = None,
-    timeout_sec: float = _ARTIFACT_READY_TIMEOUT_SEC,
-    interval_sec: float = _ARTIFACT_READY_INTERVAL_SEC,
     verification_service: VerificationService,
     runtime_blob_store: RuntimeBlobStore,
 ) -> PayloadFile:
     cache_key = (test_name, ref_key)
     if cache is not None and cache_key in cache:
         return cache[cache_key]
-    deadline = time.monotonic() + max(0.0, float(timeout_sec))
-    while True:
-        ref = verification_service.verification_artifact_ref(
-            verification_id,
-            test_name,
-            ref_key,
-        )
-        if ref:
-            payload = runtime_blob_store.descriptor(ref)
-            if payload is not None:
-                if cache is not None:
-                    cache[cache_key] = payload
-                return payload
-        if time.monotonic() >= deadline:
-            break
-        time.sleep(max(0.001, min(float(interval_sec), deadline - time.monotonic())))
-    raise RuntimeError(f"{label} is missing")
+    ref = verification_service.verification_artifact_ref(
+        verification_id, test_name, ref_key,
+    )
+    if not ref:
+        raise RuntimeError(f"{label} is missing: artifact reference not published")
+    payload = runtime_blob_store.descriptor(ref)
+    if payload is None:
+        raise RuntimeError(f"{label} is missing: published artifact blob unavailable")
+    if cache is not None:
+        cache[cache_key] = payload
+    return payload
 
 
 def _generate_feedback_by_test(

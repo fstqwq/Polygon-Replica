@@ -88,6 +88,8 @@ Case-result cache publication is first-writer-wins because equivalent executions
 
 Generator success requires an available untruncated output payload and records it as input evidence. Main-correct success requires an available output payload and records it as answer evidence. Verification task results and their input, output, answer, feedback, transcript, and log locators are committed through the [SQLite persistence contract](persistence.md#execution-rows).
 
+Artifact publication is synchronous: install the immutable blob, commit its task artifact reference, then notify the coordinator. Downstream preparation reads the published reference once (or reuses its preparation cache). A missing reference or blob is an immediate execution error; this also applies to cached results and duplicate-input references.
+
 These payloads are cache. Durable summaries may outlive them; downloads resolve locators through the owning store and report unavailable payloads. Artifact ownership is indexed by verification, task, test, pass, and role for authorization.
 
 Debug and internal-error reports received after a task decision become bounded, retry-deduplicated late diagnostics. They do not change task status, verdict, canonical result, locators, parent status, or dependency readiness.

@@ -6,6 +6,8 @@ from unittest.mock import patch
 
 from app.service.execution.policy import normalize_execution_result
 from app.service.judgehost.ports.case_binding import CaseBinding
+from app.service.verification.completion import VerificationTaskCompletionService
+from app.service.verification.workflow import _verification_required_file
 from app.service.verification.judgehost_adapter import VerificationJudgehostAdapter
 from app.service.verification.runtime_registry import VerificationRuntimeRegistry
 from app.service.verification.lifecycle import verification_task_id
@@ -876,7 +878,37 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
             )
             for task_id in (owner_id, main_id, duplicate_id)
         )
-        self.verification_task_store.commit_task_completions(completions)
+        published = []
+
+        def read_published_artifacts(notified_id, _commit):
+            for test_name, ref_key in (
+                ("001.in", "input_ref"), ("002.in", "input_ref"), ("001.in", "answer_ref"),
+            ):
+                payload = _verification_required_file(
+                    notified_id, test_name, ref_key, label=test_name,
+                    verification_service=self.verification_service,
+                    runtime_blob_store=self.runtime_blob_store,
+                )
+                self.assertEqual(payload.path.read_bytes(), b"1\n")
+                published.append(payload)
+            return True
+
+        completion_service = VerificationTaskCompletionService(
+            self.verification_task_store, self.runtime_blob_store, read_published_artifacts,
+        )
+        completion_service.commit(completions)
+        self.assertEqual(len(published), 3)
+        published[0].path.unlink()
+        for test_name, expected in (
+            ("missing.in", "artifact reference not published"),
+            ("001.in", "published artifact blob unavailable"),
+        ):
+            with self.subTest(test_name=test_name), self.assertRaisesRegex(RuntimeError, expected):
+                _verification_required_file(
+                    verification_id, test_name, "input_ref", label=test_name,
+                    verification_service=self.verification_service,
+                    runtime_blob_store=self.runtime_blob_store,
+                )
         retry = self.verification_task_store.commit_task_completions(completions)
 
         self.assertEqual(
