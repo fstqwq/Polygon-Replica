@@ -178,13 +178,22 @@ class JudgehostDispatch:
             )
         except Exception as exc:
             error_text = f"judgehost materialization failed: {exc}"
-            self._batch_runtime.finish_materialization(
+            accepted = self._batch_runtime.finish_materialization(
                 claim,
                 success=False,
                 materialized_submission=None,
                 error_text=error_text,
                 now_text=now_iso(),
             )
+            if accepted:
+                # Failed preparation cannot acquire a lease. Publish terminal
+                # case results so completion and its retries can finish the work.
+                self._batch_runtime.record_batch_failure(
+                    batch_id,
+                    runresult="internal-error",
+                    error_text=error_text,
+                    updated_at=now_iso(),
+                )
             return False
         return self._batch_runtime.finish_materialization(
             claim,

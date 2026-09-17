@@ -31,6 +31,7 @@ from app.service.judgehost.cache.executable import ExecutableCache
 from app.service.judgehost.cache.case_result import CaseResultCache
 from app.service.judgehost.domjudge.identity import job_id, submit_id
 from app.service.judgehost.api import Judgehost
+from app.service.judgehost.dispatch.materializer import BatchPayloadMaterializer
 from app.service.platform.maintenance.admission import MaintenanceAdmissionGate
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
 from app.service.verification.diagnostic import compose_task_diagnostic_display
@@ -93,6 +94,97 @@ def _pass_bundle_bytes(
 
 class TestJudgehostService(E2ETestBase):
     seed_default_workspace = True
+
+    def test_materialization_failure_finishes_compile_task_and_preserves_other_work(self) -> None:
+        service = self._fresh_judgehost_service()
+        host = "materialization-failure-host"
+        service.domjudge_register_host(host)
+        failed_run = f"materialization-failed-{uuid.uuid4().hex}"
+        service.enqueue_compile_only_task(
+            problem=self.problem, username=self.user, artifact_verification_id="pending",
+            upload_content=b"int main(){return 0;}\n", upload_filename="submission.cpp",
+            run_id=failed_run,
+            verification_id=_canonical_verification_id(failed_run),
+            verification_program_id=_SOLUTION_PROGRAM_ID,
+        )
+        with patch.object(
+            BatchPayloadMaterializer, "materialize", side_effect=OSError("disk write failed"),
+        ):
+            self.assertEqual(service.domjudge_fetch_work(host), [])
+        failed = service.task_snapshot_for_run(failed_run)
+        self.assertIsNotNone(failed)
+        self.assertEqual(failed["status"], "failed")
+        self.assertIn("disk write failed", failed["error_text"])
+
+        healthy_run = f"materialization-healthy-{uuid.uuid4().hex}"
+        healthy_task = service.enqueue_compile_only_task(
+            problem=self.problem, username=self.user, artifact_verification_id="pending",
+            upload_content=b"int main(){return 0;}\n", upload_filename="submission.cpp",
+            run_id=healthy_run,
+            verification_id=_canonical_verification_id(healthy_run),
+            verification_program_id=_SOLUTION_PROGRAM_ID,
+        )
+        work = service.domjudge_fetch_work(host)
+        self.assertEqual(len(self._work_rows_for_task(service, work, healthy_task)), 1)
+
+    def test_materialization_failure_is_durable_after_publication_retry(self) -> None:
+        service = self._fresh_judgehost_service()
+        build_id = _canonical_verification_id(f"materialization-build-{uuid.uuid4().hex}")
+        self._seed_build_verification(build_id)
+        ctx = runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        verification_id = _canonical_verification_id(f"materialization-{uuid.uuid4().hex}")
+        admit_test_verification(
+            verification_id=verification_id,
+            problem_id=int(ctx["problem"]["id"]), workspace_id=int(ctx["workspace"]["id"]),
+        )
+        main_id = verification_task_id(verification_id, _ACCEPTED_PROGRAM_ID, "001.in")
+        dependent_id = verification_task_id(verification_id, _SOLUTION_PROGRAM_ID, "001.in")
+        tasks = [
+            PlannedTask(
+                task_id=main_id, predecessor_task_id=None, task_kind="main-correct",
+                source_path="solutions/ac.cpp", program_id=_ACCEPTED_PROGRAM_ID,
+                test_name="001.in", expected_behavior="accepted",
+            ),
+            PlannedTask(
+                task_id=dependent_id, predecessor_task_id=main_id, task_kind="solution-run",
+                source_path="solutions/ac.cpp", program_id=_SOLUTION_PROGRAM_ID,
+                test_name="001.in", expected_behavior="accepted",
+            ),
+        ]
+        activate_test_verification(
+            verification_id, programs=verification_programs_for_tasks(tasks), tasks=tasks,
+        )
+        run_id = f"materialization-run-{uuid.uuid4().hex}"
+        service.enqueue_task(
+            problem=self.problem, username=self.user, artifact_verification_id=build_id,
+            submission_path="solutions/ac.cpp", upload_content=None, upload_filename=None,
+            run_id=run_id, selected_tests=["001.in"], verification_id=verification_id,
+            verification_task_id=main_id, verification_program_id=_ACCEPTED_PROGRAM_ID,
+            expected_behavior="accepted", verification_source="run.execute", task_kind="main-correct",
+        )
+        host = "materialization-retry-host"
+        service.domjudge_register_host(host)
+        with (
+            patch.object(BatchPayloadMaterializer, "materialize", side_effect=OSError("disk write failed")),
+            patch.object(runtime.db, "write_transaction", side_effect=OSError("database unavailable")),
+        ):
+            self.assertEqual(service.domjudge_fetch_work(host), [])
+        pending = db_fetch_one("SELECT final_status FROM verification_tasks WHERE id=?", [main_id])
+        self.assertEqual(pending["final_status"], "")
+
+        # Let the bounded publication retry become due; fetch-work drives recovery.
+        time.sleep(0.3)
+        self.assertEqual(service.domjudge_fetch_work(host), [])
+        main = db_fetch_one("SELECT final_status,result_json FROM verification_tasks WHERE id=?", [main_id])
+        dependent = db_fetch_one("SELECT final_status FROM verification_tasks WHERE id=?", [dependent_id])
+        parent = db_fetch_one("SELECT status,fail_reason FROM verifications WHERE id=?", [verification_id])
+        self.assertEqual(main["final_status"], "failed")
+        self.assertEqual(json.loads(main["result_json"])["outcome"]["verdict"], "FL")
+        self.assertIn("disk write failed", main["result_json"])
+        self.assertEqual(dependent["final_status"], "cancelled")
+        self.assertEqual(parent["status"], "failed")
+        self.assertIn("disk write failed", parent["fail_reason"])
+        self.assertEqual(service.task_snapshot_for_run(run_id)["status"], "failed")
 
     def test_compile_progress_is_acknowledged_during_another_case_publication(self) -> None:
         from app.main import app
