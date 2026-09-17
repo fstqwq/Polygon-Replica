@@ -1,6 +1,5 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
-from types import MappingProxyType
 
 from app.config import ConfigValues
 from app.service.problem.runtime_config import ProblemConfigLimits
@@ -23,10 +22,11 @@ class JudgehostSettings:
 
 
 class JudgehostConfiguration:
-    """Decode one canonical Judgehost settings snapshot per operation."""
+    """Reuse decoded settings until the immutable configuration is replaced."""
 
     def __init__(self, values: ConfigValues) -> None:
         self._values = values
+        self._settings: JudgehostSettings | None = None
 
     @staticmethod
     def _bool(values: Mapping[str, object], key: str) -> bool:
@@ -57,8 +57,11 @@ class JudgehostConfiguration:
         return value
 
     def snapshot(self) -> JudgehostSettings:
-        values = MappingProxyType(dict(self._values.snapshot()))
-        return JudgehostSettings(
+        values = self._values.snapshot()
+        cached = self._settings
+        if cached is not None and cached.values is values:
+            return cached
+        settings = JudgehostSettings(
             values=values,
             enabled=self._bool(values, "JUDGEHOST_ENABLE"),
             api_token=self._text(values, "JUDGEHOST_API_TOKEN"),
@@ -83,3 +86,5 @@ class JudgehostConfiguration:
                 max_pass_limit=self._int(values, "GENERAL_PASS_LIMIT_MAX"),
             ),
         )
+        self._settings = settings
+        return settings
