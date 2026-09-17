@@ -31,7 +31,7 @@ class VerificationJudgehostAdapter:
         self._runtime_registry = runtime_registry
 
     def _binding_matches(self, binding: CaseBinding) -> bool:
-        row = self._task_store.runtime_row(binding.task_id)
+        row = self._task_store.bound_task_context(binding.task_id)
         return bool(
             row is not None
             and row["verification_id"] == binding.execution_scope_id

@@ -19,7 +19,7 @@ from app.service.verification.task_completion import (
     CompletionCommit,
     TaskCompletion,
 )
-from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
+from app.service.verification.task_store import VerificationTaskContext, VerificationTaskStore
 from app.service.verification.types import VerificationStatus, VerificationTaskStatus
 
 
@@ -36,7 +36,7 @@ PostCommitNotifier = Callable[[str, CompletionCommit], bool]
 
 
 def verification_task_fail_reason(
-    task_row: VerificationTaskRow,
+    task_row: VerificationTaskContext,
     *,
     error_text: str,
     fallback: str = "",
@@ -74,7 +74,7 @@ class VerificationTaskCompletionService:
 
     @staticmethod
     def _report_matches_task(
-        task_row: VerificationTaskRow,
+        task_row: VerificationTaskContext,
         report: CaseTerminalReport,
         *,
         judgehost_task_id: str,
@@ -91,7 +91,7 @@ class VerificationTaskCompletionService:
 
     @staticmethod
     def _failed_completion(
-        task_row: VerificationTaskRow,
+        task_row: VerificationTaskContext,
         *,
         run_id: str,
         result: ExecutionResult,
@@ -135,7 +135,7 @@ class VerificationTaskCompletionService:
 
     def _prepare_generated_input(
         self,
-        task_row: VerificationTaskRow,
+        task_row: VerificationTaskContext,
         *,
         run_id: str,
         result: ExecutionResult,
@@ -202,7 +202,7 @@ class VerificationTaskCompletionService:
 
     def _prepare_main_correct(
         self,
-        task_row: VerificationTaskRow,
+        task_row: VerificationTaskContext,
         *,
         run_id: str,
         result: ExecutionResult,
@@ -246,7 +246,7 @@ class VerificationTaskCompletionService:
 
     def prepare(
         self,
-        task_row: VerificationTaskRow,
+        task_row: VerificationTaskContext,
         report: CaseTerminalReport,
     ) -> TaskCompletion:
         task_kind = task_row["task_kind"]
@@ -340,7 +340,7 @@ class VerificationTaskCompletionService:
             verification_task_id = binding.task_id
             if not verification_task_id:
                 continue
-            task_row = self._task_store.runtime_row(verification_task_id)
+            task_row = self._task_store.bound_task_context(verification_task_id)
             if task_row is None:
                 return False
             if (
@@ -370,7 +370,7 @@ class VerificationTaskCompletionService:
         judgehost_task_id: str,
         reason: str,
     ) -> bool:
-        task_row = self._task_store.runtime_row(binding.task_id)
+        task_row = self._task_store.bound_task_context(binding.task_id)
         if task_row is None:
             return True
         if (

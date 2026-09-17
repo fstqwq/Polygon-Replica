@@ -47,22 +47,27 @@ from app.service.verification.task_metadata import canonical_diagnostics
 from app.service.verification.types import VerificationStatus, VerificationTaskStatus
 
 
-class VerificationTaskRow(TypedDict):
+class VerificationTaskContext(TypedDict):
+    """Immutable task metadata and the identities of its current execution."""
+
     id: str
     verification_id: str
-    predecessor_task_id: str
     task_kind: str
     source_path: str
     program_id: str
     test_name: str
     expected_behavior: str
+    run_id: str
+    judgehost_task_id: str
+
+
+class VerificationTaskRow(VerificationTaskContext):
+    predecessor_task_id: str
     queue_index: int
     status: VerificationTaskStatus
     result: ExecutionResult
     result_json: str
     verdict: str
-    run_id: str
-    judgehost_task_id: str
     runtime_sec: float | None
     cpu_sec: float | None
     wall_sec: float | None
@@ -99,12 +104,13 @@ class VerificationTaskReadRow(TypedDict):
     status: VerificationTaskStatus
 
 
-@dataclass
+@dataclass(frozen=True)
 class _RuntimeTaskState:
     status: VerificationTaskStatus
     run_id: str
     judgehost_task_id: str
     started_at: str
+    context: VerificationTaskContext
 
 
 _SnapshotValue = TypeVar("_SnapshotValue")
@@ -462,6 +468,8 @@ class VerificationTaskStore:
             """,
             [verification_id],
         ).fetchall()
+        with self._runtime_lock.read_lock():
+            runtimes = dict(self._runtime_by_task_id)
         ordered = sorted((dict(row) for row in rows), key=self._row_order)
         values: list[dict[str, object]] = []
         limit_bytes = self._limit_bytes()
@@ -471,7 +479,7 @@ class VerificationTaskStore:
                 self._decorate_row_with_runtime(
                     index,
                     row,
-                    runtime=self._runtime_by_task_id.get(task_id),
+                    runtime=runtimes.get(task_id),
                 )
             )
             snapshot = task_diagnostic_snapshot_from_json(
@@ -494,12 +502,11 @@ class VerificationTaskStore:
         self,
         reader: Callable[[sqlite3.Connection], _SnapshotValue],
     ) -> _SnapshotValue:
-        """Read SQLite and runtime overlays under the lifecycle lock order."""
+        """Read one SQLite snapshot; runtime overlays use short memory locks."""
 
-        with self._runtime_lock.read_lock():
-            with self.db.conn() as conn:
-                conn.execute("BEGIN")
-                return reader(conn)
+        with self.db.conn() as conn:
+            conn.execute("BEGIN")
+            return reader(conn)
 
     def runtime_row(self, task_id: str) -> VerificationTaskRow | None:
         if not task_id:
@@ -522,6 +529,13 @@ class VerificationTaskStore:
                 runtime=runtime,
             )
 
+    def bound_task_context(self, task_id: str) -> VerificationTaskContext | None:
+        """Snapshot a validated binding; durable terminal state stays in SQLite."""
+
+        with self._runtime_lock.read_lock():
+            runtime = self._runtime_by_task_id.get(task_id)
+        return None if runtime is None else runtime.context.copy()
+
     def bind_and_expose_judgehost_runtime(
         self,
         verification_task_id: str,
@@ -539,7 +553,8 @@ class VerificationTaskStore:
             row = self.db.fetch_one(
                 """
                 SELECT task.final_status,task.verification_id,task.program_id,
-                       task.test_name,verification.status AS verification_status
+                       task.test_name,task.task_kind,task.source_path,task.expected_behavior,
+                       verification.status AS verification_status
                 FROM verification_tasks task
                 JOIN verifications verification ON verification.id=task.verification_id
                 WHERE task.id=?
@@ -569,6 +584,17 @@ class VerificationTaskStore:
                 run_id=run_id,
                 judgehost_task_id=judgehost_task_id,
                 started_at="",
+                context=VerificationTaskContext(
+                    id=verification_task_id,
+                    verification_id=expected_verification_id,
+                    program_id=expected_program_id,
+                    test_name=expected_test_name,
+                    task_kind=str(row["task_kind"]),
+                    source_path=str(row["source_path"]),
+                    expected_behavior=str(row["expected_behavior"]),
+                    run_id=run_id,
+                    judgehost_task_id=judgehost_task_id,
+                ),
             )
             self._runtime_by_task_id[verification_task_id] = runtime
             try:
@@ -620,6 +646,7 @@ class VerificationTaskStore:
                 run_id=current.run_id,
                 judgehost_task_id=current.judgehost_task_id,
                 started_at=current.started_at or now_iso(),
+                context=current.context,
             )
             return True
 
@@ -665,6 +692,7 @@ class VerificationTaskStore:
                         run_id=runtime.run_id,
                         judgehost_task_id=runtime.judgehost_task_id,
                         started_at="",
+                        context=runtime.context,
                     )
                     changed.append(task_id)
         return changed
@@ -887,8 +915,6 @@ class VerificationTaskStore:
             raise ValueError("failed or cancelled task completion needs a reason")
 
         with self._runtime_lock.write_lock():
-            active_task_ids = set(self._runtime_by_task_id)
-
             def _tx(conn: sqlite3.Connection) -> CompletionCommit:
                 # Only a replay needs the previously committed artifact refs.
                 rows = conn.execute(
@@ -1094,7 +1120,7 @@ class VerificationTaskStore:
                             conn,
                             verification_id=verification_id,
                             root_task_ids=set(skipped_task_ids),
-                            active_task_ids=active_task_ids,
+                            active_task_ids=set(self._runtime_by_task_id),
                             feedback_text="skipped because generate-input was skipped",
                         )
                     )

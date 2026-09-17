@@ -1,6 +1,7 @@
 import sqlite3
 import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 
 from app.service.verification.execution import (
     VerificationCoordinatorFailure,
@@ -65,6 +66,41 @@ class _CancellationHandle(VerificationRuntimeHandle):
 
 
 class TestVerificationLifecycleService(VerificationServiceTestBase):
+    def test_cancel_commits_while_page_keeps_a_consistent_read_snapshot(self) -> None:
+        verification_id = canonical_test_verification_id(f"read-cancel:{self.test_id}")
+        self._activate_verification(
+            verification_id=verification_id,
+            problem_id=self.problem_id,
+            workspace_id=self.workspace_id,
+        )
+        reading = threading.Event()
+        release = threading.Event()
+
+        def read_page(conn: sqlite3.Connection) -> tuple[str, str]:
+            first = conn.execute("SELECT status FROM verifications WHERE id=?", [verification_id]).fetchone()[0]
+            self.verification_task_store.snapshot_rows(conn, verification_id)
+            reading.set()
+            if not release.wait(timeout=5.0):
+                raise TimeoutError("page read was not released")
+            second = conn.execute("SELECT status FROM verifications WHERE id=?", [verification_id]).fetchone()[0]
+            return first, second
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            page = pool.submit(self.verification_task_store.read_lifecycle_snapshot, read_page)
+            try:
+                self.assertTrue(reading.wait(timeout=2.0))
+                cancel = pool.submit(
+                    self.verification_service.cancel_verification,
+                    verification_id,
+                    reason="cancel during page read",
+                )
+                self.assertEqual(cancel.result(timeout=1.0).outcome, "transitioned")
+            finally:
+                release.set()
+            self.assertEqual(page.result(timeout=2.0), ("running", "running"))
+        with self.db.conn() as conn:
+            self.assertEqual(conn.execute("SELECT status FROM verifications WHERE id=?", [verification_id]).fetchone()[0], "cancelled")
+
     def test_activation_installs_one_immutable_graph(self) -> None:
         verification_id = canonical_test_verification_id(
             f"activation-once:{self.test_id}"

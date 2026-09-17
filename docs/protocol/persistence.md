@@ -25,6 +25,12 @@ Late diagnostics are merged and deduplicated independently of task completion. T
 
 Activation, completion, cancellation, and sanity finalization serialize their compare-and-set transitions. Readers therefore observe either a complete running graph or the preceding taskless queued state, and one terminal decision for each task and parent. Process-local overlays are applied after one consistent SQLite read and never compete with persisted authority.
 
+Page reads keep a SQLite read transaction and copy runtime overlays under a
+short memory lock. Result decoding and page projection proceed after releasing
+that lock. Task bindings retain immutable execution metadata for lease and
+completion callbacks; completion transactions still arbitrate durable terminal
+decisions.
+
 ## Packages and previews
 
 | Table | Authority |
