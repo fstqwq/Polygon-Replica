@@ -11,7 +11,7 @@ from app.service.verification.runtime_registry import VerificationRuntimeRegistr
 from app.service.verification.lifecycle import verification_task_id
 from app.service.verification.task_completion import TaskCompletion
 from app.service.verification.task_store import VerificationTaskStore
-from app.service.verification.types import VerificationTaskStatus
+from app.service.verification.types import VerificationStatus, VerificationTaskStatus
 
 from tests.identity_helpers import canonical_test_verification_id
 from tests.isolated_db_helpers import isolated_db_fetch_all
@@ -24,6 +24,194 @@ from tests.verification_service_fixture import (
 
 
 class TestVerificationCompletionService(VerificationServiceTestBase):
+    def test_solution_completions_progress_across_storage_and_publication_delays(self) -> None:
+        for after_commit in (False, True):
+            for replay in (False, True):
+                with self.subTest(after_commit=after_commit, replay=replay):
+                    verification_id = canonical_test_verification_id(
+                        f"concurrent-solutions:{self.test_id}:{after_commit}:{replay}"
+                    )
+                    self._insert_verification_row(verification_id)
+                    task_ids = [verification_task_id(verification_id, "solution-0", f"{i:03}.in")
+                                for i in (1, 2)]
+                    self._activate_graph(verification_id, tasks=[
+                        {"id": task_id, "task_kind": "solution-run", "program_id": "solution-0",
+                         "source_path": "solutions/accepted.cpp", "test_name": f"{i:03}.in",
+                         "expected_behavior": "accepted"}
+                        for i, task_id in enumerate(task_ids, 1)
+                    ], edges=[])
+                    store = self.verification_task_store
+                    first = TaskCompletion(
+                        task_id=task_ids[0], status=VerificationTaskStatus.DONE,
+                        run_id="run-first", judgehost_task_id="jt-first",
+                        result=normalize_execution_result(verdict="AC"),
+                    )
+                    self.assertTrue(store.bind_and_expose_judgehost_runtime(
+                        first.task_id, expected_verification_id=verification_id,
+                        expected_program_id="solution-0", expected_test_name="001.in",
+                        run_id=first.run_id, judgehost_task_id=first.judgehost_task_id,
+                        expose=lambda: None,
+                    ))
+                    second = TaskCompletion(
+                        task_id=task_ids[0 if replay else 1], status=VerificationTaskStatus.DONE,
+                        run_id="run-second", judgehost_task_id="jt-second",
+                        result=normalize_execution_result(verdict="WA" if replay else "AC"),
+                    )
+                    entered, release = threading.Event(), threading.Event()
+                    write_transaction = self.db.write_transaction
+                    delayed_thread = None
+
+                    def delayed_transaction(transaction):
+                        if threading.current_thread() is not delayed_thread:
+                            return write_transaction(transaction)
+                        result = write_transaction(transaction) if after_commit else None
+                        entered.set()
+                        if not release.wait(timeout=5):
+                            raise TimeoutError("completion was not released")
+                        return result if after_commit else write_transaction(transaction)
+
+                    def submit_first():
+                        nonlocal delayed_thread
+                        delayed_thread = threading.current_thread()
+                        return store.commit_task_completions((first,))
+
+                    with patch.object(self.db, "write_transaction", side_effect=delayed_transaction):
+                        with ThreadPoolExecutor(max_workers=2) as pool:
+                            pending = pool.submit(submit_first)
+                            try:
+                                self.assertTrue(entered.wait(timeout=2))
+                                other = pool.submit(store.commit_task_completions, (second,)).result(timeout=2)
+                            finally:
+                                release.set()
+                            original = pending.result(timeout=2)
+                    expected = "WA" if replay and not after_commit else "AC"
+                    self.assertEqual(original.effective_completions[0].result.verdict, expected)
+                    self.assertEqual(other.effective_completions[0].result.verdict,
+                                     expected if replay else "AC")
+                    self.assertEqual(store.runtime_row(first.task_id)["result"].verdict, expected)
+
+    def test_cancel_during_solution_storage_or_publication_cannot_restore_binding(self) -> None:
+        for after_commit in (False, True):
+            with self.subTest(after_commit=after_commit):
+                verification_id = canonical_test_verification_id(f"solution-cancel:{self.test_id}:{after_commit}")
+                self._insert_verification_row(verification_id)
+                task_ids = [verification_task_id(verification_id, "solution-0", f"{i:03}.in") for i in (1, 2)]
+                self._activate_graph(verification_id, tasks=[
+                    {"id": task_id, "task_kind": "solution-run", "program_id": "solution-0",
+                     "source_path": "solutions/accepted.cpp", "test_name": f"{i:03}.in",
+                     "expected_behavior": "accepted"}
+                    for i, task_id in enumerate(task_ids, 1)
+                ], edges=[])
+                store = self.verification_task_store
+                self.assertTrue(store.bind_and_expose_judgehost_runtime(
+                    task_ids[0], expected_verification_id=verification_id,
+                    expected_program_id="solution-0", expected_test_name="001.in",
+                    run_id="run", judgehost_task_id="jt", expose=lambda: None,
+                ))
+                completion = TaskCompletion(
+                    task_id=task_ids[0], status=VerificationTaskStatus.DONE,
+                    run_id="run", judgehost_task_id="jt", result=normalize_execution_result(verdict="AC"),
+                )
+                entered, release = threading.Event(), threading.Event()
+                write_transaction = self.db.write_transaction
+                delayed_thread = None
+
+                def delayed_transaction(transaction):
+                    if threading.current_thread() is not delayed_thread:
+                        return write_transaction(transaction)
+                    result = write_transaction(transaction) if after_commit else None
+                    entered.set()
+                    if not release.wait(timeout=5):
+                        raise TimeoutError("completion was not released")
+                    return result if after_commit else write_transaction(transaction)
+
+                def submit():
+                    nonlocal delayed_thread
+                    delayed_thread = threading.current_thread()
+                    return store.commit_task_completions((completion,))
+
+                with patch.object(self.db, "write_transaction", side_effect=delayed_transaction):
+                    with ThreadPoolExecutor(max_workers=2) as pool:
+                        pending = pool.submit(submit)
+                        try:
+                            self.assertTrue(entered.wait(timeout=2))
+                            cancelled = pool.submit(
+                                store.transition_verification_terminal, verification_id,
+                                status=VerificationStatus.CANCELLED, reason="cancel during publication",
+                            ).result(timeout=2)
+                            self.assertEqual(cancelled.outcome, "transitioned")
+                            self.assertTrue(store.unbind_judgehost_runtime(task_ids[0], judgehost_task_id="jt"))
+                        finally:
+                            release.set()
+                        committed = pending.result(timeout=2)
+                expected = VerificationTaskStatus.DONE if after_commit else VerificationTaskStatus.CANCELLED
+                self.assertEqual(committed.effective_completions[0].status, expected)
+                self.assertIsNone(store.bound_task_context(task_ids[0]))
+                self.assertFalse(store.bind_and_expose_judgehost_runtime(
+                    task_ids[0], expected_verification_id=verification_id,
+                    expected_program_id="solution-0", expected_test_name="001.in",
+                    run_id="late", judgehost_task_id="late", expose=lambda: None,
+                ))
+                rows = {row["id"]: row for row in store.list_rows(verification_id)}
+                self.assertEqual(rows[task_ids[0]]["status"], expected)
+                self.assertEqual(rows[task_ids[1]]["status"], VerificationTaskStatus.CANCELLED)
+
+    def test_input_owner_publication_coordinates_duplicates_without_blocking_other_verifications(self) -> None:
+        verification_id = canonical_test_verification_id(f"concurrent-owners:{self.test_id}")
+        self._insert_verification_row(verification_id)
+        task_ids = [verification_task_id(verification_id, "generator-0", f"{i:03}.in") for i in (1, 2)]
+        self._activate_graph(verification_id, tasks=[
+            {"id": task_id, "task_kind": "generate-input", "program_id": "generator-0",
+             "source_path": "generators/gen.cpp", "test_name": f"{i:03}.in",
+             "expected_behavior": "accepted"}
+            for i, task_id in enumerate(task_ids, 1)
+        ], edges=[])
+        other_id = canonical_test_verification_id(f"other-owner-scope:{self.test_id}")
+        other_task = self._activate_verification(
+            verification_id=other_id, problem_id=self.problem_id, workspace_id=self.workspace_id,
+        )
+        ref = str(self.runtime_blob_store.put_bytes(b"identical input\n").blob_ref)
+        completions = [TaskCompletion(
+            task_id=task_id, status=VerificationTaskStatus.DONE, run_id=task_id,
+            judgehost_task_id=task_id, result=make_execution_result(verdict="OK", output_ref=ref), input_ref=ref,
+        ) for task_id in task_ids]
+        store = self.verification_task_store
+        entered, release = threading.Event(), threading.Event()
+        write_transaction = self.db.write_transaction
+        delayed_thread = None
+
+        def delayed_transaction(transaction):
+            result = write_transaction(transaction)
+            if threading.current_thread() is delayed_thread:
+                entered.set()
+                if not release.wait(timeout=5):
+                    raise TimeoutError("owner publication was not released")
+            return result
+
+        def submit_owner():
+            nonlocal delayed_thread
+            delayed_thread = threading.current_thread()
+            return store.commit_task_completions((completions[0],))
+
+        with patch.object(self.db, "write_transaction", side_effect=delayed_transaction):
+            with ThreadPoolExecutor(max_workers=3) as pool:
+                owner = pool.submit(submit_owner)
+                try:
+                    self.assertTrue(entered.wait(timeout=2))
+                    duplicate = pool.submit(store.commit_task_completions, (completions[1],))
+                    other = pool.submit(store.commit_task_completions, (TaskCompletion(
+                        task_id=other_task, status=VerificationTaskStatus.DONE,
+                        run_id="other", judgehost_task_id="other",
+                        result=normalize_execution_result(verdict="OK"),
+                    ),)).result(timeout=2)
+                    self.assertEqual(other.committed_task_ids, {other_task})
+                finally:
+                    release.set()
+                self.assertEqual(owner.result(timeout=2).effective_completions[0].result.verdict, "OK")
+                self.assertEqual(duplicate.result(timeout=2).effective_completions[0].result.verdict, "SK")
+        rows = {row["id"]: row for row in store.list_rows(verification_id)}
+        self.assertIn("same as 001.in", rows[task_ids[1]]["feedback_text"])
+
     def test_binding_reads_and_retirement_progress_while_completion_waits_for_storage(self) -> None:
         verification_id = canonical_test_verification_id(f"binding-progress:{self.test_id}")
         task_id = self._activate_verification(

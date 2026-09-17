@@ -1,8 +1,9 @@
 import re
 import sqlite3
-from collections.abc import Callable
-from dataclasses import dataclass, replace
-from threading import Condition, Lock, RLock
+from collections.abc import Callable, Iterator
+from contextlib import ExitStack, contextmanager, nullcontext
+from dataclasses import dataclass, field, replace
+from threading import Condition, RLock
 from typing import TypeVar, TypedDict, cast
 
 from app.db import DB, now_iso
@@ -104,6 +105,12 @@ class VerificationTaskReadRow(TypedDict):
     status: VerificationTaskStatus
 
 
+@dataclass
+class _VerificationCoordination:
+    lock: RLock = field(default_factory=RLock)
+    users: int = 0
+
+
 @dataclass(frozen=True)
 class _RuntimeTaskState:
     status: VerificationTaskStatus
@@ -193,15 +200,70 @@ class VerificationTaskStore:
 
     def __init__(self, db: DB) -> None:
         self.db = db
-        # Commit order protects durable-result and input-owner caches.
-        # Never hold the runtime map lock while waiting for SQLite.
-        self._commit_lock = Lock()
+        # Only special paths coordinate across SQL and memory publication.
+        # Never wait for SQLite or coordination while holding the runtime lock.
+        self._coordination: dict[str, _VerificationCoordination] = {}
         self._runtime_lock = RLock()
         self._admission_condition = Condition(self._runtime_lock)
         self._paused_verifications: set[str] = set()
         self._runtime_by_task_id: dict[str, _RuntimeTaskState] = {}
         self._admissible_tasks: dict[str, VerificationTaskContext] = {}
         self._input_owners: dict[str, dict[str, tuple[str, str]]] = {}
+
+    @contextmanager
+    def _coordinate(self, verification_id: str) -> Iterator[None]:
+        with self._runtime_lock:
+            scope = self._coordination.get(verification_id)
+            if scope is None:
+                scope = _VerificationCoordination()
+                self._coordination[verification_id] = scope
+            scope.users += 1
+        try:
+            with scope.lock:
+                yield
+        finally:
+            with self._runtime_lock:
+                scope.users -= 1
+                if not scope.users:
+                    del self._coordination[verification_id]
+
+    def _completion_coordination(
+        self, completions: dict[str, TaskCompletion],
+    ) -> str:
+        # Task metadata never changes. Prefer already admitted metadata; replay
+        # and rebuilt-store callers can recover it without a write transaction.
+        metadata: dict[str, tuple[str, str]] = {}
+        with self._runtime_lock:
+            for task_id in completions:
+                context = self._admissible_tasks.get(task_id)
+                if context is None:
+                    runtime = self._runtime_by_task_id.get(task_id)
+                    context = None if runtime is None else runtime.context
+                if context is not None:
+                    metadata[task_id] = (context["verification_id"], context["task_kind"])
+        missing = completions.keys() - metadata.keys()
+        if missing:
+            rows = self.db.fetch_all(
+                "SELECT id,verification_id,task_kind FROM verification_tasks "
+                f"WHERE id IN ({','.join('?' for _ in missing)})", list(missing),
+            )
+            for row in rows:
+                metadata[str(row["id"])] = (str(row["verification_id"]), str(row["task_kind"]))
+        if len(metadata) != len(completions):
+            raise RuntimeError("unknown verification task completion")
+        verification_ids = {item[0] for item in metadata.values()}
+        if len(verification_ids) != 1:
+            raise RuntimeError("task completion batch crosses verifications")
+        for task_id, completion in completions.items():
+            task_kind = metadata[task_id][1]
+            if (
+                task_kind == "generate-input"
+                or completion.result.verdict.upper() == "SK"
+                or completion.status == VerificationTaskStatus.CANCELLED
+                or (completion.fail_reason and task_kind in _HARD_FAILURE_TASK_KINDS)
+            ):
+                return metadata[task_id][0]
+        return ""
 
     def _limit_bytes(self) -> int:
         return aux_display_text_limit_bytes(self.db.config_values.snapshot())
@@ -222,7 +284,14 @@ class VerificationTaskStore:
 
         deleted_task_ids: tuple[str, ...] = ()
         deleted_verification_ids: set[str] = set()
-        with self._commit_lock:
+        with ExitStack() as scopes:
+            verifications = self.db.fetch_all(
+                "SELECT id FROM verifications WHERE problem_id=? ORDER BY id", [problem_id],
+            )
+            coordinated_ids = {str(verification["id"]) for verification in verifications}
+            for verification_id in sorted(coordinated_ids):
+                scopes.enter_context(self._coordinate(verification_id))
+
             def _tx(conn: sqlite3.Connection) -> _SnapshotValue:
                 nonlocal deleted_task_ids
                 rows = conn.execute(
@@ -240,7 +309,10 @@ class VerificationTaskStore:
                     for row in rows
                     if str(row["id"] or "")
                 )
+                deleted_verification_ids.clear()
                 deleted_verification_ids.update(str(row["verification_id"]) for row in rows)
+                if deleted_verification_ids - coordinated_ids:
+                    raise ValueError("cannot delete problem while verification history is changing")
                 with self._runtime_lock:
                     has_runtime = any(
                         task_id in self._runtime_by_task_id
@@ -273,7 +345,7 @@ class VerificationTaskStore:
         detail = plan.detail
         now_text = now_iso()
 
-        with self._commit_lock:
+        with self._coordinate(plan.verification_id):
             def _tx(conn: sqlite3.Connection) -> ActivationCommit:
                 cursor = conn.execute(
                     """
@@ -902,7 +974,9 @@ class VerificationTaskStore:
         ):
             raise ValueError("failed or cancelled task completion needs a reason")
 
-        with self._commit_lock:
+        coordinated_id = self._completion_coordination(normalized_by_id)
+        scope = self._coordinate(coordinated_id) if coordinated_id else nullcontext()
+        with scope:
             input_owners: dict[str, tuple[str, str]] | None = None
             new_input_owners: dict[str, tuple[str, str]] = {}
             stored_results: dict[str, tuple[str, ExecutionResult]] = {}
@@ -1117,7 +1191,14 @@ class VerificationTaskStore:
                     ):
                         skipped_task_ids.add(task_id)
 
-                if skipped_task_ids:
+                # Only generators own dependency-subtree skipping. A replay of
+                # a skipped descendant returns its durable result without making
+                # another admission decision for that subtree.
+                skipped_generator_ids = {
+                    task_id for task_id in skipped_task_ids
+                    if str(rows_by_id[task_id]["task_kind"]) == "generate-input"
+                }
+                if skipped_generator_ids:
                     with self._runtime_lock:
                         self._paused_verifications.add(verification_id)
                         paused_verification_id = verification_id
@@ -1126,7 +1207,7 @@ class VerificationTaskStore:
                         self._skip_pending_descendants(
                             conn,
                             verification_id=verification_id,
-                            root_task_ids=set(skipped_task_ids),
+                            root_task_ids=skipped_generator_ids,
                             active_task_ids=active_task_ids,
                             feedback_text="skipped because generate-input was skipped",
                         )
@@ -1326,7 +1407,10 @@ class VerificationTaskStore:
                     input_owners.update(new_input_owners)
                     self._input_owners[committed.verification_id] = input_owners
                 if committed.parent_transition:
-                    self._input_owners.pop(committed.verification_id, None)
+                    # The last ordinary completion can overtake a generator's
+                    # post-commit publication. Drain that publication before cleanup.
+                    with self._coordinate(committed.verification_id):
+                        self._input_owners.pop(committed.verification_id, None)
                 with self._runtime_lock:
                     for task_id in (
                         committed.committed_task_ids | committed.already_terminal_task_ids
@@ -1362,7 +1446,7 @@ class VerificationTaskStore:
             reason or f"verification {status.value}"
         )
         finished_at = now_iso()
-        with self._commit_lock:
+        with self._coordinate(verification_id):
             with self._runtime_lock:
                 self._paused_verifications.add(verification_id)
 
@@ -1448,49 +1532,48 @@ class VerificationTaskStore:
         ],
     ) -> VerificationTransitionCommit:
         detail = finish.detail
-        with self._commit_lock:
-            def _tx(conn: sqlite3.Connection) -> VerificationTransitionCommit:
-                cursor = conn.execute(
-                    """
-                    UPDATE verifications
-                    SET status='ok',finished_at=?
-                    WHERE id=? AND status='running' AND sanity_status='running'
-                      AND fail_reason=''
-                      AND NOT EXISTS (
-                          SELECT 1 FROM verification_tasks
-                          WHERE verification_id=? AND final_status=''
-                      )
-                    """,
-                    [
-                        now_iso(),
-                        finish.verification_id,
-                        finish.verification_id,
-                    ],
-                )
-                if int(cursor.rowcount or 0) == 1:
-                    write_detail(conn, finish.verification_id, detail)
-                    return VerificationTransitionCommit(
-                        verification_id=finish.verification_id,
-                        outcome="transitioned",
-                        status=VerificationStatus.OK,
-                    )
-                row = conn.execute(
-                    "SELECT status FROM verifications WHERE id=?",
-                    [finish.verification_id],
-                ).fetchone()
-                if row is None:
-                    return VerificationTransitionCommit(
-                        verification_id=finish.verification_id,
-                        outcome="missing",
-                        status=None,
-                    )
+        def _tx(conn: sqlite3.Connection) -> VerificationTransitionCommit:
+            cursor = conn.execute(
+                """
+                UPDATE verifications
+                SET status='ok',finished_at=?
+                WHERE id=? AND status='running' AND sanity_status='running'
+                  AND fail_reason=''
+                  AND NOT EXISTS (
+                      SELECT 1 FROM verification_tasks
+                      WHERE verification_id=? AND final_status=''
+                  )
+                """,
+                [
+                    now_iso(),
+                    finish.verification_id,
+                    finish.verification_id,
+                ],
+            )
+            if int(cursor.rowcount or 0) == 1:
+                write_detail(conn, finish.verification_id, detail)
                 return VerificationTransitionCommit(
                     verification_id=finish.verification_id,
-                    outcome="closed",
-                    status=VerificationStatus(str(row["status"])),
+                    outcome="transitioned",
+                    status=VerificationStatus.OK,
                 )
+            row = conn.execute(
+                "SELECT status FROM verifications WHERE id=?",
+                [finish.verification_id],
+            ).fetchone()
+            if row is None:
+                return VerificationTransitionCommit(
+                    verification_id=finish.verification_id,
+                    outcome="missing",
+                    status=None,
+                )
+            return VerificationTransitionCommit(
+                verification_id=finish.verification_id,
+                outcome="closed",
+                status=VerificationStatus(str(row["status"])),
+            )
 
-            return self.db.write_transaction(_tx)
+        return self.db.write_transaction(_tx)
 
     def append_diagnostic(
         self,
@@ -1509,48 +1592,47 @@ class VerificationTaskStore:
             received_at=received_at,
             limit_bytes=self._limit_bytes(),
         )
-        with self._commit_lock:
-            with self._runtime_lock:
-                if task_id not in self._runtime_by_task_id:
-                    return "not-applicable"
+        with self._runtime_lock:
+            if task_id not in self._runtime_by_task_id:
+                return "not-applicable"
 
-            def _tx(conn: sqlite3.Connection) -> DiagnosticMergeOutcome:
-                row = conn.execute(
-                    """
-                    SELECT task.final_status,diagnostic.snapshot_json
-                    FROM verification_tasks task
-                    LEFT JOIN verification_task_diagnostics diagnostic
-                      ON diagnostic.task_id=task.id
-                    WHERE task.id=?
-                    """,
-                    [task_id],
-                ).fetchone()
-                if row is None or not str(row["final_status"] or ""):
-                    return "not-applicable"
-                snapshot = task_diagnostic_snapshot_from_json(
-                    str(row["snapshot_json"] or "")
-                )
-                merged, outcome = merge_task_diagnostic_snapshot(
-                    snapshot,
-                    item,
-                    limit_bytes=self._limit_bytes(),
-                )
-                if outcome != "persisted":
-                    return outcome
-                conn.execute(
-                    """
-                    INSERT INTO verification_task_diagnostics(
-                        task_id,snapshot_json,updated_at
-                    ) VALUES(?,?,?)
-                    ON CONFLICT(task_id) DO UPDATE SET
-                        snapshot_json=excluded.snapshot_json,
-                        updated_at=excluded.updated_at
-                    """,
-                    [task_id, task_diagnostic_snapshot_json(merged), now_text],
-                )
+        def _tx(conn: sqlite3.Connection) -> DiagnosticMergeOutcome:
+            row = conn.execute(
+                """
+                SELECT task.final_status,diagnostic.snapshot_json
+                FROM verification_tasks task
+                LEFT JOIN verification_task_diagnostics diagnostic
+                  ON diagnostic.task_id=task.id
+                WHERE task.id=?
+                """,
+                [task_id],
+            ).fetchone()
+            if row is None or not str(row["final_status"] or ""):
+                return "not-applicable"
+            snapshot = task_diagnostic_snapshot_from_json(
+                str(row["snapshot_json"] or "")
+            )
+            merged, outcome = merge_task_diagnostic_snapshot(
+                snapshot,
+                item,
+                limit_bytes=self._limit_bytes(),
+            )
+            if outcome != "persisted":
                 return outcome
+            conn.execute(
+                """
+                INSERT INTO verification_task_diagnostics(
+                    task_id,snapshot_json,updated_at
+                ) VALUES(?,?,?)
+                ON CONFLICT(task_id) DO UPDATE SET
+                    snapshot_json=excluded.snapshot_json,
+                    updated_at=excluded.updated_at
+                """,
+                [task_id, task_diagnostic_snapshot_json(merged), now_text],
+            )
+            return outcome
 
-            return self.db.write_transaction(_tx)
+        return self.db.write_transaction(_tx)
 
     def diagnostic_snapshot(self, task_id: str) -> TaskDiagnosticSnapshot:
         row = self.db.fetch_one(
@@ -1566,76 +1648,75 @@ class VerificationTaskStore:
             reason or "interrupted by application restart"
         )
         finished_at = now_iso()
-        with self._commit_lock:
-            def _tx(conn: sqlite3.Connection) -> StartupRecoverySummary:
-                verification_rows = conn.execute(
-                    """
-                    SELECT id FROM verifications
-                    WHERE status IN ('queued','running')
-                    ORDER BY created_at ASC,id ASC
-                    """
-                ).fetchall()
-                verification_ids = tuple(
-                    str(row["id"] or "") for row in verification_rows
-                    if str(row["id"] or "")
-                )
-                if not verification_ids:
-                    return StartupRecoverySummary((), ())
-                task_rows = conn.execute(
-                    """
-                    SELECT task.id
-                    FROM verification_tasks task
-                    JOIN verifications verification
-                      ON verification.id=task.verification_id
-                    WHERE verification.status IN ('queued','running')
-                      AND task.final_status=''
-                    ORDER BY task.created_at ASC,task.id ASC
-                    """
-                ).fetchall()
-                task_ids = tuple(
-                    str(row["id"] or "") for row in task_rows
-                    if str(row["id"] or "")
-                )
-                conn.execute(
-                    """
-                    UPDATE verification_tasks
-                    SET final_status=?,result_json=?,finished_at=?
-                    WHERE final_status=''
-                      AND verification_id IN (
-                          SELECT id FROM verifications
-                          WHERE status IN ('queued','running')
-                      )
-                    """,
-                    [
-                        VerificationTaskStatus.CANCELLED.value,
-                        execution_result_json(cancelled_task_result(safe_reason)),
-                        finished_at,
-                    ],
-                )
-                conn.execute(
-                    """
-                    UPDATE verifications
-                    SET status='failed',
-                        fail_reason=CASE
-                            WHEN fail_reason='' THEN ? ELSE fail_reason
-                        END,
-                        sanity_status=CASE
-                            WHEN sanity_status IN ('pending','running') THEN 'skipped'
-                            ELSE sanity_status
-                        END,
-                        finished_at=COALESCE(finished_at,?)
-                    WHERE status IN ('queued','running')
-                    """,
-                    [safe_reason, finished_at],
-                )
-                return StartupRecoverySummary(verification_ids, task_ids)
+        def _tx(conn: sqlite3.Connection) -> StartupRecoverySummary:
+            verification_rows = conn.execute(
+                """
+                SELECT id FROM verifications
+                WHERE status IN ('queued','running')
+                ORDER BY created_at ASC,id ASC
+                """
+            ).fetchall()
+            verification_ids = tuple(
+                str(row["id"] or "") for row in verification_rows
+                if str(row["id"] or "")
+            )
+            if not verification_ids:
+                return StartupRecoverySummary((), ())
+            task_rows = conn.execute(
+                """
+                SELECT task.id
+                FROM verification_tasks task
+                JOIN verifications verification
+                  ON verification.id=task.verification_id
+                WHERE verification.status IN ('queued','running')
+                  AND task.final_status=''
+                ORDER BY task.created_at ASC,task.id ASC
+                """
+            ).fetchall()
+            task_ids = tuple(
+                str(row["id"] or "") for row in task_rows
+                if str(row["id"] or "")
+            )
+            conn.execute(
+                """
+                UPDATE verification_tasks
+                SET final_status=?,result_json=?,finished_at=?
+                WHERE final_status=''
+                  AND verification_id IN (
+                      SELECT id FROM verifications
+                      WHERE status IN ('queued','running')
+                  )
+                """,
+                [
+                    VerificationTaskStatus.CANCELLED.value,
+                    execution_result_json(cancelled_task_result(safe_reason)),
+                    finished_at,
+                ],
+            )
+            conn.execute(
+                """
+                UPDATE verifications
+                SET status='failed',
+                    fail_reason=CASE
+                        WHEN fail_reason='' THEN ? ELSE fail_reason
+                    END,
+                    sanity_status=CASE
+                        WHEN sanity_status IN ('pending','running') THEN 'skipped'
+                        ELSE sanity_status
+                    END,
+                    finished_at=COALESCE(finished_at,?)
+                WHERE status IN ('queued','running')
+                """,
+                [safe_reason, finished_at],
+            )
+            return StartupRecoverySummary(verification_ids, task_ids)
 
-            summary = self.db.write_transaction(_tx)
-            with self._runtime_lock:
-                self._runtime_by_task_id.clear()
-                self._admissible_tasks.clear()
-            self._input_owners.clear()
-            return summary
+        summary = self.db.write_transaction(_tx)
+        with self._runtime_lock:
+            self._runtime_by_task_id.clear()
+            self._admissible_tasks.clear()
+        self._input_owners.clear()
+        return summary
 
     def verification_is_running(self, verification_id: str) -> bool:
         row = self.db.fetch_one(
@@ -1647,8 +1728,7 @@ class VerificationTaskStore:
     def reset_runtime_state(self) -> None:
         """Forget all process-local indexes after exclusive artifact cleanup."""
 
-        with self._commit_lock:
-            with self._runtime_lock:
-                self._runtime_by_task_id.clear()
-                self._admissible_tasks.clear()
-            self._input_owners.clear()
+        with self._runtime_lock:
+            self._runtime_by_task_id.clear()
+            self._admissible_tasks.clear()
+        self._input_owners.clear()
