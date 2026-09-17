@@ -103,13 +103,15 @@ class TestJudgehostService(E2ETestBase):
             JUDGEHOST_API_TOKEN="test-token", JUDGEHOST_API_USERNAME="judgehost",
         )
         verification_id = _canonical_verification_id(f"compile-progress-{uuid.uuid4().hex}")
+        fixture_text = f"{verification_id}\n"
         headers = {"Authorization": "Bearer test-token"}
         hostname = "compile-progress-host"
         result = {"runresult": "correct", "runtime": "0.001",
-                  "output_run": base64.b64encode(b"ok\n").decode("ascii")}
+                  "output_run": base64.b64encode(fixture_text.encode()).decode("ascii")}
         with TestClient(app, raise_server_exceptions=False) as client:
             self._seed_build_verification(
-                verification_id, [("001.in", "ok\n", "ok\n"), ("002.in", "ok\n", "ok\n")],
+                verification_id,
+                [(name, fixture_text, fixture_text) for name in ("001.in", "002.in")],
             )
             service.enqueue_task(
                 problem=self.problem, username=self.user,
