@@ -432,7 +432,7 @@ class JudgehostPayloadPreparation:
             test = dict(raw_test)
             for field in ("input_file", "answer_file"):
                 try:
-                    descriptor = PayloadFile.from_payload(test.get(field))
+                    descriptor = self._runtime_blob_store.resolve_payload(test.get(field))
                     materialized = self._runtime_blob_store.put_file(descriptor)
                 except (OSError, ValueError) as exc:
                     raise RuntimeError(
@@ -492,7 +492,7 @@ class JudgehostPayloadPreparation:
     ) -> dict[str, object]:
         config_snapshot = settings.values
         source_name = decode_basename(raw=payload.get("source_name"), default="submission.cpp")
-        source_file = PayloadFile.from_payload(payload["source_file"])
+        source_file = self._runtime_blob_store.resolve_payload(payload["source_file"])
         source_bytes = self._runtime_blob_store.read(
             source_file,
             max_bytes=settings.max_submission_source_bytes,
@@ -511,7 +511,7 @@ class JudgehostPayloadPreparation:
             safe_name = decode_basename(raw=raw_name)
             if (not safe_name) or safe_name == source_name:
                 continue
-            descriptor = PayloadFile.from_payload(raw_file)
+            descriptor = self._runtime_blob_store.resolve_payload(raw_file)
             blob = self._runtime_blob_store.read(
                 descriptor,
                 max_bytes=settings.max_submission_source_bytes,
@@ -581,7 +581,7 @@ class JudgehostPayloadPreparation:
             if raw_file is None:
                 return b""
             return self._runtime_blob_store.read(
-                PayloadFile.from_payload(raw_file),
+                self._runtime_blob_store.resolve_payload(raw_file),
                 max_bytes=settings.max_component_source_bytes,
             )
 
@@ -835,7 +835,7 @@ class JudgehostPayloadPreparation:
             materialized_extra_sources: dict[str, object] = {}
             for name, raw_file in extra_source_files_override.items():
                 try:
-                    descriptor = PayloadFile.from_payload(raw_file)
+                    descriptor = self._runtime_blob_store.resolve_payload(raw_file)
                     materialized = self._runtime_blob_store.put_file(descriptor)
                 except (OSError, ValueError) as exc:
                     raise RuntimeError(

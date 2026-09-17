@@ -27,6 +27,19 @@ class TestRuntimeBlobStore(unittest.TestCase):
         self.assertEqual(from_file.blob_ref, from_bytes.blob_ref)
         self.assertEqual(from_file.path, from_bytes.path)
 
+    def test_serialized_descriptor_preserves_path_and_validates_size(self) -> None:
+        stored = self.blobs.put_bytes(b"one")
+        self.assertEqual(self.blobs.read(self.blobs.resolve_payload(stored.to_payload())), b"one")
+        external = self.root / "external.in"
+        external.write_bytes(b"two")
+        payload = {**stored.to_payload(), "path": str(external)}
+        self.assertEqual(self.blobs.resolve_payload(payload).path, external.resolve())
+        with self.assertRaises(ValueError):
+            self.blobs.resolve_payload({**stored.to_payload(), "size": True})
+        stored.path.unlink()
+        with self.assertRaises(OSError):
+            self.blobs.read(self.blobs.resolve_payload(stored.to_payload()))
+
     def test_deleted_blob_is_unavailable_until_republished(self) -> None:
         content = b"reusable case output\n"
         first = self.blobs.put_bytes(content)

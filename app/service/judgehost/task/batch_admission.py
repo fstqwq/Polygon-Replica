@@ -13,7 +13,7 @@ from app.service.judgehost.domjudge.result import parse_bool
 from app.service.judgehost.domjudge.task_plan import task_kind
 from app.service.judgehost.task.registry import JudgehostTaskRegistry
 from app.service.judgehost.task.retention import compact_payload_for_retention
-from app.service.platform.runtime_blob_store import PayloadFile
+from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
 
 
 class PreparedTest(TypedDict):
@@ -68,9 +68,11 @@ class TaskBatchAdmission:
         self,
         batch_runtime: JudgehostBatchRuntime,
         tasks: JudgehostTaskRegistry,
+        blobs: RuntimeBlobStore,
     ) -> None:
         self._batch_runtime = batch_runtime
         self._tasks = tasks
+        self._blobs = blobs
 
     def complete_exposure(self, task_id: str) -> None:
         row = self._tasks.get(task_id)
@@ -92,8 +94,8 @@ class TaskBatchAdmission:
         for ordinal, entry in enumerate(tests_rows, start=1):
             raw_name = entry["name"]
             test_name = raw_name if RUN_TEST_NAME_RE.fullmatch(raw_name) else f"{ordinal:03}.in"
-            input_file = PayloadFile.from_payload(entry["input_file"])
-            answer_file = PayloadFile.from_payload(entry["answer_file"])
+            input_file = self._blobs.resolve_payload(entry["input_file"])
+            answer_file = self._blobs.resolve_payload(entry["answer_file"])
             if input_file.blob_ref is None or answer_file.blob_ref is None:
                 raise RuntimeError(
                     "verification testcase payload must be materialized before admission"
@@ -188,7 +190,7 @@ class TaskBatchAdmission:
 
     def _prepare_payload(self, payload: dict[str, object]) -> PreparedPayload:
         source_name = decode_basename(raw=payload.get("source_name"), default="submission.cpp")
-        source_file = PayloadFile.from_payload(payload["source_file"])
+        source_file = self._blobs.resolve_payload(payload["source_file"])
         if source_file.size <= 0:
             raise RuntimeError("submission source payload is empty")
         raw_extra_value = payload.get("extra_source_files")
@@ -202,7 +204,7 @@ class TaskBatchAdmission:
             for raw_name, raw_file in sorted(raw_extra.items())
             if (name := decode_basename(raw=raw_name))
             and name != source_name
-            and (source := PayloadFile.from_payload(raw_file)).size > 0
+            and (source := self._blobs.resolve_payload(raw_file)).size > 0
         ]
         raw_verification = payload.get("verification_payload")
         if raw_verification is None:

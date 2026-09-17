@@ -162,6 +162,7 @@ class Judgehost:
         self._task_batch_admission = TaskBatchAdmission(
             self._batch_runtime,
             self._tasks,
+            self._runtime_blob_store,
         )
         self._payload_preparation = JudgehostPayloadPreparation(
             self._workspace_service,

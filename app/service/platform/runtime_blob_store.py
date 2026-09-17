@@ -88,6 +88,25 @@ class RuntimeBlobStore:
             self._descriptors[descriptor.identity] = descriptor
         return descriptor
 
+    def resolve_payload(self, raw: object) -> PayloadFile:
+        """Reuse a canonical descriptor when every serialized field agrees.
+
+        Availability is checked by the consuming blob operation. Unrecognized
+        descriptors retain the normal validation and path-resolution boundary.
+        """
+        if isinstance(raw, dict):
+            identity = raw.get("identity")
+            if isinstance(identity, str) and type(raw.get("size")) is int:
+                cached = self._cached_descriptor(identity)
+                if (
+                    cached is not None
+                    and raw.get("path") == str(cached.path)
+                    and raw.get("size") == cached.size
+                    and raw.get("blob_ref") == cached.blob_ref
+                ):
+                    return cached
+        return PayloadFile.from_payload(raw)
+
     @staticmethod
     def ref(identity: str) -> str:
         safe_identity = RuntimeBlobStore.normalize_identity(identity)
