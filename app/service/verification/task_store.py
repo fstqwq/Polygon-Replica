@@ -9,7 +9,7 @@ from app.service.execution.codec import (
     execution_result_from_json,
     execution_result_json,
 )
-from app.service.execution.model import ExecutionResult
+from app.service.execution.model import ExecutionPassResult, ExecutionResult
 from app.service.execution.policy import (
     execution_result_with_outcome,
     normalize_execution_result,
@@ -111,6 +111,14 @@ class _RuntimeTaskState:
     judgehost_task_id: str
     started_at: str
     context: VerificationTaskContext
+    result_json: str = ""
+    result: ExecutionResult | None = None
+
+
+def _stored_result(runtime: _RuntimeTaskState | None, text: str) -> ExecutionResult:
+    if runtime is not None and runtime.result is not None and runtime.result_json == text:
+        return runtime.result
+    return execution_result_from_json(text)
 
 
 _SnapshotValue = TypeVar("_SnapshotValue")
@@ -139,34 +147,45 @@ def _test_name_order(test_name: str) -> tuple[int, str]:
 
 
 def _bounded_result(result: ExecutionResult, *, limit_bytes: int) -> ExecutionResult:
-    passes = tuple(
-        replace(
-            pass_result,
-            feedback=bounded_display_text(
-                pass_result.feedback,
-                limit_bytes=limit_bytes,
-            ),
+    bounded_passes: list[ExecutionPassResult] = []
+    for pass_result in result.passes:
+        feedback = bounded_display_text(pass_result.feedback, limit_bytes=limit_bytes)
+        bounded_passes.append(
+            pass_result if feedback == pass_result.feedback
+            else replace(pass_result, feedback=feedback)
         )
-        for pass_result in result.passes
-    )
+    passes = tuple(bounded_passes)
     diagnostics = canonical_diagnostics(
         list(result.compile.diagnostics),
         list_limit=64,
         message_limit=limit_bytes,
     )["rows"]
+    error = bounded_display_text(result.outcome.error, limit_bytes=limit_bytes)
+    feedback = bounded_display_text(result.outcome.feedback, limit_bytes=limit_bytes)
+    compile_log = bounded_display_text(result.compile.log, limit_bytes=limit_bytes)
+    warnings = tuple(
+        bounded_display_text(warning.message, limit_bytes=limit_bytes)
+        for warning in result.warnings
+    )
+    if (
+        passes == result.passes
+        and diagnostics == list(result.compile.diagnostics)
+        and error == result.outcome.error
+        and feedback == result.outcome.feedback
+        and compile_log == result.compile.log
+        and warnings == tuple(warning.message for warning in result.warnings)
+    ):
+        return result
     return normalize_execution_result(
         passes=passes,
         verdict=result.verdict,
         score_text=result.score_text,
         answer_correct=result.answer_correct,
-        error=bounded_display_text(result.outcome.error, limit_bytes=limit_bytes),
-        feedback=bounded_display_text(result.outcome.feedback, limit_bytes=limit_bytes),
-        compile_log=bounded_display_text(result.compile.log, limit_bytes=limit_bytes),
+        error=error,
+        feedback=feedback,
+        compile_log=compile_log,
         compile_diagnostics=diagnostics,
-        warnings=(
-            bounded_display_text(warning.message, limit_bytes=limit_bytes)
-            for warning in result.warnings
-        ),
+        warnings=warnings,
     )
 
 
@@ -363,7 +382,7 @@ class VerificationTaskStore:
         task_id = str(row["id"] or "")
         program_id = str(row["program_id"] or "")
         result_json = str(row["result_json"] or "{}")
-        result = execution_result_from_json(result_json)
+        result = _stored_result(runtime, result_json)
         return {
             "id": task_id,
             "verification_id": verification_id,
@@ -922,12 +941,14 @@ class VerificationTaskStore:
         with self._runtime_lock.write_lock():
             input_owners: dict[str, tuple[str, str]] | None = None
             new_input_owners: dict[str, tuple[str, str]] = {}
+            stored_results: dict[str, tuple[str, ExecutionResult]] = {}
 
             def _tx(conn: sqlite3.Connection) -> CompletionCommit:
                 nonlocal input_owners
                 # Each transaction retry starts with only committed state.
                 input_owners = None
                 new_input_owners.clear()
+                stored_results.clear()
                 # Only a replay needs the previously committed artifact refs.
                 rows = conn.execute(
                     f"""
@@ -1018,8 +1039,8 @@ class VerificationTaskStore:
                     current_status = str(row["final_status"] or "")
                     if current_status:
                         runtime = self._runtime_by_task_id.get(task_id)
-                        current_result = execution_result_from_json(
-                            str(row["result_json"] or "{}")
+                        current_result = _stored_result(
+                            runtime, str(row["result_json"] or "{}")
                         )
                         already_terminal_task_ids.add(task_id)
                         effective.append(
@@ -1076,6 +1097,8 @@ class VerificationTaskStore:
                                 ),
                             )
                     effective_completion = replace(incoming, result=result)
+                    result_json = execution_result_json(result)
+                    stored_results[task_id] = (result_json, result)
                     conn.execute(
                         """
                         UPDATE verification_tasks
@@ -1084,7 +1107,7 @@ class VerificationTaskStore:
                         """,
                         [
                             effective_completion.status.value,
-                            execution_result_json(effective_completion.result),
+                            result_json,
                             now_iso(),
                             task_id,
                         ],
@@ -1323,13 +1346,19 @@ class VerificationTaskStore:
                 )
 
             committed = self.db.write_transaction(_tx)
-            # Publish only durable owners. A failed or retried transaction
+            # Publish only durable owners/results. A failed or retried transaction
             # must never introduce a duplicate-input owner into the runtime map.
             if input_owners is not None:
                 input_owners.update(new_input_owners)
                 self._input_owners[committed.verification_id] = input_owners
             if committed.parent_transition:
                 self._input_owners.pop(committed.verification_id, None)
+            for task_id, (text, result) in stored_results.items():
+                runtime = self._runtime_by_task_id.get(task_id)
+                if runtime is not None:
+                    self._runtime_by_task_id[task_id] = replace(
+                        runtime, result_json=text, result=result,
+                    )
             return committed
 
     def transition_verification_terminal(

@@ -11,6 +11,8 @@ History and detail reads combine one consistent SQLite snapshot with a process-l
 The task store retains generated-input owners by content-addressed output reference
 within each active verification. Completion publishes new owners after its database
 transaction commits; missing runtime indexes rebuild from durable results. Graph
-completion, terminalization, and runtime reset discard the owner index.
+completion, terminalization, and runtime reset discard the owner index. Bound tasks
+retain their committed typed result for reads of the same persisted JSON, and release
+it with their runtime binding.
 
 The [execution protocol](../../../../protocol/execution.md) defines lifecycle, graph, verdict, cache, and evidence semantics.
