@@ -27,6 +27,27 @@ class TestRuntimeBlobStore(unittest.TestCase):
         self.assertEqual(from_file.blob_ref, from_bytes.blob_ref)
         self.assertEqual(from_file.path, from_bytes.path)
 
+    def test_deleted_blob_is_unavailable_until_republished(self) -> None:
+        content = b"reusable case output\n"
+        first = self.blobs.put_bytes(content)
+        assert first.blob_ref is not None
+        self.assertEqual(self.blobs.read(first), content)
+        first.path.unlink()
+        self.assertIsNone(self.blobs.descriptor(first.blob_ref))
+        restored = self.blobs.put_bytes(content)
+        self.assertEqual(restored.blob_ref, first.blob_ref)
+        self.assertEqual(self.blobs.read(restored), content)
+
+    def test_runtime_reset_discards_blob_availability(self) -> None:
+        content = b"before and after runtime reset\n"
+        first = self.blobs.put_bytes(content)
+        assert first.blob_ref is not None
+        self.blobs.clear_all()
+        self.assertIsNone(self.blobs.descriptor(first.blob_ref))
+        restored = self.blobs.put_bytes(content)
+        self.assertEqual(restored.blob_ref, first.blob_ref)
+        self.assertEqual(self.blobs.read(restored), content)
+
     def test_domjudge_json_stream_preserves_base64_chunk_boundaries(self) -> None:
         payloads = [b"", b"a", b"ab", b"abc", bytes(range(251)) * 66842]
         files = []
