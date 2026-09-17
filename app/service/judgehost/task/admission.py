@@ -150,7 +150,6 @@ class JudgehostTaskAdmission:
             manual_validate_only=manual_validate_only,
             execution_template=execution_template,
         )
-        payload["execution_signature"] = task_plan.execution_signature(payload)
         safe_task_kind = task_plan.task_kind(payload)
         safe_mode = payload.get("mode")
         if not isinstance(safe_mode, str) or safe_mode not in {
