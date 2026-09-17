@@ -43,8 +43,8 @@ or claims its materialization. Empty-queue waits share a five-second long-poll
 budget, and each maintenance admission lock attempt waits at most 50 milliseconds.
 Long polling releases scheduler and admission locks while waiting. Disabled hosts
 and closed admission return empty work; draining admission skips empty-queue waits.
-Before entering an empty-queue wait, fetch-work finalizes the batches it has
-processed, publishing cached results and notifying result waiters. It then
+Before entering an empty-queue wait, fetch-work publishes the completed cached
+cases it has processed and notifies result waiters. It then
 rechecks ready work, including dependencies released by those results.
 
 Successful and idempotent `add-judging-run` responses are the JSON integer `1`. A new result bound to a verification task receives `1` only after its canonical result and task completion are durable. Persistence failure returns non-2xx for retry. A retry for an already-terminal, cancelled, or retired case also receives `1`.
@@ -55,6 +55,20 @@ acknowledged before the coordinator receives its completion event. Pending cache
 publication participates in maintenance activity counts, and cancellation
 discards unpublished cache candidates. Executions without a coordinating
 verification finish these operations in the callback.
+
+Completion publication owns individual cases while validation and persistence
+run outside the runtime state lock. Different cases in one batch can publish
+concurrently. Failed publication retains the cases for retry; a repeated callback
+is acknowledged after its own durable decision, independently of other cases.
+Publication in progress participates in maintenance activity and pins runtime
+state against cleanup.
+
+The coordinator closes a program's admission after applying its durable task
+completions and performing task cleanup. Batch closure requires closed admission,
+terminal cases, and acknowledged completions. The runtime claims the terminal
+transition under its state lock and performs final cleanup outside that lock.
+The last in-progress publication rechecks closure when it releases its cases.
+Late diagnostics remain retryable after the batch reaches its terminal state.
 
 Sources, auxiliary sources, inputs, and answers are fixed in content-addressed runtime storage before a case becomes fetchable. Cases sharing one verification program and compile specification share compilation.
 

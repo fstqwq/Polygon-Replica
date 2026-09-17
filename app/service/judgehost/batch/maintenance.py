@@ -130,7 +130,10 @@ class BatchMaintenance:
                 self._state._closed_program_keys.add(
                     (token, batch.verification_program_id)
                 )
-                if batch_id in self._state._active_finalization_generation_by_batch:
+                if (
+                    batch_id in self._state._active_finalization_generation_by_batch
+                    or self._state._publishing_case_ids_by_batch.get(batch_id)
+                ):
                     continue
                 for case_id in tuple(self._state._case_ids_by_batch.get(batch_id, ())):
                     if processed_count >= safe_limit:
@@ -373,6 +376,7 @@ class BatchMaintenance:
             ]
             if any(
                 batch_id in self._state._active_finalization_generation_by_batch
+                or self._state._publishing_case_ids_by_batch.get(batch_id)
                 for batch_id in affected_batches
             ):
                 return None

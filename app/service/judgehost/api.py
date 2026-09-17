@@ -346,7 +346,7 @@ class Judgehost:
             service_class=service_class,
             admission_gate=self._admission_gate,
         )
-        self._finalize_admitted_task(task_id)
+        self._publish_admitted_task(task_id)
         return task_id
 
     def enqueue_compile_only_task(
@@ -378,13 +378,13 @@ class Judgehost:
             prepared_payload=prepared_payload,
             admission_gate=self._admission_gate,
         )
-        self._finalize_admitted_task(task_id)
+        self._publish_admitted_task(task_id)
         return task_id
 
-    def _finalize_admitted_task(self, task_id: str) -> None:
+    def _publish_admitted_task(self, task_id: str) -> None:
         batch = self._batch_runtime.batch_for_task(task_id)
         if batch is not None:
-            self._batch_finalizer.finalize_batch_if_ready(batch["batch_id"])
+            self._publish_batches((batch["batch_id"],))
 
     def set_admission_gate(self, gate: MaintenanceAdmissionGate | None) -> None:
         self._admission_gate = gate
@@ -543,8 +543,7 @@ class Judgehost:
 
     def cancel_all_batches(self) -> int:
         batch_ids = self._maintenance.cancel_all_batches()
-        for batch_id in batch_ids:
-            self._batch_finalizer.finalize_batch_if_ready(batch_id)
+        self._publish_batches(tuple(batch_ids))
         return len(batch_ids)
 
     def forget_domjudge_runs(self, run_ids: list[str]) -> int:
@@ -583,7 +582,7 @@ class Judgehost:
             try:
                 self._batch_finalizer.finalize_task_if_ready(task_id, batch_row=batch)
             except Exception:
-                self._batch_runtime.schedule_batch_finalization_retry(batch["batch_id"])
+                self._batch_runtime.retry_task_publication(task_id)
                 logger.exception("post-commit task finalization failed task_id=%s", task_id)
             batches[batch["batch_id"]] = None
         for batch_id in batches:
@@ -618,7 +617,7 @@ class Judgehost:
 
     def domjudge_register_host(self, hostname: str) -> list[dict[str, object]]:
         outcome = self._dispatch.domjudge_register_host(hostname)
-        self._finalize_batches(outcome.terminal_batch_ids)
+        self._publish_batches(outcome.terminal_batch_ids)
         return list(outcome.workdirs)
 
     def domjudge_fetch_work(
@@ -629,18 +628,18 @@ class Judgehost:
         outcome = self._dispatch.domjudge_fetch_work(
             hostname,
             max_batchsize,
-            finalize_batches=self._finalize_batches,
+            publish_results=self._publish_batches,
             admission_gate=self._admission_gate,
         )
-        self._finalize_batches(outcome.terminal_batch_ids)
+        self._publish_batches(outcome.terminal_batch_ids)
         return list(outcome.work)
 
     def probe_task_case_cache(self, task_ids: list[str]) -> set[str]:
         outcome = self._dispatch.probe_task_case_cache(task_ids)
-        self._finalize_batches(outcome.terminal_batch_ids)
+        self._publish_batches(outcome.terminal_batch_ids)
         return set(outcome.pending_task_ids)
 
-    def _finalize_batches(
+    def _publish_batches(
         self,
         batch_ids: tuple[int, ...],
         *,
@@ -655,12 +654,9 @@ class Judgehost:
                 batch is not None and not batch["failure_runresult"]
                 and self._execution_port.defers_finalization(batch["verification_id"])
             )
-            self._batch_finalizer.finalize_batch_if_ready(
+            self._batch_finalizer.publish_batch_results(
                 batch_id,
-                require_completion_ack=(
-                    require_completion_ack
-                    and self._batch_runtime.batch_requires_completion_ack(batch_id)
-                ),
+                require_completion_ack=require_completion_ack,
                 defer_task_finalization=defer,
             )
 
@@ -671,7 +667,7 @@ class Judgehost:
         finalize: bool = True,
     ) -> Acknowledgement:
         if finalize and outcome.terminal_batch_ids:
-            self._finalize_batches(
+            self._publish_batches(
                 outcome.terminal_batch_ids,
                 require_completion_ack=True,
             )
@@ -706,7 +702,7 @@ class Judgehost:
             script_id,
             hostname=hostname,
         )
-        self._finalize_batches(outcome.terminal_batch_ids)
+        self._publish_batches(outcome.terminal_batch_ids)
         if outcome.error:
             raise RuntimeError(outcome.error)
         return list(outcome.files)
@@ -757,10 +753,12 @@ class Judgehost:
         case = self._batch_runtime.fetch_case(judgetask_id)
         batch = None if case is None else self._batch_runtime.fetch_batch(case["batch_id"])
         if case is not None and batch is not None and not batch["failure_runresult"]:
-            if not self._completion_publisher.acknowledge_terminal_case(judgetask_id):
-                raise RuntimeError("verification task completion is not durably acknowledged")
+            self._batch_finalizer.publish_batch_results(
+                batch["batch_id"], case_ids=(judgetask_id,), require_completion_ack=True,
+                defer_task_finalization=self._execution_port.defers_finalization(batch["verification_id"]),
+            )
             if not self._execution_port.defers_finalization(batch["verification_id"]):
-                self.finish_reported_tasks((case["task_id"],))
+                self._result.publish_pending_cache(case["task_id"])
             return self._complete_callback(outcome, finalize=False)
         result = self._complete_callback(outcome)
         if case is not None:

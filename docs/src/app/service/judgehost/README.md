@@ -18,6 +18,13 @@ admission -> lease -> callback normalization
           -> durable publication through the execution port -> cleanup
 ```
 
+Case publication and batch closure have separate ownership. Publication takes
+the pending cases under a short state lock, persists their results independently
+of other cases in the batch, acknowledges them, and notifies coordination.
+Failed publication and late diagnostics use the pending-case index for retries.
+The coordinator closes completed programs; the runtime closes a batch after its
+cases are terminal and acknowledged and active publication has released them.
+
 Task, batch, host, lease, callback-receipt, and cache-index state is
 process-local and is reset at startup. Runtime source and evidence blobs are
 stored below the disposable cache root. Missing final callbacks and compile

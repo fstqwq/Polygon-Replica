@@ -2409,19 +2409,6 @@ class TestJudgehostScheduler(unittest.TestCase):
             [first_batch, second_batch],
         )
         self.assertEqual(scheduler.active_script_hashes("compile", compile_id), set())
-        self.assertIsNotNone(
-            scheduler.claim_batch_finalization(
-                first_batch,
-                now_text=now_text,
-            )
-        )
-        self.assertIsNotNone(
-            scheduler.claim_batch_finalization(
-                second_batch,
-                now_text=now_text,
-            )
-        )
-        self.assertEqual(scheduler.active_script_hashes("compile", compile_id), set())
 
     def test_sixteen_hosts_never_lease_a_case_twice(self) -> None:
         scheduler = JudgehostBatchRuntime(id_base=1000)

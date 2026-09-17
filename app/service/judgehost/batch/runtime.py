@@ -117,9 +117,6 @@ class JudgehostBatchRuntime:
     def fetch_batch(self, batch_id: int) -> ExecutionBatchRow | None:
         return self._state.fetch_batch(batch_id)
 
-    def batch_requires_completion_ack(self, batch_id: int) -> bool:
-        return self._finalization.requires_completion_ack(batch_id)
-
     def batch_verification_cancellation_requested(self, batch_id: int) -> bool:
         return self._finalization.verification_cancellation_requested(batch_id)
 
@@ -322,9 +319,6 @@ class JudgehostBatchRuntime:
     def abort_lease(self, claim: LeaseClaim, *, now_text: str) -> bool:
         return self._dispatch.abort_lease(claim, now_text=now_text)
 
-    def batch_finalize_row(self, batch_id: int) -> dict[str, object] | None:
-        return self._finalization.batch_finalize_row(batch_id)
-
     def claim_batch_finalization(
         self, batch_id: int, *, now_text: str
     ) -> FinalizationClaim | None:
@@ -344,14 +338,27 @@ class JudgehostBatchRuntime:
             claim, now_text=now_text, delay_sec=delay_sec
         )
 
-    def complete_batch_finalization(self, claim: FinalizationClaim) -> bool:
-        return self._finalization.complete_batch_finalization(claim)
+    def claim_case_publications(
+        self, batch_id: int, *, case_ids: tuple[int, ...] | None = None
+    ) -> tuple[JudgehostCaseRow, ...]:
+        return self._finalization.claim_case_publications(batch_id, case_ids=case_ids)
+
+    def complete_case_publications(
+        self, batch_id: int, cases: tuple[JudgehostCaseRow, ...], *, retry: bool = False
+    ) -> bool:
+        return self._finalization.complete_case_publications(batch_id, cases, retry=retry)
+
+    def retry_task_publication(self, task_id: str) -> None:
+        self._finalization.retry_task_publication(task_id)
 
     def due_batch_finalizations(self, *, limit: int) -> list[int]:
         return self._finalization.due_batch_finalizations(limit=limit)
 
-    def clear_batch_finalization_retry(self, batch_id: int) -> None:
-        self._finalization.clear_batch_finalization_retry(batch_id)
+    def publications_acknowledged(
+        self, batch_id: int, *, case_ids: tuple[int, ...] | None = None
+    ) -> bool:
+        return self._finalization.publications_acknowledged(batch_id, case_ids=case_ids)
+
 
     def set_batch_terminal_status(
         self,

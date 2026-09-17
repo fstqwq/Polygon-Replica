@@ -401,7 +401,7 @@ class JudgehostDispatch:
         hostname: str,
         max_batchsize: int | None = None,
         *,
-        finalize_batches: Callable[[tuple[int, ...]], None],
+        publish_results: Callable[[tuple[int, ...]], None],
         admission_gate: MaintenanceAdmissionGate | None = None,
     ) -> DispatchOutcome:
         safe_host = normalize_judgehost_hostname(hostname)
@@ -479,9 +479,9 @@ class JudgehostDispatch:
                 return self._outcome((), affected_batch_ids)
             if affected_batch_ids:
                 # Publish cached results and wake result waiters before sleeping.
-                # Finalization can unlock more work, so select again afterwards.
+                # Publication can unlock more work, so select again afterwards.
                 # No scheduler or maintenance admission lock is held here.
-                finalize_batches(tuple(affected_batch_ids))
+                publish_results(tuple(affected_batch_ids))
                 affected_batch_ids.clear()
                 continue
             if long_poll_deadline is None:

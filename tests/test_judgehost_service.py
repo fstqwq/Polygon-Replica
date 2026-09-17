@@ -4438,6 +4438,97 @@ class TestJudgehostService(E2ETestBase):
         run_config = json.loads(run_config_raw)
         self.assertEqual(int(run_config.get("pass_limit") or 0), 3)
 
+    def test_cached_case_commits_while_other_case_in_same_program_is_blocked(self) -> None:
+        service = self._fresh_judgehost_service()
+        build_id = _canonical_verification_id(f"cache-concurrent-build-{uuid.uuid4().hex}")
+        self._seed_build_verification(build_id, [("001.in", "first\n", "first\n"), ("002.in", "second\n", "second\n")])
+        seed_id = _canonical_verification_id(f"cache-seed-{uuid.uuid4().hex}")
+        service.enqueue_task(
+            problem=self.problem, username=self.user, artifact_verification_id=build_id,
+            submission_path="solutions/ac.cpp", upload_content=None, upload_filename=None,
+            run_id=f"seed-{uuid.uuid4().hex}", selected_tests=["001.in", "002.in"],
+            verification_id=seed_id, verification_program_id=_SOLUTION_PROGRAM_ID,
+            expected_behavior="accepted", verification_source="run.execute", task_kind="solution-run",
+        )
+        host = "cache-concurrent-host"
+        service.domjudge_register_host(host)
+        work = service.domjudge_fetch_work(host, max_batchsize=2)
+        self.assertEqual(len(work), 2)
+        service.domjudge_update_judging(host, int(work[0]["judgetaskid"]), {
+            "compile_success": "1", "output_compile": "", "compile_metadata": "",
+        })
+        for item in work:
+            service.domjudge_add_judging_run(host, int(item["judgetaskid"]), {
+                "runresult": "correct", "runtime": "0.001", "output_run": "",
+                "output_diff": "", "output_error": "", "output_system": "",
+                "metadata": base64.b64encode(b"cpu-time: 0.001\nwall-time: 0.001\nmemory-bytes: 4096\n").decode(),
+                "compare_metadata": "",
+            })
+        verification_id = _canonical_verification_id(f"cache-concurrent-{uuid.uuid4().hex}")
+        ctx = runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        admit_test_verification(verification_id=verification_id, problem_id=int(ctx["problem"]["id"]), workspace_id=int(ctx["workspace"]["id"]))
+        tasks = [PlannedTask(
+            task_id=verification_task_id(verification_id, _SOLUTION_PROGRAM_ID, test),
+            predecessor_task_id=None, task_kind="solution-run", source_path="solutions/ac.cpp",
+            program_id=_SOLUTION_PROGRAM_ID, test_name=test, expected_behavior="accepted",
+        ) for test in ("001.in", "002.in")]
+        accepted = PlannedTask(
+            task_id=verification_task_id(verification_id, _ACCEPTED_PROGRAM_ID, "001.in"),
+            predecessor_task_id=None, task_kind="main-correct", source_path="solutions/ac.cpp",
+            program_id=_ACCEPTED_PROGRAM_ID, test_name="001.in", expected_behavior="accepted",
+        )
+        planned = [accepted, *tasks]
+        activate_test_verification(verification_id, programs=verification_programs_for_tasks(planned), tasks=planned)
+        runtime.verification_task_store.commit_task_completions((TaskCompletion(
+            task_id=accepted.task_id, status=VerificationTaskStatus.DONE,
+            run_id="", judgehost_task_id="", result=normalize_execution_result(verdict="OK"),
+        ),))
+
+        def enqueue(index: int) -> str:
+            task = tasks[index]
+            return service.enqueue_task(
+                verification_task_id=task.task_id, problem=self.problem, username=self.user,
+                artifact_verification_id=build_id, submission_path="solutions/ac.cpp",
+                upload_content=None, upload_filename=None, run_id=f"cached-{index}-{uuid.uuid4().hex}",
+                selected_tests=[task.test_name], verification_id=verification_id,
+                verification_program_id=_SOLUTION_PROGRAM_ID, expected_behavior="accepted",
+                verification_source="run.execute", task_kind="solution-run", persist_verification_run=False,
+            )
+
+        first = enqueue(0)
+        entered = threading.Event()
+        release = threading.Event()
+        store = runtime.verification_task_store
+        commit = store.commit_task_completions
+
+        def pause_first(results):
+            if any(result.task_id == tasks[0].task_id for result in results):
+                entered.set()
+                if not release.wait(5):
+                    raise TimeoutError("first completion was not released")
+            return commit(results)
+
+        with patch.object(store, "commit_task_completions", side_effect=pause_first):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                first_probe = pool.submit(service.probe_task_case_cache, [first])
+                try:
+                    self.assertTrue(entered.wait(2))
+                    second = enqueue(1)
+                    second_probe = pool.submit(service.probe_task_case_cache, [second])
+                    self.assertEqual(second_probe.result(timeout=2), set())
+                    row = db_fetch_one("SELECT final_status FROM verification_tasks WHERE id=?", (tasks[1].task_id,))
+                    self.assertEqual(row["final_status"], "done")
+                    service.close_programs(verification_id, [_SOLUTION_PROGRAM_ID])
+                    second_case = service.run_case_snapshots(service.wait_for_task(second, timeout_sec=1))[0]
+                    batch_id = int(second_case["batch_id"])
+                    self.assertEqual(judgehost_fetch_batch(service, batch_id)["status"], "finalize-pending")
+                finally:
+                    release.set()
+                self.assertEqual(first_probe.result(timeout=2), set())
+        self.assertEqual(judgehost_fetch_batch(service, batch_id)["status"], "completed")
+        rows = [db_fetch_one("SELECT final_status FROM verification_tasks WHERE id=?", (task.task_id,)) for task in tasks]
+        self.assertEqual([row["final_status"] for row in rows], ["done", "done"])
+
     def test_domjudge_active_cache_probe_finishes_hits_and_leases_only_misses(
         self,
     ) -> None:
