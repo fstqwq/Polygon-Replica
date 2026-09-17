@@ -42,6 +42,13 @@ Full verification reports a `boundary_coverage` warning when no validator is con
 
 Tasks for the same source program and compile specification share one judgehost compilation. Generator parameters belong to the invocation and result-cache identity, while program identity remains tied to source and compile configuration. Identical generator invocations share generated evidence; duplicate tasks remain ordered but do not execute twice.
 
+The coordinator prepares dependency-ready tasks in program turns. A turn contains
+that program's ready tasks when its turn begins. Tasks becoming ready during the
+turn join a later turn behind programs already waiting. Completion and cancellation
+events interrupt preparation between tasks. The queues contain task identities;
+payload construction occurs when each task is prepared. Host dispatch retains
+foreground priority and its existing affinity rules.
+
 Prepared payloads carry canonical `problem_mode`. Execution mode is derived from the task:
 
 | Task | Execution mode | Components |

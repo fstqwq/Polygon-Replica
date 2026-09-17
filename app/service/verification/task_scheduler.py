@@ -88,6 +88,8 @@ class _IncrementalDagState:
             child_ids.sort(key=self.plan_index_by_id.__getitem__)
 
         self.ready: deque[str] = deque()
+        self.ready_programs: deque[str] = deque()
+        self.ready_by_program: dict[str, deque[str]] = {}
         self.ready_ids: set[str] = set()
         for task_id, row in self.rows_by_id.items():
             if self.status_by_id[task_id] == VerificationTaskStatus.PENDING:
@@ -101,11 +103,19 @@ class _IncrementalDagState:
     def _enqueue_if_ready(self, task_id: str) -> None:
         if self.remaining_parents[task_id] != 0 or task_id in self.ready_ids:
             return
-        self.ready.append(task_id)
+        program_id = self.program_id_by_task_id[task_id]
+        if program_id not in self.ready_by_program:
+            self.ready_by_program[program_id] = deque()
+            self.ready_programs.append(program_id)
+        self.ready_by_program[program_id].append(task_id)
         self.ready_ids.add(task_id)
 
     def pop_ready(self) -> VerificationTaskRow | None:
-        while self.ready:
+        while self.ready or self.ready_programs:
+            if not self.ready:
+                # Detach this turn's ready tasks. Later arrivals join a new turn
+                # behind waiting programs, even when they belong to this program.
+                self.ready = self.ready_by_program.pop(self.ready_programs.popleft())
             task_id = self.ready.popleft()
             self.ready_ids.discard(task_id)
             if self.status_by_id[task_id] != VerificationTaskStatus.PENDING:
