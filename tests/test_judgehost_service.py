@@ -4521,10 +4521,17 @@ class TestJudgehostService(E2ETestBase):
             expected_behavior="accepted",
             verification_source="run.execute",
         )
-        self.assertEqual(service.probe_task_case_cache([hit_task_id]), set())
-        self.assertEqual(
-            service.wait_for_task(hit_task_id, timeout_sec=2.0), run_id_hit
-        )
+        # Cached results become observable while the fetching host still waits
+        # for its next execution packet.
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            fetching = pool.submit(
+                service.domjudge_fetch_work, "judgehost-partial-cache", 8
+            )
+            self.assertEqual(
+                service.wait_for_task(hit_task_id, timeout_sec=1.0), run_id_hit
+            )
+            self.assertFalse(fetching.done())
+            self.assertEqual(fetching.result(timeout=7.0), [])
         hit_rows = judgehost_cases_for_run(service, run_id_hit)
         self.assertEqual([str(row["status"]) for row in hit_rows], ["reported"])
 

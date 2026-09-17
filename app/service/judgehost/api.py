@@ -626,15 +626,12 @@ class Judgehost:
         hostname: str,
         max_batchsize: int | None = None,
     ) -> list[dict[str, object]]:
-        gate = self._admission_gate
-        if gate is None:
-            outcome = self._dispatch.domjudge_fetch_work(hostname, max_batchsize)
-        else:
-            outcome = self._dispatch.domjudge_fetch_work(
-                hostname,
-                max_batchsize,
-                admission_gate=gate,
-            )
+        outcome = self._dispatch.domjudge_fetch_work(
+            hostname,
+            max_batchsize,
+            finalize_batches=self._finalize_batches,
+            admission_gate=self._admission_gate,
+        )
         self._finalize_batches(outcome.terminal_batch_ids)
         return list(outcome.work)
 

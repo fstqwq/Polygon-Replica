@@ -43,6 +43,9 @@ or claims its materialization. Empty-queue waits share a five-second long-poll
 budget, and each maintenance admission lock attempt waits at most 50 milliseconds.
 Long polling releases scheduler and admission locks while waiting. Disabled hosts
 and closed admission return empty work; draining admission skips empty-queue waits.
+Before entering an empty-queue wait, fetch-work finalizes the batches it has
+processed, publishing cached results and notifying result waiters. It then
+rechecks ready work, including dependencies released by those results.
 
 Successful and idempotent `add-judging-run` responses are the JSON integer `1`. A new result bound to a verification task receives `1` only after its canonical result and task completion are durable. Persistence failure returns non-2xx for retry. A retry for an already-terminal, cancelled, or retired case also receives `1`.
 

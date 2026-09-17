@@ -1,6 +1,7 @@
 import logging
 import re
 import time
+from collections.abc import Callable
 from contextlib import nullcontext
 
 from app.db import now_iso
@@ -400,6 +401,7 @@ class JudgehostDispatch:
         hostname: str,
         max_batchsize: int | None = None,
         *,
+        finalize_batches: Callable[[tuple[int, ...]], None],
         admission_gate: MaintenanceAdmissionGate | None = None,
     ) -> DispatchOutcome:
         safe_host = normalize_judgehost_hostname(hostname)
@@ -475,6 +477,13 @@ class JudgehostDispatch:
 
             if admission_gate is not None and admission_gate.state() == "draining":
                 return self._outcome((), affected_batch_ids)
+            if affected_batch_ids:
+                # Publish cached results and wake result waiters before sleeping.
+                # Finalization can unlock more work, so select again afterwards.
+                # No scheduler or maintenance admission lock is held here.
+                finalize_batches(tuple(affected_batch_ids))
+                affected_batch_ids.clear()
+                continue
             if long_poll_deadline is None:
                 long_poll_deadline = time.monotonic() + self._fetch_long_poll_sec
             remaining = long_poll_deadline - time.monotonic()
