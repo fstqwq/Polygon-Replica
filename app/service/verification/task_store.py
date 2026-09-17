@@ -234,6 +234,15 @@ class VerificationTaskStore:
                 if not scope.users:
                     del self._coordination[verification_id]
 
+    def _close_admission(self, verification_id: str) -> None:
+        # A concurrent completion may be durable but not yet have removed its
+        # admission entry. Closing a scope retires those entries as well.
+        with self._runtime_lock:
+            task_ids = [task_id for task_id, context in self._admissible_tasks.items()
+                        if context["verification_id"] == verification_id]
+            for task_id in task_ids:
+                del self._admissible_tasks[task_id]
+
     def _completion_metadata(
         self, completions: dict[str, TaskCompletion],
     ) -> dict[str, _CompletionMetadata]:
@@ -1429,6 +1438,7 @@ class VerificationTaskStore:
                     input_owners.update(new_input_owners)
                     self._input_owners[committed.verification_id] = input_owners
                 if committed.parent_transition:
+                    self._close_admission(committed.verification_id)
                     # The last ordinary completion can overtake a generator's
                     # post-commit publication. Drain that publication before cleanup.
                     with self._coordinate(committed.verification_id):
@@ -1534,9 +1544,7 @@ class VerificationTaskStore:
 
             try:
                 committed = self.db.write_transaction(_tx)
-                with self._runtime_lock:
-                    for task_id in committed.cancelled_task_ids:
-                        self._admissible_tasks.pop(task_id, None)
+                self._close_admission(verification_id)
                 self._input_owners.pop(verification_id, None)
                 return committed
             finally:

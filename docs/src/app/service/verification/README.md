@@ -20,7 +20,8 @@ acquired before entering SQLite and released after publication; waiting users ke
 the same coordination object alive. The last completion drains owner publication
 before discarding that verification's input index.
 Completed tasks leave the admission index. While cancellation commits, admission
-for that verification waits for its outcome. A committed cancellation rejects
+for that verification waits for its outcome. A committed cancellation removes every admission entry in its verification,
+including completions whose memory publication is still pending, and rejects
 waiting admissions; rollback lets them continue. Fatal completions and duplicate-input
 subtree skipping also pause admission while they decide the affected tasks.
 Startup recovery

@@ -141,6 +141,12 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
                             ).result(timeout=2)
                             self.assertEqual(cancelled.outcome, "transitioned")
                             self.assertTrue(store.unbind_judgehost_runtime(task_ids[0], judgehost_task_id="jt"))
+                            self.assertFalse(store.bind_and_expose_judgehost_runtime(
+                                task_ids[0], expected_verification_id=verification_id,
+                                expected_program_id="solution-0", expected_test_name="001.in",
+                                run_id="during-publication", judgehost_task_id="during-publication",
+                                expose=lambda: None,
+                            ))
                         finally:
                             release.set()
                         committed = pending.result(timeout=2)
