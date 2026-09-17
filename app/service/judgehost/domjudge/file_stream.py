@@ -1,7 +1,7 @@
 import base64
 import json
 import threading
-from collections.abc import Iterator, Sequence
+from collections.abc import Generator, Iterator, Sequence
 from dataclasses import dataclass
 
 from app.service.platform.runtime_blob_store import PayloadFile
@@ -11,6 +11,7 @@ from app.service.platform.runtime_blob_store import PayloadFile
 # allocation solely to carry base64 alignment into the next iteration.
 _RAW_CHUNK_SIZE = (16 * 1024 * 1024) - 1
 _STREAM_SLOTS = threading.BoundedSemaphore(16)
+_COALESCE_BYTES = 64 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,6 +22,26 @@ class DomjudgeDownloadFile:
 
 
 def stream_domjudge_file_array(files: Sequence[DomjudgeDownloadFile]) -> Iterator[bytes]:
+    """Avoid a thread-pool handoff for every tiny JSON/base64 fragment."""
+    source = _stream_file_fragments(files)
+    pending = bytearray()
+    try:
+        for chunk in source:
+            if len(pending) + len(chunk) >= _COALESCE_BYTES:
+                if pending:
+                    yield bytes(pending)
+                    pending.clear()
+                if len(chunk) >= _COALESCE_BYTES:
+                    yield chunk
+                    continue
+            pending.extend(chunk)
+        if pending:
+            yield bytes(pending)
+    finally:
+        source.close()
+
+
+def _stream_file_fragments(files: Sequence[DomjudgeDownloadFile]) -> Generator[bytes, None, None]:
     descriptors = tuple(files)
     validate_domjudge_file_array(descriptors)
 

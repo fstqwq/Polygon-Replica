@@ -42,6 +42,13 @@ Full verification reports a `boundary_coverage` warning when no validator is con
 
 Tasks for the same source program and compile specification share one judgehost compilation. Generator parameters belong to the invocation and result-cache identity, while program identity remains tied to source and compile configuration. Identical generator invocations share generated evidence; duplicate tasks remain ordered but do not execute twice.
 
+The coordinator prepares dependency-ready tasks in program turns. A turn contains
+that program's ready tasks when its turn begins. Tasks becoming ready during the
+turn join a later turn behind programs already waiting. Completion and cancellation
+events interrupt preparation between tasks. The queues contain task identities;
+payload construction occurs when each task is prepared. Host dispatch retains
+foreground priority and its existing affinity rules.
+
 Prepared payloads carry canonical `problem_mode`. Execution mode is derived from the task:
 
 | Task | Execution mode | Components |
@@ -67,6 +74,8 @@ The canonical task result contains `outcome`, compile evidence, ordered passes, 
 
 Cancellation atomically marks the verification and every open task `cancelled`, closes judgehost admission for that verification, and returns before runtime cleanup finishes. A process-local drain retires its cases, batches, and registry entries without publishing per-case cancellation to SQLite.
 
+The cancellation drain processes ready verifications in bounded queue turns. Requests waiting for callback receipts or publication/finalization owners remain parked while other requests run. The last receipt release and publication/finalization release notify the drain after releasing the runtime state lock; a notification during a slice retains a later queue turn. Releases performed by the drain itself rely on that slice's progress decision. A periodic 0.5-second scan recovers missed scheduling, missed notifications, and failed slices even when the ready queue remains busy. Runtime reset discards parked requests and ignores late wake notifications until resume.
+
 A callback that loses the race to cancellation discards its result and cache candidate and receives the idempotent judgehost ACK. Leased or reporting cases may remain temporarily for callback and workdir cleanup, but they cannot change the durable decision. Repeating cancellation is safe. Startup may discard unfinished runtime drain state because SQLite already contains the authoritative cancellation.
 
 ## Identity and cache
@@ -80,6 +89,8 @@ Case-result cache publication is first-writer-wins because equivalent executions
 ## Evidence and diagnostics
 
 Generator success requires an available untruncated output payload and records it as input evidence. Main-correct success requires an available output payload and records it as answer evidence. Verification task results and their input, output, answer, feedback, transcript, and log locators are committed through the [SQLite persistence contract](persistence.md#execution-rows).
+
+Artifact publication is synchronous: install the immutable blob, commit its task artifact reference, then notify the coordinator. Downstream preparation reads the published reference once (or reuses its preparation cache). A missing reference or blob is an immediate execution error; this also applies to cached results and duplicate-input references.
 
 These payloads are cache. Durable summaries may outlive them; downloads resolve locators through the owning store and report unavailable payloads. Artifact ownership is indexed by verification, task, test, pass, and role for authorization.
 

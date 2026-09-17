@@ -195,9 +195,10 @@ class CaseExecutionRow(TypedDict):
 
 @dataclass(frozen=True, slots=True)
 class FinalizationClaim:
+    """Exclusive snapshot for closing a fully acknowledged batch."""
+
     batch_id: int
     generation: int
-    terminal_transition: bool
     batch: ExecutionBatchRow
     cases: tuple[JudgehostCaseRow, ...]
 

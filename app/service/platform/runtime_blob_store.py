@@ -3,6 +3,7 @@ import hashlib
 import os
 import re
 import shutil
+import stat
 import threading
 import uuid
 from collections.abc import Iterator
@@ -76,6 +77,35 @@ class RuntimeBlobStore:
         self._root.mkdir(parents=True, exist_ok=True)
         self._locks_guard = threading.Lock()
         self._locks: dict[str, tuple[threading.Lock, int]] = {}
+        self._descriptors: dict[str, PayloadFile] = {}
+
+    def _cached_descriptor(self, identity: str) -> PayloadFile | None:
+        with self._locks_guard:
+            return self._descriptors.get(identity)
+
+    def _remember(self, descriptor: PayloadFile) -> PayloadFile:
+        with self._locks_guard:
+            self._descriptors[descriptor.identity] = descriptor
+        return descriptor
+
+    def resolve_payload(self, raw: object) -> PayloadFile:
+        """Reuse a canonical descriptor when every serialized field agrees.
+
+        Availability is checked by the consuming blob operation. Unrecognized
+        descriptors retain the normal validation and path-resolution boundary.
+        """
+        if isinstance(raw, dict):
+            identity = raw.get("identity")
+            if isinstance(identity, str) and type(raw.get("size")) is int:
+                cached = self._cached_descriptor(identity)
+                if (
+                    cached is not None
+                    and raw.get("path") == str(cached.path)
+                    and raw.get("size") == cached.size
+                    and raw.get("blob_ref") == cached.blob_ref
+                ):
+                    return cached
+        return PayloadFile.from_payload(raw)
 
     @staticmethod
     def ref(identity: str) -> str:
@@ -134,6 +164,9 @@ class RuntimeBlobStore:
     def put_bytes(self, payload: bytes) -> PayloadFile:
         blob = bytes(payload)
         identity = hashlib.sha256(blob).hexdigest()
+        cached = self._cached_descriptor(identity)
+        if cached is not None and cached.size == len(blob) and self._valid_target(cached.path, cached.size):
+            return cached
         target = self._path(identity)
         with self._key_lock(identity):
             if not self._valid_target(target, len(blob)):
@@ -144,15 +177,18 @@ class RuntimeBlobStore:
                     os.replace(temp, target)
                 finally:
                     temp.unlink(missing_ok=True)
-        return PayloadFile(
+        return self._remember(PayloadFile(
             path=target,
             size=len(blob),
             identity=identity,
             blob_ref=self.ref(identity),
-        )
+        ))
 
     def put_file(self, payload: PayloadFile | Path) -> PayloadFile:
         descriptor = payload if isinstance(payload, PayloadFile) else self.describe_file(payload)
+        cached = self._cached_descriptor(descriptor.identity)
+        if cached is not None and cached.size == descriptor.size and self._valid_target(cached.path, cached.size):
+            return cached
         target = self._path(descriptor.identity)
         with self._key_lock(descriptor.identity):
             if not self._valid_target(target, descriptor.size):
@@ -169,17 +205,20 @@ class RuntimeBlobStore:
                     os.replace(temp, target)
                 finally:
                     temp.unlink(missing_ok=True)
-        return PayloadFile(
+        return self._remember(PayloadFile(
             path=target,
             size=descriptor.size,
             identity=descriptor.identity,
             blob_ref=self.ref(descriptor.identity),
-        )
+        ))
 
     def descriptor(self, blob_ref: str) -> PayloadFile | None:
         identity = self.parse_ref(blob_ref)
         if identity is None:
             return None
+        cached = self._cached_descriptor(identity)
+        if cached is not None and self._valid_target(cached.path, cached.size):
+            return cached
         path = self._path(identity)
         try:
             if path.is_symlink() or not path.is_file():
@@ -187,7 +226,7 @@ class RuntimeBlobStore:
             size = int(path.stat().st_size)
         except OSError:
             return None
-        return PayloadFile(path=path, size=size, identity=identity, blob_ref=blob_ref)
+        return self._remember(PayloadFile(path=path, size=size, identity=identity, blob_ref=blob_ref))
 
     @contextlib.contextmanager
     def open(self, payload: PayloadFile | str) -> Iterator[BinaryIO]:
@@ -223,6 +262,7 @@ class RuntimeBlobStore:
         with self._locks_guard:
             if self._locks:
                 raise RuntimeError("cannot clear runtime blobs while entries are active")
+            self._descriptors.clear()
         if self._root.exists() and self._root.is_dir() and not self._root.is_symlink():
             shutil.rmtree(self._root)
         self._root.mkdir(parents=True, exist_ok=True)
@@ -230,7 +270,8 @@ class RuntimeBlobStore:
     @staticmethod
     def _valid_target(path: Path, expected_size: int) -> bool:
         try:
-            return path.is_file() and not path.is_symlink() and path.stat().st_size == expected_size
+            info = path.lstat()
+            return stat.S_ISREG(info.st_mode) and info.st_size == expected_size
         except OSError:
             return False
 

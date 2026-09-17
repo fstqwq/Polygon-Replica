@@ -18,17 +18,20 @@ import threading
 import time
 import tarfile
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from app.service.verification.payload import prepared_payload_for_uploaded_source
+from app.service.judgehost.task.model import ExecutionTemplate
 from app.service.verification.plan import VerificationTestPlan
 from app.service.judgehost.cache.executable import ExecutableCache
 from app.service.judgehost.cache.case_result import CaseResultCache
 from app.service.judgehost.domjudge.identity import job_id, submit_id
 from app.service.judgehost.api import Judgehost
+from app.service.judgehost.dispatch.materializer import BatchPayloadMaterializer
 from app.service.platform.maintenance.admission import MaintenanceAdmissionGate
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
 from app.service.verification.diagnostic import compose_task_diagnostic_display
@@ -91,6 +94,256 @@ def _pass_bundle_bytes(
 
 class TestJudgehostService(E2ETestBase):
     seed_default_workspace = True
+
+    def test_materialization_failure_finishes_compile_task_and_preserves_other_work(self) -> None:
+        service = self._fresh_judgehost_service()
+        host = "materialization-failure-host"
+        service.domjudge_register_host(host)
+        failed_run = f"materialization-failed-{uuid.uuid4().hex}"
+        service.enqueue_compile_only_task(
+            problem=self.problem, username=self.user, artifact_verification_id="pending",
+            upload_content=b"int main(){return 0;}\n", upload_filename="submission.cpp",
+            run_id=failed_run,
+            verification_id=_canonical_verification_id(failed_run),
+            verification_program_id=_SOLUTION_PROGRAM_ID,
+        )
+        with patch.object(
+            BatchPayloadMaterializer, "materialize", side_effect=OSError("disk write failed"),
+        ):
+            self.assertEqual(service.domjudge_fetch_work(host), [])
+        failed = service.task_snapshot_for_run(failed_run)
+        self.assertIsNotNone(failed)
+        self.assertEqual(failed["status"], "failed")
+        self.assertIn("disk write failed", failed["error_text"])
+
+        healthy_run = f"materialization-healthy-{uuid.uuid4().hex}"
+        healthy_task = service.enqueue_compile_only_task(
+            problem=self.problem, username=self.user, artifact_verification_id="pending",
+            upload_content=b"int main(){return 0;}\n", upload_filename="submission.cpp",
+            run_id=healthy_run,
+            verification_id=_canonical_verification_id(healthy_run),
+            verification_program_id=_SOLUTION_PROGRAM_ID,
+        )
+        work = service.domjudge_fetch_work(host)
+        self.assertEqual(len(self._work_rows_for_task(service, work, healthy_task)), 1)
+
+    def test_materialization_failure_is_durable_after_publication_retry(self) -> None:
+        service = self._fresh_judgehost_service()
+        build_id = _canonical_verification_id(f"materialization-build-{uuid.uuid4().hex}")
+        self._seed_build_verification(build_id)
+        ctx = runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        verification_id = _canonical_verification_id(f"materialization-{uuid.uuid4().hex}")
+        admit_test_verification(
+            verification_id=verification_id,
+            problem_id=int(ctx["problem"]["id"]), workspace_id=int(ctx["workspace"]["id"]),
+        )
+        main_id = verification_task_id(verification_id, _ACCEPTED_PROGRAM_ID, "001.in")
+        dependent_id = verification_task_id(verification_id, _SOLUTION_PROGRAM_ID, "001.in")
+        tasks = [
+            PlannedTask(
+                task_id=main_id, predecessor_task_id=None, task_kind="main-correct",
+                source_path="solutions/ac.cpp", program_id=_ACCEPTED_PROGRAM_ID,
+                test_name="001.in", expected_behavior="accepted",
+            ),
+            PlannedTask(
+                task_id=dependent_id, predecessor_task_id=main_id, task_kind="solution-run",
+                source_path="solutions/ac.cpp", program_id=_SOLUTION_PROGRAM_ID,
+                test_name="001.in", expected_behavior="accepted",
+            ),
+        ]
+        activate_test_verification(
+            verification_id, programs=verification_programs_for_tasks(tasks), tasks=tasks,
+        )
+        run_id = f"materialization-run-{uuid.uuid4().hex}"
+        service.enqueue_task(
+            problem=self.problem, username=self.user, artifact_verification_id=build_id,
+            submission_path="solutions/ac.cpp", upload_content=None, upload_filename=None,
+            run_id=run_id, selected_tests=["001.in"], verification_id=verification_id,
+            verification_task_id=main_id, verification_program_id=_ACCEPTED_PROGRAM_ID,
+            expected_behavior="accepted", verification_source="run.execute", task_kind="main-correct",
+        )
+        host = "materialization-retry-host"
+        service.domjudge_register_host(host)
+        with (
+            patch.object(BatchPayloadMaterializer, "materialize", side_effect=OSError("disk write failed")),
+            patch.object(runtime.db, "write_transaction", side_effect=OSError("database unavailable")),
+        ):
+            self.assertEqual(service.domjudge_fetch_work(host), [])
+        pending = db_fetch_one("SELECT final_status FROM verification_tasks WHERE id=?", [main_id])
+        self.assertEqual(pending["final_status"], "")
+
+        # Let the bounded publication retry become due; fetch-work drives recovery.
+        time.sleep(0.3)
+        self.assertEqual(service.domjudge_fetch_work(host), [])
+        main = db_fetch_one("SELECT final_status,result_json FROM verification_tasks WHERE id=?", [main_id])
+        dependent = db_fetch_one("SELECT final_status FROM verification_tasks WHERE id=?", [dependent_id])
+        parent = db_fetch_one("SELECT status,fail_reason FROM verifications WHERE id=?", [verification_id])
+        self.assertEqual(main["final_status"], "failed")
+        self.assertEqual(json.loads(main["result_json"])["outcome"]["verdict"], "FL")
+        self.assertIn("disk write failed", main["result_json"])
+        self.assertEqual(dependent["final_status"], "cancelled")
+        self.assertEqual(parent["status"], "failed")
+        self.assertIn("disk write failed", parent["fail_reason"])
+        self.assertEqual(service.task_snapshot_for_run(run_id)["status"], "failed")
+
+    def test_compile_progress_is_acknowledged_during_another_case_publication(self) -> None:
+        from app.main import app
+
+        service = runtime.judgehost_task_service
+        override_config_values(
+            self, runtime.config_values, JUDGEHOST_ENABLE=True,
+            JUDGEHOST_API_TOKEN="test-token", JUDGEHOST_API_USERNAME="judgehost",
+        )
+        verification_id = _canonical_verification_id(f"compile-progress-{uuid.uuid4().hex}")
+        fixture_text = f"{verification_id}\n"
+        headers = {"Authorization": "Bearer test-token"}
+        hostname = "compile-progress-host"
+        result = {"runresult": "correct", "runtime": "0.001",
+                  "output_run": base64.b64encode(fixture_text.encode()).decode("ascii")}
+        with TestClient(app, raise_server_exceptions=False) as client:
+            self._seed_build_verification(
+                verification_id,
+                [(name, fixture_text, fixture_text) for name in ("001.in", "002.in")],
+            )
+            service.enqueue_task(
+                problem=self.problem, username=self.user,
+                artifact_verification_id=verification_id,
+                submission_path="solutions/ac.cpp", upload_content=None,
+                upload_filename=None, run_id=f"run-{uuid.uuid4().hex}",
+                selected_tests=["001.in", "002.in"],
+                verification_id=_canonical_verification_id("compile-progress-run"),
+                verification_program_id=_SOLUTION_PROGRAM_ID,
+                expected_behavior="accepted", verification_source="run.execute",
+            )
+            service.domjudge_register_host(hostname)
+            leased = service.domjudge_fetch_work(hostname, max_batchsize=2)
+            self.assertEqual(len(leased), 2)
+            first, second = [int(row["judgetaskid"]) for row in leased]
+            service.domjudge_update_judging(hostname, first, {"compile_success": "1"})
+            service._result.domjudge_add_judging_run(hostname, first, result)
+            case = judgehost_fetch_case(service, first)
+            self.assertIsNotNone(case)
+            batch_id = case["batch_id"]
+            publication = service._batch_runtime.claim_case_publications(batch_id)
+            self.assertEqual([row["id"] for row in publication], [first])
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                try:
+                    response = client.put(
+                        f"/api/v4/judgehosts/update-judging/{hostname}/{second}",
+                        data={"compile_success": "1"}, headers=headers,
+                    )
+                    self.assertEqual(response.status_code, 200, response.text)
+                    self.assertEqual(response.json(), {})
+                    self.assertFalse(judgehost_fetch_case(service, first)["completion_acknowledged"])
+                    self.assertEqual(judgehost_fetch_batch(service, batch_id)["compile_success"], 1)
+                    self.assertEqual(judgehost_fetch_case(service, second)["status"], "leased")
+                    response = pool.submit(
+                        client.post, f"/api/v4/judgehosts/add-judging-run/{hostname}/{second}",
+                        data=result, headers=headers,
+                    ).result(timeout=3)
+                    self.assertEqual(response.status_code, 200, response.text)
+                    self.assertTrue(judgehost_fetch_case(service, second)["completion_acknowledged"])
+                finally:
+                    service._batch_runtime.complete_case_publications(batch_id, publication, retry=True)
+            for case_id in (first, second):
+                response = client.post(
+                    f"/api/v4/judgehosts/add-judging-run/{hostname}/{case_id}",
+                    data=result, headers=headers,
+                )
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json(), 1)
+                self.assertTrue(judgehost_fetch_case(service, case_id)["completion_acknowledged"])
+
+    def test_duplicate_result_waits_for_durable_publication_or_retries_failed_owner(self) -> None:
+        from app.main import app
+
+        service = runtime.judgehost_task_service
+        override_config_values(
+            self, runtime.config_values, JUDGEHOST_ENABLE=True,
+            JUDGEHOST_API_TOKEN="test-token", JUDGEHOST_API_USERNAME="judgehost",
+        )
+        ctx = runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        headers = {"Authorization": "Bearer test-token"}
+        with TestClient(app, raise_server_exceptions=False) as client:
+            for outcome in ("committed", "retry", "cancelled"):
+                with self.subTest(outcome=outcome):
+                    verification_id = _canonical_verification_id(f"publication-{uuid.uuid4().hex}")
+                    build_id = _canonical_verification_id(f"build-{uuid.uuid4().hex}")
+                    fixture_text = verification_id + "\n"
+                    self.assertEqual(admit_test_verification(
+                        verification_id=verification_id,
+                        problem_id=int(ctx["problem"]["id"]),
+                        workspace_id=int(ctx["workspace"]["id"]),
+                    ).outcome, "admitted")
+                    task_id = verification_task_id(verification_id, _ACCEPTED_PROGRAM_ID, "001.in")
+                    tasks = [PlannedTask(
+                        task_id=task_id, predecessor_task_id=None,
+                        task_kind="main-correct", source_path="solutions/ac.cpp",
+                        program_id=_ACCEPTED_PROGRAM_ID, test_name="001.in",
+                        expected_behavior="accepted",
+                    )]
+                    self.assertEqual(activate_test_verification(
+                        verification_id, programs=verification_programs_for_tasks(tasks), tasks=tasks,
+                    ).outcome, "activated")
+                    self._seed_build_verification(build_id, [("001.in", fixture_text, fixture_text)])
+                    service.enqueue_task(
+                        problem=self.problem, username=self.user, artifact_verification_id=build_id,
+                        submission_path="solutions/ac.cpp", upload_content=None, upload_filename=None,
+                        run_id=f"r-{uuid.uuid4().hex}", selected_tests=["001.in"],
+                        verification_id=verification_id, verification_task_id=task_id,
+                        verification_program_id=_ACCEPTED_PROGRAM_ID, expected_behavior="accepted",
+                        verification_source="run.execute", task_kind="main-correct",
+                        persist_verification_run=False,
+                    )
+                    hostname = f"publication-{outcome}"
+                    service.domjudge_register_host(hostname)
+                    leased = service.domjudge_fetch_work(hostname, max_batchsize=1)
+                    self.assertEqual(len(leased), 1)
+                    case_id = int(leased[0]["judgetaskid"])
+                    service.domjudge_update_judging(hostname, case_id, {"compile_success": "1"})
+                    payload = {"runresult": "correct", "runtime": "0.001",
+                               "output_run": base64.b64encode(fixture_text.encode()).decode("ascii")}
+                    service._result.domjudge_add_judging_run(hostname, case_id, payload)
+                    batch_id = judgehost_fetch_case(service, case_id)["batch_id"]
+                    publication = service._batch_runtime.claim_case_publications(batch_id, case_ids=(case_id,))
+                    self.assertEqual([row["id"] for row in publication], [case_id])
+                    waiting = threading.Event()
+                    condition = service._batch_runtime._state._publication_condition
+                    original_wait = condition.wait
+
+                    def observed_wait(timeout=None):
+                        waiting.set()
+                        return original_wait(timeout)
+
+                    with patch.object(condition, "wait", side_effect=observed_wait):
+                        with ThreadPoolExecutor(max_workers=1) as pool:
+                            pending = pool.submit(
+                                client.post, f"/api/v4/judgehosts/add-judging-run/{hostname}/{case_id}",
+                                data=payload, headers=headers,
+                            )
+                            try:
+                                self.assertTrue(waiting.wait(timeout=3))
+                                self.assertFalse(pending.done())
+                                self.assertEqual(db_fetch_one(
+                                    "SELECT final_status FROM verification_tasks WHERE id=?", [task_id],
+                                )["final_status"], "")
+                                if outcome == "committed":
+                                    service._batch_finalizer._publish_cases(publication)
+                                elif outcome == "cancelled":
+                                    runtime.verification_service.cancel_verification(
+                                        verification_id, reason="cancel while publication waits",
+                                    )
+                            finally:
+                                service._batch_runtime.complete_case_publications(
+                                    batch_id, publication, retry=outcome != "committed",
+                                )
+                            response = pending.result(timeout=5)
+                    self.assertEqual(response.status_code, 200, response.text)
+                    self.assertEqual(response.json(), 1)
+                    self.assertEqual(db_fetch_one(
+                        "SELECT final_status FROM verification_tasks WHERE id=?", [task_id],
+                    )["final_status"], "cancelled" if outcome == "cancelled" else "done")
+                    self.assertTrue(judgehost_fetch_case(service, case_id)["completion_acknowledged"])
 
     def test_unknown_judging_run_callback_is_idempotently_acknowledged(self) -> None:
         service = runtime.judgehost_task_service
@@ -255,8 +508,17 @@ class TestJudgehostService(E2ETestBase):
             )
         return Path(artifact_path).resolve()
 
-    def test_domjudge_add_judging_run_survives_result_cache_publication_failure(
-        self,
+    def test_domjudge_add_judging_run_survives_result_cache_publication_failure(self) -> None:
+        self._assert_result_cache_failure(deferred=False)
+
+    def test_result_ack_is_durable_while_deferred_cache_write_is_blocked(self) -> None:
+        self._assert_result_cache_failure(deferred=True)
+
+    def test_result_losing_to_durable_cancel_does_not_publish_cache(self) -> None:
+        self._assert_result_cache_failure(deferred=True, cancel_before_publication=True)
+
+    def _assert_result_cache_failure(
+        self, *, deferred: bool, cancel_before_publication: bool = False,
     ) -> None:
         service = runtime.judgehost_task_service
         override_config_values(
@@ -330,6 +592,7 @@ class TestJudgehostService(E2ETestBase):
         task_store = runtime.verification_task_store
 
         callbacks = VerificationRuntimeCallbacks(
+            finish_tasks=service.finish_reported_tasks if deferred else None,
             publish_task=lambda _row: (_ for _ in ()).throw(
                 RuntimeError("unexpected publish")
             ),
@@ -347,7 +610,9 @@ class TestJudgehostService(E2ETestBase):
             callbacks=callbacks,
             edges=[],
         )
-        runtime.verification_runtime_registry.register(verification_id, coordinator)
+        runtime.verification_runtime_registry.register(
+            verification_id, coordinator, defers_finalization=deferred,
+        )
         coordinator_thread = threading.Thread(target=coordinator.run, daemon=True)
         coordinator_thread.start()
         try:
@@ -370,25 +635,74 @@ class TestJudgehostService(E2ETestBase):
                     "compile_metadata": "",
                 },
             )
-            with patch.object(
-                CaseResultCache,
-                "try_store",
-                side_effect=OSError("result cache unavailable"),
-            ):
-                ack = service.domjudge_add_judging_run(
-                    "judgehost-immediate-finalize",
-                    case_id,
-                    {
-                        "runresult": "correct",
-                        "runtime": "0.001",
-                        "output_run": base64.b64encode(b"ok\n").decode("ascii"),
-                        "output_diff": "",
-                        "output_error": "",
-                        "output_system": "",
-                        "metadata": base64.b64encode(metadata).decode("ascii"),
-                        "compare_metadata": "",
-                    },
+            cache_entered = threading.Event()
+            release_cache = threading.Event()
+
+            def fail_cache(*_args, **_kwargs):
+                cache_entered.set()
+                if deferred:
+                    release_cache.wait(timeout=5.0)
+                raise OSError("result cache unavailable")
+
+            payload = {
+                "runresult": "correct",
+                "runtime": "0.001",
+                "output_run": base64.b64encode(b"ok\n").decode("ascii"),
+                "output_diff": "",
+                "output_error": "",
+                "output_system": "",
+                "metadata": base64.b64encode(metadata).decode("ascii"),
+                "compare_metadata": "",
+            }
+
+            def report():
+                return service.domjudge_add_judging_run(
+                    "judgehost-immediate-finalize", case_id, payload,
                 )
+
+            if cancel_before_publication:
+                # Stop between receiving the result and its durable publication.
+                # Cancellation has committed, but runtime cancellation has not run yet.
+                service._result.domjudge_add_judging_run(
+                    "judgehost-immediate-finalize", case_id, payload,
+                )
+                runtime.verification_service.cancel_verification(
+                    verification_id, reason="cancel before result publication",
+                )
+                cache_before = self._judge_index_entry_count(RuntimeCacheIndex.RESULT)
+                self.assertEqual(report(), 1)
+                coordinator_thread.join(timeout=3.0)
+                self.assertFalse(coordinator_thread.is_alive())
+                self.assertEqual(self._judge_index_entry_count(RuntimeCacheIndex.RESULT), cache_before)
+                self.assertEqual(service.busy_counts()["finalizations"], 0)
+                persisted = db_fetch_one(
+                    "SELECT final_status FROM verification_tasks WHERE id=?", [task_id],
+                )
+                self.assertEqual(persisted["final_status"], "cancelled")
+                return
+
+            with patch.object(CaseResultCache, "try_store", side_effect=fail_cache):
+                if deferred:
+                    with ThreadPoolExecutor(max_workers=1) as executor:
+                        pending = executor.submit(report)
+                        try:
+                            self.assertTrue(cache_entered.wait(timeout=3.0))
+                            ack = pending.result(timeout=1.0)
+                            persisted = db_fetch_one(
+                                "SELECT final_status,result_json FROM verification_tasks WHERE id=?",
+                                [task_id],
+                            )
+                            self.assertEqual(persisted["final_status"], "done")
+                            self.assertEqual(json.loads(persisted["result_json"])["outcome"]["verdict"], "OK")
+                            self.assertEqual(report(), 1)
+                            self.assertGreater(service.busy_counts()["finalizations"], 0)
+                        finally:
+                            release_cache.set()
+                        coordinator_thread.join(timeout=3.0)
+                        self.assertFalse(coordinator_thread.is_alive())
+                    self.assertEqual(service.busy_counts()["finalizations"], 0)
+                else:
+                    ack = report()
             self.assertEqual(ack, 1)
 
             deadline = time.monotonic() + 2.0
@@ -2136,13 +2450,12 @@ class TestJudgehostService(E2ETestBase):
             expected_behavior="accepted",
             verification_source="run.execute",
         )
-        precomputed = payload.get("precomputed") if isinstance(payload, dict) else {}
-        run_cfg = precomputed.get("run_config") if isinstance(precomputed, dict) else {}
+        precomputed = payload["precomputed"]
+        self.assertIsInstance(precomputed, ExecutionTemplate)
+        run_cfg = json.loads(precomputed.run_config_json)
         self.assertIsInstance(run_cfg, dict)
         self.assertEqual(int(run_cfg.get("pass_limit") or 0), 7)
-        run_files = (
-            precomputed.get("run_files") if isinstance(precomputed, dict) else []
-        )
+        run_files = precomputed.batch_spec.run_files
         self.assertIn("pass-capture", {item[0] for item in run_files})
 
     def test_domjudge_pass_fail_multi_pass_uses_configured_pass_limit(self) -> None:
@@ -2174,16 +2487,13 @@ class TestJudgehostService(E2ETestBase):
             expected_behavior="accepted",
             verification_source="run.execute",
         )
-        precomputed = payload.get("precomputed") if isinstance(payload, dict) else {}
-        run_cfg = precomputed.get("run_config") if isinstance(precomputed, dict) else {}
+        precomputed = payload["precomputed"]
+        self.assertIsInstance(precomputed, ExecutionTemplate)
+        run_cfg = json.loads(precomputed.run_config_json)
         self.assertIsInstance(run_cfg, dict)
         self.assertEqual(int(run_cfg.get("pass_limit") or 0), 7)
-        run_files = (
-            precomputed.get("run_files") if isinstance(precomputed, dict) else []
-        )
-        compare_files = (
-            precomputed.get("compare_files") if isinstance(precomputed, dict) else []
-        )
+        run_files = precomputed.batch_spec.run_files
+        compare_files = precomputed.batch_spec.compare_files
         self.assertIn("pass-capture", {item[0] for item in run_files})
         self.assertIn("pass-capture", {item[0] for item in compare_files})
 
@@ -4379,6 +4689,97 @@ class TestJudgehostService(E2ETestBase):
         run_config = json.loads(run_config_raw)
         self.assertEqual(int(run_config.get("pass_limit") or 0), 3)
 
+    def test_cached_case_commits_while_other_case_in_same_program_is_blocked(self) -> None:
+        service = self._fresh_judgehost_service()
+        build_id = _canonical_verification_id(f"cache-concurrent-build-{uuid.uuid4().hex}")
+        self._seed_build_verification(build_id, [("001.in", "first\n", "first\n"), ("002.in", "second\n", "second\n")])
+        seed_id = _canonical_verification_id(f"cache-seed-{uuid.uuid4().hex}")
+        service.enqueue_task(
+            problem=self.problem, username=self.user, artifact_verification_id=build_id,
+            submission_path="solutions/ac.cpp", upload_content=None, upload_filename=None,
+            run_id=f"seed-{uuid.uuid4().hex}", selected_tests=["001.in", "002.in"],
+            verification_id=seed_id, verification_program_id=_SOLUTION_PROGRAM_ID,
+            expected_behavior="accepted", verification_source="run.execute", task_kind="solution-run",
+        )
+        host = "cache-concurrent-host"
+        service.domjudge_register_host(host)
+        work = service.domjudge_fetch_work(host, max_batchsize=2)
+        self.assertEqual(len(work), 2)
+        service.domjudge_update_judging(host, int(work[0]["judgetaskid"]), {
+            "compile_success": "1", "output_compile": "", "compile_metadata": "",
+        })
+        for item in work:
+            service.domjudge_add_judging_run(host, int(item["judgetaskid"]), {
+                "runresult": "correct", "runtime": "0.001", "output_run": "",
+                "output_diff": "", "output_error": "", "output_system": "",
+                "metadata": base64.b64encode(b"cpu-time: 0.001\nwall-time: 0.001\nmemory-bytes: 4096\n").decode(),
+                "compare_metadata": "",
+            })
+        verification_id = _canonical_verification_id(f"cache-concurrent-{uuid.uuid4().hex}")
+        ctx = runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        admit_test_verification(verification_id=verification_id, problem_id=int(ctx["problem"]["id"]), workspace_id=int(ctx["workspace"]["id"]))
+        tasks = [PlannedTask(
+            task_id=verification_task_id(verification_id, _SOLUTION_PROGRAM_ID, test),
+            predecessor_task_id=None, task_kind="solution-run", source_path="solutions/ac.cpp",
+            program_id=_SOLUTION_PROGRAM_ID, test_name=test, expected_behavior="accepted",
+        ) for test in ("001.in", "002.in")]
+        accepted = PlannedTask(
+            task_id=verification_task_id(verification_id, _ACCEPTED_PROGRAM_ID, "001.in"),
+            predecessor_task_id=None, task_kind="main-correct", source_path="solutions/ac.cpp",
+            program_id=_ACCEPTED_PROGRAM_ID, test_name="001.in", expected_behavior="accepted",
+        )
+        planned = [accepted, *tasks]
+        activate_test_verification(verification_id, programs=verification_programs_for_tasks(planned), tasks=planned)
+        runtime.verification_task_store.commit_task_completions((TaskCompletion(
+            task_id=accepted.task_id, status=VerificationTaskStatus.DONE,
+            run_id="", judgehost_task_id="", result=normalize_execution_result(verdict="OK"),
+        ),))
+
+        def enqueue(index: int) -> str:
+            task = tasks[index]
+            return service.enqueue_task(
+                verification_task_id=task.task_id, problem=self.problem, username=self.user,
+                artifact_verification_id=build_id, submission_path="solutions/ac.cpp",
+                upload_content=None, upload_filename=None, run_id=f"cached-{index}-{uuid.uuid4().hex}",
+                selected_tests=[task.test_name], verification_id=verification_id,
+                verification_program_id=_SOLUTION_PROGRAM_ID, expected_behavior="accepted",
+                verification_source="run.execute", task_kind="solution-run", persist_verification_run=False,
+            )
+
+        first = enqueue(0)
+        entered = threading.Event()
+        release = threading.Event()
+        store = runtime.verification_task_store
+        commit = store.commit_task_completions
+
+        def pause_first(results):
+            if any(result.task_id == tasks[0].task_id for result in results):
+                entered.set()
+                if not release.wait(5):
+                    raise TimeoutError("first completion was not released")
+            return commit(results)
+
+        with patch.object(store, "commit_task_completions", side_effect=pause_first):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                first_probe = pool.submit(service.probe_task_case_cache, [first])
+                try:
+                    self.assertTrue(entered.wait(2))
+                    second = enqueue(1)
+                    second_probe = pool.submit(service.probe_task_case_cache, [second])
+                    self.assertEqual(second_probe.result(timeout=2), set())
+                    row = db_fetch_one("SELECT final_status FROM verification_tasks WHERE id=?", (tasks[1].task_id,))
+                    self.assertEqual(row["final_status"], "done")
+                    service.close_programs(verification_id, [_SOLUTION_PROGRAM_ID])
+                    second_case = service.run_case_snapshots(service.wait_for_task(second, timeout_sec=1))[0]
+                    batch_id = int(second_case["batch_id"])
+                    self.assertEqual(judgehost_fetch_batch(service, batch_id)["status"], "finalize-pending")
+                finally:
+                    release.set()
+                self.assertEqual(first_probe.result(timeout=2), set())
+        self.assertEqual(judgehost_fetch_batch(service, batch_id)["status"], "completed")
+        rows = [db_fetch_one("SELECT final_status FROM verification_tasks WHERE id=?", (task.task_id,)) for task in tasks]
+        self.assertEqual([row["final_status"] for row in rows], ["done", "done"])
+
     def test_domjudge_active_cache_probe_finishes_hits_and_leases_only_misses(
         self,
     ) -> None:
@@ -4462,10 +4863,17 @@ class TestJudgehostService(E2ETestBase):
             expected_behavior="accepted",
             verification_source="run.execute",
         )
-        self.assertEqual(service.probe_task_case_cache([hit_task_id]), set())
-        self.assertEqual(
-            service.wait_for_task(hit_task_id, timeout_sec=2.0), run_id_hit
-        )
+        # Cached results become observable while the fetching host still waits
+        # for its next execution packet.
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            fetching = pool.submit(
+                service.domjudge_fetch_work, "judgehost-partial-cache", 8
+            )
+            self.assertEqual(
+                service.wait_for_task(hit_task_id, timeout_sec=1.0), run_id_hit
+            )
+            self.assertFalse(fetching.done())
+            self.assertEqual(fetching.result(timeout=7.0), [])
         hit_rows = judgehost_cases_for_run(service, run_id_hit)
         self.assertEqual([str(row["status"]) for row in hit_rows], ["reported"])
 
@@ -5560,7 +5968,7 @@ class TestJudgehostService(E2ETestBase):
         self.assertEqual(str(case_row_a["lease_owner"] or ""), "judgehost-share-a")
         self.assertEqual(str(case_row_b["lease_owner"] or ""), "judgehost-share-b")
 
-    def test_domjudge_fetch_work_defers_preemption_until_inflight_case_reports(
+    def test_domjudge_fetch_work_allows_next_batch_during_async_result_upload(
         self,
     ) -> None:
         service = runtime.judgehost_task_service
@@ -5621,7 +6029,11 @@ class TestJudgehostService(E2ETestBase):
             service_class="foreground",
         )
         second_tasks = service.domjudge_fetch_work(host, max_batchsize=1)
-        self.assertEqual(second_tasks, [])
+        self.assertEqual(len(second_tasks), 1)
+        self.assertEqual(
+            len(self._work_rows_for_task(service, second_tasks, high_task_id)), 1
+        )
+        second_case_id = int(second_tasks[0]["judgetaskid"])
         first_case_id = int(first_tasks[0].get("judgetaskid") or 0)
         first_case = judgehost_fetch_case(service, first_case_id)
         self.assertIsNotNone(first_case)
@@ -5656,11 +6068,10 @@ class TestJudgehostService(E2ETestBase):
         self.assertIsNotNone(reported_case)
         self.assertEqual(str(reported_case["status"] or ""), "reported")
 
-        second_tasks = service.domjudge_fetch_work(host, max_batchsize=1)
-        self.assertEqual(len(second_tasks), 1)
-        self.assertEqual(
-            len(self._work_rows_for_task(service, second_tasks, high_task_id)), 1
-        )
+        second_case = judgehost_fetch_case(service, second_case_id)
+        self.assertIsNotNone(second_case)
+        self.assertEqual(second_case["status"], "leased")
+        self.assertEqual(second_case["lease_owner"], host)
 
     def test_domjudge_add_debug_info_preserves_result_and_appends_diagnostic(
         self,
@@ -5893,6 +6304,15 @@ class TestJudgehostService(E2ETestBase):
         run_id_b = f"r-jh-grouped-generate-b-{uuid.uuid4().hex[:8]}"
         self.assertNotEqual(run_id_a, run_id_b)
 
+        template = service.prepare_execution_template(
+            upload_file=generator_file,
+            upload_filename="gen.cpp",
+            verification_payload=payload_base,
+            expected_behavior="accepted",
+            verification_source="generate-input",
+            task_kind="generate-input",
+            extra_source_files=plan_a.extra_source_files,
+        )
         prepared_a = prepared_payload_for_uploaded_source(
             source_label="gen.cpp",
             run_id=run_id_a,
@@ -5907,7 +6327,9 @@ class TestJudgehostService(E2ETestBase):
             username=self.user,
             artifact_verification_id=verification_id,
             submission_path=None,
-            upload_content=generator_source,
+            upload_content=None,
+            upload_file=generator_file,
+            execution_template=template,
             upload_filename="gen.cpp",
             run_id=run_id_a,
             selected_tests=[],
@@ -5957,7 +6379,9 @@ class TestJudgehostService(E2ETestBase):
             username=self.user,
             artifact_verification_id=verification_id,
             submission_path=None,
-            upload_content=generator_source,
+            upload_content=None,
+            upload_file=generator_file,
+            execution_template=template,
             upload_filename="gen.cpp",
             run_id=run_id_b,
             selected_tests=[],

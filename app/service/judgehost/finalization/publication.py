@@ -1,3 +1,5 @@
+from collections.abc import Callable
+
 from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
 from app.service.judgehost.ports.case_binding import CaseBinding
 from app.service.judgehost.ports.completion import (
@@ -61,11 +63,13 @@ class JudgehostCaseCompletionPublisher:
         execution_port: CaseCompletionSink,
         tasks: JudgehostTaskRegistry,
         diagnostic_publisher: JudgehostCaseDiagnosticPublisher,
+        discard_cache_case: Callable[[int], None],
     ) -> None:
         self._batch_runtime = batch_runtime
         self._execution_port = execution_port
         self._tasks = tasks
         self._diagnostic_publisher = diagnostic_publisher
+        self._discard_cache_case = discard_cache_case
 
     def _reported_case_completion(
         self,
@@ -113,9 +117,14 @@ class JudgehostCaseCompletionPublisher:
             reports.append(report)
         if not reports:
             return True
-        if not self._execution_port.reported_many(tuple(reports)):
+        def acknowledge(cancelled_task_ids: frozenset[str]) -> None:
+            for case_id, report in zip(unique_case_ids, reports, strict=True):
+                if report.binding.task_id in cancelled_task_ids:
+                    self._discard_cache_case(case_id)
+            self._batch_runtime.acknowledge_case_completions(list(unique_case_ids))
+
+        if not self._execution_port.reported_many(tuple(reports), after_commit=acknowledge):
             return False
-        self._batch_runtime.acknowledge_case_completions(list(unique_case_ids))
         return all(
             (case := self._batch_runtime.fetch_case(case_id)) is not None
             and bool(case["completion_acknowledged"])

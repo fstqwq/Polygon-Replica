@@ -48,8 +48,9 @@ def _create_template() -> None:
     _PROCESS_ROOT.mkdir(parents=True, exist_ok=True)
     database = DB(_DB_PATH, config_values=build_config_values())
     database.init()
-    with database.conn() as connection:
+    with database.writer_connection() as connection:
         connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    database.close_connections()
     shutil.copy2(_DB_PATH, _DB_TEMPLATE)
 
 
@@ -80,6 +81,7 @@ class DBTestBase(unittest.TestCase):
         self.storage_layout = StorageLayout.from_settings(self.settings)
         self.config_values = build_config_values()
         self.db = DB(_DB_PATH, config_values=self.config_values)
+        self.addCleanup(self.db.close_connections)
         self.verification_task_store = VerificationTaskStore(self.db)
         self.access_query = AccessQuery(self.db)
         self.access_command = AccessCommand(self.db)

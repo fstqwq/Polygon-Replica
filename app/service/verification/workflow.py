@@ -1,9 +1,9 @@
 import shutil
-import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 
+from app.service.judgehost.task.model import ExecutionTemplate, PreparedTest
 from app.service.execution.identity import new_run_id
 from app.service.execution.policy import normalize_execution_result
 from app.service.judgehost.api import Judgehost
@@ -33,7 +33,7 @@ from app.service.verification.lifecycle import (
     VerificationAdmission,
     VerificationProgram,
 )
-from app.service.verification.payload import prepared_payload_for_uploaded_source
+from app.service.verification.payload import answer_name, prepared_payload_for_uploaded_source
 from app.service.verification.plan import VerificationTestPlan
 from app.service.verification.runtime_threshold import time_limit_ms_from_run_config_json
 from app.service.verification.sanity import (
@@ -60,9 +60,6 @@ from app.service.verification.workflow_policy import (
     visible_programs,
 )
 
-_ARTIFACT_READY_TIMEOUT_SEC = 2.0
-_ARTIFACT_READY_INTERVAL_SEC = 0.05
-
 
 @dataclass(frozen=True)
 class TaskExecutionContext:
@@ -74,7 +71,7 @@ class TaskExecutionContext:
     snapshot_root: Path
     artifact_file_by_test_ref: dict[tuple[str, str], PayloadFile]
     program_by_id: dict[str, VerificationProgram]
-    execution_template_by_program_id: dict[str, dict[str, object]]
+    execution_template_by_program_id: dict[str, ExecutionTemplate]
     test_plan_by_name: dict[str, VerificationTestPlan]
     run_verification_payload_base: dict[str, object]
     generate_verification_payload_base: dict[str, object]
@@ -84,6 +81,7 @@ class TaskExecutionContext:
     runtime_blob_store: RuntimeBlobStore
     verification_service: VerificationService
     task_store: VerificationTaskStore
+    prepared_test_by_files: dict[tuple[str, PayloadFile, PayloadFile], PreparedTest] = field(default_factory=dict)
 
 
 def _require_online_judgehost(judgehost: Judgehost) -> None:
@@ -107,31 +105,23 @@ def _verification_required_file(
     *,
     label: str,
     cache: dict[tuple[str, str], PayloadFile] | None = None,
-    timeout_sec: float = _ARTIFACT_READY_TIMEOUT_SEC,
-    interval_sec: float = _ARTIFACT_READY_INTERVAL_SEC,
     verification_service: VerificationService,
     runtime_blob_store: RuntimeBlobStore,
 ) -> PayloadFile:
     cache_key = (test_name, ref_key)
     if cache is not None and cache_key in cache:
         return cache[cache_key]
-    deadline = time.monotonic() + max(0.0, float(timeout_sec))
-    while True:
-        ref = verification_service.verification_artifact_ref(
-            verification_id,
-            test_name,
-            ref_key,
-        )
-        if ref:
-            payload = runtime_blob_store.descriptor(ref)
-            if payload is not None:
-                if cache is not None:
-                    cache[cache_key] = payload
-                return payload
-        if time.monotonic() >= deadline:
-            break
-        time.sleep(max(0.001, min(float(interval_sec), deadline - time.monotonic())))
-    raise RuntimeError(f"{label} is missing")
+    ref = verification_service.verification_artifact_ref(
+        verification_id, test_name, ref_key,
+    )
+    if not ref:
+        raise RuntimeError(f"{label} is missing: artifact reference not published")
+    payload = runtime_blob_store.descriptor(ref)
+    if payload is None:
+        raise RuntimeError(f"{label} is missing: published artifact blob unavailable")
+    if cache is not None:
+        cache[cache_key] = payload
+    return payload
 
 
 def _generate_feedback_by_test(
@@ -183,11 +173,29 @@ def _uploaded_source_files(
     return values
 
 
+def _prepared_test(
+    execution: TaskExecutionContext,
+    *,
+    test_name: str,
+    input_file: PayloadFile,
+    answer_file: PayloadFile,
+) -> PreparedTest:
+    key = (test_name, input_file, answer_file)
+    cached = execution.prepared_test_by_files.get(key)
+    if cached is None:
+        cached = execution.judgehost.prepare_test(
+            test_name=test_name, answer_name=answer_name(test_name),
+            input_file=input_file, answer_file=answer_file,
+        )
+        execution.prepared_test_by_files[key] = cached
+    return cached
+
+
 def _execution_template(
     execution: TaskExecutionContext,
     *,
     program: VerificationProgram,
-) -> dict[str, object]:
+) -> ExecutionTemplate:
     cached = execution.execution_template_by_program_id.get(program.program_id)
     if cached is not None:
         return cached
@@ -207,6 +215,7 @@ def _execution_template(
         extra_source_files=dict(compile_spec.extra_source_files),
         manual_validate_only=compile_spec.manual_validate_only,
         compile_only=False,
+        bypass_case_result_cache=execution.bypass_case_result_cache,
     )
     execution.execution_template_by_program_id[program.program_id] = prepared
     return prepared
@@ -313,12 +322,17 @@ def _publish_generate_task(task_row: VerificationTaskRow, *, execution: TaskExec
                     input_ref=owner_output_ref,
                 ),
             )
+        empty_answer = execution.runtime_blob_store.put_bytes(b"")
         prepared = prepared_payload_for_uploaded_source(
             source_label=compile_spec.source_name,
             run_id=run_id,
             test_name=test_name,
             input_file=test_plan.execution_input_file,
-            answer_file=execution.runtime_blob_store.put_bytes(b""),
+            answer_file=empty_answer,
+            prepared_test=_prepared_test(
+                execution, test_name=test_name,
+                input_file=test_plan.execution_input_file, answer_file=empty_answer,
+            ),
             verification_payload_base=execution.generate_verification_payload_base,
             extra_source_files=dict(compile_spec.extra_source_files),
             manual_validate_only=compile_spec.manual_validate_only,
@@ -424,6 +438,9 @@ def _publish_run_task(task_row: VerificationTaskRow, *, execution: TaskExecution
             test_name=test_name,
             input_file=input_file,
             answer_file=answer_file,
+            prepared_test=_prepared_test(
+                execution, test_name=test_name, input_file=input_file, answer_file=answer_file,
+            ),
             verification_payload_base=execution.run_verification_payload_base,
         )
         execution_template = _execution_template(
@@ -684,6 +701,7 @@ def run_workspace_verification_dag(
         )
 
         callbacks = VerificationExecutionCallbacks(
+            finish_tasks=judgehost.finish_reported_tasks,
             publish_task=lambda row: _publish_task(row, execution=execution),
             probe_task_case_cache=judgehost.probe_task_case_cache,
             close_programs=lambda program_ids: judgehost.close_programs(

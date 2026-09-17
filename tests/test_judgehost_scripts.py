@@ -22,6 +22,17 @@ config = SimpleNamespace(
 
 
 class TestJudgehostScripts(unittest.TestCase):
+    def test_configuration_replacement_updates_settings_and_preserves_old_snapshot(self) -> None:
+        values = build_config_values()
+        configuration = JudgehostConfiguration(values)
+        old = configuration.snapshot()
+        replacement = dict(values.snapshot())
+        replacement["JUDGEHOST_FETCH_BATCH_SIZE"] = old.fetch_batch_size + 1
+        values.replace(replacement)
+        current = configuration.snapshot()
+        self.assertEqual(current.fetch_batch_size, old.fetch_batch_size + 1)
+        self.assertEqual(old.values["JUDGEHOST_FETCH_BATCH_SIZE"], old.fetch_batch_size)
+
     def setUp(self) -> None:
         self._root = tempfile.TemporaryDirectory(prefix="judgehost-scripts-")
         self.addCleanup(self._root.cleanup)

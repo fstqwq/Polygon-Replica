@@ -1,5 +1,6 @@
 import uuid
 
+from app.service.judgehost.task.model import ExecutionTemplate
 from app.db import now_iso
 from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
 from app.service.judgehost.domjudge import task_plan
@@ -83,7 +84,7 @@ class JudgehostTaskAdmission:
         compile_only: bool = False,
         persist_verification_run: bool = False,
         prepared_payload: dict[str, object] | None = None,
-        execution_template: dict[str, object] | None = None,
+        execution_template: ExecutionTemplate | None = None,
         service_class: str = "background",
         admission_gate: MaintenanceAdmissionGate | None = None,
     ) -> str:
@@ -150,7 +151,6 @@ class JudgehostTaskAdmission:
             manual_validate_only=manual_validate_only,
             execution_template=execution_template,
         )
-        payload["execution_signature"] = task_plan.execution_signature(payload)
         safe_task_kind = task_plan.task_kind(payload)
         safe_mode = payload.get("mode")
         if not isinstance(safe_mode, str) or safe_mode not in {

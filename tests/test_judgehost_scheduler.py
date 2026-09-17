@@ -25,6 +25,7 @@ from app.service.judgehost.cache.executable import ExecutableCache
 from app.service.judgehost.domjudge.case_result import build_case_result
 from app.service.judgehost.domjudge.identity import script_id, submit_id
 from app.service.judgehost.cancellation import JudgehostCancellationDrain
+from app.service.judgehost.finalization.service import JudgehostBatchFinalizer
 from app.service.judgehost.maintenance.terminal_cleanup import JudgehostTerminalCleanup
 from app.service.judgehost.task.registry import JudgehostTaskRegistry
 from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
@@ -1959,7 +1960,7 @@ class TestJudgehostScheduler(unittest.TestCase):
         self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], batch_id)
         self.assertEqual(scheduler.select_ready_batch("host-b")["batch_id"], batch_id)
 
-    def test_ready_wait_uses_generation_without_lost_wakeup(self) -> None:
+    def test_ready_wait_observes_work_without_lost_wakeup(self) -> None:
         scheduler = JudgehostBatchRuntime(id_base=260)
         _batch_id, now_text = _create_staged_batch(
             scheduler,
@@ -1982,6 +1983,90 @@ class TestJudgehostScheduler(unittest.TestCase):
         self.assertFalse(thread.is_alive())
         self.assertEqual(outcomes, [True])
         self.assertEqual(scheduler.select_ready_batch("host-b")["batch_id"], _batch_id)
+
+    def test_ready_wait_continues_when_other_host_takes_notified_work(self) -> None:
+        scheduler = JudgehostBatchRuntime(id_base=265)
+        waiting = threading.Event()
+        finished = threading.Event()
+        outcomes: list[bool] = []
+        condition = scheduler._state._ready_condition
+        original_wait = condition.wait
+
+        def observed_wait(timeout: float | None = None) -> bool:
+            waiting.set()
+            return original_wait(timeout)
+
+        def wait_for_work() -> None:
+            outcomes.append(scheduler.wait_for_ready_batch(1.0))
+            finished.set()
+
+        with patch.object(condition, "wait", side_effect=observed_wait):
+            thread = threading.Thread(target=wait_for_work)
+            thread.start()
+            try:
+                self.assertTrue(waiting.wait(timeout=0.5))
+                with condition:
+                    first_batch = _create_ready_batch(
+                        scheduler, task_id="contended", run_id="run-contended",
+                        ordinals=[1],
+                    )
+                    _lease_cases(
+                        scheduler, first_batch, hostname="other-host", limit=1,
+                        now_text="leased",
+                    )
+                self.assertFalse(finished.wait(timeout=0.03))
+                next_batch = _create_ready_batch(
+                    scheduler, task_id="available", run_id="run-available",
+                    ordinals=[2],
+                )
+                self.assertTrue(finished.wait(timeout=0.5))
+            finally:
+                thread.join(timeout=2.0)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(outcomes, [True])
+        self.assertEqual(scheduler.select_ready_batch("waiting-host")["batch_id"], next_batch)
+
+    def test_async_reports_keep_their_leases_without_blocking_other_batches(self) -> None:
+        scheduler = JudgehostBatchRuntime(id_base=270)
+        batches = [
+            _create_ready_batch(
+                scheduler, task_id=f"async-{i}", run_id=f"run-async-{i}",
+                ordinals=[i + 1], verification_id=f"ver-{i + 10:x}",
+            )
+            for i in range(3)
+        ]
+        cases = []
+        for batch_id in batches:
+            selected = scheduler.select_ready_batch("host-a")
+            self.assertIsNotNone(selected)
+            assert selected is not None
+            self.assertEqual(selected["batch_id"], batch_id)
+            cases.extend(_lease_cases(
+                scheduler, batch_id, hostname="host-a", limit=1, now_text="leased",
+            ))
+        self.assertEqual(scheduler.host_leased_case_count("host-a"), 3)
+        claims = [scheduler.claim_case_reporting(
+            int(case["id"]), hostname="host-a",
+            receipt_generation=_receipt_generation(scheduler, int(case["id"])),
+            now_text="reporting",
+        ) for case in cases]
+        self.assertTrue(all(claim is not None for claim in claims))
+        # Cancel one verification while other batches are still uploading.
+        scheduler.close_verification_admission("ver-a")
+        scheduler.drain_verification_cancel_slice(
+            "ver-a", now_text="cancelled", limit=16,
+        )
+        for index in (2, 0, 1):
+            claim = claims[index]
+            assert claim is not None
+            scheduler.commit_case_result(
+                claim.case_id, generation=claim.generation,
+                result=_case_result(f"{index + 1:03}.in"), updated_at="reported",
+            )
+        self.assertEqual(scheduler.host_leased_case_count("host-a"), 0)
+        self.assertEqual([
+            scheduler.fetch_case(int(case["id"]))["status"] for case in cases
+        ], ["cancelled", "reported", "reported"])
 
     def test_reporting_claim_serializes_duplicate_and_defers_cancel(self) -> None:
         scheduler = JudgehostBatchRuntime(id_base=250)
@@ -2325,19 +2410,6 @@ class TestJudgehostScheduler(unittest.TestCase):
             [first_batch, second_batch],
         )
         self.assertEqual(scheduler.active_script_hashes("compile", compile_id), set())
-        self.assertIsNotNone(
-            scheduler.claim_batch_finalization(
-                first_batch,
-                now_text=now_text,
-            )
-        )
-        self.assertIsNotNone(
-            scheduler.claim_batch_finalization(
-                second_batch,
-                now_text=now_text,
-            )
-        )
-        self.assertEqual(scheduler.active_script_hashes("compile", compile_id), set())
 
     def test_sixteen_hosts_never_lease_a_case_twice(self) -> None:
         scheduler = JudgehostBatchRuntime(id_base=1000)
@@ -2613,6 +2685,206 @@ class TestJudgehostScheduler(unittest.TestCase):
 
 
 class TestJudgehostCancellationDrain(unittest.TestCase):
+    def _cancellation_fixture(self):
+        batches = JudgehostBatchRuntime()
+        tasks = JudgehostTaskRegistry()
+        completed = {name: threading.Event() for name in ("ver-a", "ver-b")}
+
+        class _Cleanup:
+            @staticmethod
+            def schedule(verification_id):
+                completed[verification_id].set()
+
+        # Cancellation retirement uses runtime/task state only; ordinary result
+        # publication dependencies must remain unused on this path.
+        finalizer = JudgehostBatchFinalizer(
+            batches, tasks, None, None, None,  # type: ignore[arg-type]
+        )
+        drain = JudgehostCancellationDrain(
+            batches, tasks, finalizer, _Cleanup(),  # type: ignore[arg-type]
+        )
+        batches.set_cancellation_progress_notifier(drain.wake)
+        self.addCleanup(drain.pause)
+        ids = {}
+        for index, name in enumerate(completed):
+            tasks.insert(_task_row(index, verification_id=name))
+            ids[name] = _create_ready_batch(
+                batches, task_id=f"task-{index}", run_id=f"run-{index}",
+                ordinals=[index + 1], verification_id=name,
+            )
+        return batches, tasks, drain, completed, ids
+
+    def test_receipt_wait_parks_only_its_verification_and_release_wakes_it(self) -> None:
+        batches, tasks, drain, completed, ids = self._cancellation_fixture()
+        case = _lease_cases(
+            batches, ids["ver-a"], hostname="host-a", limit=1, now_text="now",
+        )[0]
+        receipt = batches.acquire_case_callback_receipt(case["id"])
+        assert receipt is not None
+        entered = threading.Event()
+        release = threading.Event()
+        original = batches.drain_verification_cancel_slice
+
+        def controlled_slice(verification_id, **kwargs):
+            result = original(verification_id, **kwargs)
+            if verification_id == "ver-a" and result.processed_case_count:
+                entered.set()
+                if not release.wait(2):
+                    raise AssertionError("test did not release cancellation slice")
+            return result
+
+        # A long fallback interval makes completion depend on queue/wake events.
+        with patch("app.service.judgehost.cancellation._DISCOVERY_INTERVAL_SEC", 60), patch.object(
+            batches, "drain_verification_cancel_slice", side_effect=controlled_slice,
+        ):
+            batches.close_verification_admission("ver-a")
+            drain.schedule("ver-a", reason="cancelled")
+            try:
+                self.assertTrue(entered.wait(2))
+                batches.close_verification_admission("ver-b")
+                drain.schedule("ver-b", reason="cancelled")
+            finally:
+                release.set()
+            self.assertTrue(completed["ver-b"].wait(2))
+            self.assertEqual(batches.fetch_case(case["id"])["status"], "leased")
+            batches.release_case_callback_receipt(receipt.receipt_id)
+            self.assertTrue(completed["ver-a"].wait(2))
+            self.assertEqual(batches.fetch_case(case["id"])["status"], "cancelled")
+            self.assertEqual(batches.fetch_batch(ids["ver-a"])["status"], "failed")
+            self.assertEqual(tasks.get("task-0")["status"], "failed")
+            drain.pause()
+
+    def test_release_during_active_slice_retains_next_round(self) -> None:
+        batches, _tasks, drain, completed, ids = self._cancellation_fixture()
+        case = _lease_cases(
+            batches, ids["ver-a"], hostname="host-a", limit=1, now_text="now",
+        )[0]
+        receipt = batches.acquire_case_callback_receipt(case["id"])
+        assert receipt is not None
+        entered = threading.Event()
+        release = threading.Event()
+        original = batches.drain_verification_cancel_slice
+
+        def controlled_slice(verification_id, **kwargs):
+            result = original(verification_id, **kwargs)
+            if result.awaiting_receipt_count and not result.processed_case_count:
+                entered.set()
+                if not release.wait(2):
+                    raise AssertionError("test did not release parked slice")
+            return result
+
+        with patch("app.service.judgehost.cancellation._DISCOVERY_INTERVAL_SEC", 60), patch.object(
+            batches, "drain_verification_cancel_slice", side_effect=controlled_slice,
+        ):
+            batches.close_verification_admission("ver-a")
+            drain.schedule("ver-a", reason="cancelled")
+            try:
+                self.assertTrue(entered.wait(2))
+                batches.release_case_callback_receipt(receipt.receipt_id)
+            finally:
+                release.set()
+            self.assertTrue(completed["ver-a"].wait(2))
+            self.assertEqual(batches.fetch_batch(ids["ver-a"])["status"], "failed")
+            drain.pause()
+
+    def test_discovery_recovers_missing_schedule_and_failed_slice(self) -> None:
+        batches, _tasks, drain, completed, ids = self._cancellation_fixture()
+        original = batches.drain_verification_cancel_slice
+        failed = False
+
+        def fail_once(verification_id, **kwargs):
+            nonlocal failed
+            if not failed:
+                failed = True
+                raise RuntimeError("injected cancellation failure")
+            return original(verification_id, **kwargs)
+
+        with patch.object(batches, "drain_verification_cancel_slice", side_effect=fail_once), self.assertLogs(
+            "app.service.judgehost.cancellation", level="ERROR",
+        ):
+            batches.close_verification_admission("ver-a")
+            drain.start()
+            self.assertTrue(completed["ver-a"].wait(3))
+            self.assertEqual(batches.fetch_batch(ids["ver-a"])["status"], "failed")
+            drain.pause()
+
+    def test_publication_and_finalization_release_wake_cancelled_batch(self) -> None:
+        for owner in ("publication", "finalization-abort", "finalization-complete"):
+            with self.subTest(owner=owner):
+                batches, _tasks, drain, completed, ids = self._cancellation_fixture()
+                batch_id = ids["ver-a"]
+                case = _lease_cases(
+                    batches, batch_id, hostname="host-a", limit=1, now_text="now",
+                )[0]
+                _commit_leased_case_result(
+                    batches, case_id=case["id"], hostname="host-a",
+                    result=_case_result(case["test_name"]), updated_at="now",
+                )
+                if owner == "publication":
+                    publications = batches.claim_case_publications(batch_id)
+                    self.assertEqual(len(publications), 1)
+                else:
+                    batches.acknowledge_case_completion(case["id"])
+                    batches.finish_verification_execution("ver-a", now_text="now")
+                    claim = batches.claim_batch_finalization(batch_id, now_text="now")
+                    assert claim is not None
+                parked = threading.Event()
+                original = batches.drain_verification_cancel_slice
+
+                def observe_wait(verification_id, **kwargs):
+                    result = original(verification_id, **kwargs)
+                    if not result.processed_case_count:
+                        parked.set()
+                    return result
+
+                with patch("app.service.judgehost.cancellation._DISCOVERY_INTERVAL_SEC", 60), patch.object(
+                    batches, "drain_verification_cancel_slice", side_effect=observe_wait,
+                ):
+                    batches.close_verification_admission("ver-a")
+                    drain.schedule("ver-a", reason="cancelled")
+                    self.assertTrue(parked.wait(2))
+                    if owner == "publication":
+                        batches.complete_case_publications(batch_id, publications, retry=True)
+                    elif owner == "finalization-abort":
+                        batches.abort_batch_finalization(claim, now_text="now")
+                    else:
+                        batches.set_batch_terminal_status(
+                            claim, status="failed", completed_at="now", updated_at="now",
+                        )
+                    self.assertTrue(completed["ver-a"].wait(2))
+                    self.assertEqual(batches.fetch_batch(batch_id)["status"], "failed")
+                    self.assertTrue(batches.fetch_case(case["id"])["completion_acknowledged"])
+                    drain.pause()
+
+    def test_pause_discards_waiting_request_and_resume_accepts_new_work(self) -> None:
+        batches, _tasks, drain, completed, ids = self._cancellation_fixture()
+        case = _lease_cases(
+            batches, ids["ver-a"], hostname="host-a", limit=1, now_text="now",
+        )[0]
+        receipt = batches.acquire_case_callback_receipt(case["id"])
+        assert receipt is not None
+        batches.close_verification_admission("ver-a")
+        drain.schedule("ver-a", reason="cancelled")
+        drain.pause()
+        # Late releases must return while paused, without waiting for resume.
+        released = threading.Event()
+
+        def late_release():
+            batches.release_case_callback_receipt(receipt.receipt_id)
+            released.set()
+
+        thread = threading.Thread(target=late_release, daemon=True)
+        thread.start()
+        try:
+            self.assertTrue(released.wait(2))
+        finally:
+            drain.resume()
+            thread.join(2)
+        batches.close_verification_admission("ver-b")
+        drain.schedule("ver-b", reason="cancelled")
+        self.assertTrue(completed["ver-b"].wait(2))
+        self.assertEqual(batches.fetch_batch(ids["ver-b"])["status"], "failed")
+
     def test_deduplicated_request_retries_bounded_slices(self) -> None:
         entered = threading.Event()
         release = threading.Event()
@@ -2689,6 +2961,7 @@ class TestJudgehostCancellationDrain(unittest.TestCase):
             cleanup,  # type: ignore[arg-type]
         )
 
+        self.addCleanup(drain.pause)
         drain.schedule("ver-cancel", reason="cancelled by user")
         self.assertTrue(entered.wait(timeout=2.0))
         drain.schedule("ver-cancel", reason="cancelled by user")

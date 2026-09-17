@@ -9,6 +9,7 @@ from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from starlette.datastructures import MutableHeaders
 
 import app.main_constant as _K
 from app.impl.contest.workspace_scope import (
@@ -249,10 +250,14 @@ def _sanitize_redirect_target(target: str) -> str:
 
 
 def _apply_security_headers(response) -> None:
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "SAMEORIGIN"
-    response.headers["Referrer-Policy"] = "same-origin"
-    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'"
+    apply_security_headers(response.headers)
+
+
+def apply_security_headers(headers: MutableHeaders) -> None:
+    headers["X-Content-Type-Options"] = "nosniff"
+    headers["X-Frame-Options"] = "SAMEORIGIN"
+    headers["Referrer-Policy"] = "same-origin"
+    headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'"
 
 
 def redirect_response(url: str, status_code: int = 303, message: str = "") -> RedirectResponse:

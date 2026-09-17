@@ -298,7 +298,7 @@ _DB_TEMPLATE_PATH = suite_root() / "fixture-template" / "metadata.db"
 
 def _checkpoint_database() -> None:
     _assert_test_runtime_paths()
-    with db.conn() as conn:
+    with db.writer_connection() as conn:
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
 
@@ -315,6 +315,7 @@ def _initialize_database_template() -> None:
 
 def _restore_database_template() -> None:
     _assert_test_runtime_paths()
+    db.close_connections()
     for sidecar in _database_sidecars(db.path):
         sidecar.unlink(missing_ok=True)
     replacement = db.path.with_name(f".{db.path.name}.{uuid.uuid4().hex}.tmp")
@@ -322,6 +323,7 @@ def _restore_database_template() -> None:
     try:
         shutil.copy2(_DB_TEMPLATE_PATH, replacement)
         os.replace(replacement, db.path)
+        db.reopen()
     finally:
         replacement.unlink(missing_ok=True)
 

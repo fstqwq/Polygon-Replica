@@ -993,6 +993,85 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
             thread.join(timeout=2.0)
             self.assertFalse(thread.is_alive())
 
+    def test_ready_programs_finish_their_turn_before_newly_ready_work(self) -> None:
+        task_ids = ["a-1", "b-1", "a-2", "c-1", "a-3", "a-late"]
+        edges = [("a-1", "a-late")]
+        store = _InMemoryTaskStore(
+            rows=[
+                _task_row(
+                    task_id, task_kind="solution-run",
+                    status=VerificationTaskStatus.PENDING, queue_index=index,
+                    program_id=task_id[0], test_name=f"{index}.in",
+                )
+                for index, task_id in enumerate(task_ids)
+            ],
+            edges=edges,
+        )
+        published: list[str] = []
+        closed: list[str] = []
+
+        def publish(row: dict[str, object]) -> TaskPublishResult:
+            task_id = str(row["id"])
+            published.append(task_id)
+            return TaskPublishResult(
+                task_id=task_id, run_id=f"run-{task_id}", judgehost_task_id=f"judge-{task_id}",
+                terminal_result=TaskCompletion(
+                    task_id=task_id, status=VerificationTaskStatus.DONE,
+                    run_id=f"run-{task_id}", judgehost_task_id=f"judge-{task_id}",
+                    result=_execution_result("AC"),
+                ),
+            )
+
+        coordinator = VerificationRuntimeCoordinator(
+            "verification", task_store=store,
+            completion_service=_FakeCompletionService(store), edges=edges,
+            callbacks=VerificationRuntimeCallbacks(
+                publish_task=publish, probe_task_case_cache=lambda _ids: set(),
+                cancel_execution=lambda _reason: None, close_programs=closed.extend,
+            ),
+        )
+        coordinator.run()
+        self.assertEqual(published, ["a-1", "a-2", "a-3", "b-1", "c-1", "a-late"])
+        self.assertEqual(closed, ["b", "c", "a"])
+        self.assertTrue(all(row["status"] == VerificationTaskStatus.DONE for row in store.list_rows("verification")))
+
+    def test_cancel_interrupts_a_program_turn_and_retires_waiting_programs(self) -> None:
+        store = _InMemoryTaskStore(
+            rows=[
+                _task_row(
+                    task_id, task_kind="solution-run",
+                    status=VerificationTaskStatus.PENDING, queue_index=index,
+                    program_id=task_id[0], test_name=f"{index}.in",
+                )
+                for index, task_id in enumerate(["a-1", "b-1", "a-2"])
+            ],
+            edges=[],
+        )
+        published: list[str] = []
+        closed: list[str] = []
+
+        def publish(row: dict[str, object]) -> TaskPublishResult:
+            task_id = str(row["id"])
+            published.append(task_id)
+            store.cancel_open_tasks("verification", reason="user cancellation")
+            coordinator.enqueue_cancel("user cancellation")
+            return TaskPublishResult(
+                task_id=task_id, run_id=f"run-{task_id}", judgehost_task_id=f"judge-{task_id}",
+            )
+
+        coordinator = VerificationRuntimeCoordinator(
+            "verification", task_store=store,
+            completion_service=_FakeCompletionService(store), edges=[],
+            callbacks=VerificationRuntimeCallbacks(
+                publish_task=publish, probe_task_case_cache=lambda _ids: set(),
+                cancel_execution=lambda _reason: None, close_programs=closed.extend,
+            ),
+        )
+        coordinator.run()
+        self.assertEqual(published, ["a-1"])
+        self.assertCountEqual(closed, ["a", "b"])
+        self.assertTrue(all(row["status"] == VerificationTaskStatus.CANCELLED for row in store.list_rows("verification")))
+
     def test_synchronous_failure_stops_independent_root_publication(self) -> None:
         verification_id = "ver-synchronous-failure"
         store = _InMemoryTaskStore(
@@ -1003,13 +1082,13 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
                         task_kind="solution-run",
                         status=VerificationTaskStatus.PENDING,
                         queue_index=index,
-                        program_id=f"solution-{index}",
-                        test_name="001.in",
+                        program_id="solution-0" if task_id != "vt-independent" else "solution-1",
+                        test_name=f"{index:03}.in",
                     ),
                     "verification_id": verification_id,
                 }
                 for index, task_id in enumerate(
-                    ("vt-first", "vt-independent"),
+                    ("vt-first", "vt-independent", "vt-same-program"),
                     start=1,
                 )
             ],
@@ -1059,6 +1138,7 @@ class TestVerificationRuntimeCoordinator(unittest.TestCase):
         }
         self.assertEqual(publish_order, ["vt-first"])
         self.assertEqual(drain_reasons, ["source payload is unavailable"])
+        self.assertEqual(rows["vt-same-program"]["status"], VerificationTaskStatus.CANCELLED)
         self.assertEqual(
             str(rows["vt-independent"]["status"]),
             VerificationTaskStatus.CANCELLED,

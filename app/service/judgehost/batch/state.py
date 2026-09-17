@@ -12,7 +12,7 @@ import statistics
 import threading
 import time
 from collections import defaultdict, deque
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 from app.service.judgehost.domjudge.identity import script_id
 from app.service.judgehost.batch.model import (
@@ -85,7 +85,7 @@ class BatchState:
     ):
         self._lock = threading.RLock() if lock is None else lock
         self._ready_condition = threading.Condition(self._lock)
-        self._ready_generation = 0
+        self._publication_condition = threading.Condition(self._lock)
         self._id_base = max(1, int(id_base if id_base is not None else time.time_ns()))
         self._next_entity_id_value = self._id_base + 1
         self._batches: dict[int, ExecutionBatchRecord] = {}
@@ -102,6 +102,7 @@ class BatchState:
         self._closed_program_keys: set[tuple[str, str]] = set()
         self._closed_verification_ids: set[str] = set()
         self._cancelled_verification_ids: set[str] = set()
+        self.cancellation_progress_notifier: Callable[[str], None] | None = None
         self._script_hash_refcounts: dict[tuple[str, int, str], int] = defaultdict(int)
         self._script_hashes_by_id: dict[tuple[str, int], set[str]] = defaultdict(set)
         self._leased_case_ids_by_host: dict[str, set[int]] = defaultdict(set)
@@ -115,6 +116,8 @@ class BatchState:
         self._materialization_generation_by_batch: dict[int, int] = {}
         self._finalization_generation_by_batch: dict[int, int] = {}
         self._active_finalization_generation_by_batch: dict[int, int] = {}
+        self._pending_publication_case_ids_by_batch: dict[int, set[int]] = defaultdict(set)
+        self._publishing_case_ids_by_batch: dict[int, set[int]] = defaultdict(set)
         # Materialization replaces the descriptor in this canonical map. Keeping
         # raw and materialized copies separately made warm program appends
         # observe a compile key without its submission.
@@ -145,6 +148,17 @@ class BatchState:
         )
         self._stolen_batch_by_host: dict[str, int] = {}
         self._compile_owner_by_batch: dict[int, str] = {}
+
+    def _cancelled_verification_id_locked(self, batch_id: int) -> str:
+        batch = self._batches.get(batch_id)
+        if batch is not None and batch.verification_id in self._cancelled_verification_ids:
+            return batch.verification_id
+        return ""
+
+    def notify_cancellation_progress(self, verification_id: str) -> None:
+        """Invoke the drain only after releasing the state lock."""
+        if verification_id and self.cancellation_progress_notifier is not None:
+            self.cancellation_progress_notifier(verification_id)
 
     def _next_entity_ids_locked(self, count: int) -> tuple[int, ...]:
         if count < 0:
@@ -186,6 +200,8 @@ class BatchState:
             self._materialization_generation_by_batch.clear()
             self._finalization_generation_by_batch.clear()
             self._active_finalization_generation_by_batch.clear()
+            self._pending_publication_case_ids_by_batch.clear()
+            self._publishing_case_ids_by_batch.clear()
             self._compile_submissions_by_key.clear()
             self._compile_key_by_submit_id.clear()
             self._batch_ids_by_compile_key.clear()
@@ -204,8 +220,8 @@ class BatchState:
             self._case_id_by_callback_receipt.clear()
             self._stolen_batch_by_host.clear()
             self._compile_owner_by_batch.clear()
-            self._ready_generation += 1
             self._ready_condition.notify_all()
+            self._publication_condition.notify_all()
 
     def activity_counts(self) -> dict[str, int]:
         with self._lock:
@@ -222,7 +238,8 @@ class BatchState:
                 "reporting": sum(
                     counts.reporting for counts in self._batch_counts.values()
                 ),
-                "finalizations": len(self._active_finalization_generation_by_batch),
+                "finalizations": len(self._active_finalization_generation_by_batch)
+                + sum(len(ids) for ids in self._publishing_case_ids_by_batch.values()),
             }
 
     def pending_finalization_ids(self) -> tuple[int, ...]:
@@ -374,7 +391,6 @@ class BatchState:
         key = self._batch_heap_key_locked(batch)
         self._refresh_prerequisite_index_locked(batch, ready=key is not None)
         if self._ready_batches.update(batch.batch_id, key):
-            self._ready_generation += 1
             self._ready_condition.notify_all()
 
     def _touch_batch_locked(self, batch: ExecutionBatchRecord) -> None:
@@ -455,6 +471,8 @@ class BatchState:
             if not leased_ids:
                 self._leased_case_ids_by_host.pop(old_owner, None)
         case.status = status
+        if status in self._TERMINAL_CASE_STATUSES:
+            self._pending_publication_case_ids_by_batch[case.batch_id].add(case.id)
         case.lease_owner = lease_owner
         if lease_owner:
             case.last_callback_hostname = lease_owner
@@ -552,6 +570,8 @@ class BatchState:
             updated_at=created_at,
         )
         self._cases[case_id] = case
+        if case.status in self._TERMINAL_CASE_STATUSES:
+            self._pending_publication_case_ids_by_batch[batch_id].add(case_id)
         self._case_ids_by_batch[batch_id].add(case_id)
         self._case_ids_by_task[source.task_id].add(case_id)
         self._case_ids_by_run[source.run_id].add(case_id)
@@ -863,6 +883,7 @@ class BatchState:
                     self._case_ids_by_testcase.pop(case.testcase_id, None)
 
         for batch_id in affected_batch_ids:
+            self._pending_publication_case_ids_by_batch[batch_id].difference_update(case_ids)
             retained = self._case_ids_by_batch[batch_id].difference(case_ids)
             self._case_ids_by_batch[batch_id] = retained
             if retained:
@@ -928,6 +949,8 @@ class BatchState:
         self._materialization_generation_by_batch.pop(batch_id, None)
         self._finalization_generation_by_batch.pop(batch_id, None)
         self._active_finalization_generation_by_batch.pop(batch_id, None)
+        self._pending_publication_case_ids_by_batch.pop(batch_id, None)
+        self._publishing_case_ids_by_batch.pop(batch_id, None)
         self._cache_heaps_by_batch.pop(batch_id, None)
         self._runnable_heaps_by_batch.pop(batch_id, None)
         self._empty_batch_ids.discard(batch_id)

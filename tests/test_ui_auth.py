@@ -1,19 +1,23 @@
-
-from tests.db_helpers import db_execute, db_fetch_all, db_fetch_one
-
 import asyncio
 import sqlite3
+from collections.abc import Awaitable, Callable
 from unittest.mock import patch
 
 from fastapi import HTTPException
-from starlette.responses import PlainTextResponse
+from starlette.responses import PlainTextResponse, Response
+from starlette.types import Message, Receive, Scope, Send
+
+# Initialize the test runtime and password-envelope store before importing handlers.
+from tests.common import E2ETestBase, override_config_values
+from tests.db_helpers import db_execute, db_fetch_all, db_fetch_one
+
 import app.impl.admin.panel as admin_panel_module
+from app.impl.auth.middleware import AuthenticationMiddleware
 from app.service.auth.password_hash import password_verifier_storage_hash
 from app.config import CONFIG_REGISTRY, ConfigKind
 from app.impl.auth.password_envelope import PasswordEnvelopeStore
 from app.impl.root.auth_pages import logout, register_email_check, setup_email_check
 from app.service.platform.maintenance.coordinator import MaintenanceStart
-from tests.common import E2ETestBase, override_config_values
 
 from tests.ui_support import (
     DEFAULT_CONFIG_VALUES,
@@ -37,7 +41,6 @@ from tests.ui_support import (
     _settings_password_update_with_envelope,
     _setup_with_password_envelope,
     _sudo_with_password_envelope,
-    auth_middleware,
     auth_password_meta,
     runtime,
     json,
@@ -63,6 +66,36 @@ from tests.ui_support import (
 
 SUDO_COOKIE_NAME = runtime.config_values.SUDO_COOKIE_NAME
 SUDO_COOKIE_MAX_AGE = int(runtime.config_values.SUDO_COOKIE_MAX_AGE)
+
+
+async def _through_auth(
+    request: Request, handler: Callable[[Request], Awaitable[Response]],
+) -> Response:
+    messages: list[Message] = []
+
+    async def downstream(scope: Scope, receive: Receive, send: Send) -> None:
+        response = await handler(Request(scope, receive=receive))
+        await response(scope, receive, send)
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: Message) -> None:
+        messages.append(message)
+
+    await AuthenticationMiddleware(downstream)(request.scope, receive, send)
+    start = next(
+        message for message in messages if message["type"] == "http.response.start"
+    )
+    response = Response(
+        b"".join(
+            message.get("body", b"")
+            for message in messages if message["type"] == "http.response.body"
+        ),
+        status_code=start["status"],
+    )
+    response.raw_headers = start["headers"]
+    return response
 
 
 class TestUIAuth(UIHelpersMixin, E2ETestBase):
@@ -1077,9 +1110,9 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         async def _next(_: Request) -> PlainTextResponse:
             return PlainTextResponse("ok", status_code=200)
 
-        with self.assertRaises(HTTPException) as blocked:
-            asyncio.run(auth_middleware(req, _next))
-        self.assertEqual(blocked.exception.status_code, 403)
+        response = asyncio.run(_through_auth(req, _next))
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
 
     def test_auth_middleware_blocks_cross_origin_admin_posts(self) -> None:
         username = self.random_id("admincsrf")
@@ -1107,9 +1140,8 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
                     method="POST",
                     extra_headers=[(b"origin", b"http://evil.example")],
                 )
-                with self.assertRaises(HTTPException) as blocked:
-                    asyncio.run(auth_middleware(req, _next))
-                self.assertEqual(blocked.exception.status_code, 403)
+                response = asyncio.run(_through_auth(req, _next))
+                self.assertEqual(response.status_code, 403)
                 self.assertFalse(reached_handler)
 
     def test_auth_middleware_blocks_admin_post_without_origin(self) -> None:
@@ -1129,9 +1161,9 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         async def _next(_: Request) -> PlainTextResponse:
             return PlainTextResponse("ok", status_code=200)
 
-        with self.assertRaises(HTTPException) as blocked:
-            asyncio.run(auth_middleware(req, _next))
-        self.assertEqual(blocked.exception.status_code, 403)
+        response = asyncio.run(_through_auth(req, _next))
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
 
     def test_auth_middleware_allows_same_origin_admin_post(self) -> None:
         username = self.random_id("admincsrfok")
@@ -1151,7 +1183,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         async def _next(_: Request) -> PlainTextResponse:
             return PlainTextResponse("ok", status_code=200)
 
-        resp = asyncio.run(auth_middleware(req, _next))
+        resp = asyncio.run(_through_auth(req, _next))
         self.assertEqual(resp.status_code, 200)
 
     def test_auth_middleware_redirects_unauthenticated_admin_paths(self) -> None:
@@ -1167,7 +1199,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
 
         for path in ("/admin", "/admin/users"):
             with self.subTest(path=path):
-                response = asyncio.run(auth_middleware(_request(path), _next))
+                response = asyncio.run(_through_auth(_request(path), _next))
                 self.assertEqual(response.status_code, 303)
                 self.assertTrue(
                     response.headers.get("location", "").startswith("/login?next=")
@@ -1191,7 +1223,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         async def _next(_: Request) -> PlainTextResponse:
             return PlainTextResponse("ok", status_code=200)
 
-        resp = asyncio.run(auth_middleware(req, _next))
+        resp = asyncio.run(_through_auth(req, _next))
         self.assertEqual(resp.status_code, 200)
 
     def test_auth_middleware_allows_userless_contest_path(self) -> None:
@@ -1211,7 +1243,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         async def _next(_: Request) -> PlainTextResponse:
             return PlainTextResponse("ok", status_code=200)
 
-        resp = asyncio.run(auth_middleware(req, _next))
+        resp = asyncio.run(_through_auth(req, _next))
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.body, b"ok")
 
@@ -1233,7 +1265,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         async def _next(_: Request) -> PlainTextResponse:
             return PlainTextResponse("ok", status_code=200)
 
-        resp = asyncio.run(auth_middleware(req, _next))
+        resp = asyncio.run(_through_auth(req, _next))
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.body, b"ok")
         self.assertEqual(resp.headers.get("location", ""), "")
@@ -1246,7 +1278,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
 
         with patch.object(runtime.db, "init") as init_mock:
             with self.assertRaises(sqlite3.OperationalError):
-                asyncio.run(auth_middleware(req, _next))
+                asyncio.run(_through_auth(req, _next))
         init_mock.assert_not_called()
 
     def test_auth_middleware_redirects_to_setup_when_no_registered_users(self) -> None:
@@ -1255,7 +1287,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         async def _next(_: Request) -> PlainTextResponse:
             return PlainTextResponse("ok", status_code=200)
 
-        resp = asyncio.run(auth_middleware(req, _next))
+        resp = asyncio.run(_through_auth(req, _next))
         self.assertEqual(resp.status_code, 303)
         self.assertIn("/setup?next=", resp.headers.get("location", ""))
 

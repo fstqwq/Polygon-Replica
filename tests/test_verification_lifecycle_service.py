@@ -1,6 +1,8 @@
 import sqlite3
 import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
 
 from app.service.verification.execution import (
     VerificationCoordinatorFailure,
@@ -20,7 +22,7 @@ from app.service.verification.runtime_registry import (
     VerificationRuntimeHandle,
     VerificationRuntimeRegistry,
 )
-from app.service.verification.types import VerificationTaskStatus
+from app.service.verification.types import VerificationStatus, VerificationTaskStatus
 
 from tests.identity_helpers import canonical_test_verification_id
 from tests.isolated_db_helpers import isolated_db_fetch_all
@@ -65,6 +67,325 @@ class _CancellationHandle(VerificationRuntimeHandle):
 
 
 class TestVerificationLifecycleService(VerificationServiceTestBase):
+    def test_cancel_waits_for_its_activation_or_fatal_publication_only(self) -> None:
+        for fatal in (False, True):
+            with self.subTest(fatal=fatal):
+                verification_id = canonical_test_verification_id(f"scoped-publication:{self.test_id}:{fatal}")
+                self._insert_verification_row(verification_id)
+                task_id = verification_task_id(verification_id, "accepted", "001.in")
+                plan = ActivationPlan.build(
+                    verification_id, detail={},
+                    programs=(self._verification_program(
+                        program_id="accepted", kind="main-correct",
+                        source_path="solutions/accepted.cpp", expected_behavior="accepted",
+                    ),),
+                    tasks=(PlannedTask(
+                        task_id=task_id, predecessor_task_id=None, task_kind="main-correct",
+                        source_path="solutions/accepted.cpp", program_id="accepted",
+                        test_name="001.in", expected_behavior="accepted",
+                    ),),
+                )
+                if fatal:
+                    self.verification_service.activate_verification(plan)
+                other_id = canonical_test_verification_id(f"scoped-other:{self.test_id}:{fatal}")
+                other_task = self._activate_verification(
+                    verification_id=other_id, problem_id=self.problem_id, workspace_id=self.workspace_id,
+                )
+                store = self.verification_task_store
+                entered, release = threading.Event(), threading.Event()
+                cancel_started = threading.Event()
+                write_transaction = self.db.write_transaction
+                delayed_thread = None
+
+                def delayed_transaction(transaction):
+                    result = write_transaction(transaction)
+                    if threading.current_thread() is delayed_thread:
+                        entered.set()
+                        if not release.wait(timeout=5):
+                            raise TimeoutError("lifecycle publication was not released")
+                    return result
+
+                def publish():
+                    nonlocal delayed_thread
+                    delayed_thread = threading.current_thread()
+                    if fatal:
+                        return store.commit_task_completions((TaskCompletion(
+                            task_id=task_id, status=VerificationTaskStatus.FAILED,
+                            run_id="failed", judgehost_task_id="failed",
+                            result=normalize_execution_result(verdict="FL"), fail_reason="executor failed",
+                        ),))
+                    return self.verification_service.activate_verification(plan)
+
+                def cancel():
+                    cancel_started.set()
+                    return store.transition_verification_terminal(
+                        verification_id, status=VerificationStatus.CANCELLED, reason="user cancellation",
+                    )
+
+                with patch.object(self.db, "write_transaction", side_effect=delayed_transaction):
+                    with ThreadPoolExecutor(max_workers=4) as pool:
+                        pending = pool.submit(publish)
+                        try:
+                            self.assertTrue(entered.wait(timeout=2))
+                            cancelling = pool.submit(cancel)
+                            self.assertTrue(cancel_started.wait(timeout=2))
+                            repeated = pool.submit(cancel)
+                            other = pool.submit(store.commit_task_completions, (TaskCompletion(
+                                task_id=other_task, status=VerificationTaskStatus.DONE,
+                                run_id="other", judgehost_task_id="other",
+                                result=normalize_execution_result(verdict="OK"),
+                            ),)).result(timeout=2)
+                            self.assertEqual(other.committed_task_ids, {other_task})
+                        finally:
+                            release.set()
+                        pending.result(timeout=2)
+                        outcomes = {cancelling.result(timeout=2).outcome, repeated.result(timeout=2).outcome}
+                self.assertEqual(outcomes, {"closed"} if fatal else {"transitioned", "closed"})
+                self.assertFalse(store.bind_and_expose_judgehost_runtime(
+                    task_id, expected_verification_id=verification_id,
+                    expected_program_id="accepted", expected_test_name="001.in",
+                    run_id="late", judgehost_task_id="late", expose=lambda: None,
+                ))
+                self.assertEqual(self.verification_service.verification_record(verification_id)["status"],
+                                 "failed" if fatal else "cancelled")
+
+    def test_cancellation_closes_admission_and_rollback_restores_it(self) -> None:
+        for rollback in (False, True):
+            with self.subTest(rollback=rollback):
+                verification_id = canonical_test_verification_id(f"admission-cancel:{self.test_id}:{rollback}")
+                task_id = self._activate_verification(
+                    verification_id=verification_id,
+                    problem_id=self.problem_id,
+                    workspace_id=self.workspace_id,
+                )
+                store = self.verification_task_store
+
+                def bind() -> bool:
+                    return store.bind_and_expose_judgehost_runtime(
+                        task_id, expected_verification_id=verification_id,
+                        expected_program_id="accepted", expected_test_name="001.in",
+                        run_id="run-admission", judgehost_task_id="jt-admission",
+                        expose=lambda: None,
+                    )
+
+                self.assertTrue(bind())
+                self.assertTrue(store.set_task_leased(task_id))
+                entered = threading.Event()
+                release = threading.Event()
+                write_transaction = self.db.write_transaction
+
+                def delayed_transaction(transaction):
+                    entered.set()
+                    if not release.wait(timeout=5):
+                        raise TimeoutError("cancellation storage was not released")
+                    return write_transaction(transaction)
+
+                waiting = threading.Event()
+                wait_count = 0
+                condition = store._admission_condition
+                original_wait = condition.wait
+
+                def observed_wait(timeout=None):
+                    nonlocal wait_count
+                    wait_count += 1
+                    if wait_count == 2:
+                        waiting.set()
+                    return original_wait(timeout)
+
+                if rollback:
+                    self._install_verification_cancel_abort(verification_id)
+                try:
+                    with (
+                        patch.object(self.db, "write_transaction", side_effect=delayed_transaction),
+                        patch.object(condition, "wait", side_effect=observed_wait),
+                    ):
+                        with ThreadPoolExecutor(max_workers=3) as pool:
+                            pending = pool.submit(
+                                self.verification_service.cancel_verification,
+                                verification_id, reason="cancel admission test",
+                            )
+                            try:
+                                self.assertTrue(entered.wait(timeout=2))
+                                binding = pool.submit(bind)
+                                leasing = pool.submit(store.set_task_leased, task_id)
+                                self.assertTrue(waiting.wait(timeout=2))
+                                self.assertFalse(binding.done())
+                                self.assertFalse(leasing.done())
+                            finally:
+                                release.set()
+                            if rollback:
+                                with self.assertRaises(sqlite3.IntegrityError):
+                                    pending.result(timeout=2)
+                            else:
+                                self.assertEqual(pending.result(timeout=2).outcome, "transitioned")
+                            self.assertEqual(binding.result(timeout=2), rollback)
+                            self.assertEqual(leasing.result(timeout=2), rollback)
+                finally:
+                    if rollback:
+                        self._clear_verification_cancel_abort()
+                self.assertEqual(bind(), rollback)
+                self.assertEqual(store.set_task_leased(task_id), rollback)
+                record = self.verification_service.verification_record(verification_id)
+                self.assertEqual(record["status"], "running" if rollback else "cancelled")
+                result = store.commit_task_completions((TaskCompletion(
+                    task_id=task_id, status=VerificationTaskStatus.DONE,
+                    run_id="run-admission", judgehost_task_id="jt-admission",
+                    result=normalize_execution_result(verdict="OK"),
+                ),))
+                self.assertEqual(
+                    result.effective_completions[0].status,
+                    VerificationTaskStatus.DONE if rollback else VerificationTaskStatus.CANCELLED,
+                )
+                self.assertFalse(bind())
+                self.assertFalse(store.set_task_leased(task_id))
+
+    def test_fatal_completion_waiters_observe_commit_or_rollback(self) -> None:
+        for rollback in (False, True):
+            with self.subTest(rollback=rollback):
+                verification_id = canonical_test_verification_id(f"fatal-admission:{self.test_id}:{rollback}")
+                task_id = self._activate_verification(
+                    verification_id=verification_id,
+                    problem_id=self.problem_id, workspace_id=self.workspace_id,
+                )
+                store = self.verification_task_store
+
+                def bind() -> bool:
+                    return store.bind_and_expose_judgehost_runtime(
+                        task_id, expected_verification_id=verification_id,
+                        expected_program_id="accepted", expected_test_name="001.in",
+                        run_id="run-fatal", judgehost_task_id="jt-fatal", expose=lambda: None,
+                    )
+
+                self.assertTrue(bind())
+                entered = threading.Event()
+                release = threading.Event()
+                waiting = threading.Event()
+                write_transaction = self.db.write_transaction
+                condition = store._admission_condition
+                original_wait = condition.wait
+
+                def observed_wait(timeout=None):
+                    waiting.set()
+                    return original_wait(timeout)
+
+                def delayed_transaction(transaction):
+                    def before_commit(conn):
+                        result = transaction(conn)
+                        entered.set()
+                        if not release.wait(timeout=5):
+                            raise TimeoutError("fatal completion was not released")
+                        if rollback:
+                            raise sqlite3.IntegrityError("forced completion rollback")
+                        return result
+                    return write_transaction(before_commit)
+
+                with (
+                    patch.object(self.db, "write_transaction", side_effect=delayed_transaction),
+                    patch.object(condition, "wait", side_effect=observed_wait),
+                ):
+                    with ThreadPoolExecutor(max_workers=2) as pool:
+                        completion = pool.submit(store.commit_task_completions, (TaskCompletion(
+                            task_id=task_id, status=VerificationTaskStatus.FAILED,
+                            run_id="run-fatal", judgehost_task_id="jt-fatal",
+                            result=normalize_execution_result(verdict="FL"), fail_reason="executor failed",
+                        ),))
+                        try:
+                            self.assertTrue(entered.wait(timeout=2))
+                            binding = pool.submit(bind)
+                            self.assertTrue(waiting.wait(timeout=2))
+                            self.assertFalse(binding.done())
+                        finally:
+                            release.set()
+                        if rollback:
+                            with self.assertRaisesRegex(sqlite3.IntegrityError, "forced completion rollback"):
+                                completion.result(timeout=2)
+                        else:
+                            self.assertEqual(completion.result(timeout=2).parent_transition, "failed")
+                        self.assertEqual(binding.result(timeout=2), rollback)
+                self.assertEqual(store.set_task_leased(task_id), rollback)
+                self.assertEqual(
+                    self.verification_service.verification_record(verification_id)["status"],
+                    "running" if rollback else "failed",
+                )
+
+    def test_other_task_can_be_published_and_leased_during_completion_storage(self) -> None:
+        verification_id = canonical_test_verification_id(f"admission-progress:{self.test_id}")
+        self._insert_verification_row(verification_id)
+        task_ids = tuple(verification_task_id(verification_id, "accepted", name) for name in ("001.in", "002.in"))
+        self._activate_graph(verification_id, tasks=[
+            {"id": task_id, "task_kind": "main-correct", "program_id": "accepted",
+             "source_path": "solutions/ac.cpp", "expected_behavior": "accepted", "test_name": name}
+            for task_id, name in zip(task_ids, ("001.in", "002.in"))
+        ], edges=[])
+        store = self.verification_task_store
+        entered = threading.Event()
+        release = threading.Event()
+        write_transaction = self.db.write_transaction
+
+        def delayed_transaction(transaction):
+            entered.set()
+            if not release.wait(timeout=5):
+                raise TimeoutError("completion storage was not released")
+            return write_transaction(transaction)
+
+        with patch.object(self.db, "write_transaction", side_effect=delayed_transaction):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                pending = pool.submit(store.commit_task_completions, (TaskCompletion(
+                    task_id=task_ids[0], status=VerificationTaskStatus.DONE,
+                    run_id="r-first", judgehost_task_id="jt-first",
+                    result=normalize_execution_result(verdict="OK"),
+                ),))
+                try:
+                    self.assertTrue(entered.wait(timeout=2))
+                    self.assertTrue(pool.submit(
+                        store.bind_and_expose_judgehost_runtime, task_ids[1],
+                        expected_verification_id=verification_id,
+                        expected_program_id="accepted", expected_test_name="002.in",
+                        run_id="r-next", judgehost_task_id="jt-next", expose=lambda: None,
+                    ).result(timeout=2))
+                    self.assertTrue(pool.submit(store.set_task_leased, task_ids[1]).result(timeout=2))
+                finally:
+                    release.set()
+                self.assertEqual(pending.result(timeout=2).committed_task_ids, {task_ids[0]})
+        self.assertEqual([row["status"] for row in store.list_rows(verification_id)], [
+            VerificationTaskStatus.DONE, VerificationTaskStatus.LEASED,
+        ])
+
+    def test_cancel_commits_while_page_keeps_a_consistent_read_snapshot(self) -> None:
+        verification_id = canonical_test_verification_id(f"read-cancel:{self.test_id}")
+        self._activate_verification(
+            verification_id=verification_id,
+            problem_id=self.problem_id,
+            workspace_id=self.workspace_id,
+        )
+        reading = threading.Event()
+        release = threading.Event()
+
+        def read_page(conn: sqlite3.Connection) -> tuple[str, str]:
+            first = conn.execute("SELECT status FROM verifications WHERE id=?", [verification_id]).fetchone()[0]
+            self.verification_task_store.snapshot_rows(conn, verification_id)
+            reading.set()
+            if not release.wait(timeout=5.0):
+                raise TimeoutError("page read was not released")
+            second = conn.execute("SELECT status FROM verifications WHERE id=?", [verification_id]).fetchone()[0]
+            return first, second
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            page = pool.submit(self.verification_task_store.read_lifecycle_snapshot, read_page)
+            try:
+                self.assertTrue(reading.wait(timeout=2.0))
+                cancel = pool.submit(
+                    self.verification_service.cancel_verification,
+                    verification_id,
+                    reason="cancel during page read",
+                )
+                self.assertEqual(cancel.result(timeout=1.0).outcome, "transitioned")
+            finally:
+                release.set()
+            self.assertEqual(page.result(timeout=2.0), ("running", "running"))
+        with self.db.conn() as conn:
+            self.assertEqual(conn.execute("SELECT status FROM verifications WHERE id=?", [verification_id]).fetchone()[0], "cancelled")
+
     def test_activation_installs_one_immutable_graph(self) -> None:
         verification_id = canonical_test_verification_id(
             f"activation-once:{self.test_id}"
@@ -1493,8 +1814,13 @@ class TestVerificationLifecycleService(VerificationServiceTestBase):
                 self,
                 runtime_verification_id: str,
                 handle: VerificationRuntimeHandle,
+                *,
+                defers_finalization: bool = False,
             ) -> None:
-                super().register(runtime_verification_id, handle)
+                super().register(
+                    runtime_verification_id, handle,
+                    defers_finalization=defers_finalization,
+                )
                 lifecycle.cancel_verification(
                     runtime_verification_id,
                     reason="cancelled during registration",

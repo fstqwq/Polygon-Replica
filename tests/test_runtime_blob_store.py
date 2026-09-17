@@ -27,6 +27,40 @@ class TestRuntimeBlobStore(unittest.TestCase):
         self.assertEqual(from_file.blob_ref, from_bytes.blob_ref)
         self.assertEqual(from_file.path, from_bytes.path)
 
+    def test_serialized_descriptor_preserves_path_and_validates_size(self) -> None:
+        stored = self.blobs.put_bytes(b"one")
+        self.assertEqual(self.blobs.read(self.blobs.resolve_payload(stored.to_payload())), b"one")
+        external = self.root / "external.in"
+        external.write_bytes(b"two")
+        payload = {**stored.to_payload(), "path": str(external)}
+        self.assertEqual(self.blobs.resolve_payload(payload).path, external.resolve())
+        with self.assertRaises(ValueError):
+            self.blobs.resolve_payload({**stored.to_payload(), "size": True})
+        stored.path.unlink()
+        with self.assertRaises(OSError):
+            self.blobs.read(self.blobs.resolve_payload(stored.to_payload()))
+
+    def test_deleted_blob_is_unavailable_until_republished(self) -> None:
+        content = b"reusable case output\n"
+        first = self.blobs.put_bytes(content)
+        assert first.blob_ref is not None
+        self.assertEqual(self.blobs.read(first), content)
+        first.path.unlink()
+        self.assertIsNone(self.blobs.descriptor(first.blob_ref))
+        restored = self.blobs.put_bytes(content)
+        self.assertEqual(restored.blob_ref, first.blob_ref)
+        self.assertEqual(self.blobs.read(restored), content)
+
+    def test_runtime_reset_discards_blob_availability(self) -> None:
+        content = b"before and after runtime reset\n"
+        first = self.blobs.put_bytes(content)
+        assert first.blob_ref is not None
+        self.blobs.clear_all()
+        self.assertIsNone(self.blobs.descriptor(first.blob_ref))
+        restored = self.blobs.put_bytes(content)
+        self.assertEqual(restored.blob_ref, first.blob_ref)
+        self.assertEqual(self.blobs.read(restored), content)
+
     def test_domjudge_json_stream_preserves_base64_chunk_boundaries(self) -> None:
         payloads = [b"", b"a", b"ab", b"abc", bytes(range(251)) * 66842]
         files = []

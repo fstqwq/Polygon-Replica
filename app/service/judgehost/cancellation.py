@@ -14,7 +14,6 @@ from app.service.judgehost.task.registry import JudgehostTaskRegistry
 
 logger = logging.getLogger(__name__)
 
-_IDLE_RETRY_SEC = 0.25
 _DISCOVERY_INTERVAL_SEC = 0.5
 
 
@@ -48,18 +47,18 @@ class JudgehostCancellationDrain:
         self._requests: dict[str, _CancellationRequest] = {}
         self._drained: set[str] = set()
         self._active_verification_id = ""
-        self._started = False
+        self._thread: threading.Thread | None = None
         self._resetting = False
 
     def _ensure_started_locked(self) -> None:
-        if self._started:
+        if self._thread is not None:
             return
-        self._started = True
-        threading.Thread(
+        self._thread = threading.Thread(
             target=self._run,
             name="judgehost-cancellation-drain",
             daemon=True,
-        ).start()
+        )
+        self._thread.start()
 
     def start(self) -> None:
         with self._condition:
@@ -82,13 +81,27 @@ class JudgehostCancellationDrain:
                     queued_monotonic=time.monotonic(),
                 )
                 self._requests[verification_id] = request
-            if (
-                verification_id != self._active_verification_id
-                and verification_id not in self._queued
-            ):
-                self._queue.append(verification_id)
-                self._queued.add(verification_id)
+            self._enqueue_locked(verification_id)
             self._ensure_started_locked()
+            self._condition.notify()
+
+    def _enqueue_locked(self, verification_id: str) -> None:
+        if verification_id not in self._queued:
+            self._queue.append(verification_id)
+            self._queued.add(verification_id)
+
+    def wake(self, verification_id: str) -> None:
+        """Retry an existing cancellation after another owner releases runtime state."""
+        # Our own slice already accounts for progress. Its failed retirement must
+        # park until discovery rather than waking itself into a retry loop.
+        if threading.current_thread() is self._thread:
+            return
+        with self._condition:
+            if self._resetting or verification_id not in self._requests:
+                return
+            # Queue even during an active slice: release can race with its last
+            # readiness check, so the next round must retain this notification.
+            self._enqueue_locked(verification_id)
             self._condition.notify()
 
     def pause(self) -> None:
@@ -107,41 +120,44 @@ class JudgehostCancellationDrain:
             self._condition.notify_all()
 
     def _run(self) -> None:
+        next_discovery = time.monotonic() + _DISCOVERY_INTERVAL_SEC
         while True:
             with self._condition:
-                while not self._queue:
-                    self._condition.wait(timeout=_DISCOVERY_INTERVAL_SEC)
-                    if not self._queue and not self._resetting:
-                        for verification_id in (
-                            self._batch_runtime.cancelled_verification_ids()
-                        ):
-                            if (
-                                verification_id in self._drained
-                                or verification_id in self._requests
-                                or verification_id in self._queued
-                            ):
-                                continue
-                            self._requests[verification_id] = _CancellationRequest(
-                                verification_id=verification_id,
-                                reason="verification cancelled",
-                                queued_monotonic=time.monotonic(),
-                            )
-                            self._queue.append(verification_id)
-                            self._queued.add(verification_id)
+                while True:
+                    if self._resetting:
+                        self._condition.wait()
+                        continue
+                    now = time.monotonic()
+                    if now >= next_discovery:
+                        for verification_id in self._batch_runtime.cancelled_verification_ids():
+                            if verification_id not in self._drained:
+                                self._requests.setdefault(
+                                    verification_id,
+                                    _CancellationRequest(
+                                        verification_id=verification_id,
+                                        reason="verification cancelled",
+                                        queued_monotonic=now,
+                                    ),
+                                )
+                        # Recover missed notifications and failed slices even
+                        # while unrelated cancellations keep the ready queue busy.
+                        for verification_id in self._requests:
+                            self._enqueue_locked(verification_id)
+                        next_discovery = now + _DISCOVERY_INTERVAL_SEC
+                    if self._queue:
+                        break
+                    self._condition.wait(timeout=max(0.0, next_discovery - now))
                 verification_id = self._queue.popleft()
                 self._queued.discard(verification_id)
                 request = self._requests.get(verification_id)
                 if request is None or self._resetting:
                     continue
                 self._active_verification_id = verification_id
-            failed = False
             completed = False
-            awaiting_receipts = 0
             made_progress = False
             try:
-                completed, awaiting_receipts, made_progress = self._drain_slice(request)
+                completed, made_progress = self._drain_slice(request)
             except Exception:
-                failed = True
                 logger.exception(
                     "Judgehost cancellation drain slice failed verification_id=%s",
                     verification_id,
@@ -165,17 +181,15 @@ class JudgehostCancellationDrain:
                         elapsed,
                     )
                     continue
-                if verification_id not in self._queued:
-                    self._queue.append(verification_id)
-                    self._queued.add(verification_id)
-                self._condition.notify()
-            if failed or awaiting_receipts or not made_progress:
-                time.sleep(_IDLE_RETRY_SEC)
+                if made_progress:
+                    self._enqueue_locked(verification_id)
+                # Waiting/failed requests stay parked; other queued work runs
+                # immediately. Release notifications or discovery retry them.
 
     def _drain_slice(
         self,
         request: _CancellationRequest,
-    ) -> tuple[bool, int, bool]:
+    ) -> tuple[bool, bool]:
         started = time.monotonic()
         if request.slices == 0:
             logger.info(
@@ -230,6 +244,5 @@ class JudgehostCancellationDrain:
         )
         return (
             completed,
-            case_outcome.awaiting_receipt_count,
             bool(case_outcome.processed_case_count or task_count or retired_count),
         )

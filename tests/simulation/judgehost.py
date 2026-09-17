@@ -707,6 +707,22 @@ class JudgehostSimulation:
         if node.state == "completed":
             self._violate(f"node completed twice: {node.node_id}")
             return
+        if node.batch_id is None or node.case_id is None:
+            self._violate(f"completed node has no case identity: {node.node_id}")
+            return
+        cases = self.scheduler.claim_case_publications(
+            node.batch_id, case_ids=(node.case_id,)
+        )
+        if not cases:
+            self._violate(f"case publication rejected for {node.node_id}")
+            return
+        # Persistence is instantaneous in this scheduler-only simulation.
+        # Acknowledge it before releasing dependencies or closing programs.
+        acknowledged = self.scheduler.acknowledge_case_completion(node.case_id)
+        self.scheduler.complete_case_publications(node.batch_id, cases)
+        if not acknowledged:
+            self._violate(f"case publication was not acknowledged for {node.node_id}")
+            return
         node.state = "completed"
         node.completed_at = self._now
         if node.timing_kind == "foreground" and node.leased_hostname is not None:

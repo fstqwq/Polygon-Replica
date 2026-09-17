@@ -33,7 +33,15 @@ class BatchMaintenance:
             return ()
         expired: list[tuple[CaseRecord, ExecutionBatchRecord]] = []
         with self._state._lock:
-            for case in tuple(self._state._cases.values()):
+            # Transitions and retirement already maintain the host lease index.
+            # Snapshot only active leases because expiry mutates that index.
+            case_ids = tuple(
+                case_id
+                for leased_ids in self._state._leased_case_ids_by_host.values()
+                for case_id in leased_ids
+            )
+            for case_id in case_ids:
+                case = self._state._cases[case_id]
                 if (
                     case.status != "leased"
                     or case.callback_receipt_count
@@ -122,7 +130,10 @@ class BatchMaintenance:
                 self._state._closed_program_keys.add(
                     (token, batch.verification_program_id)
                 )
-                if batch_id in self._state._active_finalization_generation_by_batch:
+                if (
+                    batch_id in self._state._active_finalization_generation_by_batch
+                    or self._state._publishing_case_ids_by_batch.get(batch_id)
+                ):
                     continue
                 for case_id in tuple(self._state._case_ids_by_batch.get(batch_id, ())):
                     if processed_count >= safe_limit:
@@ -365,6 +376,7 @@ class BatchMaintenance:
             ]
             if any(
                 batch_id in self._state._active_finalization_generation_by_batch
+                or self._state._publishing_case_ids_by_batch.get(batch_id)
                 for batch_id in affected_batches
             ):
                 return None

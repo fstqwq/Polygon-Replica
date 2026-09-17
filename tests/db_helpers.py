@@ -1,3 +1,6 @@
+import sqlite3
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Callable
 
@@ -14,14 +17,26 @@ from app.service.verification.lifecycle import (
 )
 
 
+@contextmanager
+def _persisted_read() -> Iterator[sqlite3.Connection]:
+    """Inspect durable state independently, including after runtime shutdown."""
+
+    uri = db.path.resolve().as_uri() + "?mode=ro"
+    with closing(sqlite3.connect(uri, uri=True, timeout=0)) as connection:
+        connection.row_factory = sqlite3.Row
+        yield connection
+
+
 def db_fetch_one(sql: str, params: list[object] | tuple[object, ...] | None = None):
     values = [] if params is None else list(params)
-    return db.fetch_one(sql, values)
+    with _persisted_read() as connection:
+        return connection.execute(sql, values).fetchone()
 
 
 def db_fetch_all(sql: str, params: list[object] | tuple[object, ...] | None = None):
     values = [] if params is None else list(params)
-    return db.fetch_all(sql, values)
+    with _persisted_read() as connection:
+        return connection.execute(sql, values).fetchall()
 
 
 def db_execute(sql: str, params: list[object] | tuple[object, ...] | None = None):

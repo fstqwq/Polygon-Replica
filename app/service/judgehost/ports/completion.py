@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, Protocol, TypedDict
 
@@ -28,9 +29,13 @@ class CaseCompletionReport:
 
 
 class CaseCompletionSink(Protocol):
+    def defers_finalization(self, verification_id: str) -> bool: ...
+
     def reported_many(
         self,
         reports: tuple[CaseCompletionReport, ...],
+        *,
+        after_commit: Callable[[frozenset[str]], None] | None = None,
     ) -> bool:
         ...
 

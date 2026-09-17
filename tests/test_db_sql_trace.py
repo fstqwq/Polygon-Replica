@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from app.db import DB, now_iso, sqlite3
 from tests.db_fixture import DBTestBase
+from tests.isolated_db_helpers import isolated_db_execute
 
 
 class TestDBSqlTrace(DBTestBase):
@@ -15,9 +16,7 @@ class TestDBSqlTrace(DBTestBase):
 
     @staticmethod
     def _execute(db: DB, sql: str, params: tuple[object, ...] = ()) -> None:
-        with db.conn() as conn:
-            conn.execute(sql, params)
-            conn.commit()
+        isolated_db_execute(db, sql, params)
 
     @staticmethod
     def _trace_sql_texts(info_mock) -> list[str]:
@@ -66,3 +65,16 @@ class TestDBSqlTrace(DBTestBase):
         value_text = next((text for text in sql_texts if "json_fields=value_json" in text), "")
         self.assertTrue(value_text, sql_texts)
         self.assertNotIn('"blob": "', value_text)
+
+    def test_db_trace_can_be_disabled_after_a_traced_request(self) -> None:
+        values = dict(self.config_values.snapshot())
+        values["DB_SQL_TRACE_ENABLED"] = True
+        self.config_values.replace(values)
+        self._fetch_one(self.db, "SELECT 1")
+        values["DB_SQL_TRACE_ENABLED"] = False
+        self.config_values.replace(values)
+        with patch("app.db.logger.info") as info:
+            row = self._fetch_one(self.db, "SELECT 2 AS value")
+        assert row is not None
+        self.assertEqual(row["value"], 2)
+        info.assert_not_called()

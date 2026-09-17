@@ -1,3 +1,6 @@
+from app.service.judgehost.task.model import PreparedTest
+
+
 _HEAVY_PAYLOAD_KEYS = {
     "precomputed",
 }
@@ -22,6 +25,9 @@ def compact_payload_for_retention(payload: object) -> dict[str, object]:
         tests_obj = verification_payload.get("tests")
         if isinstance(tests_obj, list):
             for test_obj in tests_obj:
+                if isinstance(test_obj, PreparedTest):
+                    compact_tests.append({"name": test_obj.name, "answer_name": test_obj.answer_name})
+                    continue
                 if not isinstance(test_obj, dict):
                     continue
                 compact_test = {

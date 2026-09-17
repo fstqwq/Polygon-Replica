@@ -1,6 +1,6 @@
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, TypedDict, cast
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
 
@@ -72,6 +72,9 @@ class ProblemHrefBuilder:
     request: Request
     problem_slug: str
     contest_slug: str | None
+    _paths: dict[tuple[str, tuple[tuple[str, str], ...]], str] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
 
     def __call__(
         self,
@@ -83,14 +86,17 @@ class ProblemHrefBuilder:
     ) -> str:
         if "problem" in path_params:
             raise ValueError("problem path parameter is managed by the builder")
-        encoded_path = _encoded_route_path(
-            self.request,
-            route_name=route_name,
-            path_params={
-                "problem": self.problem_slug,
-                **{key: str(value) for key, value in path_params.items()},
-            },
-        )
+        normalized_params = {
+            "problem": self.problem_slug,
+            **{key: str(value) for key, value in path_params.items()},
+        }
+        path_key = (route_name, tuple(sorted(normalized_params.items())))
+        encoded_path = self._paths.get(path_key)
+        if encoded_path is None:
+            encoded_path = _encoded_route_path(
+                self.request, route_name=route_name, path_params=normalized_params
+            )
+            self._paths[path_key] = encoded_path
         if not unquote(encoded_path).startswith("/problems/"):
             raise ValueError("problem URL builder only accepts Problem routes")
 

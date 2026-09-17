@@ -34,10 +34,10 @@ class MaintenanceAdmissionGate:
             yield
 
     @contextmanager
-    def try_locked(self) -> Iterator[bool]:
-        """Try the admission boundary without delaying judgehost polling."""
+    def try_locked(self, *, timeout_sec: float = 0.0) -> Iterator[bool]:
+        """Try the admission boundary with a bounded optional wait."""
 
-        acquired = self._lock.acquire(blocking=False)
+        acquired = self._lock.acquire(timeout=max(0.0, timeout_sec))
         try:
             yield acquired
         finally:

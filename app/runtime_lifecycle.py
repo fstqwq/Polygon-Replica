@@ -64,6 +64,7 @@ def startup(runtime: ApplicationRuntime) -> None:
     """Recover interrupted work and start the runtime worker queue once."""
     if runtime.schema_error is not None:
         return
+    runtime.db.reopen()
     runtime.runtime_state_service.initialize_metadata()
     runtime.problem_package_service.recover_startup()
     runtime.export_service.fail_interrupted_export_jobs()
@@ -79,3 +80,5 @@ def shutdown(runtime: ApplicationRuntime) -> None:
         runtime.worker_queue_service.stop()
     except Exception as exc:  # pylint: disable=broad-exception-caught
         warnings.warn(f"shutdown worker queue stop failed: {exc}", RuntimeWarning)
+    finally:
+        runtime.db.close_connections(permanent=True)

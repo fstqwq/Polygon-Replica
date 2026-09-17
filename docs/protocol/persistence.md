@@ -2,6 +2,25 @@
 
 The canonical schema and required-object manifest live in `app/db.py`. SQLite stores identities, relationships, configuration, lifecycle state, summaries, and filesystem locators. Committed source and large payloads remain in their owning filesystem roots.
 
+Each database instance owns one reusable write connection. A non-reentrant mutex
+covers its complete transaction or maintenance operation, including commit or
+rollback. Callers execute on their own threads. Writer admission has no FIFO
+guarantee. Write transactions use the same connection for their reads and writes.
+SQLite busy timeouts are zero; operations return errors without sleeping or
+replaying transaction callbacks. Other processes must coordinate database writes
+with the service operationally.
+
+Independent queries exclusively lease query-only connections from a pool retaining
+up to 16 idle connections. WAL permits these readers to run alongside the writer.
+Returning a read lease rolls back its open transaction. Each lease restores
+foreign-key enforcement, busy timeout, and current SQL tracing settings.
+
+Connection draining waits for the active writer, closes idle connections and the
+writer, and retires outstanding read leases on return. File replacement requires
+quiescing readers before draining. Runtime shutdown closes the database to new reads and writes. A subsequent
+runtime startup explicitly reopens admission. Failed write operations close their connection,
+rolling back uncommitted work; subsequent operations create a fresh writer.
+
 ## Execution rows
 
 | Table | Authority |
@@ -22,6 +41,12 @@ Late diagnostics are merged and deduplicated independently of task completion. T
 ### Linearization guarantees
 
 Activation, completion, cancellation, and sanity finalization serialize their compare-and-set transitions. Readers therefore observe either a complete running graph or the preceding taskless queued state, and one terminal decision for each task and parent. Process-local overlays are applied after one consistent SQLite read and never compete with persisted authority.
+
+Page reads keep a SQLite read transaction and copy runtime overlays under a
+short memory lock. Result decoding and page projection proceed after releasing
+that lock. Task bindings retain immutable execution metadata for lease and
+completion callbacks; completion transactions still arbitrate durable terminal
+decisions.
 
 ## Packages and previews
 

@@ -423,8 +423,8 @@ class BatchCompletion:
                 batch_id=batch.batch_id,
             )
 
-    @staticmethod
     def _append_pending_diagnostic_locked(
+        self,
         case: CaseRecord,
         diagnostic: PendingCaseDiagnostic,
         *,
@@ -453,6 +453,8 @@ class BatchCompletion:
                 return "not-applicable"
             retained = [bounded]
         case.pending_diagnostics[:] = retained
+        if case.status in self._state._TERMINAL_CASE_STATUSES:
+            self._state._pending_publication_case_ids_by_batch[case.batch_id].add(case.id)
         return "persisted"
 
     @staticmethod
@@ -744,6 +746,11 @@ class BatchCompletion:
             if case is None or case.callback_receipt_count <= 0:
                 raise RuntimeError("judgehost callback receipt counter underflow")
             case.callback_receipt_count -= 1
+            verification_id = (
+                self._state._cancelled_verification_id_locked(case.batch_id)
+                if case.callback_receipt_count == 0 else ""
+            )
+        self._state.notify_cancellation_progress(verification_id)
 
     def claim_case_reporting(
         self,

@@ -3,6 +3,9 @@ import json
 import logging
 import re
 import time
+import threading
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar, cast
 
@@ -57,6 +60,14 @@ logger = logging.getLogger(__name__)
 Acknowledgement = TypeVar("Acknowledgement")
 
 
+@dataclass(frozen=True, slots=True)
+class _PendingCachePublication:
+    verification_id: str
+    batch_id: int
+    case_id: int
+    publish: Callable[[], None]
+
+
 class JudgehostCallbackIngestion:
     STATUS_QUEUED = "queued"
     STATUS_LEASED = "leased"
@@ -83,6 +94,58 @@ class JudgehostCallbackIngestion:
         self._scripts = scripts
         self._artifact_capture = CaseArtifactCapture(runtime_blob_store)
         self._case_result_cache = case_result_cache
+        self._cache_lock = threading.Lock()
+        self._pending_cache: dict[str, dict[int, _PendingCachePublication]] = {}
+        self._active_cache_publications = 0
+
+    def pending_cache_count(self) -> int:
+        with self._cache_lock:
+            return sum(len(items) for items in self._pending_cache.values()) + self._active_cache_publications
+
+    def discard_pending_cache(self, verification_id: str | None = None) -> None:
+        with self._cache_lock:
+            if verification_id is None:
+                self._pending_cache.clear()
+            else:
+                self._pending_cache = {
+                    task_id: items for task_id, items in self._pending_cache.items()
+                    if next(iter(items.values())).verification_id != verification_id
+                }
+
+    def publish_pending_cache(self, task_id: str) -> None:
+        ready: list[_PendingCachePublication] = []
+        with self._cache_lock:
+            items = self._pending_cache.get(task_id)
+            if items is None:
+                return
+            for case_id, pending in tuple(items.items()):
+                case = self._batch_runtime.fetch_case(case_id)
+                if case is not None and not case["completion_acknowledged"]:
+                    continue
+                items.pop(case_id)
+                if case is not None:
+                    ready.append(pending)
+            if not items:
+                self._pending_cache.pop(task_id)
+            self._active_cache_publications += len(ready)
+        for pending in ready:
+            try:
+                if not self._batch_runtime.batch_verification_cancellation_requested(pending.batch_id):
+                    pending.publish()
+            finally:
+                with self._cache_lock:
+                    self._active_cache_publications -= 1
+
+    def discard_pending_case(self, case_id: int) -> None:
+        case = self._batch_runtime.fetch_case(case_id)
+        if case is None:
+            return
+        with self._cache_lock:
+            items = self._pending_cache.get(case["task_id"])
+            if items is not None:
+                items.pop(case_id, None)
+                if not items:
+                    self._pending_cache.pop(case["task_id"])
 
     @staticmethod
     def _display_text_limit_bytes(settings: JudgehostSettings) -> int:
@@ -214,6 +277,10 @@ class JudgehostCallbackIngestion:
         self, hostname: str, judgetask_id: int, payload: dict[str, object]
     ) -> CallbackOutcome[None]:
         settings = self._configuration.snapshot()
+        compile_success = (
+            parse_bool(payload["compile_success"], default=False)
+            if "compile_success" in payload else None
+        )
         receipt = self._batch_runtime.acquire_case_callback_receipt(int(judgetask_id))
         if receipt is None:
             logger.info(
@@ -225,6 +292,7 @@ class JudgehostCallbackIngestion:
                 hostname,
                 judgetask_id,
                 payload,
+                compile_success=compile_success,
                 receipt_generation=receipt.claim_generation,
                 settings=settings,
             )
@@ -232,7 +300,7 @@ class JudgehostCallbackIngestion:
             self._release_case_callback_receipt(receipt)
         return self._outcome(
             None,
-            (receipt.batch_id,),
+            (receipt.batch_id,) if compile_success is False else (),
             verification_ids=(receipt.verification_id,),
             host_contacts=() if host_contact is None else (host_contact,),
         )
@@ -243,6 +311,7 @@ class JudgehostCallbackIngestion:
         judgetask_id: int,
         payload: dict[str, object],
         *,
+        compile_success: bool | None,
         receipt_generation: int,
         settings: JudgehostSettings,
     ) -> HostContact | None:
@@ -262,16 +331,6 @@ class JudgehostCallbackIngestion:
         if not expected_hostname or expected_hostname != safe_host:
             raise RuntimeError("judgehost does not own judging run")
         batch_id = int(case_row["batch_id"])
-        compile_success = None
-        if "compile_success" in payload:
-            compile_success = (
-                1
-                if parse_bool(
-                    payload.get("compile_success"),
-                    default=False,
-                )
-                else 0
-            )
 
         def _payload_blob_as_b64(value: object) -> str:
             raw = decode_callback_blob(value)
@@ -288,7 +347,7 @@ class JudgehostCallbackIngestion:
         compile_meta = ""
         compile_updated_at = ""
         compile_success_recorded: bool | None = None
-        if compile_success == 1:
+        if compile_success is True:
             compile_output = _payload_blob_as_b64(payload.get("output_compile"))
             compile_meta = _payload_blob_as_b64(payload.get("compile_metadata"))
             compile_updated_at = now_iso()
@@ -321,7 +380,7 @@ class JudgehostCallbackIngestion:
                 "ignoring update for cancelled DOMjudge task case id: %s", case_id
             )
             return None
-        if compile_success == 0:
+        if compile_success is False:
             compile_output = _payload_blob_as_b64(payload.get("output_compile"))
             compile_meta = _payload_blob_as_b64(payload.get("compile_metadata"))
         host_contact = HostContact(
@@ -329,7 +388,7 @@ class JudgehostCallbackIngestion:
         )
         if compile_success is not None:
             updated_at = compile_updated_at or now_iso()
-            if compile_success == 0:
+            if compile_success is False:
                 compile_blob = decode_base64(compile_output)
                 compile_log = compile_blob.decode("utf-8", errors="replace").strip()
                 failure_text = (
@@ -707,44 +766,54 @@ class JudgehostCallbackIngestion:
             raise RuntimeError("judgehost case result lost its completion claim")
         if self._batch_runtime.batch_verification_cancellation_requested(batch_id):
             return 1
-        try:
-            cache_outcome = self._case_result_cache.try_store(
-                key_hash=case_key_hash,
-                signature=case_signature,
-                tags={
-                    "source_hash": source_hash,
-                    "testcase_hash": testcase_hash,
-                    "verification_source": cache_verification_source,
-                    "task_kind": canonical_task_kind,
-                },
-                runresult=runresult,
-                runtime_sec=runtime_sec,
-                cpu_sec=cpu_sec,
-                wall_sec=wall_sec,
-                memory_kb=memory_kb,
-                score_text=score_text,
-                result_json=execution_result_json(case_result),
-                files=captured_artifacts.payloads,
-                shortcut_eligible=shortcut_eligible,
-            )
-            if cache_outcome.status == "conflict":
-                logger.warning(
-                    "judgehost result-cache publication conflict "
+        cache_files = captured_artifacts.payloads
+        cache_result_json = execution_result_json(case_result)
+
+        def publish_cache() -> None:
+            try:
+                cache_outcome = self._case_result_cache.try_store(
+                    key_hash=case_key_hash,
+                    signature=case_signature,
+                    tags={
+                        "source_hash": source_hash,
+                        "testcase_hash": testcase_hash,
+                        "verification_source": cache_verification_source,
+                        "task_kind": canonical_task_kind,
+                    },
+                    runresult=runresult,
+                    runtime_sec=runtime_sec,
+                    cpu_sec=cpu_sec,
+                    wall_sec=wall_sec,
+                    memory_kb=memory_kb,
+                    score_text=score_text,
+                    result_json=cache_result_json,
+                    files=cache_files,
+                    shortcut_eligible=shortcut_eligible,
+                )
+                if cache_outcome.status == "conflict":
+                    logger.warning(
+                        "judgehost result-cache publication conflict "
+                        "verification_id=%s batch_id=%s case_id=%s host=%s",
+                        verification_id,
+                        batch_id,
+                        case_id,
+                        safe_host,
+                    )
+            except Exception:
+                logger.exception(
+                    "judgehost result-cache publication failed "
                     "verification_id=%s batch_id=%s case_id=%s host=%s",
                     verification_id,
                     batch_id,
                     case_id,
                     safe_host,
                 )
-        except Exception:
-            logger.exception(
-                "judgehost result-cache publication failed "
-                "verification_id=%s batch_id=%s case_id=%s host=%s",
-                verification_id,
-                batch_id,
-                case_id,
-                safe_host,
-            )
+
+        with self._cache_lock:
+            if not self._batch_runtime.batch_verification_cancellation_requested(batch_id):
+                self._pending_cache.setdefault(safe_task_id, {})[case_id] = _PendingCachePublication(
+                    verification_id, batch_id, case_id, publish_cache,
+                )
         logger.debug(
             "domjudge add_judging_run host=%s batch_id=%s case_id=%s runresult=%s",
             safe_host,

@@ -16,42 +16,6 @@ from tests.verification_adapter_fixture import (
 
 
 class TestVerificationAdapters(E2ETestBase):
-    def test_required_verification_file_waits_for_late_artifact_visibility(self) -> None:
-        from app.service.verification.workflow import _verification_required_file
-
-        payload = runtime.runtime_blob_store.put_bytes(b"generated\n")
-        calls = {"ref": 0, "descriptor": 0}
-
-        def _late_ref(_verification_id: str, _test_name: str, _ref_key: str) -> str:
-            calls["ref"] += 1
-            return str(payload.blob_ref) if calls["ref"] >= 2 else ""
-
-        def _late_descriptor(_ref: str) -> object:
-            calls["descriptor"] += 1
-            return payload if calls["descriptor"] >= 2 else None
-
-        with patch.object(runtime.verification_service, "verification_artifact_ref", side_effect=_late_ref), patch.object(
-            runtime.runtime_blob_store,
-            "descriptor",
-            side_effect=_late_descriptor,
-        ):
-            self.assertEqual(
-                _verification_required_file(
-                    "ver-late",
-                    "026.in",
-                    "input_ref",
-                    label="verification test 026.in",
-                    timeout_sec=0.2,
-                    interval_sec=0.001,
-                    verification_service=runtime.verification_service,
-                    runtime_blob_store=runtime.runtime_blob_store,
-                ),
-                payload,
-            )
-
-        self.assertGreaterEqual(calls["ref"], 3)
-        self.assertGreaterEqual(calls["descriptor"], 2)
-
     def test_task_publish_forwards_bypass_case_result_cache_to_judgehost(self) -> None:
         from app.service.verification.lifecycle import TASK_GENERATE_INPUT, TASK_MAIN_CORRECT
         from app.service.verification.workflow import (

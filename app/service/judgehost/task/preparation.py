@@ -1,19 +1,20 @@
-from app.main_constant import GENERAL_CONFIG_DEFAULTS, RUN_TEST_NAME_RE
-
 import json
 import re
-from typing import cast
 from pathlib import Path
+from typing import cast
 
 from app.db import now_iso
-from app.service.judgehost.domjudge.cache import executable_hash, submission_source_hash
+from app.main_constant import GENERAL_CONFIG_DEFAULTS, RUN_TEST_NAME_RE
+from app.service.judgehost.domjudge.cache import executable_hash, submission_source_hash, hash_of_hashes
+from app.service.judgehost.domjudge.identity import compile_key, submit_id
+from app.service.judgehost.batch.model import CompileSubmission, ExecutionBatchSpec
+from app.service.judgehost.task.model import ExecutionTemplate, PreparedTest
 from app.service.judgehost.domjudge.limits import (
     config_int,
     compile_output_kb,
     run_memory_limit_kb,
     run_output_kb,
 )
-from app.service.judgehost.domjudge.identity import compile_key
 from app.service.judgehost.domjudge.codec import decode_basename, decode_text
 from app.service.judgehost.domjudge.result import parse_bool, parse_int
 from app.service.platform.hashing import sha256_hex_json
@@ -130,20 +131,24 @@ class JudgehostPayloadPreparation:
         # Precomputed executable fields contain bytes and are derived entirely
         # from the canonical descriptor-backed request payload.
         stable_payload.pop("precomputed", None)
+        verification = stable_payload.get("verification_payload")
+        if isinstance(verification, dict):
+            verification = dict(verification)
+            tests = verification.get("tests")
+            if isinstance(tests, list):
+                verification["tests"] = [
+                    test.to_payload() if isinstance(test, PreparedTest) else test
+                    for test in tests
+                ]
+            stable_payload["verification_payload"] = verification
         return sha256_hex_json(stable_payload, ensure_ascii=False)
 
     @staticmethod
     def precomputed_pass_limit(payload: dict[str, object]) -> int:
-        precomputed = payload.get("precomputed")
-        if not isinstance(precomputed, dict):
-            raise RuntimeError("precomputed execution payload is required")
-        run_config = precomputed.get("run_config")
-        if not isinstance(run_config, dict):
-            raise RuntimeError("precomputed run configuration is required")
-        pass_limit = run_config.get("pass_limit")
-        if isinstance(pass_limit, bool) or not isinstance(pass_limit, int) or pass_limit < 1:
-            raise RuntimeError("precomputed pass limit must be a positive integer")
-        return pass_limit
+        template = payload.get("precomputed")
+        if not isinstance(template, ExecutionTemplate):
+            raise RuntimeError("prepared execution template is required")
+        return template.pass_limit
 
     def verification_id(self, verification_id: str) -> str:
         token = JudgehostPayloadPreparation._normalize_text(verification_id)
@@ -290,6 +295,7 @@ class JudgehostPayloadPreparation:
         bypass_case_result_cache: bool = False,
         compile_only: bool = False,
         verification_payload_override: dict[str, object] | None = None,
+        execution_template: ExecutionTemplate | None = None,
     ) -> dict[str, object]:
         safe_task_kind = task_plan.task_kind(
             {
@@ -323,10 +329,17 @@ class JudgehostPayloadPreparation:
                 raise RuntimeError(
                     f"submission source payload is unavailable: {source_label}"
                 ) from exc
-            source_bytes = self._runtime_blob_store.read(
-                source_file,
-                max_bytes=settings.max_submission_source_bytes,
-            )
+            if execution_template is None:
+                source_bytes = self._runtime_blob_store.read(
+                    source_file,
+                    max_bytes=settings.max_submission_source_bytes,
+                )
+            else:
+                if source_file != execution_template.submission.source_file:
+                    raise RuntimeError("execution template source does not match")
+                if source_file.size > settings.max_submission_source_bytes:
+                    raise RuntimeError("submission source payload is too large")
+                source_bytes = b""
             source_name = JudgehostPayloadPreparation._normalize_text_with_default(
                 upload_filename, default="submission.cpp"
             )
@@ -352,10 +365,16 @@ class JudgehostPayloadPreparation:
             source_file = self._runtime_blob_store.put_bytes(source_bytes)
             source_name = source_path.name
             source_label = JudgehostPayloadPreparation._normalize_text(submission_path) or source_name
-        source_name, entry_point = self._normalize_submission_source(
-            source_name=source_name,
-            source_bytes=source_bytes,
-        )
+        if execution_template is None:
+            source_name, entry_point = self._normalize_submission_source(
+                source_name=source_name,
+                source_bytes=source_bytes,
+            )
+        else:
+            if upload_file is None or source_name != execution_template.upload_filename:
+                raise RuntimeError("execution template upload does not match")
+            source_name = execution_template.submission.source_name
+            entry_point = execution_template.entry_point
 
         if verification_payload_override is None:
             if compile_only_flag:
@@ -374,19 +393,17 @@ class JudgehostPayloadPreparation:
                 )
         else:
             verification_payload = dict(verification_payload_override)
-        verification_payload = self._materialize_verification_payload(
-            verification_payload
-        )
+        verification_payload = self._materialize_verification_payload(verification_payload)
         if compile_only_flag:
-            empty = self._runtime_blob_store.put_bytes(b"").to_payload()
+            empty = self._runtime_blob_store.put_bytes(b"")
             verification_payload = dict(verification_payload)
             verification_payload["tests"] = [
-                {
-                    "name": "compile-only.in",
-                    "input_file": empty,
-                    "answer_name": "compile-only.ans",
-                    "answer_file": empty,
-                }
+                self.prepare_test(
+                    test_name="compile-only.in",
+                    answer_name="compile-only.ans",
+                    input_file=empty,
+                    answer_file=empty,
+                )
             ]
         payload: dict[str, object] = {
             "type": "verification.run",
@@ -414,6 +431,26 @@ class JudgehostPayloadPreparation:
         payload["mode"] = task_plan.execution_mode(payload)
         return payload
 
+    def prepare_test(
+        self,
+        *,
+        test_name: str,
+        answer_name: str,
+        input_file: PayloadFile,
+        answer_file: PayloadFile,
+    ) -> PreparedTest:
+        input_file = self._runtime_blob_store.put_file(input_file)
+        answer_file = self._runtime_blob_store.put_file(answer_file)
+        testcase_hash = hash_of_hashes([input_file.identity, answer_file.identity])
+        return PreparedTest(
+            name=test_name,
+            answer_name=answer_name,
+            input_file=input_file,
+            answer_file=answer_file,
+            testcase_hash=testcase_hash,
+            testcase_id=int(testcase_hash, 16) % (1 << 63),
+        )
+
     def _materialize_verification_payload(
         self,
         verification_payload: dict[str, object],
@@ -423,23 +460,27 @@ class JudgehostPayloadPreparation:
             return verification_payload
         if not isinstance(raw_tests, list):
             raise RuntimeError("verification tests must be a list")
-        tests: list[dict[str, object]] = []
+        tests: list[PreparedTest] = []
         for raw_test in raw_tests:
+            if isinstance(raw_test, PreparedTest):
+                tests.append(raw_test)
+                continue
             if not isinstance(raw_test, dict) or any(
                 not isinstance(key, str) for key in raw_test
             ):
                 raise RuntimeError("verification test must be an object")
-            test = dict(raw_test)
-            for field in ("input_file", "answer_file"):
-                try:
-                    descriptor = PayloadFile.from_payload(test.get(field))
-                    materialized = self._runtime_blob_store.put_file(descriptor)
-                except (OSError, ValueError) as exc:
-                    raise RuntimeError(
-                        f"verification test {field} is unavailable"
-                    ) from exc
-                test[field] = materialized.to_payload()
-            tests.append(test)
+            name, answer_name = raw_test.get("name"), raw_test.get("answer_name")
+            if not isinstance(name, str) or not isinstance(answer_name, str):
+                raise RuntimeError("verification test names must be strings")
+            try:
+                tests.append(self.prepare_test(
+                    test_name=name,
+                    answer_name=answer_name,
+                    input_file=self._runtime_blob_store.resolve_payload(raw_test.get("input_file")),
+                    answer_file=self._runtime_blob_store.resolve_payload(raw_test.get("answer_file")),
+                ))
+            except (OSError, ValueError) as exc:
+                raise RuntimeError("verification test payload is unavailable") from exc
         materialized_payload = dict(verification_payload)
         materialized_payload["tests"] = tests
         return materialized_payload
@@ -456,8 +497,10 @@ class JudgehostPayloadPreparation:
         extra_source_files: dict[str, PayloadFile] | None = None,
         manual_validate_only: bool = False,
         compile_only: bool = False,
-    ) -> dict[str, object]:
+        bypass_case_result_cache: bool = False,
+    ) -> ExecutionTemplate:
         settings = self._configuration.snapshot()
+        upload_file = self._runtime_blob_store.put_file(upload_file)
         upload_content = self._runtime_blob_store.read(
             upload_file,
             max_bytes=settings.max_submission_source_bytes,
@@ -475,28 +518,36 @@ class JudgehostPayloadPreparation:
             "verification_source": verification_source,
             "task_kind": task_kind,
             "compile_only": bool(compile_only),
+            "bypass_case_result_cache": bypass_case_result_cache,
         }
         if extra_source_files:
             payload["extra_source_files"] = {
-                name: source.to_payload() for name, source in extra_source_files.items()
+                name: self._runtime_blob_store.put_file(source).to_payload()
+                for name, source in extra_source_files.items()
             }
         if manual_validate_only:
             payload["manual_validate_only"] = True
-        return self._prepare_execution_template_payload(payload, settings=settings)
+        return self._freeze_execution_template(
+            payload, settings=settings,
+            upload_filename=self._normalize_text_with_default(upload_filename, default="submission.cpp"),
+            source_bytes=upload_content,
+        )
 
     def _prepare_execution_template_payload(
         self,
         payload: dict[str, object],
         *,
         settings: JudgehostSettings,
+        source_bytes: bytes | None = None,
     ) -> dict[str, object]:
         config_snapshot = settings.values
         source_name = decode_basename(raw=payload.get("source_name"), default="submission.cpp")
-        source_file = PayloadFile.from_payload(payload["source_file"])
-        source_bytes = self._runtime_blob_store.read(
-            source_file,
-            max_bytes=settings.max_submission_source_bytes,
-        )
+        source_file = self._runtime_blob_store.resolve_payload(payload["source_file"])
+        if source_bytes is None:
+            source_bytes = self._runtime_blob_store.read(
+                source_file,
+                max_bytes=settings.max_submission_source_bytes,
+            )
         if not source_bytes:
             raise RuntimeError("submission source payload is empty")
         entry_point = decode_text(raw=payload.get("entry_point"))
@@ -511,7 +562,7 @@ class JudgehostPayloadPreparation:
             safe_name = decode_basename(raw=raw_name)
             if (not safe_name) or safe_name == source_name:
                 continue
-            descriptor = PayloadFile.from_payload(raw_file)
+            descriptor = self._runtime_blob_store.resolve_payload(raw_file)
             blob = self._runtime_blob_store.read(
                 descriptor,
                 max_bytes=settings.max_submission_source_bytes,
@@ -581,7 +632,7 @@ class JudgehostPayloadPreparation:
             if raw_file is None:
                 return b""
             return self._runtime_blob_store.read(
-                PayloadFile.from_payload(raw_file),
+                self._runtime_blob_store.resolve_payload(raw_file),
                 max_bytes=settings.max_component_source_bytes,
             )
 
@@ -775,6 +826,68 @@ class JudgehostPayloadPreparation:
             "main_correct": main_correct,
         }
 
+    @staticmethod
+    def _execution_policy(payload: dict[str, object]) -> tuple[str, str, str, bool]:
+        return (
+            task_plan.task_kind(payload),
+            decode_text(lower=True, raw=payload.get("verification_source")),
+            decode_text(lower=True, raw=payload.get("expected_behavior")),
+            parse_bool(payload.get("bypass_case_result_cache"), default=False),
+        )
+
+    def _freeze_execution_template(
+        self,
+        payload: dict[str, object],
+        *,
+        settings: JudgehostSettings,
+        upload_filename: str,
+        source_bytes: bytes | None = None,
+    ) -> ExecutionTemplate:
+        bundle = self._prepare_execution_template_payload(
+            payload, settings=settings, source_bytes=source_bytes,
+        )
+        signature = task_plan.execution_signature({**payload, "precomputed": bundle})
+        source_file = self._runtime_blob_store.resolve_payload(payload["source_file"])
+        source_name = cast(str, payload["source_name"])
+        raw_extra = cast(dict[str, object], payload.get("extra_source_files", {}))
+        extra_sources = tuple(
+            (name, source)
+            for raw_name, raw_file in sorted(raw_extra.items())
+            if (name := decode_basename(raw=raw_name)) and name != source_name
+            and (source := self._runtime_blob_store.resolve_payload(raw_file)).size > 0
+        )
+        run_config = cast(dict[str, object], bundle["run_config"])
+        pass_limit = run_config["pass_limit"]
+        if isinstance(pass_limit, bool) or not isinstance(pass_limit, int) or pass_limit < 1:
+            raise RuntimeError("precomputed pass limit must be a positive integer")
+        key = cast(str, bundle["compile_key"])
+        return ExecutionTemplate(
+            submission=CompileSubmission(
+                compile_key=key,
+                submit_id=submit_id(key),
+                source_name=source_name,
+                source_file=source_file,
+                extra_source_items=extra_sources,
+                compile_files=tuple(cast(list[tuple[str, bytes, bool]], bundle["compile_files"])),
+            ),
+            batch_spec=ExecutionBatchSpec(
+                run_files=tuple(cast(list[tuple[str, bytes, bool]], bundle["run_files"])),
+                compare_files=tuple(cast(list[tuple[str, bytes, bool]], bundle["compare_files"])),
+            ),
+            upload_filename=upload_filename,
+            entry_point=cast(str, payload.get("entry_point", "")),
+            source_hash=cast(str, bundle["source_hash"]),
+            compile_hash=cast(str, bundle["compile_hash"]),
+            run_hash=cast(str, bundle["run_hash"]),
+            compare_hash=cast(str, bundle["compare_hash"]),
+            compile_config_json=json.dumps(bundle["compile_config"], ensure_ascii=False, separators=(",", ":")),
+            run_config_json=json.dumps(run_config, ensure_ascii=False, separators=(",", ":")),
+            compare_config_json=json.dumps(bundle["compare_config"], ensure_ascii=False, separators=(",", ":")),
+            pass_limit=pass_limit,
+            policy=self._execution_policy(payload),
+            execution_signature=signature,
+        )
+
     def prepare_enqueue_payload(
         self,
         *,
@@ -799,7 +912,7 @@ class JudgehostPayloadPreparation:
         source_label_override: str | None = None,
         extra_source_files_override: dict[str, object] | None = None,
         manual_validate_only: bool = False,
-        execution_template: dict[str, object] | None = None,
+        execution_template: ExecutionTemplate | None = None,
     ) -> dict[str, object]:
         settings = self._configuration.snapshot()
         selected = self.normalize_tests(selected_tests)
@@ -827,6 +940,7 @@ class JudgehostPayloadPreparation:
             bypass_case_result_cache=bool(bypass_case_result_cache),
             compile_only=bool(compile_only),
             verification_payload_override=verification_payload_override,
+            execution_template=execution_template,
             settings=settings,
         )
         if source_label_override is not None:
@@ -835,7 +949,7 @@ class JudgehostPayloadPreparation:
             materialized_extra_sources: dict[str, object] = {}
             for name, raw_file in extra_source_files_override.items():
                 try:
-                    descriptor = PayloadFile.from_payload(raw_file)
+                    descriptor = self._runtime_blob_store.resolve_payload(raw_file)
                     materialized = self._runtime_blob_store.put_file(descriptor)
                 except (OSError, ValueError) as exc:
                     raise RuntimeError(
@@ -845,10 +959,13 @@ class JudgehostPayloadPreparation:
             payload["extra_source_files"] = materialized_extra_sources
         if manual_validate_only:
             payload["manual_validate_only"] = True
-        payload["precomputed"] = (
-            dict(execution_template)
-            if execution_template is not None
-            else self._prepare_execution_template_payload(payload, settings=settings)
-        )
-        payload["execution_signature"] = task_plan.execution_signature(payload)
+        if execution_template is None:
+            execution_template = self._freeze_execution_template(
+                payload, settings=settings,
+                upload_filename=self._normalize_text_with_default(upload_filename, default="submission.cpp"),
+            )
+        elif execution_template.policy != self._execution_policy(payload):
+            raise RuntimeError("execution template policy does not match")
+        payload["precomputed"] = execution_template
+        payload["execution_signature"] = execution_template.execution_signature
         return payload

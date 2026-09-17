@@ -260,36 +260,15 @@ class BatchDispatch:
         )
 
     def _scheduling_snapshot_locked(self, hostname: str) -> SchedulingSnapshot:
-        def blocked_snapshot() -> SchedulingSnapshot:
-            return SchedulingSnapshot(
-                hostname=hostname,
-                leased_batch_id=None,
-                foreground_batch_id=None,
-                affinity_batch_ids=(),
-                affinity_ready_batch_id=None,
-                stolen_batch_id=None,
-                prerequisite_batch_id=None,
-                global_batch_id=None,
-                candidates=(),
-            )
-
         leased_batch_ids = {
             self._state._cases[case_id].batch_id
             for case_id in self._state._leased_case_ids_by_host.get(hostname, ())
             if case_id in self._state._cases
         }
-        leased_batch_id = None
-        if len(leased_batch_ids) > 1:
-            return blocked_snapshot()
-        if len(leased_batch_ids) == 1:
-            candidate_id = next(iter(leased_batch_ids))
-            batch = self._state._batches.get(candidate_id)
-            if (
-                batch is None
-                or self._state._batch_next_case_locked(batch, hostname=hostname) is None
-            ):
-                return blocked_snapshot()
-            leased_batch_id = candidate_id
+        # Successful DOMjudge results upload asynchronously. Outstanding reports
+        # retain their leases, but must not prevent execution in another batch.
+        leased_batch = self._ready_host_batch_locked(hostname, sorted(leased_batch_ids))
+        leased_batch_id = None if leased_batch is None else leased_batch.batch_id
 
         global_batch = self._peek_ready_batch_locked()
         foreground_batch_id = (
@@ -410,16 +389,12 @@ class BatchDispatch:
             return batch_snapshot(selected)
 
     def wait_for_ready_batch(self, timeout_sec: float) -> bool:
-        """Wait for one readiness transition without retaining the Scheduler lock."""
+        """Wait for ready work, releasing the Scheduler lock while asleep."""
         with self._state._ready_condition:
-            if self._state._ready_batches.first() is not None:
-                return True
-            generation = self._state._ready_generation
-            self._state._ready_condition.wait_for(
-                lambda: self._state._ready_generation != generation,
+            return self._state._ready_condition.wait_for(
+                lambda: self._state._ready_batches.first() is not None,
                 timeout=max(0.0, float(timeout_sec)),
             )
-            return self._state._ready_batches.first() is not None
 
     def host_leased_case_count(self, hostname: str) -> int:
         with self._state._lock:

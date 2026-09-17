@@ -339,16 +339,11 @@ class TestJudgehostBatchRuntimeLifecycle(unittest.TestCase):
         )
         _finish_pending_case(self.store, batch_id, "001.in")
         self.assertEqual(self.store.fetch_batch(batch_id)["status"], "open")
-        publication_claim = self.store.claim_batch_finalization(
-            batch_id,
-            now_text=_NOW,
-        )
-        self.assertIsNotNone(publication_claim)
-        assert publication_claim is not None
-        self.assertFalse(publication_claim.terminal_transition)
-        first_case_id = int(self.store.cases_for_batch(batch_id)[0]["id"])
+        publication = self.store.claim_case_publications(batch_id)
+        self.assertEqual(len(publication), 1)
+        first_case_id = publication[0]["id"]
         self.assertTrue(self.store.acknowledge_case_completion(first_case_id))
-        self.assertTrue(self.store.complete_batch_finalization(publication_claim))
+        self.assertFalse(self.store.complete_case_publications(batch_id, publication))
         self.assertEqual(self.store.due_batch_finalizations(limit=1), [])
 
         same_batch_id = _create_batch(
@@ -386,10 +381,14 @@ class TestJudgehostBatchRuntimeLifecycle(unittest.TestCase):
             self.store.finish_programs("ver-1", ["solution-0"], now_text=_NOW),
             [batch_id],
         )
+        # Closing admission alone cannot finish a batch with an uncommitted result.
+        self.assertIsNone(self.store.claim_batch_finalization(batch_id, now_text=_NOW))
+        publication = self.store.claim_case_publications(batch_id)
+        self.assertTrue(self.store.acknowledge_case_completion(later_case_id))
+        self.assertTrue(self.store.complete_case_publications(batch_id, publication))
         terminal_claim = self.store.claim_batch_finalization(batch_id, now_text=_NOW)
         self.assertIsNotNone(terminal_claim)
         assert terminal_claim is not None
-        self.assertTrue(terminal_claim.terminal_transition)
         self.assertIsNone(self.store.claim_batch_finalization(batch_id, now_text=_NOW))
         with self.assertRaisesRegex(RuntimeError, "verification program is closed"):
             _create_batch(
@@ -402,74 +401,99 @@ class TestJudgehostBatchRuntimeLifecycle(unittest.TestCase):
             )
         self.assertEqual(len(self.store.cases_for_batch(batch_id)), 2)
 
-    def test_publication_claim_retries_terminal_case_that_arrives_during_io(
-        self,
-    ) -> None:
+    def test_other_case_publishes_while_first_case_is_still_in_io(self) -> None:
         batch_id = _create_batch(
-            self.store,
-            task_id="task-publication-race",
-            run_id="run-publication-race",
-            case_rows=[
-                _case_row(
-                    "task-publication-race",
-                    "run-publication-race",
-                    "001.in",
-                    1,
-                ),
-                _case_row(
-                    "task-publication-race",
-                    "run-publication-race",
-                    "002.in",
-                    2,
-                ),
-            ],
+            self.store, task_id="task-first", run_id="run-first",
+            case_rows=[_case_row("task-first", "run-first", "001.in", 1)],
+            execution_signature="shared", verification_program_id="solution-0",
+        )
+        _create_batch(
+            self.store, task_id="task-second", run_id="run-second",
+            case_rows=[_case_row("task-second", "run-second", "002.in", 2)],
+            execution_signature="shared", verification_program_id="solution-0",
+        )
+        self.store.activate_task_cases("task-second", now_text=_NOW)
+        for cache_claim, _row in self.store.claim_cache_cases(batch_id, hostname="cache", limit=2, now_text=_NOW):
+            self.store.finish_cache_miss(cache_claim.case_id, generation=cache_claim.generation, updated_at=_NOW)
+        _finish_pending_case(self.store, batch_id, "001.in")
+        first = self.store.claim_case_publications(batch_id)
+        _finish_pending_case(self.store, batch_id, "002.in")
+        second = self.store.claim_case_publications(batch_id)
+        self.assertEqual([row["test_name"] for row in second], ["002.in"])
+        self.assertEqual(self.store.claim_case_publications(batch_id), ())
+        self.store.finish_programs("ver-1", ["solution-0"], now_text=_NOW)
+        self.store.acknowledge_case_completion(second[0]["id"])
+        self.assertFalse(self.store.complete_case_publications(batch_id, second))
+        self.assertTrue(self.store.fetch_case(second[0]["id"])["completion_acknowledged"])
+        self.assertTrue(self.store.publications_acknowledged(batch_id, case_ids=(second[0]["id"],)))
+        self.assertFalse(self.store.publications_acknowledged(batch_id, case_ids=(first[0]["id"],)))
+        self.assertIsNone(self.store.claim_batch_finalization(batch_id, now_text=_NOW))
+        self.store.acknowledge_case_completion(first[0]["id"])
+        self.assertTrue(self.store.complete_case_publications(batch_id, first))
+        finalization = self.store.claim_batch_finalization(batch_id, now_text=_NOW)
+        assert finalization is not None
+        self.assertTrue(self.store.set_batch_terminal_status(
+            finalization, status="completed", completed_at=_NOW, updated_at=_NOW,
+        ))
+        self.assertEqual(self.store.fetch_batch(batch_id)["status"], "completed")
+
+    def test_publication_failure_retries_cleanup_after_durable_ack(self) -> None:
+        batch_id = _create_batch(
+            self.store, task_id="task-retry", run_id="run-retry",
+            case_rows=[_case_row("task-retry", "run-retry", "001.in", 1)],
         )
         _finish_pending_case(self.store, batch_id, "001.in")
-        first_case_id = int(
-            next(
-                row
-                for row in self.store.cases_for_batch(batch_id)
-                if row["test_name"] == "001.in"
-            )["id"]
-        )
+        publication = self.store.claim_case_publications(batch_id)
+        case_id = publication[0]["id"]
+        self.store.acknowledge_case_completion(case_id)
+        self.store.complete_case_publications(batch_id, publication, retry=True)
+        retry = self.store.claim_case_publications(batch_id)
+        self.assertEqual([row["id"] for row in retry], [case_id])
+        self.assertTrue(retry[0]["completion_acknowledged"])
+        self.store.complete_case_publications(batch_id, retry)
+        self.assertEqual(self.store.claim_case_publications(batch_id), ())
+        self.assertEqual(self.store.fetch_case(case_id)["status"], "reported")
 
-        publication_claim = self.store.claim_batch_finalization(
-            batch_id,
-            now_text=_NOW,
-        )
-        self.assertIsNotNone(publication_claim)
-        assert publication_claim is not None
-        self.assertFalse(publication_claim.terminal_transition)
+    def test_diagnostic_arriving_during_publication_is_retained(self) -> None:
+        for close_first in (False, True):
+            with self.subTest(close_first=close_first):
+                task_id = f"diagnostic-{close_first}"
+                spec = _case_row(task_id, task_id, "001.in", 1)
+                spec["verification_task_id"] = f"verification-{task_id}"
+                batch_id = _create_batch(self.store, task_id=task_id, run_id=task_id, case_rows=[spec])
+                _finish_pending_case(self.store, batch_id, "001.in")
+                if close_first:
+                    self.store.finish_programs("ver-1", [f"program-{task_id}"], now_text=_NOW)
+                publication = self.store.claim_case_publications(batch_id)
+                case_id = publication[0]["id"]
+                self.store.acknowledge_case_completion(case_id)
+                self.assertEqual(self.store.record_case_diagnostic(
+                    case_id, kind="debug-info", hostname="host-001.in",
+                    text="diagnostic during publication",
+                    receipt_generation=_receipt_generation(self.store, case_id),
+                    diagnostic_limit_bytes=2048, now_text=_NOW,
+                ), "pending")
+                self.assertFalse(self.store.complete_case_publications(batch_id, publication))
+                self.assertEqual(self.store.due_batch_finalizations(limit=1), [batch_id])
+                retry = self.store.claim_case_publications(batch_id)
+                self.assertEqual([row["id"] for row in retry], [case_id])
+                diagnostics = self.store.pending_case_diagnostics(case_id)
+                self.assertEqual([item.text for item in diagnostics], ["diagnostic during publication"])
+                self.store.acknowledge_case_diagnostic(case_id, diagnostics[0])
+                self.assertEqual(self.store.complete_case_publications(batch_id, retry), close_first)
+                self.assertEqual(self.store.pending_case_diagnostics(case_id), ())
 
-        # External publication owns an immutable snapshot. Simulate a second
-        # callback becoming terminal before that I/O finishes.
-        _finish_pending_case(self.store, batch_id, "002.in")
-        second_case_id = int(
-            next(
-                row
-                for row in self.store.cases_for_batch(batch_id)
-                if row["test_name"] == "002.in"
-            )["id"]
+    def test_quiet_cleanup_waits_for_publication_after_ack(self) -> None:
+        batch_id = _create_batch(
+            self.store, task_id="task-publishing", run_id="run-publishing",
+            case_rows=[_case_row("task-publishing", "run-publishing", "001.in", 1)],
         )
-        self.assertTrue(self.store.acknowledge_case_completion(first_case_id))
-        self.assertTrue(self.store.complete_batch_finalization(publication_claim))
-
-        self.assertEqual(
-            self.store.due_batch_finalizations(limit=1),
-            [batch_id],
-        )
-        next_claim = self.store.claim_batch_finalization(batch_id, now_text=_NOW)
-        self.assertIsNotNone(next_claim)
-        assert next_claim is not None
-        self.assertFalse(next_claim.terminal_transition)
-        self.assertFalse(
-            next(
-                row for row in next_claim.cases if int(row["id"]) == second_case_id
-            )["completion_acknowledged"]
-        )
-        self.assertTrue(self.store.acknowledge_case_completion(second_case_id))
-        self.assertTrue(self.store.complete_batch_finalization(next_claim))
-        self.assertEqual(self.store.due_batch_finalizations(limit=1), [])
+        _finish_pending_case(self.store, batch_id, "001.in")
+        publication = self.store.claim_case_publications(batch_id)
+        self.store.acknowledge_case_completion(publication[0]["id"])
+        self.assertIsNone(self.store.forget_runs_if_quiet(["run-publishing"]))
+        self.store.complete_case_publications(batch_id, publication)
+        self.assertEqual(self.store.forget_runs_if_quiet(["run-publishing"]), 1)
 
     def test_batch_identity_is_program_not_execution_signature(self) -> None:
         first_batch = _create_batch(

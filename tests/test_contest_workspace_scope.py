@@ -176,6 +176,23 @@ class TestContestWorkspaceScope(ContestActionBase):
         )
         self.assertEqual(unquote(detail.fragment), "selected row")
         self.assertEqual(detail.query.count("contest="), 1)
+        second_detail = urlsplit(scoped_builder(
+            "files_download", query={"path": "other.txt", "line": 9}, fragment="another row"
+        ))
+        self.assertEqual(second_detail.path, detail.path)
+        self.assertEqual(
+            parse_qs(second_detail.query),
+            {"contest": [contest_slug], "path": ["other.txt"], "line": ["9"]},
+        )
+        self.assertEqual(unquote(second_detail.fragment), "another row")
+        for verification_id in ("ver-first", "ver-second"):
+            artifact = urlsplit(scoped_builder(
+                "artifact_file", verification_id=verification_id, rel_path="notes/a +%.txt"
+            ))
+            self.assertEqual(
+                unquote(artifact.path),
+                f"/problems/{problem_slug}/artifacts/{verification_id}/notes/a +%.txt",
+            )
         with self.assertRaisesRegex(ValueError, "managed by the builder"):
             scoped_builder(
                 "problem_files",
@@ -562,15 +579,15 @@ class TestContestWorkspaceScope(ContestActionBase):
                 f"/problems/alice/sample/statement?contest={second_slug}",
                 headers={"cookie": cookie},
             )
-        self.assertEqual(first.status_code, 200, first.text)
-        self.assertEqual(second.status_code, 200, second.text)
+            self.assertEqual(first.status_code, 200, first.text)
+            self.assertEqual(second.status_code, 200, second.text)
 
-        runtime.contest_service.remove_problem(first_id, workspace_service.known_problem_id("alice/sample"))
-        request = _app_request(
-            "/problems/alice/sample/statement",
-            query=urlencode([("contest", first_slug)]),
-            route_path="/problems/{problem:path}/statement",
-        )
-        with self.assertRaises(HTTPException) as caught:
-            resolve_problem_contest_scope(request, "alice/sample", "alice")
-        self.assertEqual(caught.exception.status_code, 404)
+            runtime.contest_service.remove_problem(first_id, workspace_service.known_problem_id("alice/sample"))
+            request = _app_request(
+                "/problems/alice/sample/statement",
+                query=urlencode([("contest", first_slug)]),
+                route_path="/problems/{problem:path}/statement",
+            )
+            with self.assertRaises(HTTPException) as caught:
+                resolve_problem_contest_scope(request, "alice/sample", "alice")
+            self.assertEqual(caught.exception.status_code, 404)

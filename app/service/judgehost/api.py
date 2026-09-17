@@ -3,6 +3,7 @@ import secrets
 import threading
 from typing import BinaryIO, TypeVar
 
+from app.service.judgehost.task.model import ExecutionTemplate, PreparedTest
 from app.db import now_iso
 from app.config import ConfigValues
 from app.service.platform.maintenance.admission import MaintenanceAdmissionGate
@@ -123,7 +124,9 @@ class Judgehost:
             self._execution_port,
             self._tasks,
             diagnostic_publisher,
+            discard_cache_case=lambda case_id: self._result.discard_pending_case(case_id),
         )
+        self._completion_publisher = completion_publisher
         self._batch_finalizer = JudgehostBatchFinalizer(
             self._batch_runtime,
             self._tasks,
@@ -137,6 +140,7 @@ class Judgehost:
             self._batch_finalizer,
             self._terminal_cleanup,
         )
+        self._batch_runtime.set_cancellation_progress_notifier(self._cancellation_drain.wake)
         self._cancellation_drain.start()
         self._result = JudgehostCallbackIngestion(
             self._batch_runtime,
@@ -266,7 +270,8 @@ class Judgehost:
         extra_source_files: dict[str, PayloadFile] | None = None,
         manual_validate_only: bool = False,
         compile_only: bool = False,
-    ) -> dict[str, object]:
+        bypass_case_result_cache: bool = False,
+    ) -> ExecutionTemplate:
         return self._payload_preparation.prepare_execution_template(
             upload_file=upload_file,
             upload_filename=upload_filename,
@@ -277,6 +282,20 @@ class Judgehost:
             extra_source_files=extra_source_files,
             manual_validate_only=manual_validate_only,
             compile_only=compile_only,
+            bypass_case_result_cache=bypass_case_result_cache,
+        )
+
+    def prepare_test(
+        self,
+        *,
+        test_name: str,
+        answer_name: str,
+        input_file: PayloadFile,
+        answer_file: PayloadFile,
+    ) -> PreparedTest:
+        return self._payload_preparation.prepare_test(
+            test_name=test_name, answer_name=answer_name,
+            input_file=input_file, answer_file=answer_file,
         )
 
     def enqueue_task(
@@ -301,7 +320,7 @@ class Judgehost:
         compile_only: bool = False,
         persist_verification_run: bool = False,
         prepared_payload: dict[str, object] | None = None,
-        execution_template: dict[str, object] | None = None,
+        execution_template: ExecutionTemplate | None = None,
         service_class: str = "background",
     ) -> str:
         task_id = self._enqueue.enqueue_task(
@@ -328,7 +347,7 @@ class Judgehost:
             service_class=service_class,
             admission_gate=self._admission_gate,
         )
-        self._finalize_admitted_task(task_id)
+        self._publish_admitted_task(task_id)
         return task_id
 
     def enqueue_compile_only_task(
@@ -360,13 +379,15 @@ class Judgehost:
             prepared_payload=prepared_payload,
             admission_gate=self._admission_gate,
         )
-        self._finalize_admitted_task(task_id)
+        self._publish_admitted_task(task_id)
         return task_id
 
-    def _finalize_admitted_task(self, task_id: str) -> None:
+    def _publish_admitted_task(self, task_id: str) -> None:
+        if not self._batch_runtime.task_has_pending_publication(task_id):
+            return
         batch = self._batch_runtime.batch_for_task(task_id)
         if batch is not None:
-            self._batch_finalizer.finalize_batch_if_ready(batch["batch_id"])
+            self._publish_batches((batch["batch_id"],))
 
     def set_admission_gate(self, gate: MaintenanceAdmissionGate | None) -> None:
         self._admission_gate = gate
@@ -413,7 +434,7 @@ class Judgehost:
             "callbacks": max(active_callbacks, attempts["callbacks"]),
             "cache_probes": attempts["cache_probes"],
             "materializations": attempts["materializations"],
-            "finalizations": attempts["finalizations"],
+            "finalizations": attempts["finalizations"] + self._result.pending_cache_count(),
         }
 
     def wait_for_task_result(
@@ -483,6 +504,7 @@ class Judgehost:
         if not reason:
             raise RuntimeError("judgehost cancellation reason is required")
         self._batch_runtime.close_verification_admission(verification_id)
+        self._result.discard_pending_cache(verification_id)
         try:
             self._cancellation_drain.schedule(verification_id, reason=reason)
         except Exception:
@@ -524,8 +546,7 @@ class Judgehost:
 
     def cancel_all_batches(self) -> int:
         batch_ids = self._maintenance.cancel_all_batches()
-        for batch_id in batch_ids:
-            self._batch_finalizer.finalize_batch_if_ready(batch_id)
+        self._publish_batches(tuple(batch_ids))
         return len(batch_ids)
 
     def forget_domjudge_runs(self, run_ids: list[str]) -> int:
@@ -553,6 +574,27 @@ class Judgehost:
         for batch_id in ready_batch_ids:
             self._batch_finalizer.finalize_batch_if_ready(batch_id)
 
+    def finish_reported_tasks(self, task_ids: tuple[str, ...]) -> None:
+        """Run post-commit work on the existing verification coordinator."""
+        batches: dict[int, None] = {}
+        for task_id in dict.fromkeys(task_ids):
+            self._result.publish_pending_cache(task_id)
+            batch = self._batch_runtime.batch_for_task(task_id)
+            if batch is None:
+                continue
+            try:
+                self._batch_finalizer.finalize_task_if_ready(task_id, batch_row=batch)
+            except Exception:
+                self._batch_runtime.retry_task_publication(task_id)
+                logger.exception("post-commit task finalization failed task_id=%s", task_id)
+            if batch["status"] == "finalize-pending":
+                batches[batch["batch_id"]] = None
+        for batch_id in batches:
+            try:
+                self._batch_finalizer.finalize_batch_if_ready(batch_id)
+            except Exception:
+                logger.exception("post-commit batch finalization failed batch_id=%s", batch_id)
+
     def reconcile_expired_verification_leases(self, verification_id: str) -> list[str]:
         outcome = self._maintenance.reconcile_expired_leases(verification_id)
         for release in outcome.releases:
@@ -579,7 +621,7 @@ class Judgehost:
 
     def domjudge_register_host(self, hostname: str) -> list[dict[str, object]]:
         outcome = self._dispatch.domjudge_register_host(hostname)
-        self._finalize_batches(outcome.terminal_batch_ids)
+        self._publish_batches(outcome.terminal_batch_ids)
         return list(outcome.workdirs)
 
     def domjudge_fetch_work(
@@ -587,24 +629,21 @@ class Judgehost:
         hostname: str,
         max_batchsize: int | None = None,
     ) -> list[dict[str, object]]:
-        gate = self._admission_gate
-        if gate is None:
-            outcome = self._dispatch.domjudge_fetch_work(hostname, max_batchsize)
-        else:
-            outcome = self._dispatch.domjudge_fetch_work(
-                hostname,
-                max_batchsize,
-                admission_gate=gate,
-            )
-        self._finalize_batches(outcome.terminal_batch_ids)
+        outcome = self._dispatch.domjudge_fetch_work(
+            hostname,
+            max_batchsize,
+            publish_results=self._publish_batches,
+            admission_gate=self._admission_gate,
+        )
+        self._publish_batches(outcome.terminal_batch_ids)
         return list(outcome.work)
 
     def probe_task_case_cache(self, task_ids: list[str]) -> set[str]:
         outcome = self._dispatch.probe_task_case_cache(task_ids)
-        self._finalize_batches(outcome.terminal_batch_ids)
+        self._publish_batches(outcome.terminal_batch_ids)
         return set(outcome.pending_task_ids)
 
-    def _finalize_batches(
+    def _publish_batches(
         self,
         batch_ids: tuple[int, ...],
         *,
@@ -614,20 +653,25 @@ class Judgehost:
         for batch_id in batch_ids:
             if self._batch_runtime.batch_verification_cancellation_requested(batch_id):
                 continue
-            self._batch_finalizer.finalize_batch_if_ready(
+            batch = self._batch_runtime.fetch_batch(batch_id)
+            defer = bool(
+                batch is not None and not batch["failure_runresult"]
+                and self._execution_port.defers_finalization(batch["verification_id"])
+            )
+            self._batch_finalizer.publish_batch_results(
                 batch_id,
-                require_completion_ack=(
-                    require_completion_ack
-                    and self._batch_runtime.batch_requires_completion_ack(batch_id)
-                ),
+                require_completion_ack=require_completion_ack,
+                defer_task_finalization=defer,
             )
 
     def _complete_callback(
         self,
         outcome: CallbackOutcome[Acknowledgement],
+        *,
+        finalize: bool = True,
     ) -> Acknowledgement:
-        if outcome.terminal_batch_ids:
-            self._finalize_batches(
+        if finalize and outcome.terminal_batch_ids:
+            self._publish_batches(
                 outcome.terminal_batch_ids,
                 require_completion_ack=True,
             )
@@ -662,7 +706,7 @@ class Judgehost:
             script_id,
             hostname=hostname,
         )
-        self._finalize_batches(outcome.terminal_batch_ids)
+        self._publish_batches(outcome.terminal_batch_ids)
         if outcome.error:
             raise RuntimeError(outcome.error)
         return list(outcome.files)
@@ -710,7 +754,20 @@ class Judgehost:
             judgetask_id,
             payload,
         )
-        return self._complete_callback(outcome)
+        case = self._batch_runtime.fetch_case(judgetask_id)
+        batch = None if case is None else self._batch_runtime.fetch_batch(case["batch_id"])
+        if case is not None and batch is not None and not batch["failure_runresult"]:
+            self._batch_finalizer.publish_batch_results(
+                batch["batch_id"], case_ids=(judgetask_id,), require_completion_ack=True,
+                defer_task_finalization=self._execution_port.defers_finalization(batch["verification_id"]),
+            )
+            if not self._execution_port.defers_finalization(batch["verification_id"]):
+                self._result.publish_pending_cache(case["task_id"])
+            return self._complete_callback(outcome, finalize=False)
+        result = self._complete_callback(outcome)
+        if case is not None:
+            self._result.publish_pending_cache(case["task_id"])
+        return result
 
     def domjudge_internal_error(
         self,
@@ -861,6 +918,7 @@ class Judgehost:
         self._cancellation_drain.pause()
         try:
             self._terminal_cleanup.reset()
+            self._result.discard_pending_cache()
             self._tasks.reset()
             self._hosts.clear()
             self._batch_runtime.reset()
