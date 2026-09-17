@@ -6,6 +6,9 @@ This document defines runtime constraints. Installation, TLS, upgrades, and reco
 
 Run one application process. The worker queue, judgehost registry, runtime cache, and admission state are process-local; multiple uvicorn workers or application replicas are unsupported.
 
+The Linux launchers use Uvicorn with the `httptools` HTTP parser and `uvloop`
+event loop. Both are pinned application dependencies in `requirements.txt`.
+
 Production terminates HTTPS at a TLS proxy and exposes uvicorn only on loopback. The browser password flow requires HTTPS outside localhost, and `AUTH_COOKIE_SECURE` defaults to `true`. Systemd and Compose bind host port `8001` to loopback and trust forwarded headers from the direct proxy peer.
 
 Generated judgehost commands use `domjudge/judgehost:latest`. The [judgehost image guide](deployment.md#judgehost-image-choice) documents the modified image for long-running stability.

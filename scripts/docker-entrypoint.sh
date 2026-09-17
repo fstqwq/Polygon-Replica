@@ -26,6 +26,8 @@ PORT=${POLYGON_REPLICA_PORT:-8001}
 KEEPALIVE_TIMEOUT_SEC=${POLYGON_REPLICA_KEEPALIVE_TIMEOUT_SEC:-30}
 
 exec uvicorn app.main:app \
+  --http httptools \
+  --loop uvloop \
   --host "$HOST" \
   --port "$PORT" \
   --timeout-keep-alive "$KEEPALIVE_TIMEOUT_SEC" \

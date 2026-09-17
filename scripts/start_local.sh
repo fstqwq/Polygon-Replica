@@ -114,6 +114,8 @@ trap on_signal INT TERM
 
 UVICORN_ARGS=(
   app.main:app
+  --http httptools
+  --loop uvloop
   --host "${HOST}"
   --port "${PORT}"
   --timeout-keep-alive "${KEEPALIVE_TIMEOUT_SEC}"
