@@ -1,5 +1,8 @@
 import json
 import sqlite3
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
 
 from app.service.execution.policy import normalize_execution_result
 from app.service.judgehost.ports.case_binding import CaseBinding
@@ -21,6 +24,51 @@ from tests.verification_service_fixture import (
 
 
 class TestVerificationCompletionService(VerificationServiceTestBase):
+    def test_binding_reads_and_retirement_progress_while_completion_waits_for_storage(self) -> None:
+        verification_id = canonical_test_verification_id(f"binding-progress:{self.test_id}")
+        task_id = self._activate_verification(
+            verification_id=verification_id,
+            problem_id=self.problem_id,
+            workspace_id=self.workspace_id,
+        )
+        store = self.verification_task_store
+        self.assertTrue(store.bind_and_expose_judgehost_runtime(
+            task_id, expected_verification_id=verification_id,
+            expected_program_id="accepted", expected_test_name="001.in",
+            run_id="run-progress", judgehost_task_id="jt-progress", expose=lambda: None,
+        ))
+        completion = TaskCompletion(
+            task_id=task_id, status=VerificationTaskStatus.DONE,
+            run_id="run-progress", judgehost_task_id="jt-progress",
+            result=normalize_execution_result(verdict="OK"),
+        )
+        entered = threading.Event()
+        release = threading.Event()
+        write_transaction = self.db.write_transaction
+
+        def delayed_transaction(transaction):
+            entered.set()
+            if not release.wait(timeout=5):
+                raise TimeoutError("storage was not released")
+            return write_transaction(transaction)
+
+        with patch.object(self.db, "write_transaction", side_effect=delayed_transaction):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                pending = pool.submit(store.commit_task_completions, (completion,))
+                try:
+                    self.assertTrue(entered.wait(timeout=2))
+                    context = pool.submit(store.bound_task_context, task_id).result(timeout=2)
+                    self.assertEqual(context["judgehost_task_id"], "jt-progress")
+                    self.assertTrue(pool.submit(
+                        store.unbind_judgehost_runtime, task_id,
+                        judgehost_task_id="jt-progress",
+                    ).result(timeout=2))
+                finally:
+                    release.set()
+                self.assertEqual(pending.result(timeout=2).committed_task_ids, {task_id})
+        self.assertIsNone(store.bound_task_context(task_id))
+        self.assertEqual(store.list_rows(verification_id)[0]["status"], VerificationTaskStatus.DONE)
+
     def test_generated_input_owner_survives_rollback_and_runtime_rebuild(self) -> None:
         verification_id = canonical_test_verification_id(f"owner-rollback:{self.test_id}")
         self._insert_verification_row(verification_id)
