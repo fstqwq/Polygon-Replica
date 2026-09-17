@@ -1136,6 +1136,15 @@ class DB:  # pylint: disable=too-many-instance-attributes
             for conn in connections:
                 conn.close()
 
+    def reopen(self) -> None:
+        """Explicitly admit connections for a new runtime lifespan."""
+
+        if self._writer_thread == threading.get_ident():
+            raise RuntimeError("cannot reopen database inside a write operation")
+        with self._write_lock:
+            with self._connection_lock:
+                self._closed = False
+
     def _install_sql_trace(self, conn: sqlite3.Connection) -> None:
         snapshot = self.config_values.snapshot()
         enabled = snapshot["DB_SQL_TRACE_ENABLED"]

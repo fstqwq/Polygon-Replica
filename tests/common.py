@@ -323,6 +323,7 @@ def _restore_database_template() -> None:
     try:
         shutil.copy2(_DB_TEMPLATE_PATH, replacement)
         os.replace(replacement, db.path)
+        db.reopen()
     finally:
         replacement.unlink(missing_ok=True)
 

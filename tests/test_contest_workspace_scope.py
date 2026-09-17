@@ -579,15 +579,15 @@ class TestContestWorkspaceScope(ContestActionBase):
                 f"/problems/alice/sample/statement?contest={second_slug}",
                 headers={"cookie": cookie},
             )
-        self.assertEqual(first.status_code, 200, first.text)
-        self.assertEqual(second.status_code, 200, second.text)
+            self.assertEqual(first.status_code, 200, first.text)
+            self.assertEqual(second.status_code, 200, second.text)
 
-        runtime.contest_service.remove_problem(first_id, workspace_service.known_problem_id("alice/sample"))
-        request = _app_request(
-            "/problems/alice/sample/statement",
-            query=urlencode([("contest", first_slug)]),
-            route_path="/problems/{problem:path}/statement",
-        )
-        with self.assertRaises(HTTPException) as caught:
-            resolve_problem_contest_scope(request, "alice/sample", "alice")
-        self.assertEqual(caught.exception.status_code, 404)
+            runtime.contest_service.remove_problem(first_id, workspace_service.known_problem_id("alice/sample"))
+            request = _app_request(
+                "/problems/alice/sample/statement",
+                query=urlencode([("contest", first_slug)]),
+                route_path="/problems/{problem:path}/statement",
+            )
+            with self.assertRaises(HTTPException) as caught:
+                resolve_problem_contest_scope(request, "alice/sample", "alice")
+            self.assertEqual(caught.exception.status_code, 404)

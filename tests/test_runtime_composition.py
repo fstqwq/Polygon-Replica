@@ -26,8 +26,9 @@ class TestRuntimeComposition(unittest.TestCase):
             application = create_app(runtime)
 
             self.assertIs(application.state.runtime, runtime)
-            with TestClient(application) as client:
-                response = client.get("/login")
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
-            self.assertGreaterEqual(int(response.headers["X-Backend-Render-Ms"]), 0)
+            for _lifespan in range(2):
+                with TestClient(application) as client:
+                    response = client.get("/login")
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
+                self.assertGreaterEqual(int(response.headers["X-Backend-Render-Ms"]), 0)

@@ -282,6 +282,12 @@ class TestDatabaseService(DBTestBase):
         with closing(sqlite3.connect(self.db.path, timeout=0)) as reopened:
             self.assertEqual(reopened.execute("SELECT value FROM writer_probe").fetchall(), [(1,)])
             self.assertEqual(reopened.execute("PRAGMA integrity_check").fetchall(), [("ok",)])
+        self.db.reopen()
+        isolated_db_execute(self.db, "INSERT INTO writer_probe VALUES(2)")
+        self.assertEqual(
+            [row[0] for row in isolated_db_fetch_all(self.db, "SELECT value FROM writer_probe ORDER BY value")],
+            [1, 2],
+        )
 
     def test_closed_writer_connection_is_replaced_after_failure(self) -> None:
         isolated_db_execute(self.db, "CREATE TABLE writer_probe(value INTEGER NOT NULL)")

@@ -17,8 +17,8 @@ foreign-key enforcement, busy timeout, and current SQL tracing settings.
 
 Connection draining waits for the active writer, closes idle connections and the
 writer, and retires outstanding read leases on return. File replacement requires
-quiescing readers before draining. Runtime shutdown permanently closes the
-database to new reads and writes. Failed write operations close their connection,
+quiescing readers before draining. Runtime shutdown closes the database to new reads and writes. A subsequent
+runtime startup explicitly reopens admission. Failed write operations close their connection,
 rolling back uncommitted work; subsequent operations create a fresh writer.
 
 ## Execution rows
