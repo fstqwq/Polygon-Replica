@@ -129,10 +129,21 @@ class _RuntimeTaskState:
     result: ExecutionResult | None = None
 
 
-def _stored_result(runtime: _RuntimeTaskState | None, text: str) -> ExecutionResult:
+def _stored_result(
+    runtime: _RuntimeTaskState | None,
+    text: str,
+    *,
+    results: dict[str, ExecutionResult] | None = None,
+) -> ExecutionResult:
     if runtime is not None and runtime.result is not None and runtime.result_json == text:
-        return runtime.result
-    return execution_result_from_json(text)
+        result = runtime.result
+    elif results is not None and text in results:
+        return results[text]
+    else:
+        result = execution_result_from_json(text)
+    if results is not None:
+        results[text] = result
+    return result
 
 
 _SnapshotValue = TypeVar("_SnapshotValue")
@@ -447,7 +458,9 @@ class VerificationTaskStore:
             str(row["id"] or ""),
         )
 
-    def _decorate_row(self, index: int, row: dict[str, object]) -> VerificationTaskRow:
+    def _decorate_row(
+        self, index: int, row: dict[str, object], *, results: dict[str, ExecutionResult],
+    ) -> VerificationTaskRow:
         task_id = str(row["id"] or "")
         with self._runtime_lock:
             runtime = self._runtime_by_task_id.get(task_id)
@@ -455,6 +468,7 @@ class VerificationTaskStore:
             index,
             row,
             runtime=runtime,
+            results=results,
         )
 
     def _decorate_row_with_runtime(
@@ -463,6 +477,7 @@ class VerificationTaskStore:
         row: dict[str, object],
         *,
         runtime: _RuntimeTaskState | None,
+        results: dict[str, ExecutionResult] | None = None,
     ) -> VerificationTaskRow:
         verification_id = str(row["verification_id"] or "")
         final_status = str(row["final_status"] or "")
@@ -482,7 +497,7 @@ class VerificationTaskStore:
         task_id = str(row["id"] or "")
         program_id = str(row["program_id"] or "")
         result_json = str(row["result_json"] or "{}")
-        result = _stored_result(runtime, result_json)
+        result = _stored_result(runtime, result_json, results=results)
         return {
             "id": task_id,
             "verification_id": verification_id,
@@ -514,7 +529,9 @@ class VerificationTaskStore:
             "updated_at": updated_at,
         }
 
-    def _decorate_list_row(self, row: dict[str, object]) -> VerificationTaskListRow:
+    def _decorate_list_row(
+        self, row: dict[str, object], *, results: dict[str, ExecutionResult],
+    ) -> VerificationTaskListRow:
         runtime = self._runtime_status(row)
         final_status = str(row["final_status"] or "")
         if final_status:
@@ -524,7 +541,7 @@ class VerificationTaskStore:
         else:
             status = VerificationTaskStatus.PENDING
         task_id = str(row["id"] or "")
-        result = execution_result_from_json(str(row["result_json"] or "{}"))
+        result = _stored_result(runtime, str(row["result_json"] or "{}"), results=results)
         return {
             "id": task_id,
             "verification_id": str(row["verification_id"] or ""),
@@ -540,7 +557,8 @@ class VerificationTaskStore:
     def list_rows(self, verification_id: str) -> list[VerificationTaskRow]:
         rows = [dict(row) for row in self.db.fetch_all("SELECT * FROM verification_tasks WHERE verification_id=?", [verification_id])]
         ordered = sorted(rows, key=self._row_order)
-        return [self._decorate_row(index + 1, row) for index, row in enumerate(ordered)]
+        results: dict[str, ExecutionResult] = {}
+        return [self._decorate_row(index + 1, row, results=results) for index, row in enumerate(ordered)]
 
     def list_rows_for_list(self, verification_id: str) -> list[VerificationTaskListRow]:
         rows = [
@@ -556,7 +574,8 @@ class VerificationTaskStore:
             )
         ]
         ordered = sorted(rows, key=self._row_order)
-        return [self._decorate_list_row(row) for row in ordered]
+        results: dict[str, ExecutionResult] = {}
+        return [self._decorate_list_row(row, results=results) for row in ordered]
 
     def snapshot_rows(
         self,
@@ -596,6 +615,9 @@ class VerificationTaskStore:
             runtimes = dict(self._runtime_by_task_id)
         ordered = sorted((dict(row) for row in rows), key=self._row_order)
         values: list[dict[str, object]] = []
+        # Share immutable results within this materialized query only. The map
+        # has at most one entry per row and is released when the read returns.
+        results: dict[str, ExecutionResult] = {}
         limit_bytes = self._limit_bytes()
         for index, row in enumerate(ordered, start=1):
             task_id = str(row["id"] or "")
@@ -604,6 +626,7 @@ class VerificationTaskStore:
                     index,
                     row,
                     runtime=runtimes.get(task_id),
+                    results=results,
                 )
             )
             snapshot = task_diagnostic_snapshot_from_json(
@@ -869,6 +892,7 @@ class VerificationTaskStore:
         *,
         verification_id: str,
         program_ids: tuple[str, ...],
+        stored_results: dict[str, tuple[str, ExecutionResult]],
     ) -> str:
         if not program_ids:
             return ""
@@ -898,6 +922,9 @@ class VerificationTaskStore:
             [verification_id, *completed_program_ids],
         ).fetchall()
         rows_by_program: dict[str, list[dict[str, object]]] = {}
+        # Current transaction results are already canonical; runtime results
+        # are reusable only when their text matches this SQLite snapshot.
+        results = {text: result for text, result in stored_results.values()}
         for row in rows:
             task_row = dict(row)
             rows_by_program.setdefault(
@@ -935,7 +962,11 @@ class VerificationTaskStore:
             matched, reason = verification_program_results_match(
                 next(iter(expected_behaviors)),
                 (
-                    execution_result_from_json(str(row["result_json"] or "{}"))
+                    _stored_result(
+                        self._runtime_status(row),
+                        str(row["result_json"] or "{}"),
+                        results=results,
+                    )
                     for row in ordered_rows
                 ),
             )
@@ -1296,6 +1327,7 @@ class VerificationTaskStore:
                         conn,
                         verification_id=verification_id,
                         program_ids=tuple(affected_solution_program_ids),
+                        stored_results=stored_results,
                     )
                 parent_transition: ParentTransition = ""
                 sanity_claimed = False
