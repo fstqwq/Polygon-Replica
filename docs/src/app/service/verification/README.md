@@ -34,4 +34,11 @@ completion, terminalization, and runtime reset discard the owner index. Bound ta
 retain their committed typed result for reads of the same persisted JSON, and release
 it with their runtime binding.
 
+Task-list and lifecycle-snapshot reads share immutable structured results for
+identical persisted JSON within that read. Program verdict aggregation also
+reuses the current transaction's prepared results and matching runtime results.
+The temporary lookup contains only results encountered by the operation and is
+released when it returns. Returned rows own their result objects; subsequent
+reads obtain a fresh database snapshot.
+
 The [execution protocol](../../../../protocol/execution.md) defines lifecycle, graph, verdict, cache, and evidence semantics.
