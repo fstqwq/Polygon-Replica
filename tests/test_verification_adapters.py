@@ -160,6 +160,9 @@ class TestVerificationAdapters(E2ETestBase):
             return f"jt-{len(calls)}"
 
         def _fake_wait_for_task_case_result(task_id: str, test_name: str) -> dict[str, object]:
+            self.assertEqual(len(calls), 2)
+            self.assertTrue((logs_dir / "summary-runtime-threshold.log").is_file())
+            self.assertTrue((logs_dir / "boundary.log").is_file())
             return {
                 "summary": {
                     "tests": [
@@ -215,7 +218,7 @@ class TestVerificationAdapters(E2ETestBase):
                 "sanity-unicode_output_stability",
             ],
         )
-        self.assertEqual(
+        self.assertCountEqual(
             closed_programs,
             [
                 (verification_id, ["sanity-empty_output_stability"]),
@@ -223,6 +226,97 @@ class TestVerificationAdapters(E2ETestBase):
             ],
         )
         self.assertIn("empty_output_stability 001.in: ok - WA", (logs_dir / "stability.log").read_text(encoding="utf-8"))
+
+    def test_sanity_probe_errors_collect_other_results_and_close_admitted_programs(self) -> None:
+        for failure in ("enqueue-first", "enqueue-second", "wait", "close"):
+            with self.subTest(failure=failure):
+                verification_id = canonical_test_verification_id(self.random_id("sanity-error"))
+                logs_dir = runtime.storage_layout.prepare_verification_root(verification_id) / "logs"
+                admitted: list[str] = []
+                waited: list[str] = []
+                closed: list[str] = []
+
+                def enqueue(**kwargs: object) -> str:
+                    program = str(kwargs["verification_program_id"])
+                    if (failure == "enqueue-first" and "empty" in program) or (
+                        failure == "enqueue-second" and "unicode" in program
+                    ):
+                        raise RuntimeError("admission failed")
+                    admitted.append(program)
+                    return program
+
+                def wait(task_id: str, test_name: str) -> dict[str, object]:
+                    waited.append(task_id)
+                    if failure == "wait" and "empty" in task_id:
+                        raise RuntimeError("wait failed")
+                    return {"summary": {"tests": [{"test": test_name, "verdict": "WA"}]}}
+
+                def close(scope: str, programs: list[str]) -> None:
+                    self.assertEqual(scope, verification_id)
+                    closed.extend(programs)
+                    if failure == "close" and "unicode" in programs[0]:
+                        raise RuntimeError("close failed")
+
+                with patch.object(runtime.judgehost_task_service, "enqueue_task", side_effect=enqueue), patch.object(
+                    runtime.judgehost_task_service, "wait_for_task_case_result", side_effect=wait,
+                ), patch.object(runtime.judgehost_task_service, "close_programs", side_effect=close):
+                    result = runtime.verification_sanity_service.run(
+                        problem=self.problem, user=self.user, verification_id=verification_id,
+                        logs_dir=logs_dir, test_plans=[sanity_test_plan()],
+                    )
+                self.assertEqual(result.status, "failed")
+                self.assertCountEqual(waited, admitted)
+                self.assertCountEqual(closed, admitted)
+                self.assertCountEqual([item.status for item in result.check_results[:2]], ["failed", "passed"])
+                self.assertTrue((logs_dir / "boundary.log").is_file())
+
+    def test_sanity_independent_check_exception_closes_both_probes(self) -> None:
+        verification_id = canonical_test_verification_id(self.random_id("sanity-cleanup"))
+        logs_dir = runtime.storage_layout.prepare_verification_root(verification_id) / "logs"
+        with patch.object(runtime.judgehost_task_service, "enqueue_task", side_effect=["first", "second"]), patch.object(
+            runtime.judgehost_task_service, "close_programs",
+        ) as close:
+            with self.assertRaisesRegex(RuntimeError, "column summary"):
+                runtime.verification_sanity_service.run(
+                    problem=self.problem, user=self.user, verification_id=verification_id,
+                    logs_dir=logs_dir, test_plans=[sanity_test_plan()],
+                    runtime_columns=[{"summary": None}],
+                )
+        self.assertCountEqual(
+            [call.args for call in close.call_args_list],
+            [(verification_id, ["sanity-empty_output_stability"]),
+             (verification_id, ["sanity-unicode_output_stability"])],
+        )
+
+    def test_sanity_validates_sample_output_before_collecting_probes(self) -> None:
+        verification_id = canonical_test_verification_id(self.random_id("sanity-sample"))
+        logs_dir = runtime.storage_layout.prepare_verification_root(verification_id) / "logs"
+        admitted: list[str] = []
+        waited: list[str] = []
+
+        def enqueue(**kwargs: object) -> str:
+            filename = str(kwargs["upload_filename"])
+            admitted.append(filename)
+            return filename
+
+        def wait(task_id: str, test_name: str) -> dict[str, object]:
+            self.assertEqual(len(admitted), 3)
+            waited.append(task_id)
+            verdict = "OK" if task_id == "custom_sample_output.py" else "WA"
+            return {"summary": {"tests": [{"test": test_name, "verdict": verdict}]}}
+
+        with patch.object(runtime.judgehost_task_service, "enqueue_task", side_effect=enqueue), patch.object(
+            runtime.judgehost_task_service, "wait_for_task_case_result", side_effect=wait,
+        ), patch.object(runtime.judgehost_task_service, "close_programs"):
+            result = runtime.verification_sanity_service.run(
+                problem=self.problem, user=self.user, verification_id=verification_id,
+                logs_dir=logs_dir,
+                test_plans=[sanity_test_plan(sample=True, sample_output_text="1\n")],
+            )
+        self.assertEqual(result.status, "passed")
+        self.assertEqual(result.checked_count, 3)
+        self.assertEqual(admitted, ["sanity_empty_output.py", "sanity_unicode_output.py", "custom_sample_output.py"])
+        self.assertEqual(waited, ["custom_sample_output.py", "sanity_empty_output.py", "sanity_unicode_output.py"])
 
     def test_sanity_missing_validator_boundary_warning_keeps_verification_ok(
         self,

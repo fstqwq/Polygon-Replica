@@ -1,5 +1,6 @@
 import base64
 import hashlib
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -64,6 +65,15 @@ class _StabilityProbe:
     check_name: str
     upload_filename: str
     source_bytes: bytes
+
+
+@dataclass
+class _PendingStabilityProbe:
+    probe: _StabilityProbe
+    task_id: str = ""
+    verdict: str = ""
+    message: str = ""
+    error: str = ""
 
 
 def planned_sanity_checks(test_plans: list[VerificationTestPlan]) -> list[str]:
@@ -152,7 +162,7 @@ def _stability_probes() -> list[_StabilityProbe]:
     ]
 
 
-def _run_stability_probe(
+def _enqueue_stability_probe(
     *,
     problem: str,
     user: str,
@@ -162,14 +172,14 @@ def _run_stability_probe(
     bypass_case_result_cache: bool,
     service_class: str,
     judgehost: Judgehost,
-) -> tuple[str, str]:
+) -> str:
     run_id = _stability_run_id(
         verification_id=verification_id,
         test_name=plan.test_name,
         check_name=probe.check_name,
     )
     program_id = f"sanity-{probe.check_name}"
-    task_id = judgehost.enqueue_task(
+    return judgehost.enqueue_task(
         problem=problem,
         username=user,
         artifact_verification_id=verification_id,
@@ -187,29 +197,29 @@ def _run_stability_probe(
         persist_verification_run=False,
         service_class=service_class,
     )
+
+
+def _close_stability_probe(
+    pending: _PendingStabilityProbe,
+    *,
+    verification_id: str,
+    judgehost: Judgehost,
+) -> None:
     try:
-        return _result_verdict(
-            judgehost.wait_for_task_case_result(task_id, plan.test_name)
-        )
-    finally:
         judgehost.close_programs(
             verification_id,
-            [program_id],
+            [f"sanity-{pending.probe.check_name}"],
         )
+    except Exception as exc:
+        pending.error = str(exc) or "judgehost stability probe failed"
 
 
-def _run_stability_checks(
+def _stability_check_results(
     *,
-    problem: str,
-    user: str,
-    verification_id: str,
     logs_dir: Path,
-    test_plans: list[VerificationTestPlan],
-    bypass_case_result_cache: bool,
-    service_class: str,
-    judgehost: Judgehost,
+    probe_plan: VerificationTestPlan | None,
+    probes: list[_PendingStabilityProbe],
 ) -> list[VerificationSanityCheckResult]:
-    probe_plan = next((plan for plan in test_plans if plan.test_name), None)
     if probe_plan is None:
         return [
             VerificationSanityCheckResult(name=probe.check_name, status=SANITY_PASSED, checked_count=0)
@@ -219,20 +229,11 @@ def _run_stability_checks(
     log_path.parent.mkdir(parents=True, exist_ok=True)
     lines: list[str] = []
     results: list[VerificationSanityCheckResult] = []
-    for probe in _stability_probes():
-        try:
-            verdict, message = _run_stability_probe(
-                problem=problem,
-                user=user,
-                verification_id=verification_id,
-                plan=probe_plan,
-                probe=probe,
-                bypass_case_result_cache=bypass_case_result_cache,
-                service_class=service_class,
-                judgehost=judgehost,
-            )
-        except Exception as exc:
-            detail = str(exc) or "judgehost stability probe failed"
+    for pending in probes:
+        probe = pending.probe
+        verdict, message = pending.verdict, pending.message
+        if pending.error:
+            detail = pending.error
             lines.append(f"{probe.check_name} {probe_plan.test_name}: failed - {detail}")
             results.append(
                 VerificationSanityCheckResult(
@@ -347,111 +348,144 @@ def run_verification_sanity_checks(
             failed_test="",
             error="",
         )
-    check_results = _run_stability_checks(
-        problem=problem,
-        user=user,
-        verification_id=verification_id,
-        logs_dir=logs_dir,
-        test_plans=test_plans,
-        bypass_case_result_cache=bypass_case_result_cache,
-        service_class=service_class,
-        judgehost=judgehost,
-    )
-    if SUMMARY_RUNTIME_THRESHOLD_CHECK in checks:
-        runtime_checked_count = 0
-        runtime_messages: list[VerificationSanityMessage] = []
-        runtime_log = logs_dir / "summary-runtime-threshold.log"
-        runtime_log.parent.mkdir(parents=True, exist_ok=True)
-        for column in list(runtime_columns or []):
-            summary_value = column.get("summary")
-            if not isinstance(summary_value, dict):
-                raise RuntimeError("runtime threshold column summary must be an object")
-            summary = summary_value
-            source = str(column.get("source") or summary.get("source") or "")
-            report = evaluate_summary_runtime_threshold(
-                summary=summary,
-                source=source,
-                time_limit_ms=int(time_limit_ms),
+    probe_plan = next((plan for plan in test_plans if plan.test_name), None)
+    probes: list[_PendingStabilityProbe] = []
+    check_results: list[VerificationSanityCheckResult] = []
+    with ExitStack() as cleanup:
+        if probe_plan is not None:
+            for probe in _stability_probes():
+                pending = _PendingStabilityProbe(probe)
+                probes.append(pending)
+                try:
+                    pending.task_id = _enqueue_stability_probe(
+                        problem=problem,
+                        user=user,
+                        verification_id=verification_id,
+                        plan=probe_plan,
+                        probe=probe,
+                        bypass_case_result_cache=bypass_case_result_cache,
+                        service_class=service_class,
+                        judgehost=judgehost,
+                    )
+                except Exception as exc:
+                    pending.error = str(exc) or "judgehost stability probe failed"
+                    continue
+                cleanup.callback(
+                    _close_stability_probe,
+                    pending,
+                    verification_id=verification_id,
+                    judgehost=judgehost,
+                )
+        # Hosts execute both probes while independent checks run here.
+        if SUMMARY_RUNTIME_THRESHOLD_CHECK in checks:
+            runtime_checked_count = 0
+            runtime_messages: list[VerificationSanityMessage] = []
+            runtime_log = logs_dir / "summary-runtime-threshold.log"
+            runtime_log.parent.mkdir(parents=True, exist_ok=True)
+            for column in list(runtime_columns or []):
+                summary_value = column.get("summary")
+                if not isinstance(summary_value, dict):
+                    raise RuntimeError("runtime threshold column summary must be an object")
+                summary = summary_value
+                source = str(column.get("source") or summary.get("source") or "")
+                report = evaluate_summary_runtime_threshold(
+                    summary=summary,
+                    source=source,
+                    time_limit_ms=int(time_limit_ms),
+                )
+                runtime_checked_count += int(report.checked_count)
+                if report.warning_hit is not None:
+                    reason = runtime_threshold_reason(report.warning_hit, summary_has_tl=bool(column.get("summary_has_tl")))
+                    runtime_messages.append(VerificationSanityMessage(severity=SANITY_WARNING, test_name="", message=reason))
+            if runtime_messages:
+                runtime_log.write_text("\n".join(item.message for item in runtime_messages) + "\n", encoding="utf-8")
+                runtime_status = SANITY_WARNING
+            else:
+                runtime_log.write_text("summary runtime threshold ok\n", encoding="utf-8")
+                runtime_status = SANITY_PASSED
+            check_results.append(
+                VerificationSanityCheckResult(
+                    name=SUMMARY_RUNTIME_THRESHOLD_CHECK,
+                    status=runtime_status,
+                    checked_count=runtime_checked_count,
+                    messages=tuple(runtime_messages),
+                )
             )
-            runtime_checked_count += int(report.checked_count)
-            if report.warning_hit is not None:
-                reason = runtime_threshold_reason(report.warning_hit, summary_has_tl=bool(column.get("summary_has_tl")))
-                runtime_messages.append(VerificationSanityMessage(severity=SANITY_WARNING, test_name="", message=reason))
-        if runtime_messages:
-            runtime_log.write_text("\n".join(item.message for item in runtime_messages) + "\n", encoding="utf-8")
-            runtime_status = SANITY_WARNING
-        else:
-            runtime_log.write_text("summary runtime threshold ok\n", encoding="utf-8")
-            runtime_status = SANITY_PASSED
-        check_results.append(
-            VerificationSanityCheckResult(
-                name=SUMMARY_RUNTIME_THRESHOLD_CHECK,
-                status=runtime_status,
-                checked_count=runtime_checked_count,
-                messages=tuple(runtime_messages),
-            )
-        )
-    boundary_result = boundary_coverage_from_feedback(
-        feedback_by_test=dict(generate_feedback_by_test or {}),
-        test_plans=test_plans,
-        validator_configured=validator_configured,
-    )
-    boundary_log = logs_dir / "boundary.log"
-    boundary_log.parent.mkdir(parents=True, exist_ok=True)
-    boundary_messages = tuple(
-        VerificationSanityMessage(
-            severity=SANITY_WARNING,
-            test_name="",
-            message=message,
-        )
-        for message in boundary_result.messages
-    )
-    if boundary_result.status == SANITY_WARNING:
-        boundary_log.write_text(
-            "\n".join(item.message for item in boundary_messages) + "\n",
-            encoding="utf-8",
-        )
-    else:
-        boundary_log.write_text("boundary coverage ok\n", encoding="utf-8")
-    check_results.append(
-        VerificationSanityCheckResult(
-            name=BOUNDARY_COVERAGE_CHECK,
-            status=boundary_result.status,
-            checked_count=int(boundary_result.checked_count),
-            messages=boundary_messages,
-        )
-    )
-    if CUSTOM_SAMPLE_OUTPUT_CHECK in checks:
-        result = sample_output_service.validate(
-            problem=problem,
-            user=user,
-            verification_id=verification_id,
-            logs_dir=logs_dir,
+        boundary_result = boundary_coverage_from_feedback(
+            feedback_by_test=dict(generate_feedback_by_test or {}),
             test_plans=test_plans,
-            accepted_source_label=accepted_source_label,
-            accepted_source_name=accepted_source_name,
-            accepted_source_file=accepted_source_file,
-            run_verification_payload_base=run_verification_payload_base,
-            bypass_case_result_cache=bypass_case_result_cache,
-            service_class=service_class,
+            validator_configured=validator_configured,
         )
-        messages: tuple[VerificationSanityMessage, ...] = ()
-        if result.status == SANITY_FAILED:
-            messages = (
-                VerificationSanityMessage(
-                    severity=SANITY_FAILED,
-                    test_name=result.failed_test,
-                    message=result.error,
-                ),
+        boundary_log = logs_dir / "boundary.log"
+        boundary_log.parent.mkdir(parents=True, exist_ok=True)
+        boundary_messages = tuple(
+            VerificationSanityMessage(
+                severity=SANITY_WARNING,
+                test_name="",
+                message=message,
             )
+            for message in boundary_result.messages
+        )
+        if boundary_result.status == SANITY_WARNING:
+            boundary_log.write_text(
+                "\n".join(item.message for item in boundary_messages) + "\n",
+                encoding="utf-8",
+            )
+        else:
+            boundary_log.write_text("boundary coverage ok\n", encoding="utf-8")
         check_results.append(
             VerificationSanityCheckResult(
-                name=CUSTOM_SAMPLE_OUTPUT_CHECK,
-                status=result.status,
-                checked_count=int(result.validated_count),
-                messages=messages,
+                name=BOUNDARY_COVERAGE_CHECK,
+                status=boundary_result.status,
+                checked_count=int(boundary_result.checked_count),
+                messages=boundary_messages,
             )
         )
+        if CUSTOM_SAMPLE_OUTPUT_CHECK in checks:
+            result = sample_output_service.validate(
+                problem=problem,
+                user=user,
+                verification_id=verification_id,
+                logs_dir=logs_dir,
+                test_plans=test_plans,
+                accepted_source_label=accepted_source_label,
+                accepted_source_name=accepted_source_name,
+                accepted_source_file=accepted_source_file,
+                run_verification_payload_base=run_verification_payload_base,
+                bypass_case_result_cache=bypass_case_result_cache,
+                service_class=service_class,
+            )
+            messages: tuple[VerificationSanityMessage, ...] = ()
+            if result.status == SANITY_FAILED:
+                messages = (
+                    VerificationSanityMessage(
+                        severity=SANITY_FAILED,
+                        test_name=result.failed_test,
+                        message=result.error,
+                    ),
+                )
+            check_results.append(
+                VerificationSanityCheckResult(
+                    name=CUSTOM_SAMPLE_OUTPUT_CHECK,
+                    status=result.status,
+                    checked_count=int(result.validated_count),
+                    messages=messages,
+                )
+            )
+        if probe_plan is not None:
+            for pending in probes:
+                if not pending.task_id:
+                    continue
+                try:
+                    pending.verdict, pending.message = _result_verdict(
+                        judgehost.wait_for_task_case_result(pending.task_id, probe_plan.test_name)
+                    )
+                except Exception as exc:
+                    pending.error = str(exc) or "judgehost stability probe failed"
+    # Preserve diagnostic order and include failures from program cleanup.
+    check_results[:0] = _stability_check_results(
+        logs_dir=logs_dir, probe_plan=probe_plan, probes=probes,
+    )
     return _aggregate_sanity_results(check_results)
 
 
