@@ -41,4 +41,10 @@ The temporary lookup contains only results encountered by the operation and is
 released when it returns. Returned rows own their result objects; subsequent
 reads obtain a fresh database snapshot.
 
+Sanity admits both checker stability probes after ordinary execution completes,
+runs the independent runtime, boundary, and sample-output checks, then collects
+the probes. Probe diagnostics retain their planned order. Every successfully
+admitted probe has program cleanup registered for normal and exceptional exit;
+probe admission, result collection, and cleanup failures become check failures.
+
 The [execution protocol](../../../../protocol/execution.md) defines lifecycle, graph, verdict, cache, and evidence semantics.
