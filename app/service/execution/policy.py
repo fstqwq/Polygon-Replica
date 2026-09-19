@@ -254,6 +254,11 @@ def canonical_execution_result(result: ExecutionResult) -> ExecutionResult:
         raise ValueError("execution outcome must use ExecutionOutcome")
     if not isinstance(result.compile, CompileResult):
         raise ValueError("execution compile result must use CompileResult")
+    canonical_execution_usage(result.outcome.usage)
+    if type(result.passes) is not tuple or type(result.warnings) is not tuple:
+        raise ValueError("execution passes and warnings must be immutable tuples")
+    if type(result.compile.diagnostics) is not tuple:
+        raise ValueError("execution compile diagnostics must be an immutable tuple")
     normalized = normalize_execution_result(
         passes=result.passes,
         verdict=result.outcome.verdict,

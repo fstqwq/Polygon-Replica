@@ -48,6 +48,36 @@ class VerificationDetailReadModel(TypedDict):
     running_tasks: list[dict[str, str]]
 
 
+class VerificationTestDetailReadModel(TypedDict):
+    record: VerificationSnapshotRecord
+    details: dict[str, object]
+    test_name: str
+    mode: str
+    tasks: list[VerificationTaskRow]
+    cases: list[VerificationTaskRow]
+
+
+def build_verification_test_detail_read_model(
+    snapshot: VerificationSnapshot, *, test_name: str, program_id: str | None,
+) -> VerificationTestDetailReadModel:
+    tasks = cast(list[VerificationTaskRow], snapshot["tasks"])
+    details = snapshot["detail"]
+    mode = str(details.get("mode") or "")
+    return {
+        "record": snapshot["record"],
+        "details": details,
+        "test_name": test_name,
+        "mode": mode if mode in {"pass-fail", "interactive"} else "malformed",
+        "tasks": tasks,
+        "cases": [
+            row for row in tasks
+            if row["test_name"] == test_name
+            and row["task_kind"] in _SOLUTION_TASK_KINDS
+            and (not program_id or row["program_id"] == program_id)
+        ],
+    }
+
+
 def _test_order(test_name: str) -> tuple[int, str]:
     token = Path(test_name).name
     match = _TEST_NAME_RE.fullmatch(token)
@@ -87,6 +117,23 @@ def _late_diagnostic_text(row: VerificationTaskRow, limit: int) -> str:
     return bounded_display_text("\n\n".join(messages), limit_bytes=limit)
 
 
+def verification_case_test_row(
+    row: VerificationTaskRow, *, display_limit: int, include_pass_details: bool = True,
+) -> dict[str, object]:
+    test_row = decode_case_test_row(
+        row["result"], test_name=row["test_name"], include_passes=include_pass_details,
+    )
+    late = _late_diagnostic_text(row, display_limit)
+    if late:
+        test_row["message"] = bounded_display_text(
+            "\n\n".join(value for value in (str(test_row.get("message") or ""), late) if value),
+            limit_bytes=display_limit,
+        )
+    test_row["late_diagnostics"] = list(cast(list[object], row.get("late_diagnostics") or []))
+    test_row["late_diagnostic_text"] = late
+    return test_row
+
+
 def _program_status(rows: list[VerificationTaskRow]) -> str:
     statuses = [row["status"] for row in rows]
     for value, display in (
@@ -111,6 +158,7 @@ def _program_rows(
     mode: str,
     pass_limit: int,
     display_limit: int,
+    include_pass_details: bool,
 ) -> dict[str, VerificationProgramDetailRow]:
     try:
         run_config = json.loads(str(details.get("run_config_json") or ""))
@@ -153,24 +201,10 @@ def _program_rows(
                 }
                 and row["verdict"].upper() != "SK"
             ):
-                test_row = decode_case_test_row(
-                    row["result"],
-                    test_name=row["test_name"],
+                test_row = verification_case_test_row(
+                    row, display_limit=display_limit,
+                    include_pass_details=include_pass_details,
                 )
-                late = _late_diagnostic_text(row, display_limit)
-                if late:
-                    test_row["message"] = bounded_display_text(
-                        "\n\n".join(
-                            item
-                            for item in (str(test_row.get("message") or ""), late)
-                            if item
-                        ),
-                        limit_bytes=display_limit,
-                    )
-                test_row["late_diagnostics"] = list(
-                    cast(list[object], row.get("late_diagnostics") or [])
-                )
-                test_row["late_diagnostic_text"] = late
                 tests.append(test_row)
                 runtime_ms = _row_int(test_row, "time_ms")
                 max_time_ms = max(
@@ -249,6 +283,7 @@ def build_verification_detail_read_model(
     snapshot: VerificationSnapshot,
     *,
     display_limit: int,
+    include_pass_details: bool = True,
 ) -> VerificationDetailReadModel:
     record = snapshot["record"]
     tasks = cast(list[VerificationTaskRow], snapshot["tasks"])
@@ -304,6 +339,7 @@ def build_verification_detail_read_model(
             mode=mode,
             pass_limit=_row_int(details, "pass_limit", default=1),
             display_limit=display_limit,
+            include_pass_details=include_pass_details,
         ),
         "task_status_by_program_and_test": status_by_case,
         "task_counts": runtime_counts,

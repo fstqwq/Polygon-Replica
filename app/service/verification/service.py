@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import cast
 
 from app.config import ConfigValues
@@ -40,7 +41,9 @@ from app.service.verification.read_model import (
 )
 from app.service.verification.detail_read_model import (
     VerificationDetailReadModel,
+    VerificationTestDetailReadModel,
     build_verification_detail_read_model,
+    build_verification_test_detail_read_model,
 )
 from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
 
@@ -879,6 +882,10 @@ class VerificationService:
     def verification_snapshot(
         self,
         verification_id: str,
+        *,
+        authorize: Callable[[VerificationSnapshotRecord], None] | None = None,
+        test_name: str | None = None,
+        program_id: str | None = None,
     ) -> VerificationSnapshot | None:
         try:
             canonical_verification_id(verification_id)
@@ -912,13 +919,17 @@ class VerificationService:
                 "created_at": str(row["created_at"] or ""),
                 "finished_at": str(row["finished_at"] or ""),
             }
+            if authorize is not None:
+                authorize(record)
             return {
                 "record": record,
                 "detail": self._verification_detail_from_connection(
                     conn,
                     verification_id,
                 ),
-                "tasks": self.task_store.snapshot_rows(conn, verification_id),
+                "tasks": self.task_store.snapshot_rows(
+                    conn, verification_id, test_name=test_name, program_id=program_id,
+                ),
             }
 
         return self.task_store.read_lifecycle_snapshot(_read)
@@ -926,13 +937,36 @@ class VerificationService:
     def verification_detail_read_model(
         self,
         verification_id: str,
+        *,
+        include_pass_details: bool = True,
     ) -> VerificationDetailReadModel | None:
         snapshot = self.verification_snapshot(verification_id)
         if snapshot is None:
             return None
         return build_verification_detail_read_model(
             snapshot,
+            include_pass_details=include_pass_details,
             display_limit=self._config_values.integer(
                 "AUX_DISPLAY_TEXT_LIMIT_BYTES"
             ),
+        )
+
+    def verification_test_detail_read_model(
+        self,
+        verification_id: str,
+        *,
+        test_name: str,
+        program_id: str | None = None,
+        authorize: Callable[[VerificationSnapshotRecord], None],
+    ) -> VerificationTestDetailReadModel | None:
+        if not test_name:
+            raise ValueError("test_name is required")
+        snapshot = self.verification_snapshot(
+            verification_id, authorize=authorize, test_name=test_name,
+            program_id=program_id,
+        )
+        if snapshot is None:
+            return None
+        return build_verification_test_detail_read_model(
+            snapshot, test_name=test_name, program_id=program_id,
         )

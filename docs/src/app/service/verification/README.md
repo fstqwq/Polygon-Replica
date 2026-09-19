@@ -41,6 +41,20 @@ The temporary lookup contains only results encountered by the operation and is
 released when it returns. Returned rows own their result objects; subsequent
 reads obtain a fresh database snapshot.
 
+Browser testcase fragments use a separate scoped read model. In one SQLite read
+transaction, the service reads the parent record, invokes authorization, then
+materializes persisted metadata and selected task evidence. A program selection
+loads the testcase's generator, main-correct task, and selected solution; a testcase
+selection loads all its programs. Duplicate generators also load their owner,
+preferring a valid predecessor and then matching output in completion/id order.
+Artifact references use one query ordered by task id, retaining the first owner.
+The runtime overlay copies only selected and owner task identities under its lock.
+
+Scoped models expose testcase evidence and persisted parent facts. Full models
+provide task counts and program summaries for Agent and complete-page consumers.
+Matrix overviews omit pass display dictionaries while retaining final-pass metric
+fallbacks. Testcase details and sample JSON retain every captured pass.
+
 Sanity admits both checker stability probes after ordinary execution completes,
 runs the independent runtime, boundary, and sample-output checks, then collects
 the probes. Probe diagnostics retain their planned order. Every successfully

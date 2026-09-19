@@ -8,6 +8,7 @@ from app.impl.auth.csrf import issue_password_form_csrf_token, verify_password_f
 from app.impl.auth.password_envelope import password_envelope_store
 from app.impl.auth.session import (
     create_session_for_user,
+    invalidate_session_identity,
     require_session_user,
     revoke_sudo_sessions_for_user,
 )
@@ -66,6 +67,7 @@ def settings_page(
 
 
 def settings_password_update(
+    request: Request,
     user: Annotated[str, Depends(require_session_user)],
     current_password: str = Form(""),
     new_password: str = Form(""),
@@ -123,6 +125,7 @@ def settings_password_update(
             raise ValueError("invalid password iterations")
         set_user_password_verifier(int(row["id"]), new_verifier, new_salt, new_iters)
         runtime().auth_service.revoke_auth_sessions_for_user(int(row["id"]))
+        invalidate_session_identity(request)
         revoke_sudo_sessions_for_user(int(row["id"]))
         token = create_session_for_user(int(row["id"]))
         response = redirect_response("/settings", status_code=303, message=message)

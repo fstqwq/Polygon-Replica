@@ -3,13 +3,16 @@ import json
 import re
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from time import monotonic, thread_time
 from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from starlette.datastructures import MutableHeaders
+from starlette.responses import Response
 
 import app.main_constant as _K
 from app.impl.contest.workspace_scope import (
@@ -299,6 +302,32 @@ def json_error_response(
     return response
 
 
+@dataclass(frozen=True, slots=True)
+class TemplateTiming:
+    elapsed_ms: float = 0.0
+    cpu_ms: float = 0.0
+
+
+def template_timing(request: Request) -> TemplateTiming:
+    value = getattr(request.state, "template_timing", None)
+    return value if isinstance(value, TemplateTiming) else TemplateTiming()
+
+
+def render_template(request: Request, template_name: str, context: dict[str, object]) -> Response:
+    """Measure synchronous template generation without authoring context work."""
+    started = monotonic()
+    cpu_started = thread_time()
+    try:
+        return runtime().templates.TemplateResponse(request, template_name, context)
+    finally:
+        elapsed_ms = max(0.0, (monotonic() - started) * 1000)
+        cpu_ms = max(0.0, (thread_time() - cpu_started) * 1000)
+        previous = template_timing(request)
+        request.state.template_timing = TemplateTiming(
+            previous.elapsed_ms + elapsed_ms, previous.cpu_ms + cpu_ms,
+        )
+
+
 def template_response(request: Request, template_name: str, context: dict | None = None):
     payload = dict(context or {})
     payload.setdefault("ui_brand_name", str(runtime().config_values.UI_BRAND_NAME))
@@ -338,14 +367,6 @@ def template_response(request: Request, template_name: str, context: dict | None
                 "toolchains": [],
                 "toolchain_mismatch": False,
             }
-    backend_render_ms: int | None = None
-    started = getattr(request.state, "request_started_at", None)
-    if isinstance(started, (int, float)):
-        elapsed_ms = (time.monotonic() - started) * 1000.0
-        if elapsed_ms >= 0:
-            backend_render_ms = int(round(elapsed_ms))
-    if "backend_render_ms" not in payload:
-        payload["backend_render_ms"] = backend_render_ms
     raw_cookie = str(
         request.cookies.get(runtime().config_values.text("FLASH_COOKIE_NAME"), "")
         or ""
@@ -368,7 +389,7 @@ def template_response(request: Request, template_name: str, context: dict | None
     payload["message_source"] = str(template_name or "").strip()
     payload["message_event_id"] = _flash_message_event_id(message, scope=f"{payload['message_source']}:{message_ts}")
     payload["message_ts"] = message_ts
-    response = runtime().templates.TemplateResponse(request, template_name, payload)
+    response = render_template(request, template_name, payload)
     if auto_update_message and queue:
         # The update happened while rendering this response. Show it now without
         # consuming an older redirect message that still belongs to the user.

@@ -581,39 +581,75 @@ class VerificationTaskStore:
         self,
         conn: sqlite3.Connection,
         verification_id: str,
+        *,
+        test_name: str | None = None,
+        program_id: str | None = None,
     ) -> list[dict[str, object]]:
-        rows = conn.execute(
-            """
-            SELECT task.*,
-                   COALESCE((
-                       SELECT artifact.artifact_ref
-                       FROM verification_task_artifacts artifact
-                       WHERE artifact.verification_id=task.verification_id
-                         AND artifact.test_name=task.test_name
-                         AND artifact.role='generated-input'
-                       ORDER BY artifact.task_id
-                       LIMIT 1
-                   ),'') AS input_ref,
-                   COALESCE((
-                       SELECT artifact.artifact_ref
-                       FROM verification_task_artifacts artifact
-                       WHERE artifact.verification_id=task.verification_id
-                         AND artifact.test_name=task.test_name
-                         AND artifact.role='accepted-answer'
-                       ORDER BY artifact.task_id
-                       LIMIT 1
-                   ),'') AS answer_ref,
-                   COALESCE(diagnostic.snapshot_json,'') AS late_diagnostic_json
+        where = "task.verification_id=?"
+        params: list[object] = [verification_id]
+        if test_name is not None:
+            where += " AND task.test_name=?"
+            params.append(test_name)
+            if program_id:
+                where += " AND (task.task_kind IN ('generate-input','main-correct') OR task.program_id=?)"
+                params.append(program_id)
+        query = """
+            SELECT task.*, COALESCE(diagnostic.snapshot_json,'') AS late_diagnostic_json
             FROM verification_tasks task
-            LEFT JOIN verification_task_diagnostics diagnostic
-              ON diagnostic.task_id=task.id
-            WHERE task.verification_id=?
-            """,
-            [verification_id],
-        ).fetchall()
+            LEFT JOIN verification_task_diagnostics diagnostic ON diagnostic.task_id=task.id
+            WHERE """
+        rows = [dict(row) for row in conn.execute(query + where, params).fetchall()]
+        if test_name is not None:
+            # Duplicate ownership follows completion order, independently of the
+            # artifact index's task-id ordering. Only generator evidence is read.
+            owner_ids: set[str] = set()
+            for row in rows:
+                if row["task_kind"] != "generate-input" or row["final_status"] != "done":
+                    continue
+                owner = conn.execute(
+                    """
+                    SELECT owner.id FROM verification_tasks owner
+                    JOIN verification_tasks selected ON selected.id=?
+                    WHERE owner.verification_id=selected.verification_id
+                      AND owner.task_kind='generate-input' AND owner.final_status='done'
+                      AND json_extract(selected.result_json,'$.outcome.verdict')='SK'
+                      AND json_extract(owner.result_json,'$.outcome.verdict')<>'SK'
+                      AND (owner.id=selected.predecessor_task_id OR (
+                          COALESCE(json_extract(selected.result_json,'$.passes[#-1].artifacts.output_ref'),'')<>''
+                          AND json_extract(owner.result_json,'$.passes[#-1].artifacts.output_ref')=
+                              json_extract(selected.result_json,'$.passes[#-1].artifacts.output_ref')))
+                    ORDER BY (owner.id=selected.predecessor_task_id) DESC,
+                             COALESCE(owner.finished_at,''),owner.id LIMIT 1
+                    """, [row["id"]],
+                ).fetchone()
+                if owner is not None:
+                    owner_ids.add(str(owner["id"]))
+            owner_ids.difference_update(str(row["id"]) for row in rows)
+            if owner_ids:
+                placeholders = ",".join("?" for _ in owner_ids)
+                rows.extend(dict(row) for row in conn.execute(
+                    query + f"task.verification_id=? AND task.id IN ({placeholders})",
+                    [verification_id, *sorted(owner_ids)],
+                ).fetchall())
+        artifact_where = "verification_id=? AND role IN ('generated-input','accepted-answer')"
+        artifact_params: list[object] = [verification_id]
+        if test_name is not None:
+            artifact_where += " AND test_name=?"
+            artifact_params.append(test_name)
+        artifact_owners: dict[tuple[str, str], str] = {}
+        for artifact in conn.execute(
+            "SELECT test_name,role,artifact_ref FROM verification_task_artifacts WHERE "
+            + artifact_where + " ORDER BY task_id", artifact_params,
+        ):
+            artifact_owners.setdefault(
+                (str(artifact["test_name"]), str(artifact["role"])), str(artifact["artifact_ref"]),
+            )
         with self._runtime_lock:
-            runtimes = dict(self._runtime_by_task_id)
-        ordered = sorted((dict(row) for row in rows), key=self._row_order)
+            runtimes = {
+                str(row["id"]): self._runtime_by_task_id[str(row["id"])]
+                for row in rows if str(row["id"]) in self._runtime_by_task_id
+            }
+        ordered = sorted(rows, key=self._row_order)
         values: list[dict[str, object]] = []
         # Share immutable results within this materialized query only. The map
         # has at most one entry per row and is released when the read returns.
@@ -632,8 +668,8 @@ class VerificationTaskStore:
             snapshot = task_diagnostic_snapshot_from_json(
                 str(row["late_diagnostic_json"] or "")
             )
-            decorated["input_ref"] = str(row["input_ref"] or "")
-            decorated["answer_ref"] = str(row["answer_ref"] or "")
+            decorated["input_ref"] = artifact_owners.get((str(row["test_name"]), "generated-input"), "")
+            decorated["answer_ref"] = artifact_owners.get((str(row["test_name"]), "accepted-answer"), "")
             display = compose_task_diagnostic_display(
                 cast(ExecutionResult, decorated["result"]),
                 snapshot,

@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import cast
+from fastapi import HTTPException
 from app.impl.runtime.dependency import runtime
 from app.service.repository.workspace import WorkspaceContext
 from app.impl.workspace.artifact import verification_artifact_file, verification_blob_virtual_rel
@@ -29,12 +30,18 @@ from app.service.platform.workspace_path import (
 )
 from app.service.problem.solution_metadata import expected_behavior_label
 from app.service.verification.task_store import VerificationTaskRow
-from app.service.verification.detail_read_model import VerificationProgramDetailRow
+from app.service.verification.detail_read_model import (
+    VerificationProgramDetailRow,
+    verification_case_test_row,
+)
+from app.service.verification.lifecycle import VerificationSnapshotRecord
+from app.service.execution.codec import compile_diagnostics_payload
 from app.service.verification.read_model import TaskCounts
 from app.service.verification.types import VerificationTaskStatus
 from app.service.platform.process import is_canonical_artifact_id
 from app.impl.workspace.run_view_lifecycle_card import _verification_tests_meta_stats
 from app.impl.workspace.run_test_generation import (
+    TestGenerationView,
     build_test_generation_views,
     generation_warning_message,
 )
@@ -468,6 +475,790 @@ def _detail_sanity_context(
     }
 
 
+def _missing_solution_cell(task_status: str) -> dict[str, object]:
+    if task_status == VerificationTaskStatus.LEASED:
+        return {
+            "text": "..",
+            "short": "..",
+            "metrics": "running",
+            "kind": "running",
+            "text_tone": "",
+            "detail": None,
+        }
+    if task_status == VerificationTaskStatus.FAILED:
+        return {
+            "text": "FL",
+            "short": "FL",
+            "metrics": "failed",
+            "kind": "fail",
+            "text_tone": "",
+            "detail": None,
+        }
+    if task_status == VerificationTaskStatus.CANCELLED:
+        return {
+            "text": "--",
+            "short": "--",
+            "metrics": "cancelled",
+            "kind": "neutral",
+            "text_tone": "",
+            "detail": None,
+        }
+    return {
+        "text": "..",
+        "short": "..",
+        "metrics": "",
+        "kind": "neutral",
+        "text_tone": "",
+        "detail": None,
+    }
+
+
+def _test_name_cell(
+    *,
+    actual_test_name: str,
+    fallback_name: str,
+    is_placeholder: bool,
+    note: dict[str, str],
+    has_detail: bool,
+) -> dict[str, object]:
+    tone = str(note.get("tone") or "")
+    note_text = str(note.get("text") or "")
+    note_detail = str(note.get("detail") or "")
+    if is_placeholder and (not actual_test_name):
+        return {
+            "kind": "neutral",
+            "text": "",
+            "short": "..",
+            "meta": "generating",
+            "detail": note_detail,
+            "clickable": False,
+        }
+    if tone in {"running", "pending"}:
+        visible_name = actual_test_name or fallback_name
+        meta = note_text.removeprefix(".. ").strip()
+        if tone == "pending":
+            meta = ""
+        if visible_name:
+            return {
+                "kind": "running" if tone == "running" else "neutral",
+                "text": visible_name,
+                "short": "",
+                "meta": meta or ("running" if tone == "running" else ""),
+                "detail": note_detail,
+                "clickable": False,
+            }
+        short = note_text
+        if note_text.startswith(".. "):
+            short = ".."
+        if tone == "pending":
+            short = ".."
+        return {
+            "kind": "running" if tone == "running" else "neutral",
+            "text": "",
+            "short": short or "..",
+            "meta": meta or ("running" if tone == "running" else ""),
+            "detail": note_detail,
+            "clickable": False,
+        }
+    visible_name = actual_test_name or fallback_name
+    kind = "neutral"
+    if tone == "ok":
+        kind = "ok"
+    elif tone == "fail":
+        kind = "fail"
+    elif tone == "warn":
+        kind = "warn"
+    elif is_placeholder:
+        kind = "neutral"
+    return {
+        "kind": kind,
+        "text": visible_name,
+        "short": "",
+        "meta": "",
+        "detail": note_detail,
+        "clickable": bool(actual_test_name and has_detail and (not is_placeholder)),
+    }
+
+
+def _case_cell(
+    item: dict[str, object], *, idx: int, test_name: str, expected_behavior: str,
+    verification_details: dict[str, object], include_row_details: bool,
+    detail_compile_error: str, detail_compile_diagnostics: list[dict[str, object]],
+    display_limit: int, time_tone: str,
+) -> dict:
+    verdict = _detail_text(
+        item.get("verdict"),
+        field=f"program.tests[{idx - 1}].verdict",
+    ).upper() or "-"
+    verdict_short = run_verdict_short(verdict)
+    time_ms = _detail_int(
+        item.get("time_ms"),
+        field=f"program.tests[{idx - 1}].time_ms",
+    )
+    time_user_ms = _detail_int(
+        item.get("time_user_ms"),
+        field=f"program.tests[{idx - 1}].time_user_ms",
+        default=time_ms,
+    )
+    time_wall_ms = _detail_int(
+        item.get("time_wall_ms"),
+        field=f"program.tests[{idx - 1}].time_wall_ms",
+        default=time_user_ms,
+    )
+    memory_kb = _detail_int(
+        item.get("memory_kb"),
+        field=f"program.tests[{idx - 1}].memory_kb",
+    )
+    memory_mb_text = run_memory_mb_text(memory_kb)
+    detail_payload: dict[str, object] | None = None
+    if include_row_details:
+        passes = _detail_dict_rows(
+            item.get("passes"),
+            field=f"program.tests[{idx - 1}].passes",
+        )
+        late_diagnostic_text = bounded_display_text(
+            _detail_text(
+                item.get("late_diagnostic_text"),
+                field=f"program.tests[{idx - 1}].late_diagnostic_text",
+            ),
+            limit_bytes=display_limit,
+        )
+        feedback_display = "-"
+        inline_feedback = bounded_display_text(
+            _detail_text(
+                item.get("message") or item.get("error"),
+                field=f"program.tests[{idx - 1}].feedback",
+            ),
+            limit_bytes=runtime().config_values.integer(
+                "AUX_DISPLAY_TEXT_LIMIT_BYTES"
+            ),
+        )
+        feedback_items = _detail_string_list(
+            item.get("feedback_files"),
+            field=f"program.tests[{idx - 1}].feedback_files",
+        )
+        test_stem = Path(str(test_name)).stem
+        checker_log_rel = f"feedback_dir/{test_stem}/checker.log" if test_stem else ""
+        feedback_rel = feedback_items[0] if feedback_items else ""
+        if inline_feedback:
+            feedback_display = inline_feedback
+        feedback_total = len(feedback_items)
+        feedback_total = max(
+            feedback_total,
+            _detail_int(
+                item.get("feedback_files_total"),
+                field=f"program.tests[{idx - 1}].feedback_files_total",
+            ),
+        )
+        feedback_truncated = bool(item.get("feedback_files_truncated"))
+        if feedback_total > len(feedback_items):
+            feedback_truncated = True
+        if feedback_truncated:
+            hidden_count = max(0, feedback_total - len(feedback_items))
+            if hidden_count > 0 and feedback_display != "-":
+                feedback_display = (
+                    f"{feedback_display} (+{hidden_count} more)"
+                    if feedback_display != "-"
+                    else f'+{count_label(hidden_count, "file")}'
+                )
+        pass_rows: list[dict[str, object]] = []
+        if passes:
+            for pass_index, pass_item in enumerate(passes):
+                pass_field = f"program.tests[{idx - 1}].passes[{pass_index}]"
+                pass_verdict = _detail_text(
+                    pass_item.get("verdict"),
+                    field=f"{pass_field}.verdict",
+                ).upper() or "-"
+                pass_verdict_short = run_verdict_short(pass_verdict)
+                pass_time_user_ms = _detail_int(
+                    pass_item.get("time_user_ms")
+                    if pass_item.get("time_user_ms") is not None
+                    else pass_item.get("time_ms"),
+                    field=f"{pass_field}.time_user_ms",
+                )
+                pass_time_wall_ms = _detail_int(
+                    pass_item.get("time_wall_ms"),
+                    field=f"{pass_field}.time_wall_ms",
+                    default=pass_time_user_ms,
+                )
+                pass_memory_kb = _detail_int(
+                    pass_item.get("memory_kb"),
+                    field=f"{pass_field}.memory_kb",
+                )
+                pass_feedback = bounded_display_text(
+                    _detail_text(
+                        pass_item.get("feedback"),
+                        field=f"{pass_field}.feedback",
+                    ),
+                    limit_bytes=runtime().config_values.integer(
+                        "AUX_DISPLAY_TEXT_LIMIT_BYTES"
+                    ),
+                )
+                row_feedback_display = pass_feedback or feedback_display
+                output_rel = _detail_text(
+                    pass_item.get("output_ref"),
+                    field=f"{pass_field}.output_ref",
+                )
+                pass_number = _detail_int(
+                    pass_item.get("pass"),
+                    field=f"{pass_field}.pass",
+                )
+                pass_time_display = run_cpu_wall_ms_text(
+                    pass_time_user_ms, pass_time_wall_ms
+                )
+                pass_memory_display = run_memory_mb_text(pass_memory_kb)
+                pass_rows.append(
+                    {
+                        "pass_number": pass_number,
+                        "pass_label": f"Pass {pass_number}",
+                        "capture_status": str(pass_item.get("capture_status") or ""),
+                        "verdict_short": pass_verdict_short,
+                        "text_tone": _run_cell_text_tone(pass_verdict, expected_behavior),
+                        "kind": _run_cell_kind(pass_verdict, expected_behavior),
+                        "time_display": pass_time_display,
+                        "time_tone": time_tone,
+                        "memory_display": pass_memory_display,
+                        "status_display": f"{pass_verdict_short} \u00b7 {pass_time_display} \u00b7 {pass_memory_display}",
+                        "feedback_display": row_feedback_display,
+                        "output_task_id": str(item.get("task_id") or ""),
+                        "input_ref": str(pass_item.get("input_ref") or ""),
+                        "output_rel": str(output_rel),
+                        "transcript_rel": str(pass_item.get("transcript_ref") or ""),
+                        "judge_message_rel": str(pass_item.get("judge_message_ref") or ""),
+                        "checker_log_rel": checker_log_rel,
+                        "feedback_rel": feedback_rel,
+                    }
+                )
+        if not pass_rows:
+            output_rel = _detail_text(
+                item.get("output_ref"),
+                field=f"program.tests[{idx - 1}].output_ref",
+            )
+            output_task_id = str(item.get("task_id") or "")
+            time_display = run_cpu_wall_ms_text(time_user_ms, time_wall_ms)
+            pass_rows.append(
+                {
+                    "pass_number": 1,
+                    "pass_label": "Pass 1",
+                    "capture_status": "",
+                    "verdict_short": verdict_short,
+                    "text_tone": _run_cell_text_tone(verdict, expected_behavior),
+                    "kind": _run_cell_kind(verdict, expected_behavior),
+                    "time_display": time_display,
+                    "time_tone": time_tone,
+                    "memory_display": memory_mb_text,
+                    "status_display": f"{verdict_short} \u00b7 {time_display} \u00b7 {memory_mb_text}",
+                    "feedback_display": feedback_display,
+                    "input_ref": "",
+                    "output_rel": str(output_rel),
+                    "output_task_id": output_task_id,
+                    "transcript_rel": "",
+                    "judge_message_rel": "",
+                    "checker_log_rel": checker_log_rel,
+                    "feedback_rel": feedback_rel,
+                }
+            )
+        final_index = len(pass_rows) - 1
+        for candidate_index in range(len(pass_rows) - 1, -1, -1):
+            candidate = pass_rows[candidate_index]
+            verdict_token = candidate.get("verdict_short") or ""
+            if verdict_token and verdict_token not in {"--", "-"}:
+                final_index = candidate_index
+                break
+        if late_diagnostic_text and pass_rows:
+            final_feedback = str(pass_rows[final_index].get("feedback_display") or "")
+            if late_diagnostic_text not in final_feedback:
+                pass_rows[final_index]["feedback_display"] = bounded_display_text(
+                    "\n\n".join(
+                        value
+                        for value in (
+                            "" if final_feedback == "-" else final_feedback,
+                            late_diagnostic_text,
+                        )
+                        if value
+                    ),
+                    limit_bytes=display_limit,
+                )
+        final_row = dict(pass_rows[final_index]) if pass_rows else {}
+        detail_payload = {
+            "verdict": verdict,
+            "verdict_short": verdict_short,
+            "time_display": f"{time_ms}ms",
+            "time_tone": time_tone,
+            "memory_display": memory_mb_text,
+            "status_display": f"{verdict_short} \u00b7 {run_cpu_wall_ms_text(time_user_ms, time_wall_ms)} \u00b7 {memory_mb_text}",
+            "feedback_display": feedback_display,
+            "pass_rows": pass_rows,
+            "final_row": final_row,
+            "is_multi_pass": bool(
+                _detail_int(
+                    verification_details.get("pass_limit"),
+                    field="pass_limit",
+                    default=1,
+                )
+                > 1
+                or len(pass_rows) > 1
+            ),
+            "compile_error_display": detail_compile_error,
+            "compile_diagnostics": detail_compile_diagnostics,
+            "late_diagnostics": list(
+                cast(list[object], item.get("late_diagnostics") or [])
+            ),
+        }
+    return {
+        "verdict": verdict,
+        "time_ms": time_ms,
+        "memory_kb": memory_kb,
+        "text": verdict_short,
+        "short": verdict_short,
+        "metrics": f"{time_ms}ms/{memory_mb_text}",
+        "time_display": f"{time_ms}ms",
+        "time_tone": time_tone,
+        "memory_display": memory_mb_text,
+        "kind": _run_cell_kind(verdict, expected_behavior),
+        "text_tone": _run_cell_text_tone(verdict, expected_behavior),
+        "detail": detail_payload,
+        "detail_available": True,
+    }
+
+
+def _test_detail_rows(
+    *, target_tests: list[str], row_index_by_test: dict[str, int], columns: list[dict],
+    test_generation_views: dict[str, TestGenerationView], row_generate_notes: dict[str, dict[str, str]],
+    source_verification_id: str, problem_slug: str, username: str,
+    detail_is_main_correct_run: bool = False,
+) -> list[dict]:
+    detail_rows: list[dict] = []
+    def _verification_artifact_preview(
+        verification_id: str, rel_path: str
+    ) -> RunDetailPreview:
+        safe_verification_id = verification_id or ""
+        safe_rel_path = (rel_path or "").lstrip("/")
+        if (
+            not problem_slug
+            or not username
+            or (not safe_rel_path)
+            or (not is_canonical_artifact_id(safe_verification_id))
+        ):
+            return _run_detail_preview_unavailable("missing")
+        resolved = verification_artifact_file(safe_verification_id, safe_rel_path)
+        if resolved is None:
+            return _run_detail_preview_unavailable("missing")
+        payload_file, _filename = resolved
+        with payload_file.path.open("rb") as stream:
+            blob = stream.read(
+                runtime().config_values.integer("RUN_DETAIL_PREVIEW_MAX_BYTES") + 1
+            )
+        return _run_detail_preview_from_bytes(
+            blob,
+            verification_id=safe_verification_id,
+            rel_path=safe_rel_path,
+        )
+
+    def _verification_output_preview(
+        verification_id: str, task_id: str, test_name: str
+    ) -> RunDetailPreview:
+        safe_verification_id = verification_id or ""
+        safe_task_id = str(task_id or "").strip()
+        test_stem = Path(test_name).stem
+        filename = f"{test_stem}.out" if test_stem else "program.out"
+        if (
+            not problem_slug
+            or not username
+            or (not safe_task_id)
+            or (not filename)
+            or (not is_canonical_artifact_id(safe_verification_id))
+        ):
+            return _run_detail_preview_unavailable("missing")
+        virtual_rel = f"output/{safe_task_id}/{filename}"
+        return _verification_artifact_preview(safe_verification_id, virtual_rel)
+
+    def _verification_blob_preview(
+        verification_id: str,
+        rel_path: str,
+    ) -> RunDetailPreview:
+        safe_verification_id = verification_id or ""
+        safe_rel_path = (rel_path or "").lstrip("/")
+        if (
+            not problem_slug
+            or not username
+            or (not safe_rel_path)
+            or (not is_canonical_artifact_id(safe_verification_id))
+        ):
+            return _run_detail_preview_unavailable("missing")
+        if not safe_rel_path.startswith("blob://"):
+            return _run_detail_preview_unavailable("missing")
+        virtual_rel = verification_blob_virtual_rel(
+            safe_rel_path, filename=Path(safe_rel_path).name
+        )
+        if not virtual_rel:
+            return _run_detail_preview_unavailable("missing")
+        return _verification_artifact_preview(safe_verification_id, virtual_rel)
+
+    def _verification_transcript(
+        verification_id: str,
+        rel_path: str,
+        *,
+        unavailable_message: str,
+    ) -> dict[str, object]:
+        safe_verification_id = verification_id or ""
+        safe_rel_path = (rel_path or "").lstrip("/")
+        unavailable = {
+            "available": False,
+            "state": "unavailable",
+            "events": [],
+            "events_shown": 0,
+            "events_total": 0,
+            "events_omitted": 0,
+            "raw_size_bytes": 0,
+            "error_offset": None,
+            "error_reason": None,
+            "download_verification_id": "",
+            "download_rel_path": "",
+            "message": unavailable_message,
+        }
+        if (
+            not problem_slug
+            or not username
+            or (not safe_rel_path)
+            or (not is_canonical_artifact_id(safe_verification_id))
+        ):
+            return unavailable
+        if not safe_rel_path.startswith("blob://"):
+            return unavailable
+        virtual_rel = verification_blob_virtual_rel(
+            safe_rel_path, filename=Path(safe_rel_path).name
+        )
+        if not virtual_rel:
+            return unavailable
+        resolved = verification_artifact_file(safe_verification_id, virtual_rel)
+        if resolved is None:
+            return unavailable
+        payload_file, _filename = resolved
+        with payload_file.path.open("rb") as stream:
+            parsed = parse_runpipe_transcript(
+                stream,
+                raw_size_bytes=payload_file.size,
+            )
+        return {
+            "available": True,
+            **parsed,
+            "download_verification_id": safe_verification_id,
+            "download_rel_path": virtual_rel,
+            "message": "",
+        }
+
+    for test_name in target_tests:
+        row_index = int(row_index_by_test.get(test_name) or 0)
+        if row_index <= 0:
+            continue
+        generation_view = test_generation_views.get(test_name)
+        generation_terminal = bool(generation_view is not None and generation_view["terminal"])
+        generation_alert = (
+            generation_view
+            if generation_view is not None and generation_view["alert_message"]
+            else None
+        )
+        input_rel = f"tests/{test_name}"
+        answer_name = _run_test_answer_name(test_name)
+        answer_rel = f"ans/{answer_name}" if answer_name else ""
+        row_is_interactive = any(
+            (col.get("mode") or "") == "interactive"
+            and col["tests_map"].get(test_name) is not None
+            for col in columns
+        )
+        input_preview = _run_detail_preview_unavailable("not applicable")
+        answer_preview = _run_detail_preview_unavailable("not applicable")
+        if not row_is_interactive:
+            input_preview = _verification_artifact_preview(source_verification_id, input_rel)
+            answer_preview = (
+                _verification_artifact_preview(source_verification_id, answer_rel)
+                if answer_rel
+                else _run_detail_preview_unavailable("missing")
+            )
+        detail_cells: list[dict] = []
+        for col in columns:
+            cell = col["tests_map"].get(test_name)
+            if cell is None:
+                detail_cells.append(
+                    {
+                        "text": "--",
+                        "short": "--",
+                        "metrics": "-",
+                        "kind": "neutral",
+                        "text_tone": "",
+                        "detail": None,
+                    }
+                )
+                continue
+            detail_raw = cell.get("detail")
+            detail_payload = (
+                _detail_dict(detail_raw, field="cell.detail")
+                if detail_raw is not None
+                else None
+            )
+            if detail_payload is not None:
+                interactive_mode = (col.get("mode") or "") == "interactive"
+                pass_rows_payload: list[dict[str, object]] = []
+                pass_rows_raw = _detail_dict_rows(
+                    detail_payload.get("pass_rows"),
+                    field="cell.detail.pass_rows",
+                )
+                for pass_item in pass_rows_raw:
+                    row_payload = dict(pass_item)
+                    output_rel = _detail_text(
+                        row_payload.get("output_rel"),
+                        field="cell.detail.pass.output_rel",
+                    )
+                    output_task_id = _detail_text(
+                        row_payload.get("output_task_id"),
+                        field="cell.detail.pass.output_task_id",
+                    )
+                    output_preview = _run_detail_preview_unavailable("missing")
+                    if output_rel and not interactive_mode:
+                        if output_task_id and source_verification_id:
+                            output_preview = _verification_output_preview(
+                                source_verification_id, output_task_id, test_name
+                            )
+                        else:
+                            output_preview = _verification_blob_preview(
+                                source_verification_id, output_rel
+                            )
+                    row_payload["output_preview"] = output_preview
+                    capture_status = str(row_payload.get("capture_status") or "")
+                    capture_complete = capture_status == "complete"
+                    input_ref = str(row_payload.get("input_ref") or "")
+                    pass_input_preview = _run_detail_preview_unavailable(
+                        "missing" if capture_complete else "not captured"
+                    )
+                    if input_ref:
+                        pass_input_preview = _verification_blob_preview(
+                            source_verification_id,
+                            input_ref,
+                        )
+                    row_payload["input_preview"] = pass_input_preview
+                    if interactive_mode:
+                        transcript_rel = str(row_payload.get("transcript_rel") or "")
+                        row_payload["interactive_transcript"] = _verification_transcript(
+                            source_verification_id,
+                            transcript_rel,
+                            unavailable_message="missing"
+                            if capture_complete
+                            else "not captured",
+                        )
+                        judge_message_rel = str(row_payload.get("judge_message_rel") or "")
+                        feedback_preview = _run_detail_preview_unavailable(
+                            "missing" if capture_complete else "not captured"
+                        )
+                        if judge_message_rel:
+                            feedback_preview = _verification_blob_preview(
+                                source_verification_id,
+                                judge_message_rel,
+                            )
+                            feedback_preview["download_verification_id"] = ""
+                            feedback_preview["download_rel_path"] = ""
+                        row_payload["feedback_preview"] = feedback_preview
+                    else:
+                        checker_log_rel = str(row_payload.get("checker_log_rel") or "")
+                        feedback_rel = str(row_payload.get("feedback_rel") or "")
+                        feedback_preview = _run_detail_preview_unavailable("missing")
+                        if feedback_rel:
+                            feedback_preview = _verification_blob_preview(
+                                source_verification_id,
+                                feedback_rel,
+                            )
+                        elif checker_log_rel:
+                            feedback_preview = _verification_blob_preview(
+                                source_verification_id,
+                                checker_log_rel,
+                            )
+                        row_payload["feedback_preview"] = feedback_preview
+                        if (row_payload.get("feedback_display") or "-") == "-" and bool(
+                            feedback_preview.get("available")
+                        ):
+                            preview_text = (
+                                str(feedback_preview.get("text") or "")
+                                .replace("\r\n", "\n")
+                                .replace("\r", "\n")
+                            )
+                            first_line = next(
+                                (line for line in preview_text.splitlines() if line), ""
+                            )
+                            if first_line:
+                                row_payload["feedback_display"] = (
+                                    first_line[:157].rstrip() + "..."
+                                    if len(first_line) > 160
+                                    else first_line
+                                )
+                    pass_rows_payload.append(row_payload)
+                detail_payload["pass_rows"] = pass_rows_payload
+                detail_payload["is_interactive"] = interactive_mode
+                detail_payload["mode_malformed"] = (col.get("mode") or "") == "malformed"
+                final_row_raw = detail_payload.get("final_row")
+                final_row_payload = _detail_dict(
+                    final_row_raw,
+                    field="cell.detail.final_row",
+                )
+                if pass_rows_payload:
+                    final_row_payload = dict(pass_rows_payload[-1])
+                    for candidate in reversed(pass_rows_payload):
+                        verdict_token = candidate.get("verdict_short") or ""
+                        if verdict_token and verdict_token not in {"--", "-"}:
+                            final_row_payload = dict(candidate)
+                            break
+                detail_payload["final_row"] = final_row_payload
+            detail_cells.append(
+                {
+                    "text": (cell["text"]),
+                    "short": (cell.get("short") or cell.get("text") or "--"),
+                    "metrics": (cell.get("metrics") or "-"),
+                    "time_display": (cell.get("time_display") or ""),
+                    "time_tone": (cell.get("time_tone") or ""),
+                    "memory_display": (cell.get("memory_display") or ""),
+                    "kind": (cell["kind"]),
+                    "text_tone": (cell.get("text_tone") or ""),
+                    "detail": detail_payload,
+                }
+            )
+        if detail_is_main_correct_run:
+            for cell in detail_cells:
+                main_detail_payload = _detail_dict(
+                    cell.get("detail"),
+                    field="main_correct.detail",
+                )
+                final_row_payload = _detail_dict(
+                    main_detail_payload.get("final_row"),
+                    field="main_correct.detail.final_row",
+                )
+                output_preview = _detail_preview(
+                    final_row_payload.get("output_preview"),
+                    field="main_correct.detail.final_row.output_preview",
+                )
+                if bool(output_preview.get("available")):
+                    answer_preview = output_preview
+                    break
+        generate_note = dict(row_generate_notes.get(test_name) or {})
+        test_cell = _test_name_cell(
+            actual_test_name=test_name,
+            fallback_name=test_name,
+            is_placeholder=False,
+            note=generate_note,
+            has_detail=bool(
+                generation_terminal
+                or any((cell.get("detail") is not None for cell in detail_cells))
+            ),
+        )
+        detail_rows.append(
+            {
+                "index": row_index,
+                "test_name": test_name,
+                "display_name": test_name,
+                "test_cell": test_cell,
+                "is_placeholder": False,
+                "row_id": f"test-detail-{row_index}",
+                "input_preview": input_preview,
+                "answer_preview": answer_preview,
+                "is_interactive": row_is_interactive,
+                "generate_detail": (
+                    generation_view
+                    if generation_view is not None
+                    and generation_view["status"] == VerificationTaskStatus.FAILED
+                    else None
+                ),
+                "generation_alert": generation_alert,
+                "generation_skipped": bool(
+                    generation_view is not None and generation_view["skipped"]
+                ),
+                "test_source_kind": ""
+                if generation_view is None
+                else generation_view["source_kind"],
+                "test_command": "" if generation_view is None else generation_view["command"],
+                "cells": detail_cells,
+                "has_detail": bool(
+                    generation_terminal
+                    or any((cell.get("detail") is not None for cell in detail_cells))
+                ),
+            }
+        )
+    return detail_rows
+
+
+def build_run_test_detail_context(
+    ctx: WorkspaceContext, *, verification_id: str, test_name: str, program_id: str = "",
+) -> dict:
+    """Project one authorized historical testcase without authoring side effects."""
+    def authorize(record: VerificationSnapshotRecord) -> None:
+        access = runtime().access_query.verification_context(
+            actor_user_id=int(ctx["user"]["id"]),
+            actor_workspace_id=int(ctx["workspace"]["id"]),
+            expected_problem_id=int(ctx["problem"]["id"]), verification=record,
+        )
+        if not access["can_view"]:
+            raise HTTPException(status_code=404, detail="run detail not found")
+
+    model = runtime().verification_service.verification_test_detail_read_model(
+        verification_id, test_name=test_name, program_id=program_id or None, authorize=authorize,
+    )
+    if model is None:
+        raise HTTPException(status_code=404, detail="run detail not found")
+    details = model["details"]
+    display_limit = runtime().config_values.integer("AUX_DISPLAY_TEXT_LIMIT_BYTES")
+    metadata = {
+        str(item.get("test_name") or ""): item
+        for item in _detail_dict_rows(details.get("tests_meta_rows"), field="tests_meta_rows")
+    }
+    selected_metadata = {test_name: metadata[test_name]} if test_name in metadata else {}
+    generation = build_test_generation_views(model["tasks"], selected_metadata, limit_bytes=display_limit)
+    notes = {
+        name: {"tone": view["tone"], "status_label": view["status_label"],
+               "text": view["table_text"], "detail": view["alert_message"] or view["detail"]}
+        for name, view in generation.items()
+    }
+    columns: list[dict] = []
+    for task in model["cases"]:
+        tests_map: dict[str, dict] = {}
+        if task["status"] in {VerificationTaskStatus.DONE, VerificationTaskStatus.FAILED} and task["verdict"] != "SK":
+            item = verification_case_test_row(task, display_limit=display_limit)
+            feedback: dict[str, object] = {"tests": [item]}
+            _cap_run_test_feedback_files(feedback, runtime().config_values.integer("RUN_TEST_FEEDBACK_FILE_LIST_LIMIT"))
+            diagnostics = _decorate_compile_diagnostics(_normalize_diagnostics(
+                compile_diagnostics_payload(task["result"].compile.diagnostics)[
+                    :runtime().config_values.integer("RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT")
+                ], runtime().config_values.integer("DIAGNOSTIC_MESSAGE_CHAR_LIMIT"),
+            ))
+            error = bounded_display_text(
+                "\n\n".join(value for value in (task["error_text"], str(task.get("late_diagnostic_text") or "")) if value),
+                limit_bytes=display_limit,
+            )
+            if not error and diagnostics:
+                first = diagnostics[0]
+                error = ": ".join(str(first.get(key) or "").strip() for key in ("location_display", "message") if first.get(key))
+            threshold = evaluate_summary_runtime_threshold(
+                summary=feedback, source=task["source_path"],
+                time_limit_ms=time_limit_ms_from_run_config_json(str(details.get("run_config_json") or "")),
+            )
+            tests_map[test_name] = _case_cell(
+                item, idx=1, test_name=test_name, expected_behavior=task["expected_behavior"],
+                verification_details=details, include_row_details=True,
+                detail_compile_error=error,
+                detail_compile_diagnostics=cast(list[dict[str, object]], diagnostics),
+                display_limit=display_limit, time_tone="warn" if test_name in threshold.highlighted_tests else "",
+            )
+        columns.append({
+            "id": task["program_id"], "title": Path(task["source_path"]).name or task["program_id"],
+            "mode": model["mode"], "tests_map": tests_map,
+        })
+    known_test = test_name in metadata or any(task["test_name"] == test_name for task in model["tasks"])
+    target_tests = [test_name] if known_test and (not program_id or columns) else []
+    rows = _test_detail_rows(
+        target_tests=target_tests, row_index_by_test={test_name: 1}, columns=columns,
+        test_generation_views=generation, row_generate_notes=notes,
+        source_verification_id=model["record"]["id"], problem_slug=ctx["problem"]["slug"],
+        username=ctx["user"]["username"],
+    )
+    return {"verification_id": model["record"]["id"], "detail_columns": columns, "detail_rows": rows}
+
+
 def build_run_detail_context(
     ctx: WorkspaceContext,
     execute_mode: str,
@@ -478,43 +1269,6 @@ def build_run_detail_context(
     detail_program_id: str = "",
 ) -> dict:
     display_limit = runtime().config_values.integer("AUX_DISPLAY_TEXT_LIMIT_BYTES")
-
-    def _missing_solution_cell(task_status: str) -> dict[str, object]:
-        if task_status == VerificationTaskStatus.LEASED:
-            return {
-                "text": "..",
-                "short": "..",
-                "metrics": "running",
-                "kind": "running",
-                "text_tone": "",
-                "detail": None,
-            }
-        if task_status == VerificationTaskStatus.FAILED:
-            return {
-                "text": "FL",
-                "short": "FL",
-                "metrics": "failed",
-                "kind": "fail",
-                "text_tone": "",
-                "detail": None,
-            }
-        if task_status == VerificationTaskStatus.CANCELLED:
-            return {
-                "text": "--",
-                "short": "--",
-                "metrics": "cancelled",
-                "kind": "neutral",
-                "text_tone": "",
-                "detail": None,
-            }
-        return {
-            "text": "..",
-            "short": "..",
-            "metrics": "",
-            "kind": "neutral",
-            "text_tone": "",
-            "detail": None,
-        }
 
     workspace = Path(ctx["workspace"]["path"])
     problem_id = int(ctx["problem"]["id"])
@@ -531,7 +1285,9 @@ def build_run_detail_context(
         verification_id_hint if is_canonical_artifact_id(verification_id_hint) else ""
     )
     verification_read_model = (
-        runtime().verification_service.verification_detail_read_model(verification_id_hint)
+        runtime().verification_service.verification_detail_read_model(
+            verification_id_hint, include_pass_details=include_row_details,
+        )
         if verification_id_hint
         else None
     )
@@ -637,72 +1393,6 @@ def build_run_detail_context(
             "solution path",
         )
         return bool(safe_source)
-
-    def _test_name_cell(
-        *,
-        actual_test_name: str,
-        fallback_name: str,
-        is_placeholder: bool,
-        note: dict[str, str],
-        has_detail: bool,
-    ) -> dict[str, object]:
-        tone = str(note.get("tone") or "")
-        note_text = str(note.get("text") or "")
-        note_detail = str(note.get("detail") or "")
-        if is_placeholder and (not actual_test_name):
-            return {
-                "kind": "neutral",
-                "text": "",
-                "short": "..",
-                "meta": "generating",
-                "detail": note_detail,
-                "clickable": False,
-            }
-        if tone in {"running", "pending"}:
-            visible_name = actual_test_name or fallback_name
-            meta = note_text.removeprefix(".. ").strip()
-            if tone == "pending":
-                meta = ""
-            if visible_name:
-                return {
-                    "kind": "running" if tone == "running" else "neutral",
-                    "text": visible_name,
-                    "short": "",
-                    "meta": meta or ("running" if tone == "running" else ""),
-                    "detail": note_detail,
-                    "clickable": False,
-                }
-            short = note_text
-            if note_text.startswith(".. "):
-                short = ".."
-            if tone == "pending":
-                short = ".."
-            return {
-                "kind": "running" if tone == "running" else "neutral",
-                "text": "",
-                "short": short or "..",
-                "meta": meta or ("running" if tone == "running" else ""),
-                "detail": note_detail,
-                "clickable": False,
-            }
-        visible_name = actual_test_name or fallback_name
-        kind = "neutral"
-        if tone == "ok":
-            kind = "ok"
-        elif tone == "fail":
-            kind = "fail"
-        elif tone == "warn":
-            kind = "warn"
-        elif is_placeholder:
-            kind = "neutral"
-        return {
-            "kind": kind,
-            "text": visible_name,
-            "short": "",
-            "meta": "",
-            "detail": note_detail,
-            "clickable": bool(actual_test_name and has_detail and (not is_placeholder)),
-        }
 
     columns: list[dict] = []
     all_tests: set[str] = set()
@@ -884,250 +1574,21 @@ def build_run_detail_context(
                 continue
             if selected_test_name_hint and test_name != selected_test_name_hint:
                 continue
-            verdict = _detail_text(
-                item.get("verdict"),
-                field=f"program.tests[{idx - 1}].verdict",
-            ).upper() or "-"
-            verdict_short = run_verdict_short(verdict)
-            time_ms = _detail_int(
-                item.get("time_ms"),
-                field=f"program.tests[{idx - 1}].time_ms",
-            )
-            time_user_ms = _detail_int(
-                item.get("time_user_ms"),
-                field=f"program.tests[{idx - 1}].time_user_ms",
-                default=time_ms,
-            )
-            time_wall_ms = _detail_int(
-                item.get("time_wall_ms"),
-                field=f"program.tests[{idx - 1}].time_wall_ms",
-                default=time_user_ms,
-            )
-            memory_kb = _detail_int(
-                item.get("memory_kb"),
-                field=f"program.tests[{idx - 1}].memory_kb",
-            )
-            memory_mb_text = run_memory_mb_text(memory_kb)
-            time_tone = (
-                "warn" if str(test_name) in runtime_threshold_report.highlighted_tests else ""
+            time_tone = "warn" if test_name in runtime_threshold_report.highlighted_tests else ""
+            projected_cell = _case_cell(
+                item, idx=idx, test_name=test_name, expected_behavior=expected_behavior,
+                verification_details=verification_details, include_row_details=include_row_details,
+                detail_compile_error=detail_compile_error,
+                detail_compile_diagnostics=detail_compile_diagnostics,
+                display_limit=display_limit, time_tone=time_tone,
             )
             has_test_metrics = True
-            if time_ms > max_time_ms:
-                max_time_ms = time_ms
+            if projected_cell["time_ms"] > max_time_ms:
+                max_time_ms = projected_cell["time_ms"]
                 max_time_tone = time_tone
-            if memory_kb > max_memory_kb:
-                max_memory_kb = memory_kb
-            detail_payload: dict[str, object] | None = None
-            if include_row_details:
-                passes = _detail_dict_rows(
-                    item.get("passes"),
-                    field=f"program.tests[{idx - 1}].passes",
-                )
-                late_diagnostic_text = bounded_display_text(
-                    _detail_text(
-                        item.get("late_diagnostic_text"),
-                        field=f"program.tests[{idx - 1}].late_diagnostic_text",
-                    ),
-                    limit_bytes=display_limit,
-                )
-                feedback_display = "-"
-                inline_feedback = bounded_display_text(
-                    _detail_text(
-                        item.get("message") or item.get("error"),
-                        field=f"program.tests[{idx - 1}].feedback",
-                    ),
-                    limit_bytes=runtime().config_values.integer(
-                        "AUX_DISPLAY_TEXT_LIMIT_BYTES"
-                    ),
-                )
-                feedback_items = _detail_string_list(
-                    item.get("feedback_files"),
-                    field=f"program.tests[{idx - 1}].feedback_files",
-                )
-                test_stem = Path(str(test_name)).stem
-                checker_log_rel = f"feedback_dir/{test_stem}/checker.log" if test_stem else ""
-                feedback_rel = feedback_items[0] if feedback_items else ""
-                if inline_feedback:
-                    feedback_display = inline_feedback
-                feedback_total = len(feedback_items)
-                feedback_total = max(
-                    feedback_total,
-                    _detail_int(
-                        item.get("feedback_files_total"),
-                        field=f"program.tests[{idx - 1}].feedback_files_total",
-                    ),
-                )
-                feedback_truncated = bool(item.get("feedback_files_truncated"))
-                if feedback_total > len(feedback_items):
-                    feedback_truncated = True
-                if feedback_truncated:
-                    hidden_count = max(0, feedback_total - len(feedback_items))
-                    if hidden_count > 0 and feedback_display != "-":
-                        feedback_display = (
-                            f"{feedback_display} (+{hidden_count} more)"
-                            if feedback_display != "-"
-                            else f'+{count_label(hidden_count, "file")}'
-                        )
-                pass_rows: list[dict[str, object]] = []
-                if passes:
-                    for pass_index, pass_item in enumerate(passes):
-                        pass_field = f"program.tests[{idx - 1}].passes[{pass_index}]"
-                        pass_verdict = _detail_text(
-                            pass_item.get("verdict"),
-                            field=f"{pass_field}.verdict",
-                        ).upper() or "-"
-                        pass_verdict_short = run_verdict_short(pass_verdict)
-                        pass_time_user_ms = _detail_int(
-                            pass_item.get("time_user_ms")
-                            if pass_item.get("time_user_ms") is not None
-                            else pass_item.get("time_ms"),
-                            field=f"{pass_field}.time_user_ms",
-                        )
-                        pass_time_wall_ms = _detail_int(
-                            pass_item.get("time_wall_ms"),
-                            field=f"{pass_field}.time_wall_ms",
-                            default=pass_time_user_ms,
-                        )
-                        pass_memory_kb = _detail_int(
-                            pass_item.get("memory_kb"),
-                            field=f"{pass_field}.memory_kb",
-                        )
-                        pass_feedback = bounded_display_text(
-                            _detail_text(
-                                pass_item.get("feedback"),
-                                field=f"{pass_field}.feedback",
-                            ),
-                            limit_bytes=runtime().config_values.integer(
-                                "AUX_DISPLAY_TEXT_LIMIT_BYTES"
-                            ),
-                        )
-                        row_feedback_display = pass_feedback or feedback_display
-                        output_rel = _detail_text(
-                            pass_item.get("output_ref"),
-                            field=f"{pass_field}.output_ref",
-                        )
-                        pass_number = _detail_int(
-                            pass_item.get("pass"),
-                            field=f"{pass_field}.pass",
-                        )
-                        pass_time_display = run_cpu_wall_ms_text(
-                            pass_time_user_ms, pass_time_wall_ms
-                        )
-                        pass_memory_display = run_memory_mb_text(pass_memory_kb)
-                        pass_rows.append(
-                            {
-                                "pass_number": pass_number,
-                                "pass_label": f"Pass {pass_number}",
-                                "capture_status": str(pass_item.get("capture_status") or ""),
-                                "verdict_short": pass_verdict_short,
-                                "text_tone": _run_cell_text_tone(pass_verdict, expected_behavior),
-                                "kind": _run_cell_kind(pass_verdict, expected_behavior),
-                                "time_display": pass_time_display,
-                                "time_tone": time_tone,
-                                "memory_display": pass_memory_display,
-                                "status_display": f"{pass_verdict_short} \u00b7 {pass_time_display} \u00b7 {pass_memory_display}",
-                                "feedback_display": row_feedback_display,
-                                "output_task_id": str(item.get("task_id") or ""),
-                                "input_ref": str(pass_item.get("input_ref") or ""),
-                                "output_rel": str(output_rel),
-                                "transcript_rel": str(pass_item.get("transcript_ref") or ""),
-                                "judge_message_rel": str(pass_item.get("judge_message_ref") or ""),
-                                "checker_log_rel": checker_log_rel,
-                                "feedback_rel": feedback_rel,
-                            }
-                        )
-                if not pass_rows:
-                    output_rel = _detail_text(
-                        item.get("output_ref"),
-                        field=f"program.tests[{idx - 1}].output_ref",
-                    )
-                    output_task_id = str(item.get("task_id") or "")
-                    time_display = run_cpu_wall_ms_text(time_user_ms, time_wall_ms)
-                    pass_rows.append(
-                        {
-                            "pass_number": 1,
-                            "pass_label": "Pass 1",
-                            "capture_status": "",
-                            "verdict_short": verdict_short,
-                            "text_tone": _run_cell_text_tone(verdict, expected_behavior),
-                            "kind": _run_cell_kind(verdict, expected_behavior),
-                            "time_display": time_display,
-                            "time_tone": time_tone,
-                            "memory_display": memory_mb_text,
-                            "status_display": f"{verdict_short} \u00b7 {time_display} \u00b7 {memory_mb_text}",
-                            "feedback_display": feedback_display,
-                            "input_ref": "",
-                            "output_rel": str(output_rel),
-                            "output_task_id": output_task_id,
-                            "transcript_rel": "",
-                            "judge_message_rel": "",
-                            "checker_log_rel": checker_log_rel,
-                            "feedback_rel": feedback_rel,
-                        }
-                    )
-                final_index = len(pass_rows) - 1
-                for candidate_index in range(len(pass_rows) - 1, -1, -1):
-                    candidate = pass_rows[candidate_index]
-                    verdict_token = candidate.get("verdict_short") or ""
-                    if verdict_token and verdict_token not in {"--", "-"}:
-                        final_index = candidate_index
-                        break
-                if late_diagnostic_text and pass_rows:
-                    final_feedback = str(pass_rows[final_index].get("feedback_display") or "")
-                    if late_diagnostic_text not in final_feedback:
-                        pass_rows[final_index]["feedback_display"] = bounded_display_text(
-                            "\n\n".join(
-                                value
-                                for value in (
-                                    "" if final_feedback == "-" else final_feedback,
-                                    late_diagnostic_text,
-                                )
-                                if value
-                            ),
-                            limit_bytes=display_limit,
-                        )
-                final_row = dict(pass_rows[final_index]) if pass_rows else {}
-                detail_payload = {
-                    "verdict": verdict,
-                    "verdict_short": verdict_short,
-                    "time_display": f"{time_ms}ms",
-                    "time_tone": time_tone,
-                    "memory_display": memory_mb_text,
-                    "status_display": f"{verdict_short} \u00b7 {run_cpu_wall_ms_text(time_user_ms, time_wall_ms)} \u00b7 {memory_mb_text}",
-                    "feedback_display": feedback_display,
-                    "pass_rows": pass_rows,
-                    "final_row": final_row,
-                    "is_multi_pass": bool(
-                        _detail_int(
-                            verification_details.get("pass_limit"),
-                            field="pass_limit",
-                            default=1,
-                        )
-                        > 1
-                        or len(pass_rows) > 1
-                    ),
-                    "compile_error_display": detail_compile_error,
-                    "compile_diagnostics": detail_compile_diagnostics,
-                    "late_diagnostics": list(
-                        cast(list[object], item.get("late_diagnostics") or [])
-                    ),
-                }
+            max_memory_kb = max(max_memory_kb, projected_cell["memory_kb"])
             all_tests.add(test_name)
-            tests_map[test_name] = {
-                "verdict": verdict,
-                "time_ms": time_ms,
-                "memory_kb": memory_kb,
-                "text": verdict_short,
-                "short": verdict_short,
-                "metrics": f"{time_ms}ms/{memory_mb_text}",
-                "time_display": f"{time_ms}ms",
-                "time_tone": time_tone,
-                "memory_display": memory_mb_text,
-                "kind": _run_cell_kind(verdict, expected_behavior),
-                "text_tone": _run_cell_text_tone(verdict, expected_behavior),
-                "detail": detail_payload,
-                "detail_available": True,
-            }
+            tests_map[test_name] = projected_cell
         execution_skipped = bool(execution_skipped_from_summary and (not has_materialized_tests))
         execution_skipped_reason = bounded_display_text(
             _detail_text(
@@ -1528,357 +1989,12 @@ def build_run_detail_context(
         if not is_canonical_artifact_id(source_verification_id):
             source_verification_id = ""
 
-        def _verification_artifact_preview(
-            verification_id: str, rel_path: str
-        ) -> RunDetailPreview:
-            safe_verification_id = verification_id or ""
-            safe_rel_path = (rel_path or "").lstrip("/")
-            if (
-                not problem_slug
-                or not username
-                or (not safe_rel_path)
-                or (not is_canonical_artifact_id(safe_verification_id))
-            ):
-                return _run_detail_preview_unavailable("missing")
-            resolved = verification_artifact_file(safe_verification_id, safe_rel_path)
-            if resolved is None:
-                return _run_detail_preview_unavailable("missing")
-            payload_file, _filename = resolved
-            with payload_file.path.open("rb") as stream:
-                blob = stream.read(
-                    runtime().config_values.integer("RUN_DETAIL_PREVIEW_MAX_BYTES") + 1
-                )
-            return _run_detail_preview_from_bytes(
-                blob,
-                verification_id=safe_verification_id,
-                rel_path=safe_rel_path,
-            )
-
-        def _verification_output_preview(
-            verification_id: str, task_id: str, test_name: str
-        ) -> RunDetailPreview:
-            safe_verification_id = verification_id or ""
-            safe_task_id = str(task_id or "").strip()
-            test_stem = Path(test_name).stem
-            filename = f"{test_stem}.out" if test_stem else "program.out"
-            if (
-                not problem_slug
-                or not username
-                or (not safe_task_id)
-                or (not filename)
-                or (not is_canonical_artifact_id(safe_verification_id))
-            ):
-                return _run_detail_preview_unavailable("missing")
-            virtual_rel = f"output/{safe_task_id}/{filename}"
-            return _verification_artifact_preview(safe_verification_id, virtual_rel)
-
-        def _verification_blob_preview(
-            verification_id: str,
-            rel_path: str,
-        ) -> RunDetailPreview:
-            safe_verification_id = verification_id or ""
-            safe_rel_path = (rel_path or "").lstrip("/")
-            if (
-                not problem_slug
-                or not username
-                or (not safe_rel_path)
-                or (not is_canonical_artifact_id(safe_verification_id))
-            ):
-                return _run_detail_preview_unavailable("missing")
-            if not safe_rel_path.startswith("blob://"):
-                return _run_detail_preview_unavailable("missing")
-            virtual_rel = verification_blob_virtual_rel(
-                safe_rel_path, filename=Path(safe_rel_path).name
-            )
-            if not virtual_rel:
-                return _run_detail_preview_unavailable("missing")
-            return _verification_artifact_preview(safe_verification_id, virtual_rel)
-
-        def _verification_transcript(
-            verification_id: str,
-            rel_path: str,
-            *,
-            unavailable_message: str,
-        ) -> dict[str, object]:
-            safe_verification_id = verification_id or ""
-            safe_rel_path = (rel_path or "").lstrip("/")
-            unavailable = {
-                "available": False,
-                "state": "unavailable",
-                "events": [],
-                "events_shown": 0,
-                "events_total": 0,
-                "events_omitted": 0,
-                "raw_size_bytes": 0,
-                "error_offset": None,
-                "error_reason": None,
-                "download_verification_id": "",
-                "download_rel_path": "",
-                "message": unavailable_message,
-            }
-            if (
-                not problem_slug
-                or not username
-                or (not safe_rel_path)
-                or (not is_canonical_artifact_id(safe_verification_id))
-            ):
-                return unavailable
-            if not safe_rel_path.startswith("blob://"):
-                return unavailable
-            virtual_rel = verification_blob_virtual_rel(
-                safe_rel_path, filename=Path(safe_rel_path).name
-            )
-            if not virtual_rel:
-                return unavailable
-            resolved = verification_artifact_file(safe_verification_id, virtual_rel)
-            if resolved is None:
-                return unavailable
-            payload_file, _filename = resolved
-            with payload_file.path.open("rb") as stream:
-                parsed = parse_runpipe_transcript(
-                    stream,
-                    raw_size_bytes=payload_file.size,
-                )
-            return {
-                "available": True,
-                **parsed,
-                "download_verification_id": safe_verification_id,
-                "download_rel_path": virtual_rel,
-                "message": "",
-            }
-
-        for test_name in target_tests:
-            row_index = int(row_index_by_test.get(test_name) or 0)
-            if row_index <= 0:
-                continue
-            generation_view = test_generation_views.get(test_name)
-            generation_terminal = bool(generation_view is not None and generation_view["terminal"])
-            generation_alert = (
-                generation_view
-                if generation_view is not None and generation_view["alert_message"]
-                else None
-            )
-            input_rel = f"tests/{test_name}"
-            answer_name = _run_test_answer_name(test_name)
-            answer_rel = f"ans/{answer_name}" if answer_name else ""
-            row_is_interactive = any(
-                (col.get("mode") or "") == "interactive"
-                and col["tests_map"].get(test_name) is not None
-                for col in columns
-            )
-            input_preview = _run_detail_preview_unavailable("not applicable")
-            answer_preview = _run_detail_preview_unavailable("not applicable")
-            if not row_is_interactive:
-                input_preview = _verification_artifact_preview(source_verification_id, input_rel)
-                answer_preview = (
-                    _verification_artifact_preview(source_verification_id, answer_rel)
-                    if answer_rel
-                    else _run_detail_preview_unavailable("missing")
-                )
-            detail_cells: list[dict] = []
-            for col in columns:
-                cell = col["tests_map"].get(test_name)
-                if cell is None:
-                    detail_cells.append(
-                        {
-                            "text": "--",
-                            "short": "--",
-                            "metrics": "-",
-                            "kind": "neutral",
-                            "text_tone": "",
-                            "detail": None,
-                        }
-                    )
-                    continue
-                detail_raw = cell.get("detail")
-                detail_payload = (
-                    _detail_dict(detail_raw, field="cell.detail")
-                    if detail_raw is not None
-                    else None
-                )
-                if detail_payload is not None:
-                    interactive_mode = (col.get("mode") or "") == "interactive"
-                    pass_rows_payload: list[dict[str, object]] = []
-                    pass_rows_raw = _detail_dict_rows(
-                        detail_payload.get("pass_rows"),
-                        field="cell.detail.pass_rows",
-                    )
-                    for pass_item in pass_rows_raw:
-                        row_payload = dict(pass_item)
-                        output_rel = _detail_text(
-                            row_payload.get("output_rel"),
-                            field="cell.detail.pass.output_rel",
-                        )
-                        output_task_id = _detail_text(
-                            row_payload.get("output_task_id"),
-                            field="cell.detail.pass.output_task_id",
-                        )
-                        output_preview = _run_detail_preview_unavailable("missing")
-                        if output_rel and not interactive_mode:
-                            if output_task_id and source_verification_id:
-                                output_preview = _verification_output_preview(
-                                    source_verification_id, output_task_id, test_name
-                                )
-                            else:
-                                output_preview = _verification_blob_preview(
-                                    source_verification_id, output_rel
-                                )
-                        row_payload["output_preview"] = output_preview
-                        capture_status = str(row_payload.get("capture_status") or "")
-                        capture_complete = capture_status == "complete"
-                        input_ref = str(row_payload.get("input_ref") or "")
-                        pass_input_preview = _run_detail_preview_unavailable(
-                            "missing" if capture_complete else "not captured"
-                        )
-                        if input_ref:
-                            pass_input_preview = _verification_blob_preview(
-                                source_verification_id,
-                                input_ref,
-                            )
-                        row_payload["input_preview"] = pass_input_preview
-                        if interactive_mode:
-                            transcript_rel = str(row_payload.get("transcript_rel") or "")
-                            row_payload["interactive_transcript"] = _verification_transcript(
-                                source_verification_id,
-                                transcript_rel,
-                                unavailable_message="missing"
-                                if capture_complete
-                                else "not captured",
-                            )
-                            judge_message_rel = str(row_payload.get("judge_message_rel") or "")
-                            feedback_preview = _run_detail_preview_unavailable(
-                                "missing" if capture_complete else "not captured"
-                            )
-                            if judge_message_rel:
-                                feedback_preview = _verification_blob_preview(
-                                    source_verification_id,
-                                    judge_message_rel,
-                                )
-                                feedback_preview["download_verification_id"] = ""
-                                feedback_preview["download_rel_path"] = ""
-                            row_payload["feedback_preview"] = feedback_preview
-                        else:
-                            checker_log_rel = str(row_payload.get("checker_log_rel") or "")
-                            feedback_rel = str(row_payload.get("feedback_rel") or "")
-                            feedback_preview = _run_detail_preview_unavailable("missing")
-                            if feedback_rel:
-                                feedback_preview = _verification_blob_preview(
-                                    source_verification_id,
-                                    feedback_rel,
-                                )
-                            elif checker_log_rel:
-                                feedback_preview = _verification_blob_preview(
-                                    source_verification_id,
-                                    checker_log_rel,
-                                )
-                            row_payload["feedback_preview"] = feedback_preview
-                            if (row_payload.get("feedback_display") or "-") == "-" and bool(
-                                feedback_preview.get("available")
-                            ):
-                                preview_text = (
-                                    str(feedback_preview.get("text") or "")
-                                    .replace("\r\n", "\n")
-                                    .replace("\r", "\n")
-                                )
-                                first_line = next(
-                                    (line for line in preview_text.splitlines() if line), ""
-                                )
-                                if first_line:
-                                    row_payload["feedback_display"] = (
-                                        first_line[:157].rstrip() + "..."
-                                        if len(first_line) > 160
-                                        else first_line
-                                    )
-                        pass_rows_payload.append(row_payload)
-                    detail_payload["pass_rows"] = pass_rows_payload
-                    detail_payload["is_interactive"] = interactive_mode
-                    detail_payload["mode_malformed"] = (col.get("mode") or "") == "malformed"
-                    final_row_raw = detail_payload.get("final_row")
-                    final_row_payload = _detail_dict(
-                        final_row_raw,
-                        field="cell.detail.final_row",
-                    )
-                    if pass_rows_payload:
-                        final_row_payload = dict(pass_rows_payload[-1])
-                        for candidate in reversed(pass_rows_payload):
-                            verdict_token = candidate.get("verdict_short") or ""
-                            if verdict_token and verdict_token not in {"--", "-"}:
-                                final_row_payload = dict(candidate)
-                                break
-                    detail_payload["final_row"] = final_row_payload
-                detail_cells.append(
-                    {
-                        "text": (cell["text"]),
-                        "short": (cell.get("short") or cell.get("text") or "--"),
-                        "metrics": (cell.get("metrics") or "-"),
-                        "time_display": (cell.get("time_display") or ""),
-                        "time_tone": (cell.get("time_tone") or ""),
-                        "memory_display": (cell.get("memory_display") or ""),
-                        "kind": (cell["kind"]),
-                        "text_tone": (cell.get("text_tone") or ""),
-                        "detail": detail_payload,
-                    }
-                )
-            if detail_is_main_correct_run:
-                for cell in detail_cells:
-                    main_detail_payload = _detail_dict(
-                        cell.get("detail"),
-                        field="main_correct.detail",
-                    )
-                    final_row_payload = _detail_dict(
-                        main_detail_payload.get("final_row"),
-                        field="main_correct.detail.final_row",
-                    )
-                    output_preview = _detail_preview(
-                        final_row_payload.get("output_preview"),
-                        field="main_correct.detail.final_row.output_preview",
-                    )
-                    if bool(output_preview.get("available")):
-                        answer_preview = output_preview
-                        break
-            generate_note = dict(row_generate_notes.get(test_name) or {})
-            test_cell = _test_name_cell(
-                actual_test_name=test_name,
-                fallback_name=test_name,
-                is_placeholder=False,
-                note=generate_note,
-                has_detail=bool(
-                    generation_terminal
-                    or any((cell.get("detail") is not None for cell in detail_cells))
-                ),
-            )
-            detail_rows.append(
-                {
-                    "index": row_index,
-                    "test_name": test_name,
-                    "display_name": test_name,
-                    "test_cell": test_cell,
-                    "is_placeholder": False,
-                    "row_id": f"test-detail-{row_index}",
-                    "input_preview": input_preview,
-                    "answer_preview": answer_preview,
-                    "is_interactive": row_is_interactive,
-                    "generate_detail": (
-                        generation_view
-                        if generation_view is not None
-                        and generation_view["status"] == VerificationTaskStatus.FAILED
-                        else None
-                    ),
-                    "generation_alert": generation_alert,
-                    "generation_skipped": bool(
-                        generation_view is not None and generation_view["skipped"]
-                    ),
-                    "test_source_kind": ""
-                    if generation_view is None
-                    else generation_view["source_kind"],
-                    "test_command": "" if generation_view is None else generation_view["command"],
-                    "cells": detail_cells,
-                    "has_detail": bool(
-                        generation_terminal
-                        or any((cell.get("detail") is not None for cell in detail_cells))
-                    ),
-                }
-            )
+        detail_rows = _test_detail_rows(
+            target_tests=target_tests, row_index_by_test=row_index_by_test, columns=columns,
+            test_generation_views=test_generation_views, row_generate_notes=row_generate_notes,
+            source_verification_id=source_verification_id, problem_slug=problem_slug,
+            username=username, detail_is_main_correct_run=detail_is_main_correct_run,
+        )
     rejudge_context = _run_rejudge_context_for_entries(columns, workspace)
     rerun_paths = rejudge_context.get("paths") or []
     progress_total = 0

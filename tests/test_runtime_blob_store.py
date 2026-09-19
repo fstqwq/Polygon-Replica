@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from app.service.judgehost.domjudge.file_stream import DomjudgeDownloadFile, stream_domjudge_file_array
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
@@ -72,12 +73,23 @@ class TestRuntimeBlobStore(unittest.TestCase):
                     is_executable=index % 2 == 0,
                 )
             )
-        encoded = b"".join(stream_domjudge_file_array(files))
-        rows = json.loads(encoded)
-        self.assertEqual(
-            [base64.b64decode(row["content"]) for row in rows],
-            payloads,
-        )
+        encoded_files = [
+            b'{"filename":' + json.dumps(item.filename).encode() + b',"content":"'
+            + base64.b64encode(payload) + b'","is_executable":'
+            + (b"true" if item.is_executable else b"false") + b"}"
+            for item, payload in zip(files, payloads)
+        ]
+        expected = b"[" + b",".join(encoded_files) + b"]"
+        self.assertEqual(b"".join(stream_domjudge_file_array(files)), expected)
+        # Exercise carry across short, unaligned reads without a large fixture.
+        for size in (1, 2, 4, 7):
+            with self.subTest(chunk_size=size), patch(
+                "app.service.judgehost.domjudge.file_stream._RAW_CHUNK_SIZE", size,
+            ):
+                self.assertEqual(
+                    b"".join(stream_domjudge_file_array(files[:4])),
+                    b"[" + b",".join(encoded_files[:4]) + b"]",
+                )
 
     def test_manifest_identity_is_always_the_file_content_sha256(self) -> None:
         config_dir = self.root / "config"

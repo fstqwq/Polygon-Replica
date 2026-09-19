@@ -44,7 +44,6 @@ from app.service.judgehost.domjudge.result import (
     parse_int,
 )
 from app.service.judgehost.domjudge.codec import (
-    decode_base64,
     decode_text,
 )
 from app.service.judgehost.domjudge.scripts import DomjudgeScriptCatalog
@@ -53,7 +52,6 @@ from app.service.judgehost.task.registry import JudgehostTaskRegistry
 from app.service.platform.error_text import aux_display_text_limit_bytes
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
-from app.service.execution.codec import execution_result_json
 
 logger = logging.getLogger(__name__)
 
@@ -332,31 +330,24 @@ class JudgehostCallbackIngestion:
             raise RuntimeError("judgehost does not own judging run")
         batch_id = int(case_row["batch_id"])
 
-        def _payload_blob_as_b64(value: object) -> str:
+        def _payload_blob(value: object) -> bytes:
             raw = decode_callback_blob(value)
-            if raw:
-                return base64.b64encode(
-                    truncate_stored_log_bytes(
-                        raw,
-                        settings.values,
-                    )
-                ).decode("ascii")
-            return ""
+            return truncate_stored_log_bytes(raw, settings.values) if raw else b""
 
-        compile_output = ""
-        compile_meta = ""
+        compile_output = b""
+        compile_meta = b""
         compile_updated_at = ""
         compile_success_recorded: bool | None = None
         if compile_success is True:
-            compile_output = _payload_blob_as_b64(payload.get("output_compile"))
-            compile_meta = _payload_blob_as_b64(payload.get("compile_metadata"))
+            compile_output = _payload_blob(payload.get("output_compile"))
+            compile_meta = _payload_blob(payload.get("compile_metadata"))
             compile_updated_at = now_iso()
             compile_success_recorded = self._batch_runtime.record_compile_success(
                 case_id,
                 hostname=safe_host,
                 receipt_generation=receipt_generation,
-                compile_output_b64=compile_output,
-                compile_metadata_b64=compile_meta,
+                compile_output_b64=base64.b64encode(compile_output).decode("ascii"),
+                compile_metadata_b64=base64.b64encode(compile_meta).decode("ascii"),
                 updated_at=compile_updated_at,
             )
         if batch_status in {"finalize-pending", "finalizing"}:
@@ -381,16 +372,15 @@ class JudgehostCallbackIngestion:
             )
             return None
         if compile_success is False:
-            compile_output = _payload_blob_as_b64(payload.get("output_compile"))
-            compile_meta = _payload_blob_as_b64(payload.get("compile_metadata"))
+            compile_output = _payload_blob(payload.get("output_compile"))
+            compile_meta = _payload_blob(payload.get("compile_metadata"))
         host_contact = HostContact(
             hostname=safe_host,
         )
         if compile_success is not None:
             updated_at = compile_updated_at or now_iso()
             if compile_success is False:
-                compile_blob = decode_base64(compile_output)
-                compile_log = compile_blob.decode("utf-8", errors="replace").strip()
+                compile_log = compile_output.decode("utf-8", errors="replace").strip()
                 failure_text = (
                     bounded_feedback_text(
                         compile_log,
@@ -412,8 +402,8 @@ class JudgehostCallbackIngestion:
                     case_id,
                     hostname=safe_host,
                     receipt_generation=receipt_generation,
-                    compile_output_b64=compile_output,
-                    compile_metadata_b64=compile_meta,
+                    compile_output_b64=base64.b64encode(compile_output).decode("ascii"),
+                    compile_metadata_b64=base64.b64encode(compile_meta).decode("ascii"),
                     failure_text=failure_text,
                     compile_log=compile_log,
                     compile_diagnostics=compile_diagnostics,
@@ -767,7 +757,6 @@ class JudgehostCallbackIngestion:
         if self._batch_runtime.batch_verification_cancellation_requested(batch_id):
             return 1
         cache_files = captured_artifacts.payloads
-        cache_result_json = execution_result_json(case_result)
 
         def publish_cache() -> None:
             try:
@@ -786,7 +775,7 @@ class JudgehostCallbackIngestion:
                     wall_sec=wall_sec,
                     memory_kb=memory_kb,
                     score_text=score_text,
-                    result_json=cache_result_json,
+                    result=case_result,
                     files=cache_files,
                     shortcut_eligible=shortcut_eligible,
                 )

@@ -9,6 +9,7 @@ from tests.db_helpers import (
     verification_programs_for_tasks,
 )
 
+import asyncio
 import base64
 import io
 import json
@@ -23,6 +24,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+from starlette.requests import ClientDisconnect, Request
 
 from app.service.verification.payload import prepared_payload_for_uploaded_source
 from app.service.judgehost.task.model import ExecutionTemplate
@@ -3863,6 +3865,15 @@ class TestJudgehostService(E2ETestBase):
             self.assertEqual(_last_seen_at(), before_last_seen_at)
 
     def test_domjudge_compile_logs_are_truncated_before_state_storage(self) -> None:
+        from app.main import app
+
+        with TestClient(app) as client:
+            for raw_binary in (True, False):
+                for success in (True, False):
+                    with self.subTest(raw_binary=raw_binary, success=success):
+                        self._check_compile_multipart(client, raw_binary=raw_binary, success=success)
+
+    def _check_compile_multipart(self, client: TestClient, *, raw_binary: bool, success: bool) -> None:
         service = runtime.judgehost_task_service
         override_config_values(
             self,
@@ -3886,13 +3897,14 @@ class TestJudgehostService(E2ETestBase):
             upload_filename=None,
             run_id=run_id,
             selected_tests=["001.in"],
-            verification_id=_canonical_verification_id("inv-domjudge-compile-log"),
+            verification_id=_canonical_verification_id(run_id),
             verification_program_id=_SOLUTION_PROGRAM_ID,
             expected_behavior="accepted",
             verification_source="run.execute",
         )
-        service.domjudge_register_host("judgehost-compile-log")
-        tasks = service.domjudge_fetch_work("judgehost-compile-log", max_batchsize=1)
+        hostname = f"judgehost-compile-{int(raw_binary)}-{int(success)}"
+        service.domjudge_register_host(hostname)
+        tasks = service.domjudge_fetch_work(hostname, max_batchsize=1)
         self.assertEqual(len(tasks), 1)
         case_id = int(tasks[0].get("judgetaskid") or 0)
         case_row = judgehost_fetch_case(service, case_id)
@@ -3901,15 +3913,18 @@ class TestJudgehostService(E2ETestBase):
         batch_id = int(case_row["batch_id"])
 
         limit = int(runtime.config_values.JUDGEHOST_STORED_LOG_LIMIT_BYTES)
-        service.domjudge_update_judging(
-            "judgehost-compile-log",
-            case_id,
-            {
-                "compile_success": "1",
-                "output_compile": b"A" * (limit + 8192),
-                "compile_metadata": b"B" * (limit + 4096),
+        output = b"compiler error: " + b"A" * (limit + 8192)
+        metadata = b"B" * (limit + 4096)
+        response = client.put(
+            f"/api/v4/judgehosts/update-judging/{hostname}/{case_id}",
+            data={"compile_success": "1" if success else "0"},
+            files={
+                "output_compile": ("compile.log", output) if raw_binary else (None, base64.b64encode(output).decode("ascii")),
+                "compile_metadata": ("compile.meta", metadata) if raw_binary else (None, base64.b64encode(metadata).decode("ascii")),
             },
+            headers={"Authorization": "Bearer test-token"},
         )
+        self.assertEqual(response.status_code, 200, response.text)
 
         batch_row = judgehost_fetch_batch(service, batch_id)
         self.assertIsNotNone(batch_row)
@@ -3924,6 +3939,13 @@ class TestJudgehostService(E2ETestBase):
         self.assertLessEqual(len(stored_compile_metadata), limit)
         self.assertIn(b"...[truncated]", stored_compile_output)
         self.assertIn(b"...[truncated]", stored_compile_metadata)
+        self.assertEqual(stored_compile_output, output[:limit - len(b"\n...[truncated]\n")] + b"\n...[truncated]\n")
+        self.assertEqual(stored_compile_metadata, metadata[:limit - len(b"\n...[truncated]\n")] + b"\n...[truncated]\n")
+        if not success:
+            task = service.task_snapshot_for_run(run_id)
+            self.assertEqual(task["status"], "failed")
+            self.assertIn("compiler error:", task["error_text"])
+            self.assertTrue(task["summary"]["compile_diagnostics"])
 
     def test_domjudge_fetch_work_endpoint_requires_hostname(self) -> None:
         from app.main import app
@@ -4038,6 +4060,7 @@ class TestJudgehostService(E2ETestBase):
 
     def test_file_stream_holds_maintenance_admission_until_body_closes(self) -> None:
         from app.main import app
+        from app.service.judgehost.domjudge.file_stream import DomjudgeDownloadFile, stream_domjudge_file_array
 
         service = runtime.judgehost_task_service
         override_config_values(
@@ -4051,12 +4074,17 @@ class TestJudgehostService(E2ETestBase):
         release_stream = threading.Event()
         responses: list[object] = []
         failures: list[Exception] = []
+        downloads: list[DomjudgeDownloadFile] = []
 
-        def blocking_stream(_rows):
-            stream_started.set()
-            yield b"["
-            release_stream.wait(timeout=2)
-            yield b"]"
+        def blocking_stream(rows):
+            source = iter(stream_domjudge_file_array(rows))
+            try:
+                yield next(source)
+                stream_started.set()
+                release_stream.wait(timeout=2)
+                yield from source
+            finally:
+                source.close()
 
         def request_download(client: TestClient) -> None:
             try:
@@ -4070,13 +4098,15 @@ class TestJudgehostService(E2ETestBase):
                 failures.append(exc)
 
         with (
-            patch.object(service, "domjudge_get_source_files", return_value=[]),
+            patch.object(service, "domjudge_get_source_files", return_value=downloads),
             patch(
                 "app.impl.judgehost.api.stream_domjudge_file_array",
                 side_effect=blocking_stream,
             ),
             TestClient(app) as client,
         ):
+            payload = runtime.runtime_blob_store.put_bytes(b"protected download\n")
+            downloads.append(DomjudgeDownloadFile("source.cpp", payload))
             request_thread = threading.Thread(
                 target=request_download,
                 args=(client,),
@@ -4093,6 +4123,7 @@ class TestJudgehostService(E2ETestBase):
                 self.assertFalse(started.accepted)
                 self.assertEqual(started.reason, "busy")
                 self.assertEqual(started.busy["judgehost_callbacks"], 1)
+                self.assertEqual(payload.path.read_bytes(), b"protected download\n")
             finally:
                 release_stream.set()
                 request_thread.join(timeout=2)
@@ -4102,7 +4133,51 @@ class TestJudgehostService(E2ETestBase):
         self.assertEqual(failures, [])
         self.assertEqual(len(responses), 1)
         self.assertEqual(getattr(responses[0], "status_code", None), 200)
+        self.assertEqual(base64.b64decode(responses[0].json()[0]["content"]), b"protected download\n")
         self.assertEqual(service.busy_counts()["callbacks"], 0)
+
+    def test_file_stream_releases_admission_on_read_error_and_disconnect(self) -> None:
+        from app.impl.judgehost.api import domjudge_get_files_source
+        from app.main import app
+
+        service = runtime.judgehost_task_service
+        override_config_values(self, runtime.config_values, JUDGEHOST_ENABLE=True,
+                               JUDGEHOST_API_TOKEN="test-token", JUDGEHOST_API_USERNAME="judgehost")
+
+        for disconnect in (False, True):
+            closed = threading.Event()
+
+            def source(_rows):
+                try:
+                    yield b"["
+                    raise OSError("injected file read error")
+                finally:
+                    closed.set()
+
+            async def exercise():
+                scope = {"type": "http", "method": "GET", "path": "/api/v4/judgehosts/get_files/source/1",
+                         "headers": [(b"authorization", b"Bearer test-token")], "app": app,
+                         "asgi": {"version": "3.0", "spec_version": "2.4"}}
+                response = await domjudge_get_files_source(Request(scope), "local", "1")
+                self.assertEqual(service.busy_counts()["callbacks"], 1)
+
+                async def receive():
+                    return {"type": "http.request", "body": b""}
+
+                async def send(message):
+                    if disconnect and message["type"] == "http.response.body":
+                        raise OSError("client disconnected")
+
+                # Starlette reports both socket and streamed file OSError as disconnects.
+                with self.assertRaises(ClientDisconnect):
+                    await response(scope, receive, send)
+
+            with self.subTest(disconnect=disconnect), patch.object(service, "domjudge_get_source_files", return_value=[]), patch(
+                "app.impl.judgehost.api.stream_domjudge_file_array", side_effect=source,
+            ):
+                asyncio.run(exercise())
+            self.assertTrue(closed.is_set())
+            self.assertEqual(service.busy_counts()["callbacks"], 0)
 
     def test_fetch_work_long_poll_does_not_hold_maintenance_admission_lock(
         self,

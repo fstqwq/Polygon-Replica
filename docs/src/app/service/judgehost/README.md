@@ -39,6 +39,19 @@ run identity and content-addressed compile identity. The injected execution
 port validates durable task bindings before cases become fetchable and before
 lease, diagnostic, or completion events are published.
 
+The case-result cache stores canonical immutable execution results in its existing
+process-local index. Successful durable acknowledgement permits publication;
+cancellation losers cannot publish. The first writer owns an entry. Each lookup
+checks every referenced pass artifact before returning the stored object. Missing
+artifacts invalidate the entry. Canonical validation checks usage types and nested
+immutable diagnostics before insertion.
+
+Compile callbacks decode and truncate output and metadata as bytes before deriving
+failure diagnostics. Encoding happens when writing the existing base64 fields.
+Download streams encode aligned memory views and retain at most two carry bytes.
+The response closes its iterator and releases maintenance admission on completion,
+stream failure, cancellation, or client disconnect.
+
 The formal wire contract for ACK semantics, callback retry, lease deadlines,
 cancellation, toolchain reports, and interactive or multi-pass evidence is
 defined by the

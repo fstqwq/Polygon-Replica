@@ -559,11 +559,14 @@ def _sudo_with_password_envelope(cookie_header: str, password: str, *, next_path
         next=next_path,
     )
 
-def _settings_password_update_with_envelope(user: str, current_password: str, new_password: str):
+def _settings_password_update_with_envelope(
+    user: str, current_password: str, new_password: str, *, request: Request | None = None,
+):
+    request = request if request is not None else _post_request("/settings/password")
     csrf = issue_password_form_csrf_token("settings-password")
     auth_row = db.fetch_one("SELECT id,password_salt,password_iters FROM users WHERE username=?", [user])
     if auth_row is None:
-        return settings_password_update(user=user)
+        return settings_password_update(request=request, user=user)
     current_salt = str(auth_row["password_salt"] or "").strip().lower()
     current_iters = int(auth_row["password_iters"] or 0)
     new_salt = uuid.uuid4().hex
@@ -585,6 +588,7 @@ def _settings_password_update_with_envelope(user: str, current_password: str, ne
         verifier=new_verifier,
     )
     return settings_password_update(
+        request=request,
         user=user,
         current_password="",
         new_password="",

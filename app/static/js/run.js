@@ -22,8 +22,12 @@ function initRunDetails() {
   const base = String(table.dataset.runDetailsFragment || "").trim();
   const verificationId = String(table.dataset.verificationId || "").trim();
   if (!title || !content || !base || !verificationId) return;
-  const cache = new Map();
-  let activeKey = "";
+  let pending = null;
+  const cancelPending = () => {
+    const previous = pending;
+    pending = null;
+    if (previous) previous.controller.abort();
+  };
 
   const renderTitle = (testName, sourceKind, command) => {
     title.replaceChildren(document.createTextNode(`Test Details: ${testName}`));
@@ -47,38 +51,46 @@ function initRunDetails() {
   const render = (html) => { content.innerHTML = html; };
   const load = async (testName, programId) => {
     if (!testName) {
+      cancelPending();
       loading("Run details are unavailable.");
       return;
     }
-    const key = `${testName}\u0000${programId}`;
-    activeKey = key;
-    if (cache.has(key)) {
-      render(cache.get(key));
-      return;
-    }
+    const key = JSON.stringify([base, verificationId, testName, programId]);
+    if (pending && pending.key === key) return;
+    cancelPending();
+    const request = { key, controller: new AbortController() };
+    pending = request;
     loading("Loading details...");
     const query = new URLSearchParams({ test: testName, verification_id: verificationId });
     if (programId) query.set("program_id", programId);
     try {
       const response = await fetch(`${base}${base.includes("?") ? "&" : "?"}${query}`, {
+        signal: request.controller.signal,
         credentials: "same-origin",
         headers: { "X-Requested-With": "XMLHttpRequest" },
       });
       if (!response.ok) throw new Error("detail fetch failed");
       const html = await response.text();
-      cache.set(key, html);
-      if (activeKey === key) render(html);
+      if (pending === request) render(html);
     } catch (_error) {
-      if (activeKey === key) loading("Failed to load details.");
+      if (pending === request) loading("Failed to load details.");
+    } finally {
+      if (pending === request) pending = null;
     }
   };
 
-  table.querySelectorAll('[data-popup-open="run-test-detail-popup"][data-test-name]').forEach((opener) => {
-    opener.addEventListener("click", () => {
-      const testName = String(opener.dataset.testName || "").trim();
-      renderTitle(testName, String(opener.dataset.testSourceKind || ""), String(opener.dataset.testCommand || ""));
-      load(testName, String(opener.dataset.programId || ""));
-    });
+  document.addEventListener("polygonlike:popup-opened", (event) => {
+    const { overlay, opener } = event.detail;
+    if (overlay.id !== "run-test-detail-popup" || !opener || !table.contains(opener)) return;
+    const testName = String(opener.dataset.testName || "").trim();
+    renderTitle(testName, String(opener.dataset.testSourceKind || ""), String(opener.dataset.testCommand || ""));
+    load(testName, String(opener.dataset.programId || ""));
+  });
+  document.addEventListener("polygonlike:popup-closed", (event) => {
+    if (event.detail.overlay.id !== "run-test-detail-popup") return;
+    cancelPending();
+    title.replaceChildren();
+    content.replaceChildren();
   });
 }
 

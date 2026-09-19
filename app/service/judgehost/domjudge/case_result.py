@@ -187,7 +187,7 @@ def build_case_result(
 
 
 def decode_case_test_row(
-    result: ExecutionResult, *, test_name: str
+    result: ExecutionResult, *, test_name: str, include_passes: bool = True
 ) -> dict[str, object]:
     passes = [
         build_execution_test_pass_row(
@@ -218,12 +218,13 @@ def decode_case_test_row(
             pass_number=pass_result.number,
             answer_correct=pass_result.answer_correct,
         )
-        for pass_result in result.passes
+        for pass_result in (result.passes if include_passes else ())
     ]
     usage = result.outcome.usage
+    final = result.final_pass
     return build_execution_test_row(
         test_name=test_name,
-        verdict=result.outcome.verdict,
+        verdict=result.outcome.verdict or (final.verdict if final else ""),
         time_ms=(
             0 if usage.runtime_sec is None else int(round(usage.runtime_sec * 1000.0))
         ),
@@ -231,11 +232,12 @@ def decode_case_test_row(
         time_wall_ms=(
             0 if usage.wall_sec is None else int(round(usage.wall_sec * 1000.0))
         ),
-        memory_kb=usage.memory_kb,
-        message=result.outcome.feedback,
+        memory_kb=(usage.memory_kb if usage.memory_kb is not None else final.usage.memory_kb if final else 0),
+        message=result.outcome.feedback or (final.feedback if final else ""),
         output_ref=result.output_run_ref,
         feedback_files=list(result.feedback_files),
         passes=passes,
+        include_passes=include_passes,
         runresult=result.runresult,
-        answer_correct=result.answer_correct,
+        answer_correct=result.answer_correct or bool(final and final.answer_correct),
     )

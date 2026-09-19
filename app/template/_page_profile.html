@@ -4,8 +4,10 @@
   <div class="page-profile-inner">
     <div class="page-profile-row page-profile-row-primary">
       <strong class="page-profile-title">Profile</strong>
-      <span>Backend render: <strong id="profile-backend-render" data-backend-render-ms="{{ backend_render_ms if backend_render_ms is not none else '' }}">{% if backend_render_ms is not none %}{{ backend_render_ms }} ms{% else %}n/a{% endif %}</strong></span>
-      <span>Estimated network overhead: <strong id="profile-network-estimate">n/a</strong></span>
+      <span>Application: <strong id="profile-application">n/a</strong></span>
+      <span>Template: <strong id="profile-template">n/a</strong></span>
+      <span>TTFB: <strong id="profile-ttfb">n/a</strong></span>
+      <span>Response transfer: <strong id="profile-transfer">n/a</strong></span>
     </div>
     <div class="page-profile-row page-profile-row-tertiary">
       <span class="page-profile-judgehost">Judgehost: <strong id="profile-judgehost-health-summary" class="page-profile-detail {{ runtime_judgehost_health_tone }}">{{ runtime_judgehost_health_summary }}</strong></span>

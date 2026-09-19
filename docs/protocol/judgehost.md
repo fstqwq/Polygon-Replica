@@ -28,6 +28,11 @@ The hostname supplied by registration, work fetch, version reporting, and host-s
 
 `add-debug-info` and final result files use DOMjudge multipart encoding, including base64-encoded non-file fields. Encoded fields are bounded per request. Malformed or oversized callbacks return non-2xx; an active case also receives a bounded internal-failure diagnostic.
 
+For compile callbacks, `output_compile` and `compile_metadata` parts with a filename
+contain raw bytes. Parts without a filename contain base64 text. The server decodes
+and truncates each payload before producing diagnostics, and preserves base64 in
+the stored compile fields. Field validation completes before compile state changes.
+
 ## Leasing and callback acknowledgement
 
 Registration releases leases previously owned by the hostname and returns workdirs that may be removed. Fetch-work leases ready cases to that host. A final callback from another hostname or a concurrent callback claim returns non-2xx.

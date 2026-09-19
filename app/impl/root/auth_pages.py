@@ -32,6 +32,7 @@ from app.impl.auth.session import (
     create_session_for_user,
     create_sudo_session_for_user,
     has_sudo_session,
+    invalidate_session_identity,
     revoke_session_token,
     revoke_sudo_session_token,
     session_identity,
@@ -646,6 +647,7 @@ def logout(request: Request):
     identity = session_identity(request)
     if identity is not None:
         revoke_session_token(str(identity['token']))
+    invalidate_session_identity(request)
     sudo_cookie = request.cookies.get(runtime().config_values.text("SUDO_COOKIE_NAME"))
     revoke_sudo_session_token(sudo_cookie if isinstance(sudo_cookie, str) else "")
     response = redirect_response('/login', status_code=303, message='logged out')

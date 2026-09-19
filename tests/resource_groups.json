@@ -40,6 +40,7 @@
     "test_large_package_import.py",
     "test_problem_readiness_service.py",
     "test_verification_completion_service.py",
+    "test_verification_detail_read_model.py",
     "test_verification_lifecycle_service.py",
     "test_verification_store_service.py",
     "test_worker_queue_service.py",
@@ -47,6 +48,7 @@
     "test_workspace_store_service.py"
   ],
   "executor": [
+    "test_browser_interactions.py",
     "test_icpc_export_package.py",
     "test_import_policy.py",
     "test_install_host_contract.py",
