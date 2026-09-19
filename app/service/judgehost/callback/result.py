@@ -26,7 +26,8 @@ from app.service.judgehost.batch.model import (
 )
 from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
 from app.service.judgehost.validation import normalize_judgehost_hostname
-from app.service.judgehost.cache.case_result import CaseCacheLookup, CaseResultCache
+from app.service.judgehost.cache.case_result import CaseResultCache
+from app.service.judgehost.domjudge.cache import case_cache_ref
 from app.service.judgehost.callback.diagnostic_payload import parse_diagnostic_payload
 from app.service.judgehost.callback.model import CallbackOutcome, HostContact
 from app.service.judgehost.domjudge.limits import (
@@ -709,29 +710,16 @@ class JudgehostCallbackIngestion:
         memory_kb = normalized.memory_kb
         score_text = normalized.score_text
 
-        cache_verification_source = verification_source or ""
-        case_key_hash, case_signature = self._case_result_cache.identity(
-            CaseCacheLookup(
-                source_hash=source_hash,
-                compile_hash=compile_hash,
-                run_hash=run_hash,
-                compare_hash=compare_hash,
-                compile_config_hash=compile_config_hash,
-                run_config_hash=run_config_hash,
-                compare_config_hash=compare_config_hash,
-                toolchain_cmd_digest=toolchain_cmd_digest,
-                testcase_hash=testcase_hash,
-                run_config=run_cfg,
-                expected_behavior=decode_text(
-                    raw=task_payload.get("expected_behavior"), default="unknown"
-                ),
-                main_correct=cache_verification_source == "main-correct",
-                requires_output=(
-                    cache_verification_source == "main-correct"
-                    or "generate-input" in cache_verification_source
-                ),
-                bypass=False,
-            )
+        case_key_hash, case_signature = case_cache_ref(
+            source_hash=source_hash,
+            compile_hash=compile_hash,
+            run_hash=run_hash,
+            compare_hash=compare_hash,
+            compile_config_hash=compile_config_hash,
+            run_config_hash=run_config_hash,
+            compare_config_hash=compare_config_hash,
+            toolchain_cmd_digest=toolchain_cmd_digest,
+            testcase_hash=testcase_hash,
         )
         shortcut_eligible = verdict != "FL"
         if compile_only and verdict != "OK":
@@ -766,7 +754,7 @@ class JudgehostCallbackIngestion:
                     tags={
                         "source_hash": source_hash,
                         "testcase_hash": testcase_hash,
-                        "verification_source": cache_verification_source,
+                        "verification_source": verification_source or "",
                         "task_kind": canonical_task_kind,
                     },
                     runresult=runresult,

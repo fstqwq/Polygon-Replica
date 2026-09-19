@@ -113,7 +113,7 @@ class JudgehostDispatch:
                 compare_config_hash=policy.compare_config_hash,
                 toolchain_cmd_digest=toolchain_cmd_digest,
                 testcase_hash=testcase_hash,
-                run_config=policy.run_config,
+                time_limit_sec=policy.time_limit_sec,
                 expected_behavior=policy.expected_behavior,
                 main_correct=policy.main_correct,
                 requires_output=policy.requires_output,

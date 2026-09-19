@@ -23,6 +23,7 @@ from app.service.judgehost.domjudge.result import (
     bounded_feedback_bytes,
     bounded_feedback_text,
     rewrite_untrusted_runresult,
+    run_time_limit_sec,
 )
 from app.service.judgehost.domjudge.codec import config_payload
 from app.service.judgehost.domjudge.codec import decode_base64
@@ -306,6 +307,11 @@ class TestJudgehostPayload(unittest.TestCase):
             ("correct", 15.0, {"time_limit": 6.0}, "correct"),
             ("run-error", 0.6, {"time_limit": 0.5}, "timelimit"),
             ("run-error", 0.4, {"time_limit": 0.5}, "run-error"),
+            ("run-error", 0.6, {"time_limit": 0.5, "time_limit_ms": 6000}, "timelimit"),
+            ("run-error", 6.1, {"time_limit": 0, "time_limit_ms": 6000}, "timelimit"),
+            ("run-error", 6.1, {"time_limit": "invalid", "time_limit_ms": 6000}, "timelimit"),
+            ("run-error", 6.0, {"time_limit_ms": 6000}, "run-error"),
+            ("run-error", 6.1, {}, "run-error"),
         )
         for runresult, cpu_sec, run_config, expected in cases:
             with self.subTest(runresult=runresult, cpu_sec=cpu_sec):
@@ -313,7 +319,7 @@ class TestJudgehostPayload(unittest.TestCase):
                     rewrite_untrusted_runresult(
                         runresult,
                         cpu_sec=cpu_sec,
-                        run_cfg_obj=run_config,
+                        time_limit_sec=run_time_limit_sec(run_config),
                     ),
                     expected,
                 )

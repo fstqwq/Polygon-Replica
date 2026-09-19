@@ -364,10 +364,7 @@ class TestJudgehostScheduler(unittest.TestCase):
         policy = scheduler.fetch_batch(batch_id)["cache_policy"]
         self.assertEqual(policy.run_config_hash, RuntimeCacheIndex.signature(configs["run_config"]))
         self.assertEqual(policy.toolchain_cmd_digest, "a" * 64)
-        with self.assertRaises(TypeError):
-            policy.run_config["time_limit"] = 10
-        with self.assertRaises(TypeError):
-            policy.run_config["extensions"]["flags"] = ()
+        self.assertEqual(policy.time_limit_sec, 2.0)
         appended, _ = _create_staged_batch(
             scheduler, task_id="config-next", run_id="config-run-next",
             ordinals=[2], verification_program_id="solution-0",
@@ -409,7 +406,7 @@ class TestJudgehostScheduler(unittest.TestCase):
                         run_hash=batch["run_hash"], compare_hash=batch["compare_hash"],
                         compile_config_hash=policy.compile_config_hash, run_config_hash=policy.run_config_hash,
                         compare_config_hash=policy.compare_config_hash, toolchain_cmd_digest=digest,
-                        testcase_hash=case["testcase_hash"], run_config=policy.run_config,
+                        testcase_hash=case["testcase_hash"], time_limit_sec=policy.time_limit_sec,
                         expected_behavior="accepted", main_correct=False, requires_output=False, bypass=False,
                     )
                     key, signature = cache.identity(lookup)
@@ -2632,7 +2629,7 @@ class TestJudgehostScheduler(unittest.TestCase):
                     compare_hash="4" * 32, compile_config_hash="5" * 64,
                     run_config_hash="6" * 64, compare_config_hash="7" * 64,
                     toolchain_cmd_digest="8" * 64, testcase_hash="9" * 64,
-                    run_config={}, expected_behavior="accepted", main_correct=False,
+                    time_limit_sec=0.0, expected_behavior="accepted", main_correct=False,
                     requires_output=True, bypass=False,
                 )
                 key_hash, signature = cache.identity(lookup)

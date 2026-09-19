@@ -11,6 +11,7 @@ from app.service.judgehost.domjudge.result import (
     parse_int,
     parse_metadata,
     rewrite_untrusted_runresult,
+    run_time_limit_sec,
     verdict_from_runresult,
 )
 from app.service.execution.model import (
@@ -154,7 +155,7 @@ def normalize_captured_case(
     runresult = rewrite_untrusted_runresult(
         captured.raw_runresult,
         cpu_sec=cpu_sec,
-        run_cfg_obj=dict(captured.run_config),
+        time_limit_sec=run_time_limit_sec(captured.run_config),
     )
     if (
         runresult in {"compare-error", "run-error", "internal-error"}
