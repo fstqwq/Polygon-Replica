@@ -39,7 +39,7 @@ class CaseCacheLookup:
     compare_config_hash: str
     toolchain_cmd_digest: str
     testcase_hash: str
-    run_config: Mapping[str, object]
+    time_limit_sec: float
     expected_behavior: str
     main_correct: bool
     requires_output: bool
@@ -97,7 +97,7 @@ class CaseResultCache:
                 value.get("cpu_sec"),
                 parse_nonnegative_float(value.get("runtime_sec"), 0.0),
             ),
-            run_cfg_obj=lookup.run_config,
+            time_limit_sec=lookup.time_limit_sec,
         )
         verdict = verdict_from_runresult(runresult)
         if verdict == "FL":

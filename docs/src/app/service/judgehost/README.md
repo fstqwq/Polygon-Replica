@@ -47,7 +47,7 @@ artifacts invalidate the entry. Canonical validation checks usage types and nest
 immutable diagnostics before insertion.
 
 Each program batch owns immutable cache-query configuration: configuration
-signatures, run limits and eligibility policy. Appended cases use the same
+signatures, the parsed CPU time limit and eligibility policy. Appended cases use the same
 configuration after the program identity check. An absent toolchain digest is
 resolved from the settings of each probe. Batch cleanup releases the configuration.
 One result lookup shares blob descriptor checks between entry files and all pass

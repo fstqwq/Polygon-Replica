@@ -24,7 +24,7 @@ def parse_int(raw: object, default: int = 0) -> int:
         return default
 
 
-def _run_time_limit_sec(run_cfg_obj: Mapping[str, object]) -> float:
+def run_time_limit_sec(run_cfg_obj: Mapping[str, object]) -> float:
     cfg = run_cfg_obj
     tl_sec = parse_nonnegative_float(cfg.get("time_limit"), 0.0)
     if tl_sec > 0:
@@ -39,16 +39,15 @@ def rewrite_untrusted_runresult(
     runresult: str,
     *,
     cpu_sec: float,
-    run_cfg_obj: Mapping[str, object],
+    time_limit_sec: float,
 ) -> str:
     token = str(runresult or "").strip().lower()
     if token not in {"wrong-answer", "run-error", "no-output"}:
         return token
-    tl_sec = _run_time_limit_sec(run_cfg_obj)
-    if tl_sec <= 0:
+    if time_limit_sec <= 0:
         return token
     cpu_total_sec = parse_nonnegative_float(cpu_sec, 0.0)
-    if cpu_total_sec <= tl_sec:
+    if cpu_total_sec <= time_limit_sec:
         return token
     return "timelimit"
 
