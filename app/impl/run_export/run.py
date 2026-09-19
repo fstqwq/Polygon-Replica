@@ -9,17 +9,17 @@ from fastapi import File, Form, HTTPException, Request, UploadFile, Depends
 from fastapi.responses import Response
 
 from app.impl.auth.session import require_session_user
-from app.impl.auth.shared import redirect_response, template_response
+from app.impl.auth.shared import redirect_response, render_template, template_response
 from app.impl.contest.workspace_scope import (
     contest_workspace_context_from_request,
     problem_template_navigation,
 )
 from app.impl.runtime.dependency import runtime
 from app.impl.run_export.artifact import verification_artifact_file
-from app.impl.workspace.access import require_write_access
+from app.impl.workspace.access import require_read_access, require_write_access, workspace_access_context
 from app.impl.workspace.context_job import start_verification_job
 from app.impl.workspace.context_ui import page_ctx
-from app.impl.workspace.context_model import ProblemPageContext
+from app.service.repository.workspace import WorkspaceContext
 from app.impl.workspace.context_job_helper import allocate_verification_id
 from app.impl.workspace.context_operation import (
     RunSolutionOption,
@@ -36,7 +36,8 @@ from app.impl.workspace.context_verification import (
     normalize_program_id_token,
     normalize_run_id_token,
 )
-from app.impl.workspace.run_view_detail import build_run_detail_context
+from app.impl.workspace.run_view_detail import build_run_detail_context, build_run_test_detail_context
+from app.impl.workspace.context_model import ProblemPageContext
 from app.impl.workspace.run_view_list import run_list_rows
 from app.main_util import normalize_optional_component_source_path, normalize_optional_component_source_path_safe, read_fileobj_bytes_limited
 from app.service.problem.solution_metadata import normalize_expected_behavior
@@ -203,17 +204,16 @@ def _selected_run_test_detail(
     request: Request,
     problem: str,
     user: str,
-) -> tuple[ProblemPageContext, str, list[dict[str, object]], dict[str, object]]:
-    ctx = page_ctx(
-        problem,
-        user,
-        include_branches=False,
-        refresh_status=False,
-        include_recent=True,
-        include_workspace_changes=True,
-        contest_workspace=contest_workspace_context_from_request(request),
-    )
-    execute_mode = ctx['shell']['metadata']['mode']
+) -> tuple[WorkspaceContext, str, list[dict[str, object]], dict[str, object]]:
+    try:
+        problem_id, user_id = runtime().workspace_service.page_identity(problem, user)
+        access = workspace_access_context(problem_id, user_id)
+        require_read_access({"access": access})
+        ctx = runtime().workspace_service.workspace_context(problem, user, include_recent=False)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     requested_verification_id = parse_verification_detail_id(request)
 
@@ -225,13 +225,8 @@ def _selected_run_test_detail(
     if program_id_param is not None and not program_id:
         raise HTTPException(status_code=400, detail='program_id is invalid')
 
-    detail_ctx = build_run_detail_context(
-        ctx,
-        execute_mode,
-        requested_verification_id=requested_verification_id,
-        include_row_details=True,
-        detail_test_name=test_name,
-        detail_program_id=program_id,
+    detail_ctx = build_run_test_detail_context(
+        ctx, verification_id=requested_verification_id, test_name=test_name, program_id=program_id,
     )
     detail_columns = detail_ctx['detail_columns']
     if program_id and (
@@ -258,7 +253,7 @@ def run_details_test_fragment(request: Request, problem: str, user: Annotated[st
         'verification_id': verification_id,
     }
     fragment_context.update(problem_template_navigation(request, problem))
-    response = runtime().templates.TemplateResponse(
+    response = render_template(
         request,
         '_run_test_detail_fragment.html',
         fragment_context,

@@ -2,7 +2,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-from app.service.execution.codec import execution_result_from_json
+from app.service.execution.model import ExecutionResult
+from app.service.execution.policy import canonical_execution_result
 from app.service.judgehost.batch.model import CaseResult
 from app.service.judgehost.domjudge.cache import case_cache_ref
 from app.service.judgehost.domjudge.codec import decode_text
@@ -106,11 +107,10 @@ class CaseResultCache:
             if lookup.expected_behavior == "compile":
                 self.delete(key_hash, signature)
             return None
-        result_json = decode_text(raw=value.get("result_json"))
-        if not result_json:
+        result = value.get("result")
+        if not isinstance(result, ExecutionResult):
             self.delete(key_hash, signature)
             return None
-        result = execution_result_from_json(result_json)
         if any(self._blobs.descriptor(token) is None for token in result.artifact_refs()):
             self.delete(key_hash, signature)
             return None
@@ -134,10 +134,11 @@ class CaseResultCache:
         wall_sec: float,
         memory_kb: int,
         score_text: str,
-        result_json: str,
+        result: ExecutionResult,
         files: Mapping[str, bytes | PayloadFile],
         shortcut_eligible: bool,
     ) -> dict[str, PayloadFile]:
+        canonical_execution_result(result)
         entry = self._index.put(
             namespace=RuntimeCacheIndex.RESULT,
             key_hash=key_hash,
@@ -149,7 +150,7 @@ class CaseResultCache:
                 "wall_sec": max(0.0, wall_sec),
                 "memory_kb": max(0, memory_kb),
                 "score_text": decode_text(raw=score_text),
-                "result_json": result_json,
+                "result": result,
                 "shortcut_eligible": shortcut_eligible,
             },
             files=files,
@@ -169,7 +170,7 @@ class CaseResultCache:
         wall_sec: float,
         memory_kb: int,
         score_text: str,
-        result_json: str,
+        result: ExecutionResult,
         files: Mapping[str, bytes | PayloadFile],
         shortcut_eligible: bool,
     ) -> CaseResultStoreOutcome:
@@ -196,7 +197,7 @@ class CaseResultCache:
                 wall_sec=wall_sec,
                 memory_kb=memory_kb,
                 score_text=score_text,
-                result_json=result_json,
+                result=result,
                 files=files,
                 shortcut_eligible=shortcut_eligible,
             )

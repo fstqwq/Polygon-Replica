@@ -1,6 +1,7 @@
 import io
 import tarfile
 import unittest
+from unittest.mock import patch
 
 from app.service.judgehost.domjudge.case_result import decode_case_test_row
 from app.service.judgehost.callback.pass_bundle import (
@@ -91,6 +92,23 @@ def _complete_pass_entries(number: int) -> list[tuple[str, bytes]]:
 
 
 class TestExecutionResult(unittest.TestCase):
+    def test_overview_preserves_final_usage_without_building_pass_displays(self) -> None:
+        for interactive in (False, True):
+            with self.subTest(interactive=interactive):
+                result = normalize_execution_result(passes=(
+                    _pass(1, usage=ExecutionUsage(), interactive=interactive),
+                    _pass(2, usage=ExecutionUsage(0.04, 0.05, 0.06, 1024), interactive=interactive),
+                ))
+                full = decode_case_test_row(result, test_name="001.in")
+                with (
+                    patch("app.service.judgehost.domjudge.case_result.build_execution_test_pass_row", side_effect=AssertionError("pass projection")),
+                    patch("app.service.execution.test_rows.build_execution_test_pass_row", side_effect=AssertionError("implicit pass")),
+                ):
+                    overview = decode_case_test_row(result, test_name="001.in", include_passes=False)
+                self.assertEqual(len(full["passes"]), 2)
+                self.assertEqual(overview, {**full, "passes": []})
+                self.assertEqual(overview["memory_kb"], 1024)
+
     def test_round_trip_sorts_passes_numerically_and_aggregates_each_usage(
         self,
     ) -> None:

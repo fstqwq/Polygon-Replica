@@ -21,6 +21,11 @@ jobs:
         group: [unit, service, executor, e2e]
     steps:
     - uses: actions/checkout@v6
+    - name: Set up Node for browser interaction harness
+      if: matrix.group == 'executor'
+      uses: actions/setup-node@v4
+      with:
+        node-version: "22"
     - name: Set up Python 3.14
       uses: actions/setup-python@v6
       with:

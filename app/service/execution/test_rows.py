@@ -67,11 +67,12 @@ def build_execution_test_row(
     output_ref: str = "",
     feedback_files: list[str] | None = None,
     passes: list[ExecutionTestPassRow] | None = None,
+    include_passes: bool = True,
     runresult: str = "",
     answer_correct: bool = False,
 ) -> ExecutionTestRow:
     canonical_passes = list(passes or [])
-    if not canonical_passes:
+    if not canonical_passes and include_passes:
         canonical_passes = [
             build_execution_test_pass_row(
                 verdict=verdict,
@@ -85,23 +86,23 @@ def build_execution_test_row(
                 answer_correct=answer_correct,
             )
         ]
-    final_pass = canonical_passes[-1]
+    final_pass = canonical_passes[-1] if canonical_passes else {}
     resolved_verdict = verdict or str(final_pass.get("verdict") or "")
     resolved_time_ms = max(
         0,
-        _required_int(final_pass, "time_ms") if time_ms is None else time_ms,
+        _required_int(final_pass, "time_ms") if time_ms is None and final_pass else time_ms or 0,
     )
     resolved_time_user_ms = max(
         0,
-        (_required_int(final_pass, "time_user_ms") if time_user_ms is None else time_user_ms),
+        (_required_int(final_pass, "time_user_ms") if time_user_ms is None and final_pass else time_user_ms or 0),
     )
     resolved_time_wall_ms = max(
         0,
-        (_required_int(final_pass, "time_wall_ms") if time_wall_ms is None else time_wall_ms),
+        (_required_int(final_pass, "time_wall_ms") if time_wall_ms is None and final_pass else time_wall_ms or 0),
     )
     resolved_memory_kb = max(
         0,
-        _required_int(final_pass, "memory_kb") if memory_kb is None else memory_kb,
+        _required_int(final_pass, "memory_kb") if memory_kb is None and final_pass else memory_kb or 0,
     )
     resolved_message = message or str(final_pass.get("feedback") or "")
     resolved_output_ref = output_ref or str(final_pass.get("output_ref") or "")

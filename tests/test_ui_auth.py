@@ -1,5 +1,7 @@
 import asyncio
 import sqlite3
+import threading
+import httpx
 from collections.abc import Awaitable, Callable
 from unittest.mock import patch
 
@@ -13,6 +15,7 @@ from tests.db_helpers import db_execute, db_fetch_all, db_fetch_one
 
 import app.impl.admin.panel as admin_panel_module
 from app.impl.auth.middleware import AuthenticationMiddleware
+from app.impl.auth.session import require_session_user
 from app.service.auth.password_hash import password_verifier_storage_hash
 from app.config import CONFIG_REGISTRY, ConfigKind
 from app.impl.auth.password_envelope import PasswordEnvelopeStore
@@ -101,6 +104,75 @@ async def _through_auth(
 class TestUIAuth(UIHelpersMixin, E2ETestBase):
     seed_primary_workspace = False
     seed_default_workspace = True
+
+    def test_identity_is_shared_by_request_scope_and_invalidated_on_logout(self) -> None:
+        user = workspace_service.ensure_user(self.random_id("identity"))
+        token = runtime.auth_service.create_session_for_user(user["id"])
+        request = _request_with_cookie("/settings", f"{AUTH_COOKIE_NAME}={token}")
+
+        async def handler(incoming: Request) -> Response:
+            self.assertEqual(session_user(incoming), user["username"])
+            self.assertEqual(require_session_user(Request(incoming.scope)), user["username"])
+            return PlainTextResponse("ok")
+
+        with patch.object(runtime.auth_service, "session_identity", wraps=runtime.auth_service.session_identity) as lookup:
+            self.assertEqual(asyncio.run(_through_auth(request, handler)).status_code, 200)
+            self.assertEqual(lookup.call_count, 1)
+            self.assertEqual(logout(Request(request.scope)).status_code, 303)
+            self.assertEqual(session_user(request), "")
+            with self.assertRaises(HTTPException):
+                require_session_user(request)
+            self.assertEqual(lookup.call_count, 1)
+        self.assertEqual(session_user(_request_with_cookie("/settings", f"{AUTH_COOKIE_NAME}={token}")), "")
+
+    def test_new_requests_recheck_revoked_expired_and_banned_sessions(self) -> None:
+        for cause in ("revoked", "expired", "banned"):
+            with self.subTest(cause=cause):
+                user = workspace_service.ensure_user(self.random_id(cause))
+                token = runtime.auth_service.create_session_for_user(user["id"])
+                cookie = f"{AUTH_COOKIE_NAME}={token}"
+                self.assertEqual(session_user(_request_with_cookie("/settings", cookie)), user["username"])
+                if cause == "revoked":
+                    runtime.auth_service.revoke_session_token(token)
+                elif cause == "expired":
+                    db_execute("UPDATE auth_sessions SET expires_at=? WHERE user_id=?", ["2000-01-01T00:00:00+00:00", user["id"]])
+                else:
+                    db_execute("UPDATE users SET is_banned=1 WHERE id=?", [user["id"]])
+                self.assertEqual(session_user(_request_with_cookie("/settings", cookie)), "")
+
+    def test_blocked_browser_authentication_leaves_other_paths_responsive(self) -> None:
+        user = workspace_service.ensure_user(self.random_id("authblocking"))
+        token = runtime.auth_service.create_session_for_user(user["id"])
+        entered = threading.Event()
+        release = threading.Event()
+        original = runtime.auth_service.session_identity
+
+        def blocking_lookup(raw: str):
+            if raw == token:
+                entered.set()
+                if not release.wait(10):
+                    raise AssertionError("authentication was not released")
+            return original(raw)
+
+        from app.main import app
+        override_config_values(self, runtime.config_values, JUDGEHOST_ENABLE=True, JUDGEHOST_API_TOKEN="test-token")
+
+        async def exercise() -> None:
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
+                protected = asyncio.create_task(client.get("/settings", headers={"Cookie": f"{AUTH_COOKIE_NAME}={token}"}))
+                try:
+                    self.assertTrue(await asyncio.to_thread(entered.wait, 2))
+                    for path, status in (("/login", 200), ("/static/js/core.js", 200),
+                                         ("/agent/v1/auth/status", 401), ("/api/v4/judgehosts", 401)):
+                        response = await asyncio.wait_for(client.get(path), timeout=2)
+                        self.assertEqual(response.status_code, status, path)
+                finally:
+                    release.set()
+                    await protected
+
+        with patch.object(runtime.auth_service, "session_identity", side_effect=blocking_lookup) as lookup:
+            asyncio.run(exercise())
+            self.assertEqual(sum(call.args == (token,) for call in lookup.call_args_list), 1)
 
     def test_password_crypto_production_parameters_remain_strong(self) -> None:
         self.assertEqual(DEFAULT_CONFIG_VALUES["PASSWORD_HASH_ITERS"], 240_000)
@@ -254,7 +326,12 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(session_user(req), username)
 
-        changed = _settings_password_update_with_envelope(username, password, updated)
+        changed = _settings_password_update_with_envelope(username, password, updated, request=req)
+        self.assertEqual(session_user(req), "")
+        new_request = _request_with_cookie(
+            "/settings", f"{AUTH_COOKIE_NAME}={_cookie_value_from_response(changed, AUTH_COOKIE_NAME)}",
+        )
+        self.assertEqual(session_user(new_request), username)
         self.assertEqual(changed.status_code, 303)
         self.assertIn("/settings", changed.headers.get("location", ""))
         changed_set_cookie = _response_set_cookie_blob(changed)
@@ -373,6 +450,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         )
 
         changed = settings_password_update(
+            request=_post_request("/settings/password"),
             user=username,
             current_password="",
             new_password="",
@@ -507,6 +585,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         )
 
         changed = settings_password_update(
+            request=_post_request("/settings/password"),
             user=username,
             current_password="",
             new_password="",

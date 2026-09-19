@@ -2948,6 +2948,51 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             "bob",
         )
         self.assertEqual(detail.status_code, 200)
+        from app.main import app
+        from fastapi.testclient import TestClient
+        from tests.ui_support import AUTH_COOKIE_NAME
+
+        contest_slug = f"history-scope-{uuid.uuid4().hex[:8]}"
+        actor_id = int(alice_ctx["user"]["id"])
+        contest_id = runtime.contest_service.create_contest_with_owner(
+            slug=contest_slug, title="History scope", owner_user_id=actor_id,
+        )
+        runtime.contest_service.add_problem(contest_id, "A", problem_id, actor_id)
+        token = runtime.auth_service.create_session_for_user(actor_id)
+        client = TestClient(app)
+        self.addCleanup(client.close)
+        scoped = client.get(
+            f"/problems/alice/sample/run/details/test-fragment?verification_id={verification_id}&test=001.in&program_id=solution-0&contest={contest_slug}",
+            headers={"cookie": f"{AUTH_COOKIE_NAME}={token}"},
+        )
+        self.assertEqual(scoped.status_code, 200)
+        link = scoped.context["problem_href"]("run_details_sample_json", query={"verification_id": verification_id, "test": "001.in", "program_id": "solution-0"})
+        self.assertEqual(parse_qs(urlparse(link).query)["contest"], [contest_slug])
+        workspace_service.grant_repo_access("alice/sample", "bob", "read")
+        bob_ctx = workspace_service.workspace_context("alice/sample", "bob", include_recent=False)
+        config = Path(bob_ctx["workspace"]["path"]) / "config/problem.json"
+        original = config.read_bytes()
+        before = dict(db_fetch_one("SELECT * FROM workspaces WHERE id=?", [bob_ctx["workspace"]["id"]]))
+        try:
+            config.write_text("{broken config", encoding="utf-8")
+            with patch("app.impl.run_export.run.page_ctx", side_effect=AssertionError("authoring context")):
+                history = run_details_test_fragment(
+                    _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in&program_id=solution-0"),
+                    "alice/sample", "bob",
+                )
+            self.assertEqual(history.status_code, 200)
+            self.assertIn("std.cpp", history.body.decode())
+            after = dict(db_fetch_one("SELECT * FROM workspaces WHERE id=?", [bob_ctx["workspace"]["id"]]))
+            self.assertEqual(after, before)
+        finally:
+            config.write_bytes(original)
+        workspace_service.ensure_user("charlie")
+        with self.assertRaises(HTTPException) as denied:
+            run_details_test_fragment(
+                _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in"),
+                "alice/sample", "charlie",
+            )
+        self.assertIn(denied.exception.status_code, {403, 404})
 
     def test_package_create_reuses_existing_current_package(self) -> None:
         context = workspace_service.workspace_context(

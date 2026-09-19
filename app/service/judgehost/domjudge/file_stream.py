@@ -60,11 +60,20 @@ def _stream_file_fragments(files: Sequence[DomjudgeDownloadFile]) -> Generator[b
             carry = b""
             with item.payload.path.open("rb") as handle:
                 while chunk := handle.read(_RAW_CHUNK_SIZE):
-                    raw = chunk if not carry else carry + chunk
+                    raw = memoryview(chunk)
+                    if carry:
+                        needed = min(3 - len(carry), len(raw))
+                        carry += raw[:needed].tobytes()
+                        raw = raw[needed:]
+                        if len(carry) == 3:
+                            yield base64.b64encode(carry)
+                            carry = b""
+                        else:
+                            continue
                     encoded_length = len(raw) - (len(raw) % 3)
                     if encoded_length:
                         yield base64.b64encode(raw[:encoded_length])
-                    carry = raw[encoded_length:]
+                    carry = raw[encoded_length:].tobytes()
             if carry:
                 yield base64.b64encode(carry)
             yield b'"'

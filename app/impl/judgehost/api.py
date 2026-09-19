@@ -2,16 +2,17 @@ import base64
 import json
 import logging
 import threading
-from collections.abc import Iterator, Sequence
+from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from functools import partial
 from urllib.parse import parse_qsl
 
+from anyio import CancelScope
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
+from starlette.types import Receive, Scope, Send
 
 from app.impl.runtime.dependency import runtime
 from app.main_util import read_upload_bytes_limited
@@ -114,6 +115,8 @@ _FORM_RAW_BINARY_KEYS = {
     "metadata",
     "compare_metadata",
     "team_message",
+    "output_compile",
+    "compile_metadata",
 }
 _JUDGEHOST_FORM_PART_LIMIT_HEADROOM_BYTES = 1024 * 1024
 _logger = logging.getLogger(__name__)
@@ -371,22 +374,37 @@ def _begin_file_download(service) -> _CallbackAdmissionRelease:
 def _admitted_file_stream(
     rows: Sequence[DomjudgeDownloadFile],
     release: _CallbackAdmissionRelease,
-) -> Iterator[bytes]:
+) -> Generator[bytes, None, None]:
     try:
         yield from stream_domjudge_file_array(rows)
     finally:
         release()
 
 
+class _AdmittedFileResponse(StreamingResponse):
+    """Release stream resources even when ASGI send raises on disconnect."""
+
+    def __init__(self, rows: Sequence[DomjudgeDownloadFile], release: _CallbackAdmissionRelease):
+        self._source = _admitted_file_stream(rows, release)
+        self._release = release
+        super().__init__(self._source, media_type="application/json")
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            with CancelScope(shield=True):
+                try:
+                    await run_in_threadpool(self._source.close)
+                finally:
+                    self._release()
+
+
 def _file_stream_response(
     rows: Sequence[DomjudgeDownloadFile],
     release: _CallbackAdmissionRelease,
 ) -> StreamingResponse:
-    return StreamingResponse(
-        _admitted_file_stream(rows, release),
-        media_type="application/json",
-        background=BackgroundTask(release),
-    )
+    return _AdmittedFileResponse(rows, release)
 
 
 async def domjudge_config(request: Request):

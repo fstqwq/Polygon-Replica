@@ -10,6 +10,8 @@ from unittest.mock import patch
 
 from app.config import build_config_values
 from app.service.execution.limits import VERIFICATION_RUNTIME_BATCH_SIZE
+from app.service.execution.model import CompileDiagnostic, CompileResult
+from app.service.execution.policy import normalize_execution_result
 from app.service.judgehost.batch.model import (
     CaseClaimBusy,
     CaseReportTelemetry,
@@ -20,7 +22,7 @@ from app.service.judgehost.batch.model import (
     VerificationCancellationSlice,
 )
 from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
-from app.service.judgehost.cache.case_result import CaseResultCache
+from app.service.judgehost.cache.case_result import CaseCacheLookup, CaseResultCache
 from app.service.judgehost.cache.executable import ExecutableCache
 from app.service.judgehost.domjudge.case_result import build_case_result
 from app.service.judgehost.domjudge.identity import script_id, submit_id
@@ -2500,7 +2502,7 @@ class TestJudgehostScheduler(unittest.TestCase):
                 runtime_sec=0.1,
                 cpu_sec=0.1,
                 wall_sec=0.2,
-                result_json='{"runresult":"correct"}',
+                result=_case_result("001.in"),
                 files={"program.out": b"first\n"},
             )
             second = results.try_store(
@@ -2508,7 +2510,7 @@ class TestJudgehostScheduler(unittest.TestCase):
                 runtime_sec=0.3,
                 cpu_sec=0.25,
                 wall_sec=0.4,
-                result_json='{"runresult":"correct"}',
+                result=_case_result("001.in"),
                 files={"program.out": b"second\n"},
             )
             self.assertEqual((first.status, second.status), ("stored", "conflict"))
@@ -2520,7 +2522,63 @@ class TestJudgehostScheduler(unittest.TestCase):
             self.assertIsNotNone(entry)
             assert entry is not None
             self.assertEqual(entry.value["runtime_sec"], 0.1)
+            self.assertEqual(entry.value["result"], _case_result("001.in"))
             self.assertEqual(blobs.read(entry.files["program.out"]), b"first\n")
+
+    def test_result_cache_reuses_complete_pass_evidence_and_checks_historical_files(self) -> None:
+        for count in (1, 3):
+            with self.subTest(passes=count), tempfile.TemporaryDirectory() as temp_dir:
+                _executable, blobs, index = self._runtime_cache(Path(temp_dir))
+                cache = CaseResultCache(index, blobs)
+                payloads = [blobs.put_bytes(f"{number}.in".encode()) for number in range(1, count + 1)]
+                result = normalize_execution_result(passes=tuple(
+                    replace(_case_result(f"{number}.in").passes[0], number=number)
+                    for number in range(1, count + 1)
+                ))
+                lookup = CaseCacheLookup(
+                    source_hash="1" * 64, compile_hash="2" * 32, run_hash="3" * 32,
+                    compare_hash="4" * 32, compile_config_hash="5" * 64,
+                    run_config_hash="6" * 64, compare_config_hash="7" * 64,
+                    toolchain_cmd_digest="8" * 64, testcase_hash="9" * 64,
+                    run_config={}, expected_behavior="accepted", main_correct=False,
+                    requires_output=True, bypass=False,
+                )
+                key_hash, signature = cache.identity(lookup)
+                cache.store(
+                    key_hash=key_hash, signature=signature, tags={}, runresult="correct",
+                    runtime_sec=0.001, cpu_sec=0.001, wall_sec=0.002, memory_kb=1024,
+                    score_text="", result=result, files={"program.out": payloads[-1]},
+                    shortcut_eligible=True,
+                )
+                self.assertIs(cache.lookup(lookup), result)
+                self.assertEqual(cache.lookup(lookup).passes, result.passes)
+                payloads[0].path.unlink()
+                self.assertIsNone(cache.lookup(lookup))
+                self.assertEqual(index.count_entries(namespace=RuntimeCacheIndex.RESULT), 0)
+
+    def test_result_cache_rejects_noncanonical_structured_results_before_publication(self) -> None:
+        result = normalize_execution_result(passes=(
+            _case_result("001.in").passes[0],
+            replace(_case_result("002.in").passes[0], number=2),
+        ))
+        invalid_results = (
+            replace(result, outcome=replace(result.outcome, usage=replace(result.outcome.usage, memory_kb=1024.0))),
+            replace(result, passes=tuple(reversed(result.passes))),
+            replace(result, passes=(replace(result.passes[0], usage=replace(result.passes[0].usage, memory_kb=True)), result.passes[1])),
+            replace(result, compile=CompileResult(diagnostics=(CompileDiagnostic((("nested", ["mutable"]),)),))),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            _executable, blobs, index = self._runtime_cache(Path(temp_dir))
+            cache = CaseResultCache(index, blobs)
+            for invalid in invalid_results:
+                with self.subTest(result=invalid), self.assertRaises(ValueError):
+                    cache.try_store(
+                        key_hash="1" * 64, signature="2" * 64, tags={}, runresult="correct",
+                        runtime_sec=0.001, cpu_sec=0.001, wall_sec=0.002, memory_kb=1024,
+                        score_text="", result=invalid, files={"program.out": b"payload"},
+                        shortcut_eligible=True,
+                    )
+                self.assertEqual(index.count_entries(namespace=RuntimeCacheIndex.RESULT), 0)
 
     def test_executable_cache_identity_conflict_remains_strict(self) -> None:
         with tempfile.TemporaryDirectory(prefix="runtime-executable-conflict-") as temp_dir:

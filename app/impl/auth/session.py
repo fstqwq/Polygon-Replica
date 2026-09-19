@@ -1,8 +1,19 @@
+from dataclasses import dataclass
+
 from fastapi import HTTPException, Request
 
 from app.impl.runtime.dependency import runtime
 from app.service.auth.model import AuthSessionIdentity, SudoSessionIdentity
 
+
+@dataclass(frozen=True, slots=True)
+class _RequestIdentity:
+    identity: AuthSessionIdentity | None
+
+
+def invalidate_session_identity(request: Request) -> None:
+    """Retire this request's old cookie after its session is revoked."""
+    request.state.auth_identity = _RequestIdentity(None)
 
 
 def create_session_for_user(user_id: int) -> str:
@@ -26,9 +37,14 @@ def revoke_sudo_sessions_for_user(user_id: int) -> None:
 
 
 def session_identity(request: Request) -> AuthSessionIdentity | None:
+    cached = getattr(request.state, "auth_identity", None)
+    if isinstance(cached, _RequestIdentity):
+        return cached.identity
     cookie_name = runtime().config_values.text("AUTH_COOKIE_NAME")
     raw = str(request.cookies.get(cookie_name, "")).strip()
-    return runtime().auth_service.session_identity(raw)
+    identity = runtime().auth_service.session_identity(raw)
+    request.state.auth_identity = _RequestIdentity(identity)
+    return identity
 
 
 def _sudo_identity(request: Request, scope: str) -> SudoSessionIdentity | None:

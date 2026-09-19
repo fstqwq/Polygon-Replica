@@ -136,10 +136,16 @@ function closeModal(overlay, restoreFocus = true) {
   overlay.hidden = true;
   document.body.classList.remove("popup-open", "confirm-open");
   activeModal = null;
+  if (overlay.id === "ui-confirm-overlay" && confirmResolver) confirmResolver(false);
+  document.dispatchEvent(new CustomEvent("polygonlike:popup-closed", { detail: { overlay } }));
   if (restoreFocus && trigger && typeof trigger.focus === "function") trigger.focus();
 }
 
 function openModal(overlay, trigger, onEscape) {
+  if (activeModal && activeModal.overlay === overlay) {
+    activeModal.trigger = trigger;
+    return;
+  }
   if (activeModal) closeModal(activeModal.overlay, false);
   overlay.hidden = false;
   setBackgroundInert(overlay, true);
@@ -166,8 +172,10 @@ function openModal(overlay, trigger, onEscape) {
     }
   };
   activeModal = { overlay, trigger, onKeydown };
+  const openedModal = activeModal;
   document.addEventListener("keydown", onKeydown, true);
   window.setTimeout(() => {
+    if (activeModal !== openedModal) return;
     const focusable = focusableElements(overlay);
     const target = focusable[0] || overlay.querySelector("[role='dialog']") || overlay;
     if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
@@ -202,7 +210,6 @@ export function showConfirmDialog(message, trigger = document.activeElement) {
   const confirm = overlay.querySelector(".ui-confirm-ok");
   if (confirmResolver) confirmResolver(false);
   messageElement.textContent = String(message || "Are you sure?").trim();
-  document.body.classList.add("confirm-open");
   return new Promise((resolve) => {
     let settled = false;
     const finish = (result) => {
@@ -225,6 +232,7 @@ export function showConfirmDialog(message, trigger = document.activeElement) {
     confirm.addEventListener("click", confirmHandler);
     overlay.addEventListener("click", overlayHandler);
     openModal(overlay, trigger, cancelHandler);
+    document.body.classList.add("confirm-open");
   });
 }
 
@@ -232,19 +240,19 @@ function initPopupDialogs() {
   const overlays = Array.from(document.querySelectorAll(".ui-popup-overlay[data-popup-overlay='1']"));
   if (!overlays.length) return;
   const close = (overlay) => closeModal(overlay);
-  document.querySelectorAll("[data-popup-open]").forEach((opener) => {
-    opener.addEventListener("click", (event) => {
+  document.addEventListener("click", (event) => {
+      const opener = event.target instanceof Element ? event.target.closest("[data-popup-open]") : null;
+      if (!opener) return;
       event.preventDefault();
       const overlay = document.getElementById(String(opener.dataset.popupOpen || ""));
       if (!overlay || !overlay.classList.contains("ui-popup-overlay")) return;
-      document.body.classList.add("popup-open");
       openModal(overlay, opener, () => close(overlay));
+      document.body.classList.add("popup-open");
       document.dispatchEvent(
         new CustomEvent("polygonlike:popup-opened", {
-          detail: { overlay },
+          detail: { overlay, opener },
         })
       );
-    });
   });
   overlays.forEach((overlay) => {
     overlay.querySelectorAll("[data-popup-close]").forEach((button) => {
@@ -398,15 +406,22 @@ function initTooltips() {
 }
 
 function initProfileTiming() {
-  const backend = document.getElementById("profile-backend-render");
-  const network = document.getElementById("profile-network-estimate");
-  if (!backend && !network) return;
-  const backendMs = Number(backend && backend.dataset.backendRenderMs);
-  const nav = performance.getEntriesByType ? performance.getEntriesByType("navigation")[0] : null;
-  const ttfb = nav ? Number(nav.responseStart) - Number(nav.requestStart) : NaN;
-  const format = (value) => Number.isFinite(value) && value >= 0 ? `${Math.round(value)} ms` : "n/a";
-  if (backend) backend.textContent = format(backendMs);
-  if (network) network.textContent = format(Number.isFinite(ttfb) && Number.isFinite(backendMs) ? Math.max(0, ttfb - backendMs) : NaN);
+  const update = () => {
+    const nav = performance.getEntriesByType ? performance.getEntriesByType("navigation")[0] : null;
+    const metrics = new Map((nav && nav.serverTiming || []).map((metric) => [metric.name, metric.duration]));
+    const values = {
+      application: metrics.get("application"),
+      template: metrics.get("template"),
+      ttfb: nav && nav.responseStart > 0 ? nav.responseStart - nav.requestStart : NaN,
+      transfer: nav && nav.responseEnd > 0 ? nav.responseEnd - nav.responseStart : NaN,
+    };
+    Object.entries(values).forEach(([name, value]) => {
+      const element = document.getElementById(`profile-${name}`);
+      if (element) element.textContent = Number.isFinite(value) && value >= 0 ? `${Math.round(value)} ms` : "n/a";
+    });
+  };
+  update();
+  if (document.readyState !== "complete") window.addEventListener("load", update, { once: true });
 }
 
 function initCore() {
