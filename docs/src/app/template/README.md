@@ -10,4 +10,4 @@ template generation for pages and fragments. At response start, the ASGI middlew
 reports `application`, `template`, and `template_cpu` in `Server-Timing`.
 Application elapsed time includes authentication and rendering; the compatible
 `X-Backend-Render-Ms` header reports that elapsed time. The profile presents these
-server measurements alongside browser TTFB and response transfer time.
+server measurements alongside browser TTFB and estimated network overhead.

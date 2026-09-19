@@ -20,5 +20,5 @@ The executor Node harness exercises the real modules with controlled events and
 fetch; browser layout and paint require a separate browser check.
 
 The profile reads Navigation Timing and Server-Timing. TTFB is response start minus
-request start; transfer is response end minus response start. Unavailable metrics
+request start; estimated network overhead is TTFB minus application elapsed time. Unavailable metrics
 display `n/a`.

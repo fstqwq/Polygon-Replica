@@ -409,11 +409,13 @@ function initProfileTiming() {
   const update = () => {
     const nav = performance.getEntriesByType ? performance.getEntriesByType("navigation")[0] : null;
     const metrics = new Map((nav && nav.serverTiming || []).map((metric) => [metric.name, metric.duration]));
+    const application = metrics.get("application");
+    const ttfb = nav && nav.responseStart > 0 ? nav.responseStart - nav.requestStart : NaN;
     const values = {
-      application: metrics.get("application"),
+      application,
       template: metrics.get("template"),
-      ttfb: nav && nav.responseStart > 0 ? nav.responseStart - nav.requestStart : NaN,
-      transfer: nav && nav.responseEnd > 0 ? nav.responseEnd - nav.responseStart : NaN,
+      ttfb,
+      network: ttfb - application,
     };
     Object.entries(values).forEach(([name, value]) => {
       const element = document.getElementById(`profile-${name}`);
