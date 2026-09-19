@@ -7,6 +7,7 @@ from app.service.execution.test_rows import build_execution_test_row
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.problem.solution_metadata import normalize_expected_behavior
 from app.service.verification.lifecycle import (
+    EMPTY_TASK_RESULT,
     PlannedTask,
     TASK_GENERATE_INPUT,
     TASK_MAIN_CORRECT,
@@ -194,9 +195,9 @@ def build_graph(
                 program_id=generator_program_id,
                 test_name=test_name,
                 expected_behavior="accepted",
-                result=normalize_execution_result(
-                    verdict="SK" if owner_generate_id is not None else "",
-                    feedback=duplicate_feedback,
+                result=(
+                    EMPTY_TASK_RESULT if owner_generate_id is None
+                    else normalize_execution_result(verdict="SK", feedback=duplicate_feedback)
                 ),
             )
         )

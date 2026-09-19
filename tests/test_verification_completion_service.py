@@ -2,6 +2,7 @@ import json
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from unittest.mock import patch
 
 from app.service.execution.policy import normalize_execution_result
@@ -26,6 +27,62 @@ from tests.verification_service_fixture import (
 
 
 class TestVerificationCompletionService(VerificationServiceTestBase):
+    def test_completion_preparation_validates_equal_results_before_writing(self) -> None:
+        for truncate in (False, True):
+            with self.subTest(truncate=truncate):
+                verification_id = canonical_test_verification_id(f"prepare-invalid:{self.test_id}:{truncate}")
+                self._insert_verification_row(verification_id)
+                task_ids = [verification_task_id(verification_id, "accepted", f"{i:03}.in") for i in (1, 2)]
+                self._activate_graph(verification_id, tasks=[
+                    {"id": task_id, "task_kind": "main-correct", "program_id": "accepted",
+                     "source_path": "solutions/accepted.cpp", "test_name": f"{i:03}.in",
+                     "expected_behavior": "accepted"}
+                    for i, task_id in enumerate(task_ids, 1)
+                ], edges=[])
+                result = make_execution_result(
+                    verdict="OK", output_ref=str(self.runtime_blob_store.put_bytes(b"output").blob_ref),
+                    feedback="x" * (100_000 if truncate else 1),
+                )
+                invalid = replace(result, outcome=replace(
+                    result.outcome, usage=replace(result.outcome.usage, memory_kb=1.0),
+                ))
+                self.assertEqual(result, invalid)
+                with self.assertRaises(ValueError):
+                    self.verification_task_store.commit_task_completions(tuple(
+                        TaskCompletion(task_id=task_id, status=VerificationTaskStatus.DONE,
+                                       run_id="", judgehost_task_id="", result=value)
+                        for task_id, value in zip(task_ids, (result, invalid))
+                    ))
+                with self.db.conn() as conn:
+                    rows = conn.execute(
+                        "SELECT final_status FROM verification_tasks WHERE verification_id=?",
+                        [verification_id],
+                    ).fetchall()
+                self.assertEqual([row[0] for row in rows], ["", ""])
+
+    def test_shared_completion_result_preserves_bounded_and_distinct_feedback(self) -> None:
+        verification_id = canonical_test_verification_id(f"prepare-shared:{self.test_id}")
+        self._insert_verification_row(verification_id)
+        task_ids = [verification_task_id(verification_id, "accepted", f"{i:03}.in") for i in (1, 2, 3)]
+        self._activate_graph(verification_id, tasks=[
+            {"id": task_id, "task_kind": "main-correct", "program_id": "accepted",
+             "source_path": "solutions/accepted.cpp", "test_name": f"{i:03}.in",
+             "expected_behavior": "accepted"}
+            for i, task_id in enumerate(task_ids, 1)
+        ], edges=[])
+        shared = make_execution_result(verdict="OK", feedback="你好" * 100_000)
+        distinct = make_execution_result(verdict="OK", feedback="other case")
+        commit = self.verification_task_store.commit_task_completions(tuple(
+            TaskCompletion(task_id=task_id, status=VerificationTaskStatus.DONE,
+                           run_id="", judgehost_task_id="", result=result)
+            for task_id, result in zip(task_ids, (shared, shared, distinct))
+        ))
+        self.assertEqual(commit.committed_task_ids, frozenset(task_ids))
+        rows = {row["id"]: row for row in self.verification_task_store.list_rows(verification_id)}
+        self.assertEqual(rows[task_ids[0]]["result_json"], rows[task_ids[1]]["result_json"])
+        self.assertLess(len(rows[task_ids[0]]["feedback_text"]), len(shared.feedback_text))
+        self.assertEqual(rows[task_ids[2]]["feedback_text"], "other case")
+
     def test_solution_completions_progress_across_storage_and_publication_delays(self) -> None:
         for after_commit in (False, True):
             for replay in (False, True):

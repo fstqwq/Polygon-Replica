@@ -10,6 +10,7 @@ from app.service.judgehost.batch.model import (
 
 def batch_snapshot(batch: ExecutionBatchRecord) -> ExecutionBatchRow:
     return ExecutionBatchRow(
+        cache_policy=batch.cache_policy,
         batch_id=batch.batch_id,
         verification_program_id=batch.verification_program_id,
         execution_signature=batch.execution_signature,

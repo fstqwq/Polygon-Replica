@@ -1,4 +1,4 @@
-from typing import Callable
+from collections.abc import Callable, Mapping
 
 from app.service.platform.error_text import bounded_display_text
 
@@ -24,7 +24,7 @@ def parse_int(raw: object, default: int = 0) -> int:
         return default
 
 
-def _run_time_limit_sec(run_cfg_obj: dict[str, object]) -> float:
+def _run_time_limit_sec(run_cfg_obj: Mapping[str, object]) -> float:
     cfg = run_cfg_obj
     tl_sec = parse_nonnegative_float(cfg.get("time_limit"), 0.0)
     if tl_sec > 0:
@@ -39,7 +39,7 @@ def rewrite_untrusted_runresult(
     runresult: str,
     *,
     cpu_sec: float,
-    run_cfg_obj: dict[str, object],
+    run_cfg_obj: Mapping[str, object],
 ) -> str:
     token = str(runresult or "").strip().lower()
     if token not in {"wrong-answer", "run-error", "no-output"}:

@@ -65,6 +65,19 @@ class PayloadFile:
         )
 
 
+class RuntimeBlobLookup:
+    """Share descriptor checks within one synchronous cache lookup."""
+
+    def __init__(self, store: "RuntimeBlobStore") -> None:
+        self._store = store
+        self._checked: dict[str, PayloadFile | None] = {}
+
+    def descriptor(self, blob_ref: str) -> PayloadFile | None:
+        if blob_ref not in self._checked:
+            self._checked[blob_ref] = self._store.descriptor(blob_ref)
+        return self._checked[blob_ref]
+
+
 class RuntimeBlobStore:
     """Process-lifetime immutable content store.
 
