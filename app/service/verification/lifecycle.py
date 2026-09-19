@@ -65,6 +65,7 @@ class VerificationProgram:
 _TASK_ID_COMPONENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _GENERATOR_PROGRAM_RE = re.compile(r"^generator-(0|[1-9][0-9]*)$")
 _SOLUTION_PROGRAM_RE = re.compile(r"^solution-(0|[1-9][0-9]*)$")
+EMPTY_TASK_RESULT = ExecutionResult()
 
 
 def _task_id_component(value: str, *, label: str) -> str:
@@ -116,7 +117,7 @@ class PlannedTask:
     program_id: str
     test_name: str
     expected_behavior: str
-    result: ExecutionResult = ExecutionResult()
+    result: ExecutionResult = EMPTY_TASK_RESULT
 
 
 @dataclass(frozen=True)

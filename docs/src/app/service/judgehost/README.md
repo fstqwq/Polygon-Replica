@@ -46,6 +46,14 @@ checks every referenced pass artifact before returning the stored object. Missin
 artifacts invalidate the entry. Canonical validation checks usage types and nested
 immutable diagnostics before insertion.
 
+Each program batch owns immutable cache-query configuration: configuration
+signatures, run limits and eligibility policy. Appended cases use the same
+configuration after the program identity check. An absent toolchain digest is
+resolved from the settings of each probe. Batch cleanup releases the configuration.
+One result lookup shares blob descriptor checks between entry files and all pass
+artifacts, checking each file's expected size. Each subsequent lookup checks files
+again.
+
 Compile callbacks decode and truncate output and metadata as bytes before deriving
 failure diagnostics. Encoding happens when writing the existing base64 fields.
 Download streams encode aligned memory views and retain at most two carry bytes.

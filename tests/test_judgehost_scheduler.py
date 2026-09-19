@@ -24,6 +24,10 @@ from app.service.judgehost.batch.model import (
 from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
 from app.service.judgehost.cache.case_result import CaseCacheLookup, CaseResultCache
 from app.service.judgehost.cache.executable import ExecutableCache
+from app.service.judgehost.configuration import JudgehostConfiguration
+from app.service.judgehost.dispatch.service import JudgehostDispatch
+from app.service.judgehost.domjudge.scripts import DomjudgeScriptCatalog
+from app.service.judgehost.host.registry import JudgehostHostRegistry
 from app.service.judgehost.domjudge.case_result import build_case_result
 from app.service.judgehost.domjudge.identity import script_id, submit_id
 from app.service.judgehost.cancellation import JudgehostCancellationDrain
@@ -344,6 +348,88 @@ class TestJudgehostScheduler(unittest.TestCase):
         blob_store = RuntimeBlobStore(temp_root / "blobs")
         cache_index = RuntimeCacheIndex(blob_store)
         return (ExecutableCache(cache_index), blob_store, cache_index)
+
+    def test_program_cache_configuration_survives_append_and_rejects_changes(self) -> None:
+        scheduler = JudgehostBatchRuntime(id_base=100)
+        configs = {
+            "compile_config": {"toolchain_cmd_digest": "a" * 64},
+            "run_config": {"time_limit": 2.0, "extensions": {"flags": ["one"]}},
+            "compare_config": {"combined_run_compare": False},
+        }
+        batch_id, _ = _create_staged_batch(
+            scheduler, task_id="config-first", run_id="config-run-first",
+            ordinals=[1], verification_program_id="solution-0",
+            execution_signature="config-program", **configs,
+        )
+        policy = scheduler.fetch_batch(batch_id)["cache_policy"]
+        self.assertEqual(policy.run_config_hash, RuntimeCacheIndex.signature(configs["run_config"]))
+        self.assertEqual(policy.toolchain_cmd_digest, "a" * 64)
+        with self.assertRaises(TypeError):
+            policy.run_config["time_limit"] = 10
+        with self.assertRaises(TypeError):
+            policy.run_config["extensions"]["flags"] = ()
+        appended, _ = _create_staged_batch(
+            scheduler, task_id="config-next", run_id="config-run-next",
+            ordinals=[2], verification_program_id="solution-0",
+            execution_signature="config-program", **configs,
+        )
+        self.assertEqual(appended, batch_id)
+        self.assertEqual(scheduler.fetch_batch(appended)["cache_policy"], policy)
+        for name in configs:
+            with self.subTest(config=name), self.assertRaisesRegex(RuntimeError, "program identity changed"):
+                _create_staged_batch(
+                    scheduler, task_id="config-changed", run_id="config-run-changed",
+                    ordinals=[3], verification_program_id="solution-0",
+                    execution_signature="config-program",
+                    **{**configs, name: {"changed": True}},
+                )
+        self.assertEqual(scheduler.batch_case_count(batch_id, status="staged"), 2)
+
+    def test_program_cache_digest_fallback_tracks_each_probes_settings(self) -> None:
+        original = JudgehostConfiguration(build_config_values()).snapshot()
+        changed = JudgehostConfiguration(build_config_values({"TOOLCHAIN_CPP_COMPILER": "changed-g++"})).snapshot()
+        scripts = DomjudgeScriptCatalog()
+        digest = scripts.toolchain_cmd_digest(original, "main.cpp")
+        self.assertNotEqual(digest, scripts.toolchain_cmd_digest(changed, "main.cpp"))
+        for pinned in (False, True):
+            with self.subTest(pinned=pinned), tempfile.TemporaryDirectory() as temp_dir:
+                scheduler = JudgehostBatchRuntime(id_base=100)
+                batch_id, now_text = _create_staged_batch(
+                    scheduler, task_id="digest-task", run_id="digest-run", ordinals=[1, 2],
+                    compile_config={"toolchain_cmd_digest": digest} if pinned else {},
+                )
+                _executable, blobs, index = self._runtime_cache(Path(temp_dir))
+                cache = CaseResultCache(index, blobs)
+                batch = scheduler.fetch_batch(batch_id)
+                policy = batch["cache_policy"]
+                payload = blobs.put_bytes(b"001.in")
+                for case in scheduler.cases_for_batch(batch_id, status="staged"):
+                    lookup = CaseCacheLookup(
+                        source_hash=batch["source_hash"], compile_hash=batch["compile_hash"],
+                        run_hash=batch["run_hash"], compare_hash=batch["compare_hash"],
+                        compile_config_hash=policy.compile_config_hash, run_config_hash=policy.run_config_hash,
+                        compare_config_hash=policy.compare_config_hash, toolchain_cmd_digest=digest,
+                        testcase_hash=case["testcase_hash"], run_config=policy.run_config,
+                        expected_behavior="accepted", main_correct=False, requires_output=False, bypass=False,
+                    )
+                    key, signature = cache.identity(lookup)
+                    cache.store(
+                        key_hash=key, signature=signature, tags={}, runresult="correct",
+                        runtime_sec=0.001, cpu_sec=0.001, wall_sec=0.002, memory_kb=1024,
+                        score_text="", result=_case_result("001.in"), files={"output": payload}, shortcut_eligible=True,
+                    )
+                dispatch = JudgehostDispatch(
+                    scheduler, JudgehostTaskRegistry(), None, scripts, cache, None,
+                    JudgehostConfiguration(build_config_values()), JudgehostHostRegistry(), 0,
+                )
+                scheduler.activate_task_cases("digest-task", now_text=now_text)
+                for settings in (original, changed):
+                    dispatch._apply_cache_shortcuts_for_batch(
+                        batch_id, hostname="cache", limit=1, deadline=None,
+                        admission_gate=None, settings=settings,
+                    )
+                self.assertEqual(scheduler.batch_case_count(batch_id, status="reported"), 2 if pinned else 1)
+                self.assertEqual(scheduler.batch_case_count(batch_id, status="pending"), 0 if pinned else 1)
 
     def test_materialization_claim_is_single_owner_and_failure_is_atomic(self) -> None:
         scheduler = JudgehostBatchRuntime(id_base=100)
@@ -2532,7 +2618,13 @@ class TestJudgehostScheduler(unittest.TestCase):
                 cache = CaseResultCache(index, blobs)
                 payloads = [blobs.put_bytes(f"{number}.in".encode()) for number in range(1, count + 1)]
                 result = normalize_execution_result(passes=tuple(
-                    replace(_case_result(f"{number}.in").passes[0], number=number)
+                    replace(
+                        _case_result(f"{number}.in").passes[0], number=number,
+                        artifacts=replace(
+                            _case_result(f"{number}.in").passes[0].artifacts,
+                            input_ref=str(payloads[-1].blob_ref),
+                        ),
+                    )
                     for number in range(1, count + 1)
                 ))
                 lookup = CaseCacheLookup(
@@ -2547,7 +2639,8 @@ class TestJudgehostScheduler(unittest.TestCase):
                 cache.store(
                     key_hash=key_hash, signature=signature, tags={}, runresult="correct",
                     runtime_sec=0.001, cpu_sec=0.001, wall_sec=0.002, memory_kb=1024,
-                    score_text="", result=result, files={"program.out": payloads[-1]},
+                    score_text="", result=result,
+                    files={"program.out": payloads[-1], "shared.in": payloads[-1]},
                     shortcut_eligible=True,
                 )
                 self.assertIs(cache.lookup(lookup), result)
@@ -2555,6 +2648,20 @@ class TestJudgehostScheduler(unittest.TestCase):
                 payloads[0].path.unlink()
                 self.assertIsNone(cache.lookup(lookup))
                 self.assertEqual(index.count_entries(namespace=RuntimeCacheIndex.RESULT), 0)
+
+    def test_cache_entry_checks_each_expected_size_for_shared_blob(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            _executable, blobs, index = self._runtime_cache(Path(temp_dir))
+            payload = blobs.put_bytes(b"shared")
+            entry = index.put(
+                namespace=RuntimeCacheIndex.RESULT, key_hash="1" * 64,
+                signature="2" * 64, value={}, files={"first": payload, "second": payload},
+            )
+            entry.files["second"] = replace(payload, size=payload.size + 1)
+            self.assertIsNone(index.get(
+                namespace=RuntimeCacheIndex.RESULT, key_hash="1" * 64, signature="2" * 64,
+            ))
+            self.assertEqual(index.count_entries(namespace=RuntimeCacheIndex.RESULT), 0)
 
     def test_result_cache_rejects_noncanonical_structured_results_before_publication(self) -> None:
         result = normalize_execution_result(passes=(

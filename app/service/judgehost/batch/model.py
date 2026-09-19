@@ -4,6 +4,7 @@ from typing import Literal, TypeAlias, TypedDict
 
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.execution.model import ExecutionResult
+from app.service.judgehost.cache.policy import CaseCachePolicy
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,7 @@ class HostTelemetryState:
 
 
 class ExecutionBatchRow(TypedDict):
+    cache_policy: CaseCachePolicy
     batch_id: int
     verification_program_id: str
     execution_signature: str
@@ -205,6 +207,7 @@ class FinalizationClaim:
 
 @dataclass
 class ExecutionBatchRecord:
+    cache_policy: CaseCachePolicy
     batch_id: int
     verification_program_id: str
     execution_signature: str

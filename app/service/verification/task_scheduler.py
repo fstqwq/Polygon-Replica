@@ -412,9 +412,7 @@ class VerificationRuntimeCoordinator:
         elif event.kind == "completion_committed":
             commit = event.completion_commit
             changed = False if commit is None else self._apply_completion_commit(commit)
-            if changed and self._task_store.verification_is_running(
-                self.verification_id
-            ):
+            if changed:
                 self._publish_ready_rows()
         elif event.kind == "completion_reconciliation":
             commit = event.completion_commit
@@ -423,9 +421,7 @@ class VerificationRuntimeCoordinator:
                 self._callbacks.cancel_execution(
                     commit.failure_reason or "verification failed"
                 )
-            if changed and self._task_store.verification_is_running(
-                self.verification_id
-            ):
+            if changed:
                 self._publish_ready_rows()
         elif event.kind in {"cancel", "closed"}:
             rows_by_id = {

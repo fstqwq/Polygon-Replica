@@ -9,6 +9,10 @@ process lifetime. Reuse checks the current file type and size; missing files
 remain unavailable until republished. Clearing the runtime store also clears
 its descriptor cache.
 
+A cache lookup can share a short-lived blob lookup between its entry and artifact
+checks. It resolves each reference once while checking every expected file size.
+The domain caller discards this lookup when the operation returns.
+
 Worker state, cache indexes, locks, and admission state are process-local. Runtime blobs are content-addressed files below the cache root. Startup resets both. Source backup and generated-data cleanup run under the exclusive maintenance gate.
 
 The [storage protocol](../../../../protocol/storage.md) defines roots, cleanup, backup contents, and recovery boundaries.

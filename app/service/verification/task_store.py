@@ -1,6 +1,6 @@
 import re
 import sqlite3
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
 from threading import Condition, RLock
@@ -13,6 +13,7 @@ from app.service.execution.codec import (
 )
 from app.service.execution.model import ExecutionPassResult, ExecutionResult
 from app.service.execution.policy import (
+    canonical_execution_result,
     execution_result_with_outcome,
     normalize_execution_result,
 )
@@ -214,6 +215,29 @@ def _bounded_result(result: ExecutionResult, *, limit_bytes: int) -> ExecutionRe
     )
 
 
+@dataclass(frozen=True)
+class _PreparedResult:
+    source: ExecutionResult
+    result: ExecutionResult
+    text: str
+
+
+def _prepare_results(
+    results: Iterable[ExecutionResult], *, limit_bytes: int,
+) -> dict[int, _PreparedResult]:
+    prepared: dict[int, _PreparedResult] = {}
+    for source in results:
+        cached = prepared.get(id(source))
+        if cached is not None and cached.source is source:
+            continue
+        result = _bounded_result(source, limit_bytes=limit_bytes)
+        if result is not source:
+            # Truncation must not repair an invalid incoming result.
+            canonical_execution_result(source)
+        prepared[id(source)] = _PreparedResult(source, result, execution_result_json(result))
+    return prepared
+
+
 class VerificationTaskStore:
 
     def __init__(self, db: DB) -> None:
@@ -366,6 +390,9 @@ class VerificationTaskStore:
         ordered_tasks = plan.ordered_tasks()
         detail = plan.detail
         now_text = now_iso()
+        prepared_results = _prepare_results(
+            (task.result for task in ordered_tasks), limit_bytes=self._limit_bytes(),
+        )
 
         with self._coordinate(plan.verification_id):
             def _tx(conn: sqlite3.Connection) -> ActivationCommit:
@@ -412,12 +439,7 @@ class VerificationTaskStore:
                             task.test_name,
                             task.expected_behavior,
                             "",
-                            execution_result_json(
-                                _bounded_result(
-                                    task.result,
-                                    limit_bytes=self._limit_bytes(),
-                                )
-                            ),
+                            prepared_results[id(task.result)].text,
                             None,
                             now_text,
                         )
@@ -1035,13 +1057,13 @@ class VerificationTaskStore:
         if any(completion.status not in terminal_statuses for completion in completions):
             raise ValueError("task completion status must be terminal")
         limit_bytes = self._limit_bytes()
+        prepared_results = _prepare_results(
+            (completion.result for completion in completions), limit_bytes=limit_bytes,
+        )
         normalized_by_id = {
             completion.task_id: replace(
                 completion,
-                result=_bounded_result(
-                    completion.result,
-                    limit_bytes=limit_bytes,
-                ),
+                result=prepared_results[id(completion.result)].result,
                 fail_reason=bounded_display_text(completion.fail_reason, limit_bytes=limit_bytes),
             )
             for completion in completions
@@ -1062,8 +1084,8 @@ class VerificationTaskStore:
             or (completion.fail_reason and metadata[task_id].task_kind in _HARD_FAILURE_TASK_KINDS)
         ), "")
         prepared_json = {
-            task_id: execution_result_json(completion.result)
-            for task_id, completion in normalized_by_id.items()
+            completion.task_id: prepared_results[id(completion.result)].text
+            for completion in completions
         }
         prepared_artifacts = {
             task_id: task_artifact_rows(

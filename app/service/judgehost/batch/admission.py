@@ -12,6 +12,7 @@ from app.service.judgehost.batch.model import (
     StatusCounts,
 )
 from app.service.judgehost.batch.snapshot import case_snapshot
+from app.service.judgehost.cache.policy import CaseCachePolicy
 from app.service.judgehost.domjudge.identity import script_id
 from app.service.judgehost.domjudge.identity import job_id, submit_id
 
@@ -234,6 +235,14 @@ class BatchAdmission:
             entity_ids = self._state._next_entity_ids_locked(len(cases) + 1)
             batch_id = entity_ids[0]
             batch = ExecutionBatchRecord(
+                cache_policy=CaseCachePolicy.from_config(
+                    compile_config_json=compile_config_json,
+                    run_config_json=run_config_json,
+                    compare_config_json=compare_config_json,
+                    expected_behavior=expected_behavior,
+                    verification_source=verification_source,
+                    bypass=bypass_case_result_cache,
+                ),
                 batch_id=batch_id,
                 verification_program_id=verification_program_id,
                 execution_signature=str(execution_signature),

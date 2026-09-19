@@ -13,7 +13,7 @@ from app.service.judgehost.domjudge.result import (
     rewrite_untrusted_runresult,
     verdict_from_runresult,
 )
-from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
+from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobLookup, RuntimeBlobStore
 from app.service.platform.runtime_cache_index import (
     RuntimeCacheConflictError,
     RuntimeCacheIndex,
@@ -39,7 +39,7 @@ class CaseCacheLookup:
     compare_config_hash: str
     toolchain_cmd_digest: str
     testcase_hash: str
-    run_config: dict[str, object]
+    run_config: Mapping[str, object]
     expected_behavior: str
     main_correct: bool
     requires_output: bool
@@ -79,10 +79,12 @@ class CaseResultCache:
         if lookup.bypass:
             self.delete(key_hash, signature)
             return None
+        blobs = RuntimeBlobLookup(self._blobs)
         entry = self._index.get(
             namespace=RuntimeCacheIndex.RESULT,
             key_hash=key_hash,
             signature=signature,
+            blob_lookup=blobs,
         )
         if entry is None:
             return None
@@ -111,7 +113,7 @@ class CaseResultCache:
         if not isinstance(result, ExecutionResult):
             self.delete(key_hash, signature)
             return None
-        if any(self._blobs.descriptor(token) is None for token in result.artifact_refs()):
+        if any(blobs.descriptor(token) is None for token in result.artifact_refs()):
             self.delete(key_hash, signature)
             return None
         if verdict == "OK" and lookup.expected_behavior != "compile" and not result.output_run_ref:

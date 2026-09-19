@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from app.db import now_iso
 from app.service.platform.hashing import canonical_json, sha256_hex_text
-from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
+from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobLookup, RuntimeBlobStore
 
 
 _HEX_64_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -124,14 +124,17 @@ class RuntimeCacheIndex:
                 self._entries[key] = entry
             return entry
 
-    def get(self, *, namespace: str, key_hash: str, signature: str) -> RuntimeCacheEntry | None:
+    def get(
+        self, *, namespace: str, key_hash: str, signature: str,
+        blob_lookup: RuntimeBlobLookup | None = None,
+    ) -> RuntimeCacheEntry | None:
         key = self._entry_key(namespace, key_hash, signature)
         with self.key_lock(*key):
             with self._entries_guard:
                 entry = self._entries.get(key)
             if entry is None:
                 return None
-            if self._entry_is_valid(entry):
+            if self._entry_is_valid(entry, blob_lookup=blob_lookup):
                 return entry
             with self._entries_guard:
                 self._entries.pop(key, None)
@@ -155,9 +158,12 @@ class RuntimeCacheIndex:
         with self._entries_guard:
             self._entries.clear()
 
-    def _entry_is_valid(self, entry: RuntimeCacheEntry) -> bool:
+    def _entry_is_valid(
+        self, entry: RuntimeCacheEntry, *, blob_lookup: RuntimeBlobLookup | None = None,
+    ) -> bool:
+        lookup = RuntimeBlobLookup(self._blob_store) if blob_lookup is None else blob_lookup
         for payload in entry.files.values():
-            descriptor = self._blob_store.descriptor(payload.blob_ref or "")
+            descriptor = lookup.descriptor(payload.blob_ref or "")
             if descriptor is None or descriptor.size != payload.size:
                 return False
         return True

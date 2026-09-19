@@ -1,5 +1,4 @@
 import logging
-import re
 import time
 from collections.abc import Callable
 from contextlib import nullcontext
@@ -9,12 +8,8 @@ from app.service.execution.limits import VERIFICATION_RUNTIME_BATCH_SIZE
 from app.service.judgehost.domjudge.identity import script_id
 from app.service.judgehost.ports.case_binding import CaseBinding
 from app.service.judgehost.domjudge.identity import submit_id
-from app.service.judgehost.domjudge.codec import decode_json_object, decode_text
-from app.service.judgehost.domjudge.result import (
-    parse_bool,
-)
+from app.service.judgehost.domjudge.codec import decode_text
 from app.service.judgehost.domjudge.scripts import DomjudgeScriptCatalog
-from app.service.platform.runtime_cache_index import RuntimeCacheIndex
 from app.service.platform.maintenance.admission import MaintenanceAdmissionGate
 
 from app.service.judgehost.validation import normalize_judgehost_hostname
@@ -34,7 +29,7 @@ from app.service.judgehost.dispatch.model import (
     HostRegistrationOutcome,
 )
 from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
-from app.service.judgehost.batch.model import ExecutionBatchRow, LeaseClaim
+from app.service.judgehost.batch.model import CaseResult, ExecutionBatchRow, JudgehostCaseRow, LeaseClaim
 from app.service.judgehost.task.registry import JudgehostTaskRegistry
 from app.service.judgehost.ports.completion import CaseLeaseSink
 
@@ -45,7 +40,6 @@ class JudgehostDispatch:
     STATUS_LEASED = "leased"
     STATUS_ENQUEUING = "enqueuing"
     _TASK_KIND_COMPILE_ONLY = "compile-only"
-    _TASK_KIND_MAIN_CORRECT = "main-correct"
     _CACHE_PROBE_BUDGET_SEC = 0.25
     _ADMISSION_LOCK_TIMEOUT_SEC = 0.05
     _COORDINATOR_CACHE_OWNER = "verification-coordinator-cache"
@@ -90,13 +84,10 @@ class JudgehostDispatch:
     def _try_cache_shortcut(
         self,
         *,
-        batch_row,
-        case_row,
-        compile_config_hash: str,
-        run_config_hash: str,
-        compare_config_hash: str,
+        batch_row: ExecutionBatchRow,
+        case_row: JudgehostCaseRow,
         toolchain_cmd_digest: str,
-    ):
+    ) -> CaseResult | None:
         testcase_hash = case_row["testcase_hash"]
         if not testcase_hash:
             raise RuntimeError(
@@ -110,27 +101,23 @@ class JudgehostDispatch:
             raise RuntimeError(
                 f"missing testcase_answer_hash for DOMjudge case {int(case_row['id'])}"
             )
-        expected_behavior = batch_row["expected_behavior"] or "unknown"
-        verification_source = batch_row["verification_source"]
-        main_correct = verification_source == self._TASK_KIND_MAIN_CORRECT
+        policy = batch_row["cache_policy"]
         return self._case_result_cache.lookup(
             CaseCacheLookup(
                 source_hash=batch_row["source_hash"],
                 compile_hash=batch_row["compile_hash"],
                 run_hash=batch_row["run_hash"],
                 compare_hash=batch_row["compare_hash"],
-                compile_config_hash=compile_config_hash,
-                run_config_hash=run_config_hash,
-                compare_config_hash=compare_config_hash,
+                compile_config_hash=policy.compile_config_hash,
+                run_config_hash=policy.run_config_hash,
+                compare_config_hash=policy.compare_config_hash,
                 toolchain_cmd_digest=toolchain_cmd_digest,
                 testcase_hash=testcase_hash,
-                run_config=decode_json_object(batch_row["run_config_json"]),
-                expected_behavior=expected_behavior,
-                main_correct=main_correct,
-                requires_output=(main_correct or "generate-input" in verification_source),
-                bypass=parse_bool(
-                    batch_row["bypass_case_result_cache"], default=False
-                ),
+                run_config=policy.run_config,
+                expected_behavior=policy.expected_behavior,
+                main_correct=policy.main_correct,
+                requires_output=policy.requires_output,
+                bypass=policy.bypass,
             )
         )
 
@@ -216,14 +203,8 @@ class JudgehostDispatch:
         batch_row = self._batch_runtime.fetch_batch(batch_id)
         if batch_row is None:
             return 0
-        compile_cfg = decode_json_object(batch_row["compile_config_json"])
-        run_cfg = decode_json_object(batch_row["run_config_json"])
-        compare_cfg = decode_json_object(batch_row["compare_config_json"])
-        compile_config_hash = RuntimeCacheIndex.signature(compile_cfg)
-        run_config_hash = RuntimeCacheIndex.signature(run_cfg)
-        compare_config_hash = RuntimeCacheIndex.signature(compare_cfg)
-        toolchain_cmd_digest = decode_text(raw=compile_cfg.get("toolchain_cmd_digest"))
-        if re.fullmatch(r"[0-9a-f]{64}", toolchain_cmd_digest) is None:
+        toolchain_cmd_digest = batch_row["cache_policy"].toolchain_cmd_digest
+        if not toolchain_cmd_digest:
             toolchain_cmd_digest = self._scripts.toolchain_cmd_digest(
                 settings,
                 batch_row["source_name"]
@@ -258,9 +239,6 @@ class JudgehostDispatch:
                 shortcut = self._try_cache_shortcut(
                     batch_row=batch_row,
                     case_row=row,
-                    compile_config_hash=compile_config_hash,
-                    run_config_hash=run_config_hash,
-                    compare_config_hash=compare_config_hash,
                     toolchain_cmd_digest=toolchain_cmd_digest,
                 )
             except Exception:
