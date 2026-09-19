@@ -31,6 +31,7 @@
   <tr class="{{ 'verification-row-failed' if r.is_failed else '' }}">
     <td class="verification-list-created-cell">
       <a href="{{ problem_href('run_details_page', query={'verification_id': r.id}) }}"><span class="verification-list-created-date">{{ created_parts[0] }}</span>{% if created_parts|length > 1 %} <span class="verification-list-created-time">{{ created_parts[1] }}</span>{% endif %}</a>
+      <div class="muted">{{ r.duration_display }}</div>
     </td>
     <td class="verification-list-source-cell">{{ r.source_display }}</td>
     <td class="verification-list-kind-cell">{{ r.kind }}</td>

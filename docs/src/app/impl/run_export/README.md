@@ -11,3 +11,8 @@ cells, diagnostics and artifact previews for both complete pages and fragments.
 Malformed persisted mode produces unavailable sample evidence. Fragment reads do
 not refresh Git status or normalize authored builds. Complete workspace pages use
 the authoring context, including its status refresh and build normalization.
+
+The verification list retains its Created timestamp and displays elapsed time
+below it. Active verifications use the server's current time at page render;
+terminal verifications use their persisted finish time. Duration includes time
+since creation and is shown in seconds or minutes and seconds.

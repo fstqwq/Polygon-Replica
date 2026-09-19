@@ -1,4 +1,5 @@
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.impl.auth.shared import parse_iso_utc
@@ -114,6 +115,18 @@ def _list_reason_display(raw: object) -> tuple[str, str]:
     return (display_text, title_text)
 
 
+def _list_duration_display(created_at: str, finished_at: str, *, running: bool) -> str:
+    start = parse_iso_utc(created_at)
+    end = datetime.now(timezone.utc) if running else parse_iso_utc(finished_at)
+    prefix = "Running for" if running else "Ran for"
+    if start is None or end is None:
+        return f"{prefix} n/a"
+    seconds = max(0, int((end - start).total_seconds()))
+    minutes, seconds = divmod(seconds, 60)
+    duration = f"{minutes}m {seconds}s" if minutes else f"{seconds}s"
+    return f"{prefix} {duration}"
+
+
 def _verification_row_to_list_item(
     row: dict[str, object],
     *,
@@ -138,13 +151,18 @@ def _verification_row_to_list_item(
         status_display = "ok (sanity failed)"
     if not access["can_view"]:
         return None
+    created_at = str(row.get("created_at") or "")
+    finished_at = str(row.get("finished_at") or "")
     return {
         "index": 0,
         "id": verification_id,
         "verification_id": verification_id,
         "kind": str(row.get("kind") or ""),
-        "created_at": str(row.get("created_at") or ""),
-        "finished_at": str(row.get("finished_at") or ""),
+        "created_at": created_at,
+        "finished_at": finished_at,
+        "duration_display": _list_duration_display(
+            created_at, finished_at, running=status == "running",
+        ),
         "status": status,
         "status_display": status_display,
         "status_tone": "warn" if status == "ok" and sanity_attention else status,
