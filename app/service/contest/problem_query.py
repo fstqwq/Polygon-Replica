@@ -358,9 +358,7 @@ class ContestProblemQueryService:
                 tests_valid=source_state["tests_valid"],
                 solution_count=solution_count,
                 solutions_truncated=solutions_truncated,
-                main_solution_ready=bool(
-                    build.get("accepted_solution_source")
-                ),
+                main_solution_ready=build.get("accepted_solution_source") in all_solutions,
                 output_component_label=output_label,
                 output_component_display=output_display,
                 output_component_ready=output_ready,

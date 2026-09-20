@@ -22,7 +22,9 @@ Committed problem source is owned by Git. A published problem is the commit at t
 | `mode` | `pass-fail` or `interactive` | `pass-fail` |
 | `pass_limit` | 1 through 64 | 1 |
 
-The service writes these defaults when it creates a new problem. Strict source consumers reject a missing field, an authored value outside its range, or a missing or malformed file; they do not clamp or guess. Authoring pages show configuration errors under Review and Publish and use defaults only to keep the editor operable. Saving the General form writes one complete canonical object. Verification, package export, contest package downloads, and native package construction reject invalid source at their entrance. Execution dispatches accepted values without another memory floor.
+The service writes these defaults when it creates a new problem. Strict source consumers reject a missing field, an authored value outside its range, or a missing or malformed file; they do not clamp or guess. Authoring pages use defaults to keep the editor operable when configuration is invalid. Saving the General form writes one complete canonical object. Verification, package export, contest package downloads, and native package construction reject invalid source at their entrance. Execution dispatches accepted values without another memory floor.
+
+Authoring inspection reads `config/problem.json`, `config/build.json`, and `tests/spec.json` for configuration diagnostics. Writable authoring pages also normalize recognized obsolete build fields. Workspace Review and Contest content review combine these diagnostics with component availability checks. Complete filesystem, testcase payload, and generator-reference validation belongs to verification, package import, and package construction workflows.
 
 `config/build.json` is a required UTF-8 JSON object. Its fields and constraints are:
 
@@ -94,6 +96,8 @@ Judge input is not embedded in a test entry:
 | `gen` | `tests/generator/<id>.in` interpreted as a shell-word command. Its first token resolves a source selected by `generator_sources`; remaining tokens are its arguments. |
 
 A missing payload, unselected or missing generator, or ambiguous generator token invalidates the source tree. Files merely present below `generators/` are not executable inputs until selected. An empty `tests` array has no implicit discovery behavior; verification and native package construction require at least one explicit test.
+
+Generator tokens match selected sources by complete path, path relative to `generators/`, either path without its final extension, or filename. A token with no extension can also match a filename stem. All matching sources participate in ambiguity detection, including matches from different forms.
 
 The runtime generator input payload is the generator executable invocation plus its command parameters. Its execution identity and scheduling semantics are defined by the [execution protocol](execution.md). Configured source programs live under established roots such as `generators/`, `validators/`, `checkers/`, and `solutions/`; the generator's configured output-checking component is selected from `validators/`.
 

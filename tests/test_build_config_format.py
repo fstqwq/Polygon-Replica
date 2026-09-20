@@ -22,7 +22,7 @@ from app.service.problem.solution_metadata import (
     render_solution_desc,
 )
 from app.service.problem.source_tree import load_problem_source_tree
-from app.service.problem.test_spec import dumps_tests_spec, loads_tests_spec
+from app.service.problem.test_spec import GeneratorSourceResolver, dumps_tests_spec, loads_tests_spec
 
 
 _PROBLEM_LIMITS = ProblemConfigLimits(100, 30000, 1, 2048, 1, 64)
@@ -31,6 +31,41 @@ _SAMPLE_LIMIT = 32 * 1024
 
 
 class TestBuildConfigFormat(unittest.TestCase):
+    def test_generator_aliases_preserve_selection_and_ambiguity(self) -> None:
+        sources = (
+            "generators/gen.cpp", "generators/sub/gen.cpp",
+            "generators/sub/a.b.cpp", "generators/unique.cpp",
+            "generators/unique.cpp",
+        )
+        resolver = GeneratorSourceResolver(sources)
+        for token, expected in (
+            ("generators/gen.cpp", sources[0]),
+            ("generators/gen", sources[0]),
+            ("sub/gen.cpp", sources[1]),
+            ("././sub\\gen", sources[1]),
+            ("sub/a.b", sources[2]),
+            ("a.b.cpp", sources[2]),
+            ("unique", sources[3]),
+            ("unique.cpp", sources[3]),
+        ):
+            with self.subTest(token=token):
+                self.assertEqual(resolver.resolve(token), expected)
+        for token, error in (
+            ("gen", "ambiguous"), ("gen.cpp", "ambiguous"),
+            ("a.b", "not selected"), ("other", "not selected"),
+            ("", "invalid"), ("../gen", "invalid"),
+            ("sub//gen", "invalid"), ("sub/./gen", "invalid"),
+            ("sub/../gen", "invalid"), ("/gen", "invalid"),
+        ):
+            with self.subTest(token=token), self.assertRaisesRegex(ValueError, error):
+                resolver.resolve(token)
+        self.assertEqual(
+            GeneratorSourceResolver(("generators/a.b.cpp",)).resolve("a.b"),
+            "generators/a.b.cpp",
+        )
+        with self.assertRaisesRegex(ValueError, "not selected"):
+            GeneratorSourceResolver(()).resolve("unique")
+
     def test_build_config_dump_uses_schema_key_order(self) -> None:
         config = BuildConfig(generator_sources=[])
         config.update(
@@ -209,6 +244,44 @@ class TestBuildConfigFormat(unittest.TestCase):
                 (root / "config/build.json").read_text(encoding="utf-8"),
                 invalid_text,
             )
+
+    def test_authoring_reads_configuration_while_strict_consumers_validate_payloads(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="authoring-config-") as raw:
+            root = Path(raw)
+            (root / "config").mkdir()
+            (root / "tests/manual").mkdir(parents=True)
+            problem = ProblemConfig(
+                time_limit_ms=2000, memory_limit_mb=1024,
+                mode="pass-fail", pass_limit=1,
+            )
+            tests = [{
+                "id": "001", "kind": "manual", "sample": False,
+                "sample_input": "", "sample_output": "",
+                "sample_output_validate": True, "sample_json": None,
+            }]
+            (root / "config/problem.json").write_text(
+                dumps_problem_config(problem, limits=_PROBLEM_LIMITS), encoding="utf-8",
+            )
+            (root / "config/build.json").write_text("{}\n", encoding="utf-8")
+            (root / "tests/spec.json").write_text(json.dumps({"tests": tests}), encoding="utf-8")
+            (root / "tests/manual/001.in").write_bytes(b"\xff")
+
+            state = inspect_authoring_source(
+                root, problem_limits=_PROBLEM_LIMITS,
+                tests_spec_max_bytes=_DOCUMENT_LIMIT,
+                statement_sample_max_bytes=_SAMPLE_LIMIT, allow_repair=False,
+            )
+            self.assertEqual(state["problem"], problem)
+            self.assertEqual(state["build"], {"generator_sources": []})
+            self.assertEqual(state["tests"], tests)
+            self.assertTrue(state["tests_valid"])
+            self.assertEqual(state["issues"], [])
+            with self.assertRaisesRegex(ValueError, "tests/manual/001.in: must be UTF-8"):
+                load_problem_source_tree(
+                    root, problem_limits=_PROBLEM_LIMITS,
+                    tests_spec_max_bytes=_DOCUMENT_LIMIT,
+                    statement_sample_max_bytes=_SAMPLE_LIMIT,
+                )
 
     def test_authoring_reports_pass_fail_interactor_without_losing_selections(
         self,

@@ -23,11 +23,11 @@ from app.service.problem.source_file import (
     validate_source_tree_filesystem,
 )
 from app.service.problem.test_spec import (
+    GeneratorSourceResolver,
     TestSpecEntry,
     load_tests_spec,
     parse_gen_command_tokens,
     payload_rel_path_for_test,
-    resolve_generator_source,
 )
 
 
@@ -118,6 +118,7 @@ def validate_problem_source_tree(
     for relative in selected_sources:
         require_regular_source_file(root, relative)
 
+    generator_resolver = GeneratorSourceResolver(generator_sources)
     for entry in tests:
         relative = payload_rel_path_for_test(entry["id"], entry["kind"])
         payload_path = require_regular_source_file(root, relative)
@@ -129,7 +130,7 @@ def validate_problem_source_tree(
             raise ValueError(f"{relative}: cannot read file: {exc}") from exc
         if entry["kind"] == "gen":
             tokens = parse_gen_command_tokens(payload)
-            resolve_generator_source(tokens[0], generator_sources)
+            generator_resolver.resolve(tokens[0])
 
     behaviors: dict[str, ExpectedBehavior] = {}
     for relative in solution_sources(root):

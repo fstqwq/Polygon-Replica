@@ -1,4 +1,8 @@
+from pathlib import Path
+
 from fastapi import HTTPException
+
+from app.service.problem.build_config import dumps_build_config, load_build_config
 
 from tests.contest_support import ContestActionBase
 from tests.db_helpers import db_fetch_all
@@ -22,6 +26,49 @@ class TestContestProblemActions(ContestActionBase):
         problem_id = workspace_service.known_problem_id(problem_slug)
         self.assertIsNotNone(problem_id)
         return int(problem_id), problem_slug
+
+    def test_contest_review_reports_deleted_main_solution_without_changing_source(self) -> None:
+        _contest_slug, contest_id, actor_user_id = self.create_contest("missing-main")
+        _row_id, _problem_id, slug = self.add_owned_problem(
+            contest_id, actor_user_id, "A", "missing-main",
+        )
+        workspace = Path(workspace_service.ensure_workspace(slug, "alice"))
+        main_source = "solutions/review-main.cpp"
+        main_path = workspace / main_source
+        main_path.parent.mkdir(parents=True, exist_ok=True)
+        main_path.write_text("int main() {}\n", encoding="utf-8")
+        (workspace / "solutions/other.cpp").write_text("int main() {}\n", encoding="utf-8")
+        build = load_build_config(workspace)
+        build["accepted_solution_source"] = main_source
+        (workspace / "config/build.json").write_text(
+            dumps_build_config(build), encoding="utf-8",
+        )
+        main_path.unlink()
+        source_before = {
+            path.relative_to(workspace): path.read_bytes()
+            for path in workspace.rglob("*")
+            if ".git" not in path.relative_to(workspace).parts and path.is_file()
+        }
+
+        rows = runtime.contest_problem_query_service.problem_rows(
+            contest_id, "alice", actor_user_id, include_review=True,
+        )
+
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["details_available"])
+        review = rows[0]["content_review"]
+        self.assertIsNotNone(review)
+        assert review is not None
+        self.assertEqual(review["solutions"]["tone"], "danger")
+        self.assertIn(review["solutions"], review["warnings"])
+        self.assertEqual(
+            {
+                path.relative_to(workspace): path.read_bytes()
+                for path in workspace.rglob("*")
+                if ".git" not in path.relative_to(workspace).parts and path.is_file()
+            },
+            source_before,
+        )
 
     def test_build_all_packages_persists_jobs_for_each_published_problem(self) -> None:
         contest_slug, contest_id, actor_user_id = self.create_contest("build-all")

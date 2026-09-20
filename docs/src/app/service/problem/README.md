@@ -2,7 +2,9 @@
 
 Owns interpretation of authored problem source: build configuration, runtime limits, test specification, solution metadata, content review, readiness, and UI read models.
 
-Strict source codecs protect verification and export admission. Authoring read models keep malformed or incomplete workspaces editable while reporting their errors. Git publication, execution, and derived package production belong to other services.
+Strict source codecs protect verification, import, and package workflows. Authoring read models return configuration diagnostics and normalized page inputs, including safe repair of recognized obsolete build fields. Component projections supply file availability and generator usage. Git publication, execution, and derived package production belong to other services.
+
+Generator resolution builds an alias index from the selected source list once per operation. Repeated testcase lookups share the index during that operation.
 
 Single-file Java entry-point detection is shared source interpretation used by judgehost preparation and external-package adapters.
 

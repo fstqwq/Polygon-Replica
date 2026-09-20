@@ -9,10 +9,10 @@ from app.impl.workspace.context_model import (
 )
 from app.service.problem.build_config import BuildConfig
 from app.service.problem.test_spec import (
+    GeneratorSourceResolver,
     TestSpecEntry,
     generator_source_paths,
     parse_gen_command_tokens,
-    resolve_generator_source,
 )
 from app.impl.workspace.context_operation import (
     read_build_config,
@@ -53,6 +53,7 @@ def _generator_reference_counts(
     counts = {path: 0 for path in source_catalog}
     if not source_catalog:
         return counts
+    generator_resolver = GeneratorSourceResolver(source_catalog)
     for row in tests:
         if row.get('kind') != 'gen':
             continue
@@ -67,7 +68,7 @@ def _generator_reference_counts(
         except Exception:
             continue
         try:
-            resolved = resolve_generator_source(tokens[0], source_catalog)
+            resolved = generator_resolver.resolve(tokens[0])
         except ValueError:
             continue
         counts[resolved] = counts.get(resolved, 0) + 1

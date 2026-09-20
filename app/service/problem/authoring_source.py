@@ -1,4 +1,4 @@
-"""Fault-tolerant source inspection for problem authoring pages."""
+"""Fault-tolerant configuration inspection for problem authoring pages."""
 
 from pathlib import Path
 from typing import Literal, TypedDict
@@ -19,7 +19,6 @@ from app.service.problem.runtime_config import (
     load_problem_config,
 )
 from app.service.problem.source_file import require_regular_source_file
-from app.service.problem.source_tree import validate_problem_source_tree
 from app.service.problem.test_spec import (
     TESTS_SPEC_REL,
     TestSpecEntry,
@@ -98,9 +97,9 @@ def inspect_authoring_source(
     allow_repair: bool,
     published_build_text: str | None = None,
 ) -> AuthoringSourceState:
-    """Return complete page inputs while preserving strict consumer checks.
+    """Read authored configuration and collect its diagnostics for display.
 
-    Invalid authoring files become diagnostics and page-local defaults. Known
+    Invalid configuration becomes diagnostics and page-local defaults. Known
     obsolete build fields are safely removed for writable workspaces. The
     strict source-tree loader remains the final authority for Verification,
     Export, Contest package downloads, and package materialization.
@@ -118,7 +117,6 @@ def inspect_authoring_source(
     problem_mode = problem["mode"] if problem_valid else None
     build_result = _build_result(root, problem_mode=problem_mode)
     build = build_result["config"]
-    build_valid = not build_result["error"]
     build_normalized = False
     if build_result["error"]:
         _append_issue(issues, build_result["error"], "danger")
@@ -148,7 +146,6 @@ def inspect_authoring_source(
                 build_normalized = True
                 _append_issue(issues, message, "warning")
             except OSError as exc:
-                build_valid = False
                 _append_issue(
                     issues,
                     f"config/build.json: cannot write normalized configuration: {exc}",
@@ -186,21 +183,6 @@ def inspect_authoring_source(
     except ValueError as exc:
         tests_valid = False
         _append_issue(issues, str(exc), "danger")
-
-    if (
-        problem_valid
-        and build_valid
-        and tests_valid
-    ):
-        try:
-            validate_problem_source_tree(
-                root,
-                problem=problem,
-                build=build,
-                tests=tuple(tests),
-            )
-        except ValueError as exc:
-            _append_issue(issues, str(exc), "danger")
 
     return {
         "problem": problem,

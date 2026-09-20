@@ -4,6 +4,10 @@ from urllib.parse import parse_qs, urlsplit
 from fastapi.testclient import TestClient
 
 from tests.common import E2ETestBase, runtime
+
+from app.impl.workspace.context_component_status import generator_status_context
+from app.service.problem.build_config import BuildConfig
+from app.service.problem.test_spec import TestSpecEntry
 from tests.ui_support import (
     Path,
     UIHelpersMixin,
@@ -37,6 +41,30 @@ from tests.ui_support import (
 class TestUIComponents(UIHelpersMixin, E2ETestBase):
     seed_primary_workspace = True
     seed_default_workspace = False
+
+    def test_generator_usage_counts_valid_commands_after_invalid_entries(self) -> None:
+        ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
+        source = "generators/selected.cpp"
+        unselected = "generators/unselected.cpp"
+        for relative in (source, unselected):
+            (ws / relative).write_text("int main() {}\n", encoding="utf-8")
+        entries: list[TestSpecEntry] = []
+        for index, command in enumerate(("'bad", "unselected", "selected 1", "./selected.cpp 2"), start=1):
+            test_id = f"{index:03d}"
+            entries.append({
+                "id": test_id, "kind": "gen", "sample": False,
+                "sample_input": "", "sample_output": "",
+                "sample_output_validate": True, "sample_json": None,
+            })
+            payload = ws / f"tests/generator/{test_id}.in"
+            payload.parent.mkdir(parents=True, exist_ok=True)
+            payload.write_text(command, encoding="utf-8")
+        status = generator_status_context(ws, entries, BuildConfig(generator_sources=[source]))
+        rows = {row["path"]: row for row in status["source_rows"]}
+        self.assertEqual(rows[source]["reference_count"], 2)
+        self.assertTrue(rows[source]["configured"])
+        self.assertEqual(rows[unselected]["reference_count"], 0)
+        self.assertFalse(rows[unselected]["configured"])
 
     @staticmethod
     def _update_build_config(ws: Path, **updates: str | list[str]) -> None:

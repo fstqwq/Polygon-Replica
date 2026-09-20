@@ -4,9 +4,9 @@ from pathlib import Path
 from typing import Literal, NotRequired, TypedDict
 
 from app.service.problem.test_spec import (
+    GeneratorSourceResolver,
     TestSpecEntry,
     payload_rel_path_for_test,
-    resolve_generator_source,
 )
 from app.service.problem.source_file import resolve_source
 
@@ -52,7 +52,7 @@ def prepare_tests_spec_runtime(
     runtime_entries: list[VerificationRuntimeTest] = []
     generator_targets: list[tuple[str, Path]] = []
     by_source_rel: dict[str, str] = {}
-    selected_sources = tuple(generator_sources)
+    generator_resolver = GeneratorSourceResolver(tuple(generator_sources))
     for index, row in enumerate(tests_spec_entries, start=1):
         kind = row["kind"]
         test_id = row["id"]
@@ -84,7 +84,7 @@ def prepare_tests_spec_runtime(
         except ValueError as exc:
             raise RuntimeError(str(exc)) from exc
         try:
-            source_rel = resolve_generator_source(tokens[0], selected_sources)
+            source_rel = generator_resolver.resolve(tokens[0])
             source_path = resolve_source(snapshot, source_rel)
         except ValueError as exc:
             raise RuntimeError(str(exc)) from exc

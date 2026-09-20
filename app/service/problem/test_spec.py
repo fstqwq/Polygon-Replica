@@ -183,41 +183,42 @@ def generator_source_paths(root: Path) -> list[str]:
     return sorted(sources)
 
 
-def resolve_generator_source(token: str, source_paths: tuple[str, ...]) -> str:
-    raw = token.replace("\\", "/")
-    while raw.startswith("./"):
-        raw = raw[2:]
-    if not raw or any(part in {"", ".", ".."} for part in raw.split("/")):
-        raise ValueError(f"invalid generator command source '{token}'")
-    token_path = PurePosixPath(raw)
-    matches: list[str] = []
-    for source in source_paths:
-        source_path = PurePosixPath(source)
-        without_root = source.removeprefix("generators/")
-        suffix_length = len(source_path.suffix)
-        source_without_suffix = source[:-suffix_length] if suffix_length else source
-        without_root_suffix = (
-            without_root[:-suffix_length] if suffix_length else without_root
-        )
-        if raw in {
-            source,
-            without_root,
-            source_without_suffix,
-            without_root_suffix,
-        }:
-            matches.append(source)
-            continue
-        if "/" not in raw and (
-            token_path.name == source_path.name
-            or (not token_path.suffix and token_path.name == source_path.stem)
-        ):
-            matches.append(source)
-    unique = list(dict.fromkeys(matches))
-    if not unique:
-        raise ValueError(f"generator source is not selected: {token}")
-    if len(unique) > 1:
-        raise ValueError(f"generator source is ambiguous: {token}")
-    return unique[0]
+class GeneratorSourceResolver:
+    """Resolve commands against one operation's selected generator sources."""
+
+    def __init__(self, source_paths: tuple[str, ...]) -> None:
+        self._sources_by_alias: dict[str, str | None] = {}
+        for source in source_paths:
+            source_path = PurePosixPath(source)
+            without_root = source.removeprefix("generators/")
+            suffix_length = len(source_path.suffix)
+            aliases = {
+                source,
+                without_root,
+                source[:-suffix_length] if suffix_length else source,
+                without_root[:-suffix_length] if suffix_length else without_root,
+                source_path.name,
+            }
+            stem = source_path.stem
+            if not PurePosixPath(stem).suffix:
+                aliases.add(stem)
+            for alias in aliases:
+                previous = self._sources_by_alias.setdefault(alias, source)
+                if previous != source:
+                    self._sources_by_alias[alias] = None
+
+    def resolve(self, token: str) -> str:
+        raw = token.replace("\\", "/")
+        while raw.startswith("./"):
+            raw = raw[2:]
+        if not raw or any(part in {"", ".", ".."} for part in raw.split("/")):
+            raise ValueError(f"invalid generator command source '{token}'")
+        if raw not in self._sources_by_alias:
+            raise ValueError(f"generator source is not selected: {token}")
+        source = self._sources_by_alias[raw]
+        if source is None:
+            raise ValueError(f"generator source is ambiguous: {token}")
+        return source
 
 
 def normalize_gen_command(raw: object) -> str:
