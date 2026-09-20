@@ -13,6 +13,9 @@ A cache lookup can share a short-lived blob lookup between its entry and artifac
 checks. It resolves each reference once while checking every expected file size.
 The domain caller discards this lookup when the operation returns.
 
+The static asset manifest validates root confinement and constructs fingerprinted
+URLs at startup. Template rendering looks up those immutable URLs directly.
+
 Worker state, cache indexes, locks, and admission state are process-local. Runtime blobs are content-addressed files below the cache root. Startup resets both. Source backup and generated-data cleanup run under the exclusive maintenance gate.
 
 Maintenance operations expose typed progress and outcome records, including partial

@@ -70,15 +70,7 @@ def normalize_display_text(
     text = sanitize_log_text_for_ui(str(raw or ""), path_prefixes=path_prefixes)
     if not text:
         return ""
-    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    normalized_lines = [str(line or "").rstrip() for line in lines]
-    while normalized_lines and (not normalized_lines[0].strip()):
-        normalized_lines.pop(0)
-    while normalized_lines and (not normalized_lines[-1].strip()):
-        normalized_lines.pop()
-    if not normalized_lines:
-        return ""
-    return "\n".join(normalized_lines)
+    return "\n".join(line.rstrip() for line in text.split("\n")).strip("\n")
 
 
 def truncate_utf8_text_bytes(

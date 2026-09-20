@@ -104,10 +104,14 @@ class TestPublicContracts(unittest.TestCase):
         from app.service.platform.static_assets import StaticAssetManifest
 
         with tempfile.TemporaryDirectory() as temporary_directory:
-            static_root = Path(temporary_directory)
+            static_root = Path(temporary_directory) / "static"
+            static_root.mkdir()
             asset_path = static_root / "nested" / "space +&#%.js"
             asset_path.parent.mkdir()
             asset_path.write_bytes(b"first version")
+            outside = Path(temporary_directory) / "private.txt"
+            outside.write_bytes(b"outside static root")
+            (static_root / "external.js").symlink_to(outside)
             expected_digest = hashlib.sha256(b"first version").hexdigest()[:12]
 
             manifest = StaticAssetManifest(static_root)
@@ -131,6 +135,7 @@ class TestPublicContracts(unittest.TestCase):
                 "../file.js",
                 "nested\\file.js",
                 "missing.js",
+                "external.js",
             ]:
                 with self.subTest(invalid_path=invalid_path):
                     with self.assertRaises(ValueError):
