@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import TypedDict
 
 from app.service.platform.error_text import bounded_display_text
-from app.service.verification.result_match import verification_solution_match
+from app.service.verification.result_match import analyze_program_result
 from app.service.verification.types import VerificationTaskRow
 from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.types import VerificationTaskStatus
@@ -86,11 +86,8 @@ def verification_task_failure_hint(
             ],
             "error": next((row["error_text"] for row in rows if row["error_text"]), ""),
         }
-        _matched, completed, _passed, reason = verification_solution_match(
-            first["expected_behavior"],
-            _task_status(rows),
-            summary,
-        )
+        analysis = analyze_program_result(_task_status(rows), summary)
+        _matched, completed, _passed, reason = analysis.match(first["expected_behavior"])
         error_text = str(summary["error"])
         if completed and reason:
             return verification_solution_failure_hint(

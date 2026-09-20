@@ -2,11 +2,6 @@ from collections.abc import Sequence
 
 from app.impl.workspace.run_view_model import RunFailureReason
 from app.service.verification.failure_display import verification_solution_failure_hint
-from app.service.verification.types import VerificationProgramSummaryFields
-from app.service.verification.result_match import (
-    run_actual_failed_codes,
-    run_actual_short,
-)
 
 
 _COMPILE_ERROR_VALUES = {"compile_error", "compile error", "ce"}
@@ -21,13 +16,6 @@ def run_error_display(error: str) -> str:
     if _is_compile_error(error):
         return "CE"
     return error
-
-
-def run_actual_display(run_status: str, summary: VerificationProgramSummaryFields | None) -> str:
-    failed_codes = run_actual_failed_codes(run_status, summary)
-    if failed_codes:
-        return "/".join(failed_codes)
-    return run_actual_short(run_status, summary)
 
 
 def run_memory_mb_text(memory_kb: int) -> str:

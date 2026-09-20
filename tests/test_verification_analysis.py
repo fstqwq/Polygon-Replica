@@ -6,8 +6,7 @@ from app.service.verification.boundary_coverage import boundary_coverage_from_fe
 from app.service.verification.runtime_threshold import evaluate_summary_runtime_threshold
 from app.service.verification.plan import VerificationTestPlan
 from app.service.verification.result_match import (
-    run_actual_short,
-    verification_solution_match,
+    analyze_program_result,
     verification_verdict_match,
 )
 from app.service.platform.runtime_blob_store import PayloadFile
@@ -167,11 +166,8 @@ class TestVerificationAnalysis(unittest.TestCase):
             expected_complete,
         ) in cases:
             with self.subTest(name=name):
-                matched, completed, _observed_pass, _reason = verification_solution_match(
-                    expected_behavior,
-                    run_status,
-                    summary,
-                )
+                analysis = analyze_program_result(run_status, summary)
+                matched, completed, _observed_pass, _reason = analysis.match(expected_behavior)
                 self.assertEqual(matched, expected_match)
                 self.assertEqual(completed, expected_complete)
 
@@ -197,16 +193,62 @@ class TestVerificationAnalysis(unittest.TestCase):
                 self.assertEqual(completed, expected_complete)
 
     def test_actual_result_uses_terminal_evidence_instead_of_lifecycle_status(self) -> None:
-        self.assertEqual(
-            run_actual_short(
+        cases = (
+            (
                 "failed",
                 {
                     "tests_total": 2,
                     "tests": [{"verdict": "AC"}, {"verdict": "AC"}],
                 },
+                "accepted", "AC", "AC", (True, True, True, ""),
             ),
-            "AC",
+            (
+                "ok", {"tests": [{"verdict": "WA"}, {"verdict": "TL"}, {"verdict": "RE"}]},
+                "rejected", "TL", "TL/RE/WA", (True, True, False, ""),
+            ),
+            (
+                "ok", {"tests": [{"verdict": "AC"}], "tests_total": 2, "tests_skipped": 1},
+                "accepted", "AC", "AC", (True, True, True, ""),
+            ),
+            (
+                "ok", {"tests": [{"verdict": "SK"}]},
+                "accepted", "AC", "AC", (True, True, True, ""),
+            ),
+            (
+                "failed", {"tests": [{"verdict": "WA"}], "tests_total": 2},
+                "wrong_answer", "WA", "WA", (False, False, False, ""),
+            ),
+            (
+                "failed", {"error": "compile_error", "tests": []},
+                "compile_error", "CE", "CE", (True, True, True, ""),
+            ),
+            (
+                "cancelled", {"tests": [{"verdict": "AC"}]},
+                "accepted", "--", "--", (False, False, False, ""),
+            ),
+            (
+                "running", {"tests": [{"verdict": "WA"}]},
+                "wrong_answer", "--", "--", (False, False, False, "running"),
+            ),
+            (
+                "failed", {"tests": ["invalid"]},
+                "unknown", "FL", "FL", (False, False, False, ""),
+            ),
+            (
+                "failed", {"tests": {"verdict": "AC"}},
+                "accepted", "FL", "FL", (False, False, False, ""),
+            ),
+            (
+                "ok", {"tests": [{"verdict": "AC"}], "tests_total": 2, "tests_skipped": True},
+                "accepted", "AC", "AC", (False, False, False, ""),
+            ),
         )
+        for status, summary, expected, short, display, match in cases:
+            with self.subTest(status=status, summary=summary):
+                analysis = analyze_program_result(status, summary)
+                self.assertEqual(analysis.short, short)
+                self.assertEqual(analysis.display, display)
+                self.assertEqual(analysis.match(expected), match)
 
     def test_runtime_threshold_marks_answer_correct_points(self) -> None:
         report = evaluate_summary_runtime_threshold(

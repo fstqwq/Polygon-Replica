@@ -153,14 +153,10 @@ class RunColumn(RunColumnBase, RunFailureReason):
     status: str
     created_at: str
     finished_at: str
-    has_run_row: bool
-    compile_log: str
     compile_diagnostics: list[DiagnosticEntry]
     error_display: str
     tests_total: int
-    tests_truncated: bool
     expected_behavior: str
-    expected_behavior_label: str
     expected_display: str
     expected_is_ac_only: bool
     got_short: str
@@ -238,7 +234,6 @@ class RunVerificationLogs(TypedDict):
     status: str
     error: str
     error_display: str
-    log_rows: list[dict[str, str]]
     diagnostics: list[DiagnosticEntry]
 
 
@@ -272,7 +267,6 @@ class RunDetailContext(TypedDict):
     detail_running: bool
     detail_last_updated: str
     detail_progress_total: int
-    detail_progress_reported: int
     detail_progress_placeholder_total: int
     detail_task_counts: TaskCounts
     detail_running_tasks: list[dict[str, str]]

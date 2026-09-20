@@ -19,7 +19,7 @@ from app.service.verification.lifecycle import (
     verification_task_id,
 )
 from app.service.verification.plan import VerificationTestPlan
-from app.service.verification.result_match import run_actual_failed_codes
+from app.service.verification.result_match import analyze_program_result
 from app.service.verification.sanity import SANITY_PENDING, SANITY_SKIPPED, planned_sanity_checks
 from app.service.verification.types import VerificationProgramSummary, VerificationRuntimeColumn, VerificationTaskRow
 from app.service.verification.types import Kind, VerificationStatus, VerificationTaskStatus
@@ -407,7 +407,7 @@ def runtime_threshold_columns_from_tasks(
             {
                 "source": program.source_path,
                 "summary": run_summary,
-                "summary_has_tl": "TL" in run_actual_failed_codes(run_status, run_summary),
+                "summary_has_tl": "TL" in analyze_program_result(run_status, run_summary).failed_codes,
             }
         )
     return columns

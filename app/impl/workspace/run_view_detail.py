@@ -17,14 +17,12 @@ from app.impl.workspace.context_run_detail import (
     _verification_status_summary,
     _run_rejudge_context_for_entries,
 )
-from app.impl.workspace.context_verification import normalize_program_id_token
 from app.service.judgehost.callback.runpipe_transcript import parse_runpipe_transcript
 from app.service.platform.error_text import bounded_display_text
 from app.service.platform.workspace_path import (
     normalize_optional_component_source_path_safe,
     normalize_workspace_rel_path,
 )
-from app.service.problem.solution_metadata import expected_behavior_label
 from app.service.verification.types import VerificationDetail, VerificationTaskRow
 from app.service.verification.detail_read_model import (
     VerificationProgramDetailRow,
@@ -51,11 +49,10 @@ from app.service.verification.types import (
 )
 import app.service.verification.read_model
 from app.service.verification.result_match import (
+    analyze_program_result,
     expected_status_rule,
-    run_actual_short,
     run_verdict_short,
     status_rule_expected_display,
-    verification_solution_match,
 )
 from app.service.verification.failure_display import verification_solution_failure_hint
 from app.impl.workspace.run_view_list import (
@@ -69,7 +66,6 @@ from app.impl.workspace.run_view_list import (
 )
 from app.impl.workspace.run_display import (
     rewrite_failure_reason_with_source,
-    run_actual_display,
     run_cpu_wall_ms_text,
     run_error_display,
     run_memory_mb_text,
@@ -1109,7 +1105,6 @@ def build_run_detail_context(
     requested_verification_id: str = "",
     include_row_details: bool = False,
     detail_test_name: str = "",
-    detail_program_id: str = "",
 ) -> RunDetailContext:
     display_limit = runtime().config_values.integer("AUX_DISPLAY_TEXT_LIMIT_BYTES")
 
@@ -1231,7 +1226,6 @@ def build_run_detail_context(
             mode = "malformed"
         test_limit = max(1, runtime().config_values.integer("RUN_DETAIL_TEST_LIST_LIMIT"))
         tests_total = max(len(summary["tests"]), summary["tests_total"])
-        tests_truncated = tests_total > test_limit
         summary["tests"] = summary["tests"][:test_limit]
         detail_compile_diagnostics = _decorate_compile_diagnostics(_normalize_diagnostics(
             summary["compile_diagnostics"][:runtime().config_values.integer("RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT")],
@@ -1275,14 +1269,13 @@ def build_run_detail_context(
                 source_section = "files"
                 source_path = source_rel
         expected_behavior = _run_expected_behavior_from_summary(summary)
-        matched, completed, observed_pass, match_reason = verification_solution_match(
-            expected_behavior, status, summary
-        )
+        result_analysis = analyze_program_result(status, summary)
+        matched, completed, observed_pass, match_reason = result_analysis.match(expected_behavior)
         required_codes, allowed_codes = expected_status_rule(expected_behavior)
         expected_display = status_rule_expected_display(expected_behavior)
         expected_is_ac_only = bool(required_codes == ("AC",) and allowed_codes == ("AC",))
-        got_short = run_actual_short(status, summary)
-        got_display = run_actual_display(status, summary)
+        got_short = result_analysis.short
+        got_display = result_analysis.display
         result_kind = _run_result_kind(
             expected_behavior,
             matched=matched,
@@ -1368,18 +1361,14 @@ def build_run_detail_context(
             "mode": mode,
             "created_at": created_at,
             "finished_at": finished_at,
-            "has_run_row": bool(program_row is not None),
             "tests_map": tests_map,
-            "compile_log": summary.get("compile_log") or "",
             "compile_diagnostics": detail_compile_diagnostics,
             "error": _detail_text(summary.get("error"), field="program.error"),
             "error_display": run_error_display(
                 _detail_text(summary.get("error"), field="program.error")
             ),
             "tests_total": tests_total,
-            "tests_truncated": tests_truncated,
             "expected_behavior": expected_behavior,
-            "expected_behavior_label": expected_behavior_label(expected_behavior),
             "expected_display": expected_display,
             "expected_is_ac_only": bool(expected_is_ac_only),
             "got_short": got_short,
@@ -1407,15 +1396,6 @@ def build_run_detail_context(
         }:
             continue
         columns.append(column_payload)
-    selected_detail_program_id = (
-        normalize_program_id_token(detail_program_id) if include_row_details else ""
-    )
-    if include_row_details and selected_detail_program_id:
-        columns = [
-            column
-            for column in columns
-            if str(column.get("id") or "") == selected_detail_program_id
-        ]
     status_summary = _verification_status_summary(columns)
     if verification_details:
         overall_status = (
@@ -1605,8 +1585,6 @@ def build_run_detail_context(
         target_tests = ordered_tests
         if selected_test_name:
             target_tests = [name for name in ordered_tests if name == selected_test_name]
-        if selected_detail_program_id and not columns:
-            target_tests = []
 
         source_verification_id = str(
             verification_details.get("artifact_verification_id") or verification_id_hint or ""
@@ -1630,7 +1608,6 @@ def build_run_detail_context(
             progress_total = max(progress_total, int(col.get("tests_total") or 0))
         except Exception:
             continue
-    progress_reported = len(ordered_tests)
     progress_placeholder_total = (
         min(progress_total, 24) if bool(status_summary["has_running"]) and progress_total > 0 else 0
     )
@@ -1682,7 +1659,6 @@ def build_run_detail_context(
         "status": "",
         "error": "",
         "error_display": "",
-        "log_rows": [],
         "diagnostics": [],
     }
 
@@ -1692,7 +1668,6 @@ def build_run_detail_context(
         )
         artifact_verification_error = detail_fail_reason
         diagnostics_title = "Verification"
-        log_rows: list[dict[str, str]] = []
         diagnostics_rows: list[DiagnosticEntry] = []
         for col in columns:
             raw_diags = col["compile_diagnostics"]
@@ -1742,7 +1717,6 @@ def build_run_detail_context(
             "status": artifact_verification_status,
             "error": artifact_verification_error,
             "error_display": run_error_display(artifact_verification_error),
-            "log_rows": log_rows,
             "diagnostics": diagnostics_rows,
         }
 
@@ -1765,7 +1739,6 @@ def build_run_detail_context(
         "detail_running": bool(status_summary["has_running"]),
         "detail_last_updated": last_updated,
         "detail_progress_total": progress_total,
-        "detail_progress_reported": progress_reported,
         "detail_progress_placeholder_total": progress_placeholder_total,
         "detail_task_counts": task_counts,
         "detail_running_tasks": running_tasks,

@@ -185,23 +185,23 @@ class VerificationProgramSummaryFields(TypedDict):
     source: str
     task_kind: str
     tests_total: int
-    compile_log: str
     compile_diagnostics: list[dict[str, JsonValue]]
     error: str
-    usage: VerificationProgramUsage
-    artifact_verification_id: NotRequired[str]
-    pass_limit: NotRequired[int]
     expected_behavior: NotRequired[str]
-    selected_tests: NotRequired[list[str]]
-    selected_tests_count: NotRequired[int]
     tests_skipped: NotRequired[int]
-    skipped_tests: NotRequired[int]
-    run_config: NotRequired[dict[str, object]]
-    cancelled: NotRequired[bool]
 
 
 class VerificationProgramSummary(VerificationProgramSummaryFields):
     tests: Sequence[ExecutionTestRow]
+    compile_log: str
+    usage: VerificationProgramUsage
+    artifact_verification_id: NotRequired[str]
+    pass_limit: NotRequired[int]
+    selected_tests: NotRequired[list[str]]
+    selected_tests_count: NotRequired[int]
+    skipped_tests: NotRequired[int]
+    run_config: NotRequired[dict[str, object]]
+    cancelled: NotRequired[bool]
 
 
 class VerificationProgramDetailSummary(VerificationProgramSummaryFields):

@@ -70,6 +70,10 @@ Scoped models expose testcase evidence and persisted parent facts. Full models
 provide task counts and program summaries for Agent and complete-page consumers.
 Matrix overviews omit pass display dictionaries while retaining final-pass metric
 fallbacks. Testcase details and sample JSON retain every captured pass.
+Program result analysis reads testcase verdicts once and supplies completion,
+expected-behavior matching, and short or combined result labels. Page program
+summaries carry testcase evidence and diagnostics; the page projection computes
+the displayed metric peaks from those rows.
 
 Sanity admits both checker stability probes after ordinary execution completes,
 runs the independent runtime, boundary, and sample-output checks, then collects

@@ -1,6 +1,5 @@
 """Canonical verification-detail facts assembled from one SQLite snapshot."""
 
-import json
 import re
 from pathlib import Path
 from typing import TypedDict
@@ -161,20 +160,9 @@ def _program_rows(
     record: VerificationSnapshotRecord,
     details: VerificationDetail,
     mode: str,
-    pass_limit: int,
     display_limit: int,
     include_pass_details: bool,
 ) -> dict[str, VerificationProgramDetailRow]:
-    try:
-        run_config = json.loads(str(details.get("run_config_json") or ""))
-    except (TypeError, ValueError):
-        run_config = {}
-    if not isinstance(run_config, dict):
-        run_config = {}
-    if mode in {"pass-fail", "interactive"}:
-        run_config = {**run_config, "mode": mode, "pass_limit": pass_limit}
-    else:
-        run_config = {}
     grouped: dict[str, list[VerificationTaskRow]] = {}
     for row in rows:
         if row["task_kind"] not in _SOLUTION_TASK_KINDS:
@@ -191,12 +179,9 @@ def _program_rows(
             key=lambda row: (_test_order(row["test_name"]), row["id"]),
         )
         tests: list[VerificationCaseTestRow] = []
-        compile_log = ""
         compile_diagnostics: list[dict[str, JsonValue]] = []
         error_text = ""
         late_messages: list[str] = []
-        max_time_ms = 0
-        max_memory_kb = 0
         for row in program_tasks:
             if (
                 row["status"]
@@ -211,10 +196,6 @@ def _program_rows(
                     include_pass_details=include_pass_details,
                 )
                 tests.append(test_row)
-                max_time_ms = max(max_time_ms, test_row["time_user_ms"])
-                max_memory_kb = max(max_memory_kb, test_row["memory_kb"])
-            if not compile_log and row["compile_log"]:
-                compile_log = row["compile_log"]
             compile_diagnostics.extend(
                 compile_diagnostics_payload(row["result"].compile.diagnostics)
             )
@@ -241,23 +222,12 @@ def _program_rows(
             "tests_total": len(program_tasks),
             "tests_skipped": tests_skipped,
             "tests": tests,
-            "compile_log": compile_log,
             "compile_diagnostics": compile_diagnostics,
             "error": error_text,
-            "usage": {
-                "tests": len(tests),
-                "time_ms_total": max_time_ms,
-                "time_user_ms_total": max_time_ms,
-                "time_wall_ms_total": max_time_ms,
-                "memory_kb_peak": max_memory_kb,
-            },
         }
-        if run_config:
-            summary["run_config"] = run_config
         if any(
             row["status"] == VerificationTaskStatus.CANCELLED for row in program_tasks
         ):
-            summary["cancelled"] = True
             if record["status"] in {"failed", "cancelled"} and verification_error:
                 summary["error"] = summary["error"] or verification_error
         values[program_id] = {
@@ -335,7 +305,6 @@ def build_verification_detail_read_model(
             record=record,
             details=details,
             mode=mode,
-            pass_limit=details.get("pass_limit", 1),
             display_limit=display_limit,
             include_pass_details=include_pass_details,
         ),
