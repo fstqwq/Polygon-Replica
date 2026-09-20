@@ -12,7 +12,7 @@ import time
 import zipfile
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import cast
+from typing import TypedDict
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -20,6 +20,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 from app.service.platform.maintenance.plan import ARTIFACT_TABLES
+from app.db import SQLValue
 from e2e_real_contest import (
     CONTEST,
     assert_contest_package_download,
@@ -273,12 +274,11 @@ def _password_envelope(
     payload = response.json()
     if not isinstance(payload, dict):
         raise RuntimeError("password envelope response is not an object")
-    public_key = cast(
-        rsa.RSAPublicKey,
-        serialization.load_der_public_key(
-            _b64url_decode(str(payload["public_key"]))
-        ),
+    public_key = serialization.load_der_public_key(
+        _b64url_decode(str(payload["public_key"]))
     )
+    if not isinstance(public_key, rsa.RSAPublicKey):
+        raise RuntimeError("password envelope public key must be RSA")
     encrypted = public_key.encrypt(
         verifier.encode("utf-8"),
         padding.OAEP(
@@ -383,7 +383,7 @@ def _agent_cli(*args: str, expect_ok: bool = True) -> dict[str, object]:
         if not isinstance(result, dict):
             raise RuntimeError(f"Agent CLI success omitted result: {payload!r}")
         print(f"agent-cli {args[0]} ok")
-        return cast(dict[str, object], result)
+        return result
     if completed.returncode == 0 or payload["ok"] is not False:
         raise RuntimeError(
             f"Agent CLI command unexpectedly succeeded: {command!r}"
@@ -392,7 +392,14 @@ def _agent_cli(*args: str, expect_ok: bool = True) -> dict[str, object]:
     if not isinstance(error, dict):
         raise RuntimeError(f"Agent CLI failure omitted error: {payload!r}")
     print(f"agent-cli {args[0]} failed as expected")
-    return cast(dict[str, object], error)
+    return error
+
+
+def _response_rows(payload: dict[str, object], field: str) -> list[dict[str, object]]:
+    rows = payload.get(field)
+    if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+        raise RuntimeError(f"Agent response {field!r} must be an array of objects")
+    return rows
 
 
 def _agent_approve(
@@ -583,8 +590,6 @@ def _register_user(username: str, password: str) -> httpx.Client:
 
 
 def _assert_fixture_shape() -> None:
-    if len(FIXTURE_FILES) != len(set(FIXTURE_FILES)):
-        raise RuntimeError("fixture contains duplicate paths")
     build = json.loads(FIXTURE_FILES["config/build.json"])
     required_sources = {
         str(build["accepted_solution_source"]),
@@ -599,10 +604,7 @@ def _assert_fixture_shape() -> None:
 
 
 def _exercise_legacy_build_normalization(client: httpx.Client) -> None:
-    canonical = cast(
-        dict[str, object],
-        json.loads(FIXTURE_FILES["config/build.json"]),
-    )
+    canonical = json.loads(FIXTURE_FILES["config/build.json"])
     legacy = {
         **canonical,
         "checker_args": ["--removed"],
@@ -731,10 +733,7 @@ def _exercise_agent_contest_pull(
         "--target-dir",
         str(AGENT_CONTEST_REPO),
     )
-    pulled_problems = cast(
-        list[dict[str, object]],
-        pulled.get("problems") or [],
-    )
+    pulled_problems = _response_rows(pulled, "problems")
     if (
         pulled.get("contest") != CONTEST_PULL_SLUG
         or pulled.get("contest_title") != CONTEST_PULL_TITLE
@@ -762,10 +761,7 @@ def _exercise_agent_contest_pull(
         "--target-dir",
         str(AGENT_CONTEST_REPO),
     )
-    repeated_problems = cast(
-        list[dict[str, object]],
-        repeated.get("problems") or [],
-    )
+    repeated_problems = _response_rows(repeated, "problems")
     if any(
         bool(row.get("created_repo")) or bool(row.get("changed"))
         for row in repeated_problems
@@ -794,10 +790,7 @@ def _exercise_agent_contest_pull(
         "--target-dir",
         str(AGENT_CONTEST_REPO),
     )
-    refreshed_rows = cast(
-        list[dict[str, object]],
-        refreshed.get("problems") or [],
-    )
+    refreshed_rows = _response_rows(refreshed, "problems")
     changed_by_label = {
         str(row.get("idx") or ""): bool(row.get("changed"))
         for row in refreshed_rows
@@ -911,10 +904,7 @@ def prepare() -> None:
         ):
             raise RuntimeError(f"Agent grant was not created: {approved!r}")
         authorized = _agent_cli("status")
-        problem_grants = cast(
-            list[dict[str, object]],
-            authorized.get("problem_grants") or [],
-        )
+        problem_grants = _response_rows(authorized, "problem_grants")
         if (
             authorized.get("general_scope") != "none"
             or len(problem_grants) != 1
@@ -941,7 +931,7 @@ def prepare() -> None:
         listed = _agent_cli("list-files", "--problem", PROBLEM, "--path", "config")
         listed_paths = {
             str(entry.get("path") or "")
-            for entry in cast(list[dict[str, object]], listed.get("entries") or [])
+            for entry in _response_rows(listed, "entries")
         }
         if "config/problem.json" not in listed_paths:
             raise RuntimeError(f"Agent list-files omitted problem.json: {listed!r}")
@@ -1449,17 +1439,7 @@ def _assert_accepted_solution(
 
 
 def _git(*args: str) -> str:
-    completed = subprocess.run(
-        ["git", *args],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if completed.returncode != 0:
-        raise RuntimeError(
-            f"git {' '.join(args)} failed: {completed.stderr or completed.stdout}"
-        )
-    return completed.stdout.strip()
+    return _git_bytes(*args).decode("utf-8").strip()
 
 
 def _git_bytes(*args: str) -> bytes:
@@ -1606,8 +1586,17 @@ def _assert_agent_verification_detail(verification_id: str) -> None:
         raise RuntimeError(f"Agent result-cell detail is incomplete: {cell_text!r}")
 
 
-def _export_wait_debug(job_id: str) -> dict[str, object]:
-    debug: dict[str, object] = {}
+class ExportWaitDebug(TypedDict, total=False):
+    export_job: dict[str, SQLValue] | str
+    native_package_build: dict[str, SQLValue] | str
+    verification: dict[str, SQLValue] | None
+    task_counts: list[dict[str, SQLValue]]
+    nonterminal_tasks: list[dict[str, SQLValue]]
+    diagnostic_error: str
+
+
+def _export_wait_debug(job_id: str) -> ExportWaitDebug:
+    debug: ExportWaitDebug = {}
     try:
         with _connect() as connection:
             job = connection.execute(
@@ -1809,7 +1798,7 @@ def _real_judgehost(client: httpx.Client) -> dict[str, object] | None:
         return None
     if len(matches) != 1 or len(hosts) != 1:
         raise RuntimeError(f"Judgehost stack is not isolated: {hosts!r}")
-    return cast(dict[str, object], matches[0])
+    return matches[0]
 
 
 def _wait_for_real_judgehost(client: httpx.Client, timeout_sec: float = 90.0) -> None:

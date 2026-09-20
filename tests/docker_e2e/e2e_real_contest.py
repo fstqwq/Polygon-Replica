@@ -4,6 +4,7 @@ import io
 import json
 import os
 import sqlite3
+import subprocess
 import time
 import zipfile
 from collections.abc import Callable
@@ -155,16 +156,15 @@ def assert_contest_pdf(
     preview_root = cache_root / "artifacts" / "previews" / preview_id
     if (preview_root / "pdf" / "statement.pdf").read_bytes() != response.content:
         raise RuntimeError("Contest PDF Preview cache and HTTP payload differ")
-    compile_log = (preview_root / "logs" / "contest-pdf.log").read_text(
-        encoding="utf-8",
-        errors="replace",
-    )
-    if (
-        "== xelatex pass 1 ==" not in compile_log
-        or "== xelatex pass 2 ==" not in compile_log
-        or compile_log.count("returncode: 0") < 2
-    ):
-        raise RuntimeError("Contest PDF Preview did not complete two XeLaTeX passes")
+    rendered = subprocess.run(
+        ["pdftotext", "-", "-"],
+        input=response.content,
+        capture_output=True,
+        check=True,
+        timeout=30,
+    ).stdout.decode("utf-8")
+    if CONTEST_TITLE not in rendered:
+        raise RuntimeError(f"Contest PDF omitted its title: {rendered!r}")
     if (preview_root / "contest-pdf-src").exists() or (
         preview_root / "contest-sources"
     ).exists():

@@ -1,24 +1,36 @@
 import json
 import re
+from collections.abc import Mapping
 from pathlib import Path
-from typing import cast
 
 from app.db import now_iso
 from app.main_constant import GENERAL_CONFIG_DEFAULTS, RUN_TEST_NAME_RE
 from app.service.judgehost.domjudge.cache import executable_hash, submission_source_hash, hash_of_hashes
 from app.service.judgehost.domjudge.identity import compile_key, submit_id
 from app.service.judgehost.batch.model import CompileSubmission, ExecutionBatchSpec
-from app.service.judgehost.task.model import ExecutionTemplate, PreparedTest
+from app.service.judgehost.task.model import (
+    CollectedVerificationPayload,
+    ExecutionTemplate,
+    ExecutionTemplatePayload,
+    PreparedTest,
+    PreparedTestPayload,
+    TaskPayload,
+)
+from app.service.judgehost.domjudge.wire_model import (
+    DomjudgeCompileConfig,
+    DomjudgeCompareConfig,
+    DomjudgeRunConfig,
+)
 from app.service.judgehost.domjudge.limits import (
     config_int,
     compile_output_kb,
     run_memory_limit_kb,
     run_output_kb,
 )
-from app.service.judgehost.domjudge.codec import decode_basename, decode_text
+from app.service.judgehost.domjudge.codec import decode_basename, decode_config_json, decode_text
 from app.service.judgehost.domjudge.result import parse_bool, parse_int
 from app.service.platform.hashing import sha256_hex_json
-from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
+from app.service.platform.runtime_blob_store import PayloadFile, PayloadFileDescriptor, RuntimeBlobStore
 from app.service.problem.build_config import load_build_config
 from app.service.problem.java_entry_point import detect_java_entry_point
 from app.service.problem.runtime_config import (
@@ -69,26 +81,13 @@ class JudgehostPayloadPreparation:
         self._configuration = configuration
 
     @staticmethod
-    def _normalize_text(value: object) -> str:
+    def _normalize_text(value: str | None) -> str:
         return "" if not value else str(value).strip()
 
     @staticmethod
-    def _normalize_text_with_default(value: object, *, default: str) -> str:
+    def _normalize_text_with_default(value: str | None, *, default: str) -> str:
         text = JudgehostPayloadPreparation._normalize_text(value)
         return text if text else default
-
-    @staticmethod
-    def _normalize_status(value: object) -> str:
-        return JudgehostPayloadPreparation._normalize_text(value).lower()
-
-    @staticmethod
-    def _json_object(text: str) -> dict[str, object]:
-        if not text:
-            return {}
-        try:
-            return cast(dict[str, object], json.loads(text))
-        except Exception:
-            return {}
 
     @staticmethod
     def _normalize_list(
@@ -125,7 +124,7 @@ class JudgehostPayloadPreparation:
         return (f"{entry_point}.java", entry_point)
 
     @staticmethod
-    def enqueue_fingerprint(payload: dict[str, object]) -> str:
+    def enqueue_fingerprint(payload: TaskPayload) -> str:
         stable_payload = dict(payload)
         stable_payload.pop("enqueued_at", None)
         # Precomputed executable fields contain bytes and are derived entirely
@@ -144,7 +143,7 @@ class JudgehostPayloadPreparation:
         return sha256_hex_json(stable_payload, ensure_ascii=False)
 
     @staticmethod
-    def precomputed_pass_limit(payload: dict[str, object]) -> int:
+    def precomputed_pass_limit(payload: TaskPayload) -> int:
         template = payload.get("precomputed")
         if not isinstance(template, ExecutionTemplate):
             raise RuntimeError("prepared execution template is required")
@@ -164,7 +163,7 @@ class JudgehostPayloadPreparation:
         task_kind: str,
         selected_tests: list[str],
         settings: JudgehostSettings,
-    ) -> dict[str, object]:
+    ) -> CollectedVerificationPayload:
         safe_verification_id = JudgehostPayloadPreparation._normalize_text(artifact_verification_id)
         problem_cfg = load_problem_config(
             workspace,
@@ -194,7 +193,7 @@ class JudgehostPayloadPreparation:
             else None
         )
 
-        tests_payload: list[dict[str, object]] = []
+        tests_payload: list[PreparedTestPayload] = []
         if artifact_set is not None:
             for artifact in artifact_set.cases:
                 test_name = artifact.test_name
@@ -254,7 +253,7 @@ class JudgehostPayloadPreparation:
             if testlib_source is not None:
                 source_files["testlib.h"] = testlib_source
 
-        sources_payload: dict[str, dict[str, object]] = {}
+        sources_payload: dict[str, PayloadFileDescriptor] = {}
         for name, source_path in source_files.items():
             descriptor = RuntimeBlobStore.describe_file(source_path)
             if descriptor.size > settings.max_component_source_bytes:
@@ -296,7 +295,7 @@ class JudgehostPayloadPreparation:
         compile_only: bool = False,
         verification_payload_override: dict[str, object] | None = None,
         execution_template: ExecutionTemplate | None = None,
-    ) -> dict[str, object]:
+    ) -> TaskPayload:
         safe_task_kind = task_plan.task_kind(
             {
                 "task_kind": task_kind,
@@ -376,6 +375,7 @@ class JudgehostPayloadPreparation:
             source_name = execution_template.submission.source_name
             entry_point = execution_template.entry_point
 
+        verification_payload: Mapping[str, object]
         if verification_payload_override is None:
             if compile_only_flag:
                 verification_payload = {}
@@ -393,11 +393,10 @@ class JudgehostPayloadPreparation:
                 )
         else:
             verification_payload = dict(verification_payload_override)
-        verification_payload = self._materialize_verification_payload(verification_payload)
+        materialized_verification = self._materialize_verification_payload(verification_payload)
         if compile_only_flag:
             empty = self._runtime_blob_store.put_bytes(b"")
-            verification_payload = dict(verification_payload)
-            verification_payload["tests"] = [
+            materialized_verification["tests"] = [
                 self.prepare_test(
                     test_name="compile-only.in",
                     answer_name="compile-only.ans",
@@ -405,7 +404,7 @@ class JudgehostPayloadPreparation:
                     answer_file=empty,
                 )
             ]
-        payload: dict[str, object] = {
+        payload: TaskPayload = {
             "type": "verification.run",
             "run_id": run_id,
             "problem": problem,
@@ -425,7 +424,7 @@ class JudgehostPayloadPreparation:
             "task_kind": safe_task_kind,
             "bypass_case_result_cache": bool(bypass_case_result_cache),
             "compile_only": bool(compile_only_flag),
-            "verification_payload": verification_payload,
+            "verification_payload": materialized_verification,
             "enqueued_at": now_iso(),
         }
         payload["mode"] = task_plan.execution_mode(payload)
@@ -453,11 +452,11 @@ class JudgehostPayloadPreparation:
 
     def _materialize_verification_payload(
         self,
-        verification_payload: dict[str, object],
+        verification_payload: Mapping[str, object],
     ) -> dict[str, object]:
         raw_tests = verification_payload.get("tests")
         if raw_tests is None:
-            return verification_payload
+            return dict(verification_payload)
         if not isinstance(raw_tests, list):
             raise RuntimeError("verification tests must be a list")
         tests: list[PreparedTest] = []
@@ -490,7 +489,7 @@ class JudgehostPayloadPreparation:
         *,
         upload_file: PayloadFile,
         upload_filename: str,
-        verification_payload: dict[str, object],
+        verification_payload: Mapping[str, object],
         expected_behavior: str,
         verification_source: str,
         task_kind: str,
@@ -509,7 +508,7 @@ class JudgehostPayloadPreparation:
             source_name=upload_filename,
             source_bytes=bytes(upload_content),
         )
-        payload: dict[str, object] = {
+        payload: TaskPayload = {
             "source_name": source_name,
             "source_file": upload_file.to_payload(),
             "entry_point": entry_point,
@@ -535,11 +534,11 @@ class JudgehostPayloadPreparation:
 
     def _prepare_execution_template_payload(
         self,
-        payload: dict[str, object],
+        payload: TaskPayload,
         *,
         settings: JudgehostSettings,
         source_bytes: bytes | None = None,
-    ) -> dict[str, object]:
+    ) -> ExecutionTemplatePayload:
         config_snapshot = settings.values
         source_name = decode_basename(raw=payload.get("source_name"), default="submission.cpp")
         source_file = self._runtime_blob_store.resolve_payload(payload["source_file"])
@@ -551,9 +550,7 @@ class JudgehostPayloadPreparation:
         if not source_bytes:
             raise RuntimeError("submission source payload is empty")
         entry_point = decode_text(raw=payload.get("entry_point"))
-        extra_sources_obj = cast(dict[str, object] | None, payload.get("extra_source_files"))
-        if extra_sources_obj is None:
-            extra_sources_obj = {}
+        extra_sources_obj = payload.get("extra_source_files", {})
         extra_source_items: list[tuple[str, bytes]] = []
         for raw_name, raw_file in sorted(
             extra_sources_obj.items(),
@@ -570,18 +567,19 @@ class JudgehostPayloadPreparation:
             if not blob:
                 continue
             extra_source_items.append((safe_name, blob))
-        verification_payload = cast(dict[str, object] | None, payload.get("verification_payload"))
+        verification_payload = payload.get("verification_payload")
         if verification_payload is None:
             raise RuntimeError("verification payload is required for DOMjudge compatibility")
-        run_cfg_obj: dict[str, object] = {}
         run_cfg_raw = decode_text(raw=verification_payload.get("run_config_json"))
-        if run_cfg_raw:
-            run_cfg_obj = self._json_object(run_cfg_raw)
-        problem_limits_obj = cast(
-            dict[str, object] | None, verification_payload.get("problem_limits")
-        )
-        if problem_limits_obj is None:
+        run_cfg_obj = decode_config_json(run_cfg_raw)
+        problem_limits = verification_payload.get("problem_limits")
+        problem_limits_obj: Mapping[str, object]
+        if problem_limits is None:
             problem_limits_obj = {}
+        elif isinstance(problem_limits, dict):
+            problem_limits_obj = problem_limits
+        else:
+            raise RuntimeError("verification problem limits must be an object")
         compile_only, generate_mode, main_correct = task_plan.execution_modes(payload)
         mode = task_plan.execution_mode(payload)
         manual_validate_only = parse_bool(payload.get("manual_validate_only"), default=False)
@@ -622,10 +620,14 @@ class JudgehostPayloadPreparation:
         run_tl_ms = max(100, run_tl_ms)
         run_tl_sec = max(0.1, float(run_tl_ms) / 1000.0)
         run_overshoot_sec = 0.0
-        sources_files = verification_payload.get("source_files")
-        sources_obj = cast(dict[str, object] | None, sources_files)
-        if sources_obj is None:
+        source_files = verification_payload.get("source_files")
+        sources_obj: Mapping[str, object]
+        if source_files is None:
             sources_obj = {}
+        elif isinstance(source_files, dict):
+            sources_obj = source_files
+        else:
+            raise RuntimeError("verification source files must be an object")
 
         def _source_bytes(name: str) -> bytes:
             raw_file = sources_obj.get(name)
@@ -772,7 +774,7 @@ class JudgehostPayloadPreparation:
         compare_script_timelimit = max(1, int(run_tl_sec))
         if checker_source_bytes or validator_source_bytes:
             compare_script_timelimit = max(compare_script_timelimit, min(compile_timeout, 120))
-        compile_config = {
+        compile_config: DomjudgeCompileConfig = {
             "hash": compile_hash,
             "toolchain_cmd_digest": toolchain_cmd_digest,
             "filter_compiler_files": False,
@@ -781,7 +783,7 @@ class JudgehostPayloadPreparation:
             "script_memory_limit": int(compile_mem_mb * 1024),
             "script_filesize_limit": int(compile_output_limit_kb),
         }
-        run_config = {
+        run_config: DomjudgeRunConfig = {
             "hash": run_hash,
             "time_limit": run_tl_sec,
             "overshoot": run_overshoot_sec,
@@ -802,7 +804,7 @@ class JudgehostPayloadPreparation:
             entry_point=entry_point or None,
             memory_limit=run_mem_kb,
         )
-        compare_config = {
+        compare_config: DomjudgeCompareConfig = {
             "hash": compare_hash,
             "combined_run_compare": bool(interactive),
             "compare_args": "--validate-input" if manual_validate_only else "",
@@ -827,7 +829,7 @@ class JudgehostPayloadPreparation:
         }
 
     @staticmethod
-    def _execution_policy(payload: dict[str, object]) -> tuple[str, str, str, bool]:
+    def _execution_policy(payload: TaskPayload) -> tuple[str, str, str, bool]:
         return (
             task_plan.task_kind(payload),
             decode_text(lower=True, raw=payload.get("verification_source")),
@@ -837,7 +839,7 @@ class JudgehostPayloadPreparation:
 
     def _freeze_execution_template(
         self,
-        payload: dict[str, object],
+        payload: TaskPayload,
         *,
         settings: JudgehostSettings,
         upload_filename: str,
@@ -846,21 +848,22 @@ class JudgehostPayloadPreparation:
         bundle = self._prepare_execution_template_payload(
             payload, settings=settings, source_bytes=source_bytes,
         )
-        signature = task_plan.execution_signature({**payload, "precomputed": bundle})
+        policy = self._execution_policy(payload)
+        signature = task_plan.execution_signature(bundle, policy)
         source_file = self._runtime_blob_store.resolve_payload(payload["source_file"])
-        source_name = cast(str, payload["source_name"])
-        raw_extra = cast(dict[str, object], payload.get("extra_source_files", {}))
+        source_name = payload["source_name"]
+        raw_extra = payload.get("extra_source_files", {})
         extra_sources = tuple(
             (name, source)
             for raw_name, raw_file in sorted(raw_extra.items())
             if (name := decode_basename(raw=raw_name)) and name != source_name
             and (source := self._runtime_blob_store.resolve_payload(raw_file)).size > 0
         )
-        run_config = cast(dict[str, object], bundle["run_config"])
+        run_config = bundle["run_config"]
         pass_limit = run_config["pass_limit"]
         if isinstance(pass_limit, bool) or not isinstance(pass_limit, int) or pass_limit < 1:
             raise RuntimeError("precomputed pass limit must be a positive integer")
-        key = cast(str, bundle["compile_key"])
+        key = bundle["compile_key"]
         return ExecutionTemplate(
             submission=CompileSubmission(
                 compile_key=key,
@@ -868,23 +871,23 @@ class JudgehostPayloadPreparation:
                 source_name=source_name,
                 source_file=source_file,
                 extra_source_items=extra_sources,
-                compile_files=tuple(cast(list[tuple[str, bytes, bool]], bundle["compile_files"])),
+                compile_files=tuple(bundle["compile_files"]),
             ),
             batch_spec=ExecutionBatchSpec(
-                run_files=tuple(cast(list[tuple[str, bytes, bool]], bundle["run_files"])),
-                compare_files=tuple(cast(list[tuple[str, bytes, bool]], bundle["compare_files"])),
+                run_files=tuple(bundle["run_files"]),
+                compare_files=tuple(bundle["compare_files"]),
             ),
             upload_filename=upload_filename,
-            entry_point=cast(str, payload.get("entry_point", "")),
-            source_hash=cast(str, bundle["source_hash"]),
-            compile_hash=cast(str, bundle["compile_hash"]),
-            run_hash=cast(str, bundle["run_hash"]),
-            compare_hash=cast(str, bundle["compare_hash"]),
+            entry_point=payload.get("entry_point", ""),
+            source_hash=bundle["source_hash"],
+            compile_hash=bundle["compile_hash"],
+            run_hash=bundle["run_hash"],
+            compare_hash=bundle["compare_hash"],
             compile_config_json=json.dumps(bundle["compile_config"], ensure_ascii=False, separators=(",", ":")),
             run_config_json=json.dumps(run_config, ensure_ascii=False, separators=(",", ":")),
             compare_config_json=json.dumps(bundle["compare_config"], ensure_ascii=False, separators=(",", ":")),
             pass_limit=pass_limit,
-            policy=self._execution_policy(payload),
+            policy=policy,
             execution_signature=signature,
         )
 
@@ -913,7 +916,7 @@ class JudgehostPayloadPreparation:
         extra_source_files_override: dict[str, object] | None = None,
         manual_validate_only: bool = False,
         execution_template: ExecutionTemplate | None = None,
-    ) -> dict[str, object]:
+    ) -> TaskPayload:
         settings = self._configuration.snapshot()
         selected = self.normalize_tests(selected_tests)
         safe_run_id = normalize_run_id(run_id)
@@ -946,7 +949,7 @@ class JudgehostPayloadPreparation:
         if source_label_override is not None:
             payload["source_label"] = source_label_override
         if extra_source_files_override is not None:
-            materialized_extra_sources: dict[str, object] = {}
+            materialized_extra_sources: dict[str, PayloadFileDescriptor] = {}
             for name, raw_file in extra_source_files_override.items():
                 try:
                     descriptor = self._runtime_blob_store.resolve_payload(raw_file)

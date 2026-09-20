@@ -1,11 +1,57 @@
 """Public state contract for disposable statement previews."""
 
-from typing import Literal, Protocol, TypedDict
+from typing import Literal, NotRequired, Protocol, TypedDict
 
 
 StatementPreviewSubject = Literal["problem", "contest"]
 StatementPreviewSource = Literal["workspace", "native_package"]
 StatementPreviewOutput = Literal["html", "pdf"]
+
+
+class ContestStatementPreviewItem(TypedDict):
+    idx: str
+    problem_id: int
+    problem_slug: str
+    preview_id: str
+    status: str
+    error: str
+
+
+class StatementPdfProblemResult(TypedDict):
+    idx: str
+    problem_id: int
+    problem_slug: str
+    source_folder: str
+    status: str
+    error: str
+    preamble_lines: NotRequired[list[str]]
+
+
+class StatementPdfTotals(TypedDict):
+    total: int
+    success: int
+    failed: int
+
+
+class StatementPreviewSummary(TypedDict, total=False):
+    error: str
+    content: str
+    warnings: list[str]
+    resources: list[str]
+    sample_count: int
+    returncode: int | None
+    pdf: str
+    items: list[ContestStatementPreviewItem]
+    successful: int
+    failed: int
+    job_type: str
+    contest_slug: str
+    language: str
+    results: list[StatementPdfProblemResult]
+    totals: StatementPdfTotals
+    latex_log: str
+    filename: str
+    log: str
 
 
 class StatementPreviewRow(TypedDict):
@@ -18,9 +64,8 @@ class StatementPreviewRow(TypedDict):
     output_kind: StatementPreviewOutput
     language: str
     input_identity: str
-    options: dict[str, object]
     status: str
-    summary: dict[str, object]
+    summary: StatementPreviewSummary
     created_at: str
     finished_at: str
 
@@ -40,7 +85,6 @@ class StatementPreviewRepository(Protocol):
         output_kind: StatementPreviewOutput,
         language: str,
         input_identity: str,
-        options: dict[str, object],
     ) -> None: ...
 
     def finish(
@@ -48,7 +92,7 @@ class StatementPreviewRepository(Protocol):
         preview_id: str,
         *,
         status: str,
-        summary: dict[str, object],
+        summary: StatementPreviewSummary,
     ) -> None: ...
 
     def row(
@@ -78,5 +122,4 @@ class StatementPreviewRepository(Protocol):
         output_kind: StatementPreviewOutput,
         language: str,
         input_identity: str,
-        options: dict[str, object],
     ) -> StatementPreviewRow | None: ...

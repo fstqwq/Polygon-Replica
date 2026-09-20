@@ -6,7 +6,7 @@ from app.service.judgehost.configuration import JudgehostConfiguration
 from app.service.judgehost.ports.completion import CaseTerminalReport
 from app.service.judgehost.task.registry import JudgehostTaskRegistry
 from app.service.judgehost.task.result_view import project_task_case_result
-from app.service.judgehost.task.summary import load_run_summary
+from app.service.judgehost.task.result_model import TaskSummary
 
 
 class TaskPollResult(TypedDict):
@@ -17,7 +17,7 @@ class TaskPollResult(TypedDict):
     status: str
     task_status: str
     error: str
-    summary: dict[str, object]
+    summary: TaskSummary
 
 
 class JudgehostTaskQuery:
@@ -32,9 +32,6 @@ class JudgehostTaskQuery:
         self._tasks = tasks
         self._batch_runtime = batch_runtime
         self._configuration = configuration
-
-    def load_run_summary(self, run_id: str, verification_id: str = "") -> dict[str, object]:
-        return load_run_summary(self._tasks, run_id, verification_id)
 
     def wait_for_task_result(
         self,
@@ -109,9 +106,3 @@ class JudgehostTaskQuery:
             task_id,
             test_name,
         )
-
-    def wait_for_task(self, task_id: str, timeout_sec: float | None = None) -> str:
-        result = self.wait_for_task_result(task_id, timeout_sec=timeout_sec)
-        if result["task_status"] == "failed":
-            raise RuntimeError(result["error"] or "judgehost task failed without error text")
-        return result["run_id"]

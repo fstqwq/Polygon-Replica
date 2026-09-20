@@ -4,6 +4,7 @@ from typing import Literal, Protocol, TypedDict
 
 from app.service.execution.model import ExecutionResult
 from app.service.judgehost.ports.case_binding import CaseBinding
+from app.service.judgehost.task.result_model import TaskSummary
 
 
 class CaseTerminalReport(TypedDict):
@@ -16,7 +17,7 @@ class CaseTerminalReport(TypedDict):
     status: str
     task_status: str
     error: str
-    summary: dict[str, object]
+    summary: TaskSummary
     missing_case_result: bool
     execution_result: ExecutionResult
 

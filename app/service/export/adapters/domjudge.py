@@ -14,6 +14,7 @@ from app.service.export.adapters.shared import (
     PackageAdapterPlan,
     PackageAdapterSupport,
     PackageFormat,
+    PackageLimits,
     SUBMISSION_RULES,
     annotated_submission,
 )
@@ -52,14 +53,14 @@ def render_domjudge_problem_yaml(
     else:
         validation = "custom"
         legacy_type = "pass-fail"
-    limits: dict[str, object] = {
+    limits: PackageLimits = {
         "time_limit": max(0.001, time_limit_ms / 1000.0),
     }
     if memory_limit_mb is not None:
         limits["memory"] = memory_limit_mb
     if pass_limit > 1:
         limits["validation_passes"] = pass_limit
-    payload: dict[str, object] = {
+    payload: dict[str, str | PackageLimits] = {
         "problem_format_version": "legacy",
         "type": legacy_type,
         "name": name_value,

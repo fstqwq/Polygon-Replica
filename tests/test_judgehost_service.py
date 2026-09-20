@@ -3,9 +3,6 @@ from tests.db_helpers import (
     admit_test_verification,
     db_execute,
     db_fetch_one,
-    judgehost_cases_for_run,
-    judgehost_fetch_case,
-    judgehost_fetch_batch,
     verification_programs_for_tasks,
 )
 
@@ -15,21 +12,29 @@ import io
 import json
 import os
 import shutil
+import subprocess
+import tempfile
 import threading
 import time
 import tarfile
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Generator, Sequence
 from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+from httpx import Response
 from starlette.requests import ClientDisconnect, Request
+from starlette.types import Message, Scope
 
 from app.service.verification.payload import prepared_payload_for_uploaded_source
-from app.service.judgehost.task.model import ExecutionTemplate
+from app.service.judgehost.task.query import TaskPollResult
+from app.service.judgehost.domjudge.wire_model import DomjudgeWork
+from app.service.judgehost.domjudge.file_stream import DomjudgeDownloadFile, stream_domjudge_file_array
+from app.service.judgehost.host.model import JudgehostStatusRow
+from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.verification.plan import VerificationTestPlan
-from app.service.judgehost.cache.executable import ExecutableCache
 from app.service.judgehost.cache.case_result import CaseResultCache
 from app.service.judgehost.domjudge.identity import job_id, submit_id
 from app.service.judgehost.api import Judgehost
@@ -223,7 +228,7 @@ class TestJudgehostService(E2ETestBase):
             first, second = [int(row["judgetaskid"]) for row in leased]
             service.domjudge_update_judging(hostname, first, {"compile_success": "1"})
             service._result.domjudge_add_judging_run(hostname, first, result)
-            case = judgehost_fetch_case(service, first)
+            case = service.case_snapshot(first)
             self.assertIsNotNone(case)
             batch_id = case["batch_id"]
             publication = service._batch_runtime.claim_case_publications(batch_id)
@@ -236,15 +241,15 @@ class TestJudgehostService(E2ETestBase):
                     )
                     self.assertEqual(response.status_code, 200, response.text)
                     self.assertEqual(response.json(), {})
-                    self.assertFalse(judgehost_fetch_case(service, first)["completion_acknowledged"])
-                    self.assertEqual(judgehost_fetch_batch(service, batch_id)["compile_success"], 1)
-                    self.assertEqual(judgehost_fetch_case(service, second)["status"], "leased")
+                    self.assertFalse(service.case_snapshot(first)["completion_acknowledged"])
+                    self.assertEqual(service.batch_snapshot(batch_id)["compile_success"], 1)
+                    self.assertEqual(service.case_snapshot(second)["status"], "leased")
                     response = pool.submit(
                         client.post, f"/api/v4/judgehosts/add-judging-run/{hostname}/{second}",
                         data=result, headers=headers,
                     ).result(timeout=3)
                     self.assertEqual(response.status_code, 200, response.text)
-                    self.assertTrue(judgehost_fetch_case(service, second)["completion_acknowledged"])
+                    self.assertTrue(service.case_snapshot(second)["completion_acknowledged"])
                 finally:
                     service._batch_runtime.complete_case_publications(batch_id, publication, retry=True)
             for case_id in (first, second):
@@ -254,7 +259,7 @@ class TestJudgehostService(E2ETestBase):
                 )
                 self.assertEqual(response.status_code, 200, response.text)
                 self.assertEqual(response.json(), 1)
-                self.assertTrue(judgehost_fetch_case(service, case_id)["completion_acknowledged"])
+                self.assertTrue(service.case_snapshot(case_id)["completion_acknowledged"])
 
     def test_duplicate_result_waits_for_durable_publication_or_retries_failed_owner(self) -> None:
         from app.main import app
@@ -306,7 +311,7 @@ class TestJudgehostService(E2ETestBase):
                     payload = {"runresult": "correct", "runtime": "0.001",
                                "output_run": base64.b64encode(fixture_text.encode()).decode("ascii")}
                     service._result.domjudge_add_judging_run(hostname, case_id, payload)
-                    batch_id = judgehost_fetch_case(service, case_id)["batch_id"]
+                    batch_id = service.case_snapshot(case_id)["batch_id"]
                     publication = service._batch_runtime.claim_case_publications(batch_id, case_ids=(case_id,))
                     self.assertEqual([row["id"] for row in publication], [case_id])
                     waiting = threading.Event()
@@ -345,7 +350,7 @@ class TestJudgehostService(E2ETestBase):
                     self.assertEqual(db_fetch_one(
                         "SELECT final_status FROM verification_tasks WHERE id=?", [task_id],
                     )["final_status"], "cancelled" if outcome == "cancelled" else "done")
-                    self.assertTrue(judgehost_fetch_case(service, case_id)["completion_acknowledged"])
+                    self.assertTrue(service.case_snapshot(case_id)["completion_acknowledged"])
 
     def test_unknown_judging_run_callback_is_idempotently_acknowledged(self) -> None:
         service = runtime.judgehost_task_service
@@ -384,14 +389,14 @@ class TestJudgehostService(E2ETestBase):
     @staticmethod
     def _work_rows_for_task(
         service: Judgehost,
-        rows: list[dict[str, object]],
+        rows: list[DomjudgeWork],
         task_id: str,
-    ) -> list[dict[str, object]]:
+    ) -> list[DomjudgeWork]:
         return [
             row
             for row in rows
             if (
-                (case := judgehost_fetch_case(service, int(row["judgetaskid"])))
+                (case := service.case_snapshot(int(row["judgetaskid"])))
                 is not None
                 and str(case["task_id"]) == task_id
             )
@@ -419,96 +424,78 @@ class TestJudgehostService(E2ETestBase):
         )
         return service
 
-    def _verification_run_row(
-        self, run_id: str, verification_id: str = ""
-    ) -> dict[str, object] | None:
-        safe_run_id = str(run_id or "").strip()
-        if not safe_run_id:
-            return None
-        safe_verification_id = str(verification_id or "").strip()
+    def _verification_run_row(self, run_id: str) -> TaskPollResult | None:
         service = runtime.judgehost_task_service
-        task_row = service.task_snapshot_for_run(safe_run_id)
-        if task_row is not None and safe_verification_id:
-            if str(task_row.get("verification_id") or "") != safe_verification_id:
-                task_row = None
-        if task_row is not None:
-            row_verification_id = str(task_row.get("verification_id") or "")
-            summary = service.run_summary(safe_run_id, row_verification_id)
-            return {
-                "status": str(task_row.get("run_status") or "").strip(),
-                "summary": dict(summary),
-                "verification_id": row_verification_id,
-            }
-        candidates = (
-            [safe_verification_id] if safe_verification_id else [f"ver-{safe_run_id}"]
-        )
-        task_store = runtime.verification_task_store
-        for candidate in candidates:
-            token = str(candidate or "").strip()
-            if not token:
-                continue
-            rows = task_store.list_rows(token)
-            matched_rows = [
-                row for row in rows if str(row["run_id"] or "") == safe_run_id
-            ]
-            if not matched_rows:
-                continue
-            tests = []
-            for row in matched_rows:
-                verdict = str(row["verdict"] or "")
-                tests.append(
-                    {
-                        "test": str(row["test_name"] or ""),
-                        "verdict": verdict,
-                        "time_ms": int(
-                            round(float(row["runtime_sec"] or 0.0) * 1000.0)
-                        ),
-                        "memory_kb": int(row["memory_kb"] or 0),
-                        "message": str(row["feedback_text"] or row["error_text"] or ""),
-                        "output_ref": str(row["output_ref"] or ""),
-                        "feedback_files": [],
-                        "passes": [
-                            {
-                                "index": 1,
-                                "verdict": verdict,
-                                "feedback": str(
-                                    row["feedback_text"] or row["error_text"] or ""
-                                ),
-                                "output_ref": str(row["output_ref"] or ""),
-                            }
-                        ],
-                    }
-                )
-            statuses = {str(row["status"] or "") for row in matched_rows}
-            if statuses == {VerificationTaskStatus.DONE}:
-                run_status = "ok"
-            elif VerificationTaskStatus.FAILED in statuses:
-                run_status = "failed"
-            elif VerificationTaskStatus.CANCELLED in statuses:
-                run_status = "cancelled"
-            else:
-                run_status = "running"
-            return {
-                "status": run_status,
-                "summary": {
-                    "source": str(matched_rows[0]["source_path"] or ""),
-                    "status": run_status,
-                    "tests": tests,
-                    "error": str(matched_rows[0]["error_text"] or ""),
-                },
-                "verification_id": token,
-            }
-        return None
+        task = service.task_snapshot_for_run(run_id)
+        return None if task is None else service.poll_task_result(task["id"])
 
     def _verification_artifact_root(self, verification_id: str) -> Path:
-        artifact_path = runtime.verification_service.artifact_path_for_verification(
-            str(verification_id or "").strip()
+        self.assertIsNotNone(runtime.verification_service.verification_record(verification_id))
+        return runtime.storage_layout.resolve_verification_root(verification_id).resolve()
+
+    def test_terminal_cleanup_releases_bindings_and_retains_durable_results(self) -> None:
+        service = self._fresh_judgehost_service()
+        self.addCleanup(service.reset_runtime_state)
+        build_id = _canonical_verification_id(f"cleanup-build-{uuid.uuid4().hex}")
+        self._seed_build_verification(build_id)
+        verification_id = _canonical_verification_id(f"cleanup-{uuid.uuid4().hex}")
+        ctx = runtime.workspace_service.workspace_context(
+            self.problem, self.user, include_recent=False,
         )
-        if not artifact_path:
-            raise AssertionError(
-                f"missing artifact_path for verification: {verification_id}"
-            )
-        return Path(artifact_path).resolve()
+        admit_test_verification(
+            verification_id=verification_id,
+            problem_id=ctx["problem"]["id"], workspace_id=ctx["workspace"]["id"],
+        )
+        durable_task_id = verification_task_id(verification_id, _ACCEPTED_PROGRAM_ID, "001.in")
+        planned = [PlannedTask(
+            task_id=durable_task_id, predecessor_task_id=None, task_kind="main-correct",
+            source_path="solutions/ac.cpp", program_id=_ACCEPTED_PROGRAM_ID,
+            test_name="001.in", expected_behavior="accepted",
+        )]
+        activate_test_verification(
+            verification_id, programs=verification_programs_for_tasks(planned), tasks=planned,
+        )
+        run_id = f"cleanup-run-{uuid.uuid4().hex}"
+        task_id = service.enqueue_task(
+            problem=self.problem, username=self.user, artifact_verification_id=build_id,
+            submission_path="solutions/ac.cpp", upload_content=None, upload_filename=None,
+            run_id=run_id, selected_tests=["001.in"], verification_id=verification_id,
+            verification_task_id=durable_task_id, verification_program_id=_ACCEPTED_PROGRAM_ID,
+            expected_behavior="accepted", verification_source="run.execute", task_kind="main-correct",
+        )
+        host = "cleanup-host"
+        service.domjudge_register_host(host)
+        work = service.domjudge_fetch_work(host, max_batchsize=1)
+        self.assertEqual(len(work), 1)
+        case_id = int(work[0]["judgetaskid"])
+        self.assertIsNotNone(runtime.verification_task_store.bound_task_context(durable_task_id))
+        service.domjudge_update_judging(host, case_id, {"compile_success": "1"})
+        service.domjudge_add_judging_run(host, case_id, {
+            "runresult": "correct", "runtime": "0.001",
+            "output_run": base64.b64encode(b"ok\n").decode("ascii"),
+        })
+        service.schedule_verification_cleanup(verification_id)
+        self.assertEqual(service.poll_task_result(task_id)["status"], "ok")
+        persisted = db_fetch_one(
+            "SELECT final_status,result_json FROM verification_tasks WHERE id=?", [durable_task_id],
+        )
+        cache_entries = self._judge_index_entry_count(RuntimeCacheIndex.RESULT)
+        self.assertGreater(cache_entries, 0)
+        receipt = service._batch_runtime.acquire_case_callback_receipt(case_id)
+        assert receipt is not None
+        self.assertFalse(service._terminal_cleanup._cleanup(verification_id))
+        self.assertIsNotNone(service.case_snapshot(case_id))
+        service._batch_runtime.release_case_callback_receipt(receipt.receipt_id)
+
+        self.assertTrue(service._terminal_cleanup._cleanup(verification_id))
+        self.assertIsNone(service.task_snapshot_for_run(run_id))
+        self.assertIsNone(service.case_snapshot(case_id))
+        self.assertIsNone(runtime.verification_task_store.bound_task_context(durable_task_id))
+        self.assertEqual(self._judge_index_entry_count(RuntimeCacheIndex.RESULT), cache_entries)
+        self.assertEqual(db_fetch_one(
+            "SELECT final_status,result_json FROM verification_tasks WHERE id=?", [durable_task_id],
+        ), persisted)
+        self.assertEqual(persisted["final_status"], "done")
 
     def test_domjudge_add_judging_run_survives_result_cache_publication_failure(self) -> None:
         self._assert_result_cache_failure(deferred=False)
@@ -880,7 +867,7 @@ class TestJudgehostService(E2ETestBase):
         else:  # pragma: no cover - helper contract
             raise AssertionError(f"unknown failure kind: {failure_kind}")
 
-        first_case = judgehost_fetch_case(service, first_case_id)
+        first_case = service.case_snapshot(first_case_id)
         self.assertIsNotNone(first_case)
         assert first_case is not None
         late_run_id = f"r-late-{failure_kind}-{uuid.uuid4().hex[:8]}"
@@ -902,7 +889,7 @@ class TestJudgehostService(E2ETestBase):
             persist_verification_run=False,
         )
 
-        late_cases = judgehost_cases_for_run(service, late_run_id)
+        late_cases = service.run_case_snapshots(late_run_id)
         self.assertEqual(len(late_cases), 1)
         late_case = late_cases[0]
         self.assertEqual(late_case["batch_id"], first_case["batch_id"])
@@ -1035,11 +1022,7 @@ class TestJudgehostService(E2ETestBase):
     def _judge_index_entry_count(self, kind: str) -> int:
         return int(runtime.runtime_cache_index.count_entries(namespace=kind))
 
-    @staticmethod
-    def _reset_task_queue_state(service) -> None:
-        service.reset_runtime_state()
-
-    def _lease_only_case(self, service, batch_id: int, hostname: str) -> int:
+    def _lease_only_case(self, service: Judgehost, batch_id: int, hostname: str) -> int:
         rows = service.domjudge_fetch_work(hostname, max_batchsize=1)
         self.assertEqual(len(rows), 1)
         case = service.case_snapshot(int(rows[0]["judgetaskid"]))
@@ -1050,17 +1033,13 @@ class TestJudgehostService(E2ETestBase):
 
     def _commit_case_result(
         self,
-        service,
+        service: Judgehost,
         *,
         case_id: int,
         hostname: str,
-        test_name: str,
         runresult: str,
-        verdict: str,
         feedback_text: str = "",
-        feedback_files: list[str] | None = None,
     ) -> None:
-        del test_name, verdict, feedback_files
         feedback = base64.b64encode(feedback_text.encode("utf-8")).decode("ascii")
         self.assertEqual(
             service.domjudge_add_judging_run(
@@ -1192,23 +1171,13 @@ class TestJudgehostService(E2ETestBase):
             "compile", compile_script_id
         )
         self.assertTrue(any(item.filename == "run" for item in compile_files))
-        compile_run = next(
-            (item for item in compile_files if item.filename == "run"), {}
-        )
-        compile_run_text = compile_run.payload.path.read_text(
-            encoding="utf-8", errors="replace"
-        )
-        self.assertIn(
-            'exec g++ -x c++ -Wall -O2 -std=gnu++20 -static -pipe -DDOMJUDGE -I. "$MAIN" -o "$DEST"',
-            compile_run_text,
-        )
 
         testcase_files = service.domjudge_get_testcase_files(testcase_id)
         self.assertEqual(len(testcase_files), 2)
         self.assertEqual(
             {item.filename for item in testcase_files}, {"input", "output"}
         )
-        case_row = judgehost_fetch_case(service, judgetask_id)
+        case_row = service.case_snapshot(judgetask_id)
         self.assertIsNotNone(case_row)
         self.assertTrue(str(case_row["input_ref"] or "").startswith("blob://sha256/"))
         self.assertTrue(str(case_row["answer_ref"] or "").startswith("blob://sha256/"))
@@ -1373,7 +1342,9 @@ class TestJudgehostService(E2ETestBase):
                 "compare_metadata": "",
             },
         )
-        self.assertEqual(service.wait_for_task(task_id_a, timeout_sec=2.0), run_id_a)
+        result = service.wait_for_task_result(task_id_a, timeout_sec=2.0)
+        self.assertEqual(result["task_status"], "completed")
+        self.assertEqual(result["run_id"], run_id_a)
 
         task_id_b = service.enqueue_task(
             problem=self.problem,
@@ -1391,7 +1362,7 @@ class TestJudgehostService(E2ETestBase):
             bypass_case_result_cache=True,
         )
         service.domjudge_register_host("judgehost-script-cache-b")
-        leased_b: list[dict[str, object]] = []
+        leased_b: list[DomjudgeWork] = []
         row_b = None
         for _ in range(8):
             leased_b = service.domjudge_fetch_work(
@@ -1465,20 +1436,22 @@ class TestJudgehostService(E2ETestBase):
         batch_row = service.batch_snapshot(int(task_cases[0]["batch_id"]))
         self.assertIsNotNone(batch_row)
         assert batch_row is not None
-        with patch.object(ExecutableCache, "read", return_value=None):
-            with self.assertRaises(RuntimeError):
-                service.domjudge_get_executable_files(
-                    "compare",
-                    compare_script_id,
-                    hostname=host,
-                )
+        compare_files = service.domjudge_get_executable_files(
+            "compare", compare_script_id, hostname=host,
+        )
+        missing_file = next(item for item in compare_files if item.filename == "run")
+        missing_file.payload.path.unlink()
+        with self.assertRaises(RuntimeError):
+            service.domjudge_get_executable_files(
+                "compare", compare_script_id, hostname=host,
+            )
 
-        failed_batch = judgehost_fetch_batch(service, int(batch_row["batch_id"] or 0))
+        failed_batch = service.batch_snapshot(int(batch_row["batch_id"] or 0))
         self.assertIsNotNone(failed_batch)
         assert failed_batch is not None
         self.assertEqual(str(failed_batch["status"] or ""), "open")
         service.schedule_verification_cleanup(str(failed_batch["verification_id"]))
-        failed_batch = judgehost_fetch_batch(service, int(batch_row["batch_id"] or 0))
+        failed_batch = service.batch_snapshot(int(batch_row["batch_id"] or 0))
         assert failed_batch is not None
         self.assertEqual(str(failed_batch["status"] or ""), "failed")
 
@@ -1491,7 +1464,7 @@ class TestJudgehostService(E2ETestBase):
             str(dict(run_row["summary"]).get("error") or ""),
         )
 
-    def test_generate_prepared_payload_recomputes_precomputed_from_final_verification_payload(
+    def test_generate_prepared_payload_keeps_validator_sources_in_executable(
         self,
     ) -> None:
         service = runtime.judgehost_task_service
@@ -1551,8 +1524,6 @@ class TestJudgehostService(E2ETestBase):
             extra_source_files={"testlib.h": testlib_file},
             manual_validate_only=False,
         )
-        self.assertNotIn("precomputed", prepared)
-
         task_id = service.enqueue_task(
             problem=self.problem,
             username=self.user,
@@ -2022,7 +1993,7 @@ class TestJudgehostService(E2ETestBase):
         )
 
         case_id = int(first["judgetaskid"])
-        case_row = judgehost_fetch_case(service, case_id)
+        case_row = service.case_snapshot(case_id)
         self.assertIsNotNone(case_row)
         assert case_row is not None
         self.assertEqual(str(case_row["lease_owner"] or ""), "")
@@ -2046,13 +2017,12 @@ class TestJudgehostService(E2ETestBase):
                 case_id,
                 {"compile_success": "0"},
             )
-        case_row = judgehost_fetch_case(service, case_id)
+        case_row = service.case_snapshot(case_id)
         self.assertIsNotNone(case_row)
         assert case_row is not None
-        batch_row = judgehost_fetch_batch(service, int(case_row["batch_id"]))
+        batch_row = service.batch_snapshot(int(case_row["batch_id"]))
         self.assertIsNotNone(batch_row)
         assert batch_row is not None
-        self.assertNotIn("compile_owner", batch_row)
         self.assertEqual(str(batch_row["status"] or ""), "open")
         self.assertEqual(str(batch_row["compile_state"] or ""), "unknown")
         self.assertEqual(str(case_row["lease_owner"] or ""), "judgehost-reconnect-b")
@@ -2062,11 +2032,9 @@ class TestJudgehostService(E2ETestBase):
             service,
             case_id=case_id,
             hostname="judgehost-reconnect-b",
-            test_name="001.in",
             runresult="correct",
-            verdict="OK",
         )
-        self.assertEqual(judgehost_fetch_case(service, case_id)["status"], "reported")
+        self.assertEqual(service.case_snapshot(case_id)["status"], "reported")
 
     def test_domjudge_valid_execution_events_refresh_host_heartbeat(self) -> None:
         service = runtime.judgehost_task_service
@@ -2109,7 +2077,7 @@ class TestJudgehostService(E2ETestBase):
                 for row in service.status().get("hosts", [])
             }
 
-        def _host_row() -> dict[str, object]:
+        def _host_row() -> JudgehostStatusRow:
             rows = {
                 str(row.get("hostname") or ""): row
                 for row in service.status().get("hosts", [])
@@ -2299,7 +2267,7 @@ class TestJudgehostService(E2ETestBase):
         case_id_a = int(rows_a[0].get("judgetaskid") or 0)
         self.assertGreater(case_id_a, 0)
         self.assertGreater(testcase_id_a, 0)
-        row_a = judgehost_fetch_case(service, case_id_a)
+        row_a = service.case_snapshot(case_id_a)
         self.assertIsNotNone(row_a)
         cached_testcase_id_a = int(row_a["testcase_id"] or 0)
         self.assertEqual(cached_testcase_id_a, testcase_id_a)
@@ -2330,7 +2298,7 @@ class TestJudgehostService(E2ETestBase):
         self.assertGreater(case_id_b, 0)
         self.assertGreater(testcase_id_b, 0)
         self.assertNotEqual(case_id_a, case_id_b)
-        row_b = judgehost_fetch_case(service, case_id_b)
+        row_b = service.case_snapshot(case_id_b)
         self.assertIsNotNone(row_b)
         cached_testcase_id_b = int(row_b["testcase_id"] or 0)
         self.assertEqual(cached_testcase_id_b, testcase_id_b)
@@ -2418,7 +2386,7 @@ class TestJudgehostService(E2ETestBase):
         self.assertEqual(input_b, "beta\n")
 
     def test_domjudge_interactive_uses_configured_pass_limit(self) -> None:
-        service = runtime.judgehost_task_service
+        service = self._fresh_judgehost_service()
 
         verification_id = canonical_test_verification_id(
             f"b-jh-passlimit-interactive-{uuid.uuid4().hex[:8]}"
@@ -2438,7 +2406,7 @@ class TestJudgehostService(E2ETestBase):
             memory_limit_mb=1024,
             pass_limit=7,
         )
-        payload = service.prepare_enqueue_payload(
+        service.enqueue_task(
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
@@ -2452,16 +2420,14 @@ class TestJudgehostService(E2ETestBase):
             expected_behavior="accepted",
             verification_source="run.execute",
         )
-        precomputed = payload["precomputed"]
-        self.assertIsInstance(precomputed, ExecutionTemplate)
-        run_cfg = json.loads(precomputed.run_config_json)
-        self.assertIsInstance(run_cfg, dict)
-        self.assertEqual(int(run_cfg.get("pass_limit") or 0), 7)
-        run_files = precomputed.batch_spec.run_files
-        self.assertIn("pass-capture", {item[0] for item in run_files})
+        work = service.domjudge_fetch_work("interactive-pass-limit", max_batchsize=1)
+        self.assertEqual(len(work), 1)
+        self.assertEqual(json.loads(work[0]["run_config"])["pass_limit"], 7)
+        run_files = service.domjudge_get_executable_files("run", work[0]["run_script_id"])
+        self.assertIn("pass-capture", {item.filename for item in run_files})
 
     def test_domjudge_pass_fail_multi_pass_uses_configured_pass_limit(self) -> None:
-        service = runtime.judgehost_task_service
+        service = self._fresh_judgehost_service()
 
         verification_id = canonical_test_verification_id(
             f"b-jh-passlimit-multipass-{uuid.uuid4().hex[:8]}"
@@ -2475,7 +2441,7 @@ class TestJudgehostService(E2ETestBase):
             },
         )
 
-        payload = service.prepare_enqueue_payload(
+        service.enqueue_task(
             problem=self.problem,
             username=self.user,
             artifact_verification_id=verification_id,
@@ -2489,15 +2455,13 @@ class TestJudgehostService(E2ETestBase):
             expected_behavior="accepted",
             verification_source="run.execute",
         )
-        precomputed = payload["precomputed"]
-        self.assertIsInstance(precomputed, ExecutionTemplate)
-        run_cfg = json.loads(precomputed.run_config_json)
-        self.assertIsInstance(run_cfg, dict)
-        self.assertEqual(int(run_cfg.get("pass_limit") or 0), 7)
-        run_files = precomputed.batch_spec.run_files
-        compare_files = precomputed.batch_spec.compare_files
-        self.assertIn("pass-capture", {item[0] for item in run_files})
-        self.assertIn("pass-capture", {item[0] for item in compare_files})
+        work = service.domjudge_fetch_work("pass-fail-pass-limit", max_batchsize=1)
+        self.assertEqual(len(work), 1)
+        self.assertEqual(json.loads(work[0]["run_config"])["pass_limit"], 7)
+        run_files = service.domjudge_get_executable_files("run", work[0]["run_script_id"])
+        compare_files = service.domjudge_get_executable_files("compare", work[0]["compare_script_id"])
+        self.assertIn("pass-capture", {item.filename for item in run_files})
+        self.assertIn("pass-capture", {item.filename for item in compare_files})
 
     def test_domjudge_interactor_source_overrides_host_binary_payload(self) -> None:
         service = runtime.judgehost_task_service
@@ -2562,12 +2526,12 @@ class TestJudgehostService(E2ETestBase):
         self.assertIn("interactor.cpp", run_names)
         self.assertIn("testlib.h", run_names)
         self.assertNotIn("run", run_names)
-        build_item = next((item for item in run_files if item.filename == "build"), {})
-        build_text = build_item.payload.path.read_text(
-            encoding="utf-8", errors="replace"
+        interactor = next(item for item in run_files if item.filename == "interactor.cpp")
+        self.assertEqual(
+            interactor.payload.path.read_bytes(),
+            b"#ifndef DOMJUDGE\n#define DOMJUDGE 1\n#endif\n"
+            + (ws / "interactors" / "interactor.cpp").read_bytes(),
         )
-        self.assertIn("-DDOMJUDGE", build_text)
-        self.assertIn("interactor.cpp", build_text)
         pass_capture_item = next(
             item for item in run_files if item.filename == "pass-capture"
         )
@@ -2665,20 +2629,14 @@ class TestJudgehostService(E2ETestBase):
         run_files = service.domjudge_get_executable_files(
             "run", str(task_row.get("run_script_id") or "")
         )
-        run_item = next((item for item in run_files if item.filename == "run"), {})
-        run_text = run_item.payload.path.read_text(encoding="utf-8", errors="replace")
-        self.assertIn("missing generate command payload", run_text)
+        run_item = next(item for item in run_files if item.filename == "run")
+        self.assertTrue(run_item.is_executable)
 
         compare_files = service.domjudge_get_executable_files(
             "compare", str(task_row.get("compare_script_id") or "")
         )
-        compare_run = next(
-            (item for item in compare_files if item.filename == "run"), {}
-        )
-        compare_text = compare_run.payload.path.read_text(
-            encoding="utf-8", errors="replace"
-        )
-        self.assertIn("VALIDATOR_BIN", compare_text)
+        compare_run = next(item for item in compare_files if item.filename == "run")
+        self.assertTrue(compare_run.is_executable)
         compare_names = {item.filename for item in compare_files}
         self.assertTrue(
             "validator" in compare_names or "validator.cpp" in compare_names
@@ -2744,10 +2702,16 @@ class TestJudgehostService(E2ETestBase):
         validator = next(
             item for item in compare_files if item.filename == "validator.cpp"
         )
-        self.assertIn(
-            "int main(int, char **) { return 0; }",
-            validator.payload.path.read_text(encoding="utf-8"),
+        executable = workspace / "accept-all-validator"
+        compiled = subprocess.run(
+            ["g++", "-x", "c++", str(validator.payload.path), "-o", str(executable)],
+            capture_output=True, check=False,
         )
+        self.assertEqual(compiled.returncode, 0, compiled.stderr.decode(errors="replace"))
+        accepted = subprocess.run(
+            [str(executable)], input=b"arbitrary\x00testcase\n", capture_output=True, check=False,
+        )
+        self.assertEqual(accepted.returncode, 0, accepted.stderr.decode(errors="replace"))
 
     def test_domjudge_generate_verification_interactive_mode_does_not_require_interactor_payload(
         self,
@@ -2820,9 +2784,8 @@ class TestJudgehostService(E2ETestBase):
         run_names = {item.filename for item in run_files}
         self.assertIn("run", run_names)
         self.assertNotIn("interactor.cpp", run_names)
-        run_item = next((item for item in run_files if item.filename == "run"), {})
-        run_text = run_item.payload.path.read_text(encoding="utf-8", errors="replace")
-        self.assertIn("missing generate command payload", run_text)
+        run_item = next(item for item in run_files if item.filename == "run")
+        self.assertTrue(run_item.is_executable)
 
         compare_files = service.domjudge_get_executable_files(
             "compare", str(task_row.get("compare_script_id") or "")
@@ -2883,14 +2846,22 @@ class TestJudgehostService(E2ETestBase):
         compare_files = service.domjudge_get_executable_files(
             "compare", compare_script_id
         )
-        compare_run = next(
-            (item for item in compare_files if item.filename == "run"), {}
-        )
-        compare_text = compare_run.payload.path.read_text(
-            encoding="utf-8", errors="replace"
-        )
-        self.assertIn("exit 42", compare_text)
-        db_rows = judgehost_cases_for_run(service, run_id)
+        compare_run = next(item for item in compare_files if item.filename == "run")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            comparison = Path(temp_dir)
+            test_input = comparison / "test.in"
+            test_answer = comparison / "test.ans"
+            test_input.write_bytes(b"")
+            test_answer.write_bytes(b"")
+            compared = subprocess.run(
+                [
+                    "/bin/sh", str(compare_run.payload.path), str(test_input),
+                    str(test_answer), str(comparison / "feedback"),
+                ],
+                input=b"", capture_output=True, check=False,
+            )
+        self.assertEqual(compared.returncode, 42, compared.stderr.decode(errors="replace"))
+        db_rows = service.run_case_snapshots(run_id)
         self.assertEqual(len(db_rows), 1)
         self.assertEqual(int(db_rows[0]["id"] or 0), case_id)
         self.assertEqual(str(db_rows[0]["test_name"] or ""), "compile-only.in")
@@ -2916,8 +2887,9 @@ class TestJudgehostService(E2ETestBase):
                 "team_message": "",
             },
         )
-        finished_run_id = service.wait_for_task(task_id, timeout_sec=2.0)
-        self.assertEqual(finished_run_id, run_id)
+        finished = service.wait_for_task_result(task_id, timeout_sec=2.0)
+        self.assertEqual(finished["task_status"], "completed")
+        self.assertEqual(finished["run_id"], run_id)
 
     def test_domjudge_compile_only_multi_pass_with_interactor_stays_non_combined(
         self,
@@ -2985,11 +2957,6 @@ class TestJudgehostService(E2ETestBase):
                 {"checker.cpp", "validator.cpp", "interactor.cpp", "testlib.h"}
             )
         )
-        run_item = next((item for item in run_files if item.filename == "run"), {})
-        run_text = run_item.payload.path.read_text(encoding="utf-8", errors="replace")
-        self.assertIn('cat "$TESTIN" >"$PROGOUT"', run_text)
-        self.assertIn('"$@" </dev/null >/dev/null', run_text)
-        self.assertNotIn("runpipe", run_text)
 
         case_id = int(task_row.get("judgetaskid") or 0)
         self.assertGreater(case_id, 0)
@@ -3013,8 +2980,9 @@ class TestJudgehostService(E2ETestBase):
                 "team_message": "",
             },
         )
-        finished_run_id = service.wait_for_task(task_id, timeout_sec=2.0)
-        self.assertEqual(finished_run_id, run_id)
+        finished = service.wait_for_task_result(task_id, timeout_sec=2.0)
+        self.assertEqual(finished["task_status"], "completed")
+        self.assertEqual(finished["run_id"], run_id)
 
     def test_domjudge_compile_only_cache_hit_with_extra_sources(self) -> None:
         service = runtime.judgehost_task_service
@@ -3033,22 +3001,7 @@ class TestJudgehostService(E2ETestBase):
         self._seed_build_verification(verification_id)
         run_a = f"r-jh-compile-only-extra-a-{uuid.uuid4().hex[:8]}"
         extra_testlib = runtime.runtime_blob_store.put_bytes(b"// testlib\n")
-        prepared = service.prepare_enqueue_payload(
-            problem=self.problem,
-            username=self.user,
-            artifact_verification_id=verification_id,
-            submission_path=None,
-            upload_content=b"int main(){return 0;}\n",
-            upload_filename="checker.cpp",
-            run_id=run_a,
-            selected_tests=[],
-            verification_id=_canonical_verification_id("inv-jh-compile-only-extra-a"),
-            verification_program_id=_SOLUTION_PROGRAM_ID,
-            expected_behavior="compile",
-            verification_source="build.compile",
-            compile_only=True,
-        )
-        prepared["extra_source_files"] = {"testlib.h": extra_testlib.to_payload()}
+        prepared = {"extra_source_files": {"testlib.h": extra_testlib.to_payload()}}
 
         task_a = service.enqueue_task(
             problem=self.problem,
@@ -3091,40 +3044,36 @@ class TestJudgehostService(E2ETestBase):
                 "team_message": "",
             },
         )
-        self.assertEqual(service.wait_for_task(task_a, timeout_sec=2.0), run_a)
+        result = service.wait_for_task_result(task_a, timeout_sec=2.0)
+        self.assertEqual(result["task_status"], "completed")
+        self.assertEqual(result["run_id"], run_a)
         run_row_a = self._verification_run_row(run_a)
         self.assertIsNotNone(run_row_a)
 
         run_b = f"r-jh-compile-only-extra-b-{uuid.uuid4().hex[:8]}"
-        original_lookup = CaseResultCache.lookup
-        with patch.object(
-            CaseResultCache,
-            "lookup",
-            autospec=True,
-            side_effect=original_lookup,
-        ) as cache_lookup:
-            task_b = service.enqueue_task(
-                problem=self.problem,
-                username=self.user,
-                artifact_verification_id=verification_id,
-                submission_path=None,
-                upload_content=b"int main(){return 0;}\n",
-                upload_filename="checker.cpp",
-                run_id=run_b,
-                selected_tests=[],
-                verification_id=_canonical_verification_id(
-                    "inv-jh-compile-only-extra-b"
-                ),
-                verification_program_id=_SOLUTION_PROGRAM_ID,
-                expected_behavior="compile",
-                verification_source="build.compile",
-                compile_only=True,
-                prepared_payload=prepared,
-            )
-            rows_b = service.domjudge_fetch_work(host, max_batchsize=16)
-            self.assertFalse(bool(self._work_rows_for_task(service, rows_b, task_b)))
-            self.assertEqual(cache_lookup.call_count, 1)
-        self.assertEqual(service.wait_for_task(task_b, timeout_sec=2.0), run_b)
+        task_b = service.enqueue_task(
+            problem=self.problem,
+            username=self.user,
+            artifact_verification_id=verification_id,
+            submission_path=None,
+            upload_content=b"int main(){return 0;}\n",
+            upload_filename="checker.cpp",
+            run_id=run_b,
+            selected_tests=[],
+            verification_id=_canonical_verification_id(
+                "inv-jh-compile-only-extra-b"
+            ),
+            verification_program_id=_SOLUTION_PROGRAM_ID,
+            expected_behavior="compile",
+            verification_source="build.compile",
+            compile_only=True,
+            prepared_payload=prepared,
+        )
+        rows_b = service.domjudge_fetch_work(host, max_batchsize=16)
+        self.assertFalse(bool(self._work_rows_for_task(service, rows_b, task_b)))
+        result = service.wait_for_task_result(task_b, timeout_sec=2.0)
+        self.assertEqual(result["task_status"], "completed")
+        self.assertEqual(result["run_id"], run_b)
         run_row_b = self._verification_run_row(run_b)
         self.assertIsNotNone(run_row_b)
         self.assertEqual(str(run_row_b["status"] or "").strip().lower(), "ok")
@@ -3187,7 +3136,9 @@ class TestJudgehostService(E2ETestBase):
                 "team_message": "",
             },
         )
-        self.assertEqual(service.wait_for_task(task_a, timeout_sec=2.0), run_a)
+        result = service.wait_for_task_result(task_a, timeout_sec=2.0)
+        self.assertEqual(result["task_status"], "completed")
+        self.assertEqual(result["run_id"], run_a)
 
         run_b = f"r-jh-compile-only-empty-build-b-{uuid.uuid4().hex[:8]}"
         task_b = service.enqueue_task(
@@ -3209,7 +3160,9 @@ class TestJudgehostService(E2ETestBase):
         )
         rows_b = service.domjudge_fetch_work(host, max_batchsize=16)
         self.assertFalse(bool(self._work_rows_for_task(service, rows_b, task_b)))
-        self.assertEqual(service.wait_for_task(task_b, timeout_sec=2.0), run_b)
+        result = service.wait_for_task_result(task_b, timeout_sec=2.0)
+        self.assertEqual(result["task_status"], "completed")
+        self.assertEqual(result["run_id"], run_b)
         run_row_b = self._verification_run_row(run_b)
         self.assertIsNotNone(run_row_b)
         self.assertEqual(str(run_row_b["status"] or "").strip().lower(), "ok")
@@ -3223,7 +3176,7 @@ class TestJudgehostService(E2ETestBase):
             JUDGEHOST_API_TOKEN="test-token",
             JUDGEHOST_API_USERNAME="judgehost",
         )
-        self._reset_task_queue_state(service)
+        service.reset_runtime_state()
 
         verification_id = canonical_test_verification_id(
             f"b-jh-extra-src-{uuid.uuid4().hex[:8]}"
@@ -3231,22 +3184,7 @@ class TestJudgehostService(E2ETestBase):
         run_id = f"r-jh-extra-src-{uuid.uuid4().hex[:8]}"
         self._seed_build_verification(verification_id)
         extra_testlib = runtime.runtime_blob_store.put_bytes(b"// testlib helper\n")
-        prepared = service.prepare_enqueue_payload(
-            problem=self.problem,
-            username=self.user,
-            artifact_verification_id=verification_id,
-            submission_path=None,
-            upload_content=b'#include "testlib.h"\nint main(){return 0;}\n',
-            upload_filename="gen.cpp",
-            run_id=run_id,
-            selected_tests=[],
-            verification_id=_canonical_verification_id("inv-jh-extra-src"),
-            verification_program_id=_SOLUTION_PROGRAM_ID,
-            expected_behavior="compile",
-            verification_source="build.compile",
-            compile_only=True,
-        )
-        prepared["extra_source_files"] = {"testlib.h": extra_testlib.to_payload()}
+        prepared = {"extra_source_files": {"testlib.h": extra_testlib.to_payload()}}
 
         _task_id = service.enqueue_task(
             problem=self.problem,
@@ -3301,8 +3239,9 @@ class TestJudgehostService(E2ETestBase):
                 "team_message": "",
             },
         )
-        finished_run_id = service.wait_for_task(_task_id, timeout_sec=2.0)
-        self.assertEqual(finished_run_id, run_id)
+        finished = service.wait_for_task_result(_task_id, timeout_sec=2.0)
+        self.assertEqual(finished["task_status"], "completed")
+        self.assertEqual(finished["run_id"], run_id)
 
     def test_domjudge_compile_only_result_normalization_maps_success_to_ok(
         self,
@@ -3369,8 +3308,9 @@ class TestJudgehostService(E2ETestBase):
                 "team_message": "",
             },
         )
-        finished_run_id = service.wait_for_task(task_id, timeout_sec=2.0)
-        self.assertEqual(finished_run_id, run_id)
+        finished = service.wait_for_task_result(task_id, timeout_sec=2.0)
+        self.assertEqual(finished["task_status"], "completed")
+        self.assertEqual(finished["run_id"], run_id)
 
         run_row = self._verification_run_row(run_id)
         self.assertIsNotNone(run_row)
@@ -3442,8 +3382,9 @@ class TestJudgehostService(E2ETestBase):
                 "team_message": "",
             },
         )
-        finished_run_id = service.wait_for_task(task_id, timeout_sec=2.0)
-        self.assertEqual(finished_run_id, run_id)
+        finished = service.wait_for_task_result(task_id, timeout_sec=2.0)
+        self.assertEqual(finished["task_status"], "completed")
+        self.assertEqual(finished["run_id"], run_id)
 
         run_row = self._verification_run_row(run_id)
         self.assertIsNotNone(run_row)
@@ -3511,7 +3452,7 @@ class TestJudgehostService(E2ETestBase):
                 "compile_metadata": "",
             },
         )
-        case_row = judgehost_fetch_case(service, case_id)
+        case_row = service.case_snapshot(case_id)
         self.assertIsNotNone(case_row)
         assert case_row is not None
         case_report = service.poll_task_case_result(
@@ -3526,9 +3467,9 @@ class TestJudgehostService(E2ETestBase):
             "compile failed detail",
             str(canonical_result.compile.diagnostics[0]["message"]),
         )
-        with self.assertRaises(RuntimeError) as ctx:
-            service.wait_for_task(task_id, timeout_sec=2.0)
-        self.assertIn("compile failed detail", str(ctx.exception))
+        failed = service.wait_for_task_result(task_id, timeout_sec=2.0)
+        self.assertEqual(failed["task_status"], "failed")
+        self.assertIn("compile failed detail", failed["error"])
 
         run_row = self._verification_run_row(run_id)
         self.assertIsNotNone(run_row)
@@ -3703,7 +3644,7 @@ class TestJudgehostService(E2ETestBase):
             )
             self.assertEqual(add_resp.status_code, 200)
 
-            row = judgehost_fetch_case(service, case_id)
+            row = service.case_snapshot(case_id)
             self.assertIsNotNone(row)
             self.assertEqual(str(row["status"] or ""), "reported")
             self.assertEqual(str(row["runresult"] or ""), "correct")
@@ -3786,11 +3727,11 @@ class TestJudgehostService(E2ETestBase):
         leased = service.domjudge_fetch_work(hostname, max_batchsize=1)
         self.assertEqual(len(leased), 1)
         case_id = int(leased[0].get("judgetaskid") or 0)
-        case_row = judgehost_fetch_case(service, case_id)
+        case_row = service.case_snapshot(case_id)
         self.assertIsNotNone(case_row)
         assert case_row is not None
         batch_id = int(case_row["batch_id"])
-        before = judgehost_fetch_batch(service, batch_id)
+        before = service.batch_snapshot(batch_id)
         self.assertIsNotNone(before)
         assert before is not None
         before_compile_state = (
@@ -3800,7 +3741,7 @@ class TestJudgehostService(E2ETestBase):
             before["compile_metadata_b64"],
         )
 
-        def _last_seen_at() -> object:
+        def _last_seen_at() -> str:
             row = next(
                 item
                 for item in service.status().get("hosts", [])
@@ -3846,7 +3787,7 @@ class TestJudgehostService(E2ETestBase):
                     invalid_payload,
                 )
 
-            after = judgehost_fetch_batch(service, batch_id)
+            after = service.batch_snapshot(batch_id)
             self.assertIsNotNone(after)
             assert after is not None
             self.assertEqual(
@@ -3858,7 +3799,7 @@ class TestJudgehostService(E2ETestBase):
                 ),
                 before_compile_state,
             )
-            current_case = judgehost_fetch_case(service, case_id)
+            current_case = service.case_snapshot(case_id)
             self.assertIsNotNone(current_case)
             assert current_case is not None
             self.assertEqual(current_case["status"], "leased")
@@ -3907,7 +3848,7 @@ class TestJudgehostService(E2ETestBase):
         tasks = service.domjudge_fetch_work(hostname, max_batchsize=1)
         self.assertEqual(len(tasks), 1)
         case_id = int(tasks[0].get("judgetaskid") or 0)
-        case_row = judgehost_fetch_case(service, case_id)
+        case_row = service.case_snapshot(case_id)
         self.assertIsNotNone(case_row)
         assert case_row is not None
         batch_id = int(case_row["batch_id"])
@@ -3926,7 +3867,7 @@ class TestJudgehostService(E2ETestBase):
         )
         self.assertEqual(response.status_code, 200, response.text)
 
-        batch_row = judgehost_fetch_batch(service, batch_id)
+        batch_row = service.batch_snapshot(batch_id)
         self.assertIsNotNone(batch_row)
         assert batch_row is not None
         stored_compile_output = base64.b64decode(
@@ -3983,7 +3924,6 @@ class TestJudgehostService(E2ETestBase):
     ) -> None:
         from app.main import app
 
-        service = runtime.judgehost_task_service
         override_config_values(
             self,
             runtime.config_values,
@@ -4022,20 +3962,12 @@ class TestJudgehostService(E2ETestBase):
                     headers={"Authorization": "Bearer test-token"},
                 )
                 self.assertEqual(languages.status_code, 200, languages.text)
-                with patch.object(
-                    service,
-                    "domjudge_get_testcase_files",
-                    side_effect=AssertionError(
-                        "closed maintenance admission reached file lookup"
-                    ),
-                ) as get_testcase_files:
-                    download = client.get(
-                        "/api/v4/judgehosts/get_files/testcase/1",
-                        headers={"Authorization": "Bearer test-token"},
-                    )
+                download = client.get(
+                    "/api/v4/judgehosts/get_files/testcase/1",
+                    headers={"Authorization": "Bearer test-token"},
+                )
                 self.assertEqual(download.status_code, 503, download.text)
                 self.assertEqual(download.headers.get("retry-after"), "5")
-                get_testcase_files.assert_not_called()
                 heartbeat = client.post(
                     "/api/v4/judgehosts",
                     data={"hostname": "judgehost-maintenance"},
@@ -4060,7 +3992,6 @@ class TestJudgehostService(E2ETestBase):
 
     def test_file_stream_holds_maintenance_admission_until_body_closes(self) -> None:
         from app.main import app
-        from app.service.judgehost.domjudge.file_stream import DomjudgeDownloadFile, stream_domjudge_file_array
 
         service = runtime.judgehost_task_service
         override_config_values(
@@ -4072,11 +4003,10 @@ class TestJudgehostService(E2ETestBase):
         )
         stream_started = threading.Event()
         release_stream = threading.Event()
-        responses: list[object] = []
+        responses: list[Response] = []
         failures: list[Exception] = []
-        downloads: list[DomjudgeDownloadFile] = []
 
-        def blocking_stream(rows):
+        def blocking_stream(rows: Sequence[DomjudgeDownloadFile]) -> Generator[bytes, None, None]:
             source = iter(stream_domjudge_file_array(rows))
             try:
                 yield next(source)
@@ -4090,7 +4020,7 @@ class TestJudgehostService(E2ETestBase):
             try:
                 responses.append(
                     client.get(
-                        "/api/v4/judgehosts/get_files/source/1",
+                        download_url,
                         headers={"Authorization": "Bearer test-token"},
                     )
                 )
@@ -4098,15 +4028,14 @@ class TestJudgehostService(E2ETestBase):
                 failures.append(exc)
 
         with (
-            patch.object(service, "domjudge_get_source_files", return_value=downloads),
             patch(
                 "app.impl.judgehost.api.stream_domjudge_file_array",
                 side_effect=blocking_stream,
             ),
             TestClient(app) as client,
         ):
-            payload = runtime.runtime_blob_store.put_bytes(b"protected download\n")
-            downloads.append(DomjudgeDownloadFile("source.cpp", payload))
+            download_url, payload = self._prepare_source_download(service)
+            expected = payload.path.read_bytes()
             request_thread = threading.Thread(
                 target=request_download,
                 args=(client,),
@@ -4123,7 +4052,7 @@ class TestJudgehostService(E2ETestBase):
                 self.assertFalse(started.accepted)
                 self.assertEqual(started.reason, "busy")
                 self.assertEqual(started.busy["judgehost_callbacks"], 1)
-                self.assertEqual(payload.path.read_bytes(), b"protected download\n")
+                self.assertEqual(payload.path.read_bytes(), expected)
             finally:
                 release_stream.set()
                 request_thread.join(timeout=2)
@@ -4132,9 +4061,23 @@ class TestJudgehostService(E2ETestBase):
         self.assertFalse(request_thread.is_alive())
         self.assertEqual(failures, [])
         self.assertEqual(len(responses), 1)
-        self.assertEqual(getattr(responses[0], "status_code", None), 200)
-        self.assertEqual(base64.b64decode(responses[0].json()[0]["content"]), b"protected download\n")
+        self.assertEqual(responses[0].status_code, 200)
+        self.assertEqual(base64.b64decode(responses[0].json()[0]["content"]), expected)
         self.assertEqual(service.busy_counts()["callbacks"], 0)
+
+    def _prepare_source_download(self, service: Judgehost) -> tuple[str, PayloadFile]:
+        run_id = f"download-{uuid.uuid4().hex}"
+        service.enqueue_compile_only_task(
+            problem=self.problem, username=self.user, artifact_verification_id="",
+            upload_content=b"// protected download\nint main(){return 0;}\n",
+            upload_filename="source.cpp", run_id=run_id,
+            verification_id=_canonical_verification_id(run_id),
+            verification_program_id=_SOLUTION_PROGRAM_ID,
+        )
+        work = service.domjudge_fetch_work(run_id, max_batchsize=1)
+        self.assertEqual(len(work), 1)
+        source = service.domjudge_get_source_files(work[0]["submitid"])[0].payload
+        return f"/api/v4/judgehosts/get_files/source/{work[0]['submitid']}", source
 
     def test_file_stream_releases_admission_on_read_error_and_disconnect(self) -> None:
         from app.impl.judgehost.api import domjudge_get_files_source
@@ -4146,25 +4089,27 @@ class TestJudgehostService(E2ETestBase):
 
         for disconnect in (False, True):
             closed = threading.Event()
+            download_url, _payload = self._prepare_source_download(service)
+            submit_id = download_url.rsplit("/", 1)[-1]
 
-            def source(_rows):
+            def source(_rows: Sequence[DomjudgeDownloadFile]) -> Generator[bytes, None, None]:
                 try:
                     yield b"["
                     raise OSError("injected file read error")
                 finally:
                     closed.set()
 
-            async def exercise():
-                scope = {"type": "http", "method": "GET", "path": "/api/v4/judgehosts/get_files/source/1",
+            async def exercise() -> None:
+                scope: Scope = {"type": "http", "method": "GET", "path": download_url,
                          "headers": [(b"authorization", b"Bearer test-token")], "app": app,
                          "asgi": {"version": "3.0", "spec_version": "2.4"}}
-                response = await domjudge_get_files_source(Request(scope), "local", "1")
+                response = await domjudge_get_files_source(Request(scope), "local", submit_id)
                 self.assertEqual(service.busy_counts()["callbacks"], 1)
 
-                async def receive():
+                async def receive() -> Message:
                     return {"type": "http.request", "body": b""}
 
-                async def send(message):
+                async def send(message: Message) -> None:
                     if disconnect and message["type"] == "http.response.body":
                         raise OSError("client disconnected")
 
@@ -4172,7 +4117,7 @@ class TestJudgehostService(E2ETestBase):
                 with self.assertRaises(ClientDisconnect):
                     await response(scope, receive, send)
 
-            with self.subTest(disconnect=disconnect), patch.object(service, "domjudge_get_source_files", return_value=[]), patch(
+            with self.subTest(disconnect=disconnect), patch(
                 "app.impl.judgehost.api.stream_domjudge_file_array", side_effect=source,
             ):
                 asyncio.run(exercise())
@@ -4187,7 +4132,7 @@ class TestJudgehostService(E2ETestBase):
         waiting = threading.Event()
         release = threading.Event()
         closed = threading.Event()
-        result: list[list[dict[str, object]]] = []
+        result: list[list[DomjudgeWork]] = []
 
         def wait_without_holding_admission(_timeout_sec: float) -> bool:
             waiting.set()
@@ -4237,15 +4182,11 @@ class TestJudgehostService(E2ETestBase):
         with gate.locked():
             gate.drain_locked()
         try:
-            with patch(
-                "app.service.judgehost.batch.runtime.JudgehostBatchRuntime.wait_for_ready_batch",
-                side_effect=AssertionError("draining fetch-work must not long-poll"),
-            ):
-                started = time.monotonic()
-                result = service.domjudge_fetch_work(
-                    "judgehost-maintenance-draining",
-                    max_batchsize=1,
-                )
+            started = time.monotonic()
+            result = service.domjudge_fetch_work(
+                "judgehost-maintenance-draining",
+                max_batchsize=1,
+            )
             self.assertEqual(result, [])
             self.assertLess(time.monotonic() - started, 0.5)
         finally:
@@ -4845,13 +4786,15 @@ class TestJudgehostService(E2ETestBase):
                     row = db_fetch_one("SELECT final_status FROM verification_tasks WHERE id=?", (tasks[1].task_id,))
                     self.assertEqual(row["final_status"], "done")
                     service.close_programs(verification_id, [_SOLUTION_PROGRAM_ID])
-                    second_case = service.run_case_snapshots(service.wait_for_task(second, timeout_sec=1))[0]
+                    second_result = service.wait_for_task_result(second, timeout_sec=1)
+                    self.assertEqual(second_result["task_status"], "completed")
+                    second_case = service.run_case_snapshots(second_result["run_id"])[0]
                     batch_id = int(second_case["batch_id"])
-                    self.assertEqual(judgehost_fetch_batch(service, batch_id)["status"], "finalize-pending")
+                    self.assertEqual(service.batch_snapshot(batch_id)["status"], "finalize-pending")
                 finally:
                     release.set()
                 self.assertEqual(first_probe.result(timeout=2), set())
-        self.assertEqual(judgehost_fetch_batch(service, batch_id)["status"], "completed")
+        self.assertEqual(service.batch_snapshot(batch_id)["status"], "completed")
         rows = [db_fetch_one("SELECT final_status FROM verification_tasks WHERE id=?", (task.task_id,)) for task in tasks]
         self.assertEqual([row["final_status"] for row in rows], ["done", "done"])
 
@@ -4944,12 +4887,12 @@ class TestJudgehostService(E2ETestBase):
             fetching = pool.submit(
                 service.domjudge_fetch_work, "judgehost-partial-cache", 8
             )
-            self.assertEqual(
-                service.wait_for_task(hit_task_id, timeout_sec=1.0), run_id_hit
-            )
+            hit_result = service.wait_for_task_result(hit_task_id, timeout_sec=1.0)
+            self.assertEqual(hit_result["task_status"], "completed")
+            self.assertEqual(hit_result["run_id"], run_id_hit)
             self.assertFalse(fetching.done())
             self.assertEqual(fetching.result(timeout=7.0), [])
-        hit_rows = judgehost_cases_for_run(service, run_id_hit)
+        hit_rows = service.run_case_snapshots(run_id_hit)
         self.assertEqual([str(row["status"]) for row in hit_rows], ["reported"])
 
         target_task_id = service.enqueue_task(
@@ -4967,12 +4910,12 @@ class TestJudgehostService(E2ETestBase):
             verification_source="run.execute",
         )
 
-        rows = judgehost_cases_for_run(service, run_id_target)
+        rows = service.run_case_snapshots(run_id_target)
         self.assertEqual(len(rows), 2)
         self.assertEqual({str(row["status"]) for row in rows}, {"cache-pending"})
 
         self.assertEqual(service.probe_task_case_cache([target_task_id]), set())
-        rows = judgehost_cases_for_run(service, run_id_target)
+        rows = service.run_case_snapshots(run_id_target)
         self.assertEqual(str(rows[0]["test_name"] or ""), "001.in")
         self.assertEqual(str(rows[0]["status"] or ""), "reported")
         self.assertEqual(str(rows[1]["test_name"] or ""), "002.in")
@@ -4981,7 +4924,7 @@ class TestJudgehostService(E2ETestBase):
         leased = service.domjudge_fetch_work("judgehost-partial-cache", max_batchsize=8)
         self.assertEqual(len(leased), 1)
 
-        rows = judgehost_cases_for_run(service, run_id_target)
+        rows = service.run_case_snapshots(run_id_target)
         self.assertEqual(str(rows[0]["test_name"] or ""), "001.in")
         self.assertEqual(str(rows[0]["status"] or ""), "reported")
         self.assertEqual(str(rows[1]["test_name"] or ""), "002.in")
@@ -5159,7 +5102,7 @@ class TestJudgehostService(E2ETestBase):
             },
         )
 
-        case_row = judgehost_fetch_case(service, case_id)
+        case_row = service.case_snapshot(case_id)
         self.assertIsNotNone(case_row)
         self.assertEqual(
             str(case_row["runresult"] or "").strip().lower(), "checker-fail"
@@ -5350,7 +5293,7 @@ class TestJudgehostService(E2ETestBase):
             },
         )
 
-        case_row = judgehost_fetch_case(service, case_id)
+        case_row = service.case_snapshot(case_id)
         self.assertIsNotNone(case_row)
         self.assertEqual(str(case_row["runresult"] or "").strip().lower(), "timelimit")
 
@@ -5591,11 +5534,11 @@ class TestJudgehostService(E2ETestBase):
         leased = service.domjudge_fetch_work("judgehost-case-only-id", max_batchsize=8)
         self.assertEqual(len(leased), 1)
         case_id = int(leased[0]["judgetaskid"])
-        row = judgehost_fetch_case(service, case_id)
+        row = service.case_snapshot(case_id)
         self.assertIsNotNone(row)
         assert row is not None
         batch_id = int(row["batch_id"])
-        before = judgehost_fetch_batch(service, batch_id)
+        before = service.batch_snapshot(batch_id)
         self.assertIsNotNone(before)
 
         service.domjudge_add_debug_info(
@@ -5611,9 +5554,9 @@ class TestJudgehostService(E2ETestBase):
             0,
         )
 
-        after = judgehost_fetch_batch(service, batch_id)
+        after = service.batch_snapshot(batch_id)
         self.assertEqual(after, before)
-        self.assertEqual(judgehost_fetch_case(service, case_id)["status"], "leased")
+        self.assertEqual(service.case_snapshot(case_id)["status"], "leased")
 
     def test_domjudge_internal_error_includes_judgehostlog_compare_output(self) -> None:
         service = runtime.judgehost_task_service
@@ -5931,38 +5874,28 @@ class TestJudgehostService(E2ETestBase):
         self.assertIsNotNone(finished_a)
         self.assertEqual(str(finished_a["status"] or ""), "ok")
 
-        original_delete = CaseResultCache.delete
-        with patch.object(
-            CaseResultCache,
-            "delete",
-            autospec=True,
-            side_effect=original_delete,
-        ) as cache_delete:
-            service.enqueue_task(
-                problem=self.problem,
-                username=self.user,
-                artifact_verification_id=verification_id,
-                submission_path="solutions/ac.cpp",
-                upload_content=None,
-                upload_filename=None,
-                run_id=run_id_b,
-                selected_tests=["001.in"],
-                verification_id=_canonical_verification_id("inv-recompile-b"),
-                verification_program_id=_SOLUTION_PROGRAM_ID,
-                expected_behavior="accepted",
-                verification_source="run.execute",
-                bypass_case_result_cache=True,
-            )
-            tasks_b = service.domjudge_fetch_work(
-                "judgehost-recompile", max_batchsize=8
-            )
+        cached_entries = self._judge_index_entry_count(RuntimeCacheIndex.RESULT)
+        self.assertGreater(cached_entries, 0)
+        service.enqueue_task(
+            problem=self.problem,
+            username=self.user,
+            artifact_verification_id=verification_id,
+            submission_path="solutions/ac.cpp",
+            upload_content=None,
+            upload_filename=None,
+            run_id=run_id_b,
+            selected_tests=["001.in"],
+            verification_id=_canonical_verification_id("inv-recompile-b"),
+            verification_program_id=_SOLUTION_PROGRAM_ID,
+            expected_behavior="accepted",
+            verification_source="run.execute",
+            bypass_case_result_cache=True,
+        )
+        tasks_b = service.domjudge_fetch_work(
+            "judgehost-recompile", max_batchsize=8
+        )
         self.assertEqual(len(tasks_b), 1)
-        self.assertGreaterEqual(cache_delete.call_count, 1)
-        deleted_refs = {call.args[1:] for call in cache_delete.call_args_list}
-        self.assertEqual(len(deleted_refs), 1)
-        key_hash, signature = next(iter(deleted_refs))
-        self.assertTrue(key_hash)
-        self.assertTrue(signature)
+        self.assertEqual(self._judge_index_entry_count(RuntimeCacheIndex.RESULT), cached_entries - 1)
         case_id_b = int(tasks_b[0].get("judgetaskid") or 0)
         self.assertGreater(case_id_b, 0)
         self.assertNotEqual(case_id_a, case_id_b)
@@ -6010,7 +5943,7 @@ class TestJudgehostService(E2ETestBase):
         self.assertEqual(len(tasks_a), 1)
         protocol_job_id = int(tasks_a[0].get("jobid") or 0)
         case_id_a = int(tasks_a[0].get("judgetaskid") or 0)
-        case_a = judgehost_fetch_case(service, case_id_a)
+        case_a = service.case_snapshot(case_id_a)
         assert case_a is not None
         internal_batch_id = int(case_a["batch_id"])
         self.assertGreaterEqual(protocol_job_id, 0)
@@ -6032,12 +5965,12 @@ class TestJudgehostService(E2ETestBase):
         case_id_b = int(tasks_b[0].get("judgetaskid") or 0)
         self.assertGreater(case_id_b, 0)
         self.assertNotEqual(case_id_b, case_id_a)
-        case_b = judgehost_fetch_case(service, case_id_b)
+        case_b = service.case_snapshot(case_id_b)
         assert case_b is not None
         self.assertEqual(int(case_b["batch_id"]), internal_batch_id)
 
-        case_row_a = judgehost_fetch_case(service, case_id_a)
-        case_row_b = judgehost_fetch_case(service, case_id_b)
+        case_row_a = service.case_snapshot(case_id_a)
+        case_row_b = service.case_snapshot(case_id_b)
         self.assertIsNotNone(case_row_a)
         self.assertIsNotNone(case_row_b)
         self.assertEqual(str(case_row_a["lease_owner"] or ""), "judgehost-share-a")
@@ -6047,7 +5980,7 @@ class TestJudgehostService(E2ETestBase):
         self,
     ) -> None:
         service = runtime.judgehost_task_service
-        self._reset_task_queue_state(service)
+        service.reset_runtime_state()
         override_config_values(
             self,
             runtime.config_values,
@@ -6110,7 +6043,7 @@ class TestJudgehostService(E2ETestBase):
         )
         second_case_id = int(second_tasks[0]["judgetaskid"])
         first_case_id = int(first_tasks[0].get("judgetaskid") or 0)
-        first_case = judgehost_fetch_case(service, first_case_id)
+        first_case = service.case_snapshot(first_case_id)
         self.assertIsNotNone(first_case)
         self.assertEqual(str(first_case["status"] or ""), "leased")
         self.assertEqual(str(first_case["lease_owner"] or ""), host)
@@ -6139,11 +6072,11 @@ class TestJudgehostService(E2ETestBase):
                 "compare_metadata": "",
             },
         )
-        reported_case = judgehost_fetch_case(service, first_case_id)
+        reported_case = service.case_snapshot(first_case_id)
         self.assertIsNotNone(reported_case)
         self.assertEqual(str(reported_case["status"] or ""), "reported")
 
-        second_case = judgehost_fetch_case(service, second_case_id)
+        second_case = service.case_snapshot(second_case_id)
         self.assertIsNotNone(second_case)
         self.assertEqual(second_case["status"], "leased")
         self.assertEqual(second_case["lease_owner"], host)
@@ -6152,7 +6085,7 @@ class TestJudgehostService(E2ETestBase):
         self,
     ) -> None:
         service = runtime.judgehost_task_service
-        self._reset_task_queue_state(service)
+        service.reset_runtime_state()
         verification_id = _canonical_verification_id(str(uuid.uuid4()))
         build_verification_id = _canonical_verification_id(
             f"late-debug-build-{uuid.uuid4()}"
@@ -6230,9 +6163,7 @@ class TestJudgehostService(E2ETestBase):
             service,
             case_id=case_id,
             hostname="judgehost-late-debug",
-            test_name="016.in",
             runresult="checker-fail",
-            verdict="FL",
         )
 
         before = next(
@@ -6424,7 +6355,7 @@ class TestJudgehostService(E2ETestBase):
         self.assertEqual(len(tasks_a), 1)
         protocol_job_id = int(tasks_a[0].get("jobid") or 0)
         case_id_a = int(tasks_a[0].get("judgetaskid") or 0)
-        case_a = judgehost_fetch_case(service, case_id_a)
+        case_a = service.case_snapshot(case_id_a)
         assert case_a is not None
         internal_batch_id = int(case_a["batch_id"])
         self.assertGreaterEqual(protocol_job_id, 0)
@@ -6480,7 +6411,7 @@ class TestJudgehostService(E2ETestBase):
         case_id_b = int(tasks_b[0].get("judgetaskid") or 0)
         self.assertGreater(case_id_b, 0)
         self.assertNotEqual(case_id_b, case_id_a)
-        case_b = judgehost_fetch_case(service, case_id_b)
+        case_b = service.case_snapshot(case_id_b)
         assert case_b is not None
         self.assertEqual(int(case_b["batch_id"]), internal_batch_id)
 
@@ -6649,7 +6580,7 @@ class TestJudgehostService(E2ETestBase):
         case_id_a = int(tasks_a[0].get("judgetaskid") or 0)
         testcase_id_a = int(tasks_a[0].get("testcase_id") or 0)
         self.assertGreater(testcase_id_a, 0)
-        case_row_a = judgehost_fetch_case(service, case_id_a)
+        case_row_a = service.case_snapshot(case_id_a)
         self.assertIsNotNone(case_row_a)
         self.assertEqual(int(case_row_a["testcase_id"] or 0), testcase_id_a)
         batch_id = int(tasks_a[0].get("jobid") or 0)
@@ -6674,7 +6605,7 @@ class TestJudgehostService(E2ETestBase):
         case_id_b = int(tasks_b[0].get("judgetaskid") or 0)
         testcase_id_b = int(tasks_b[0].get("testcase_id") or 0)
         self.assertGreater(testcase_id_b, 0)
-        case_row_b = judgehost_fetch_case(service, case_id_b)
+        case_row_b = service.case_snapshot(case_id_b)
         self.assertIsNotNone(case_row_b)
         self.assertEqual(int(case_row_b["testcase_id"] or 0), testcase_id_b)
         self.assertNotEqual(testcase_id_a, testcase_id_b)

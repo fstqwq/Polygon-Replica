@@ -10,6 +10,9 @@ from types import MappingProxyType
 from typing import Callable
 
 
+type ConfigValue = bool | int | float | str
+
+
 class ConfigKind(str, Enum):
     """Scalar shapes supported by durable system configuration."""
 
@@ -40,7 +43,7 @@ class ConfigPolicy:
 
     minimum: int | float | None = None
     maximum: int | float | None = None
-    choices: tuple[object, ...] = ()
+    choices: tuple[ConfigValue, ...] = ()
     text_policy: TextPolicy | None = None
     restart_required: bool = False
 
@@ -51,7 +54,7 @@ class ConfigDefinition:
 
     key: str
     kind: ConfigKind
-    default: object
+    default: ConfigValue
     category: str
     description: str
     policy: ConfigPolicy = field(default_factory=ConfigPolicy)
@@ -69,7 +72,7 @@ class ConfigDefinition:
         return self.policy.maximum
 
     @property
-    def choices(self) -> tuple[object, ...]:
+    def choices(self) -> tuple[ConfigValue, ...]:
         """Return the accepted values for an enumerated definition."""
 
         return self.policy.choices
@@ -92,10 +95,10 @@ class ConfigDefinition:
 
         return "restart" if self.restart_required else "runtime"
 
-    def normalize(self, raw_value: object) -> object:
+    def normalize(self, raw_value: object) -> ConfigValue:
         """Normalize and validate one external value."""
 
-        value: object
+        value: ConfigValue
         if self.kind is ConfigKind.INT:
             value = self._normalize_int(raw_value)
         elif self.kind is ConfigKind.FLOAT:
@@ -166,7 +169,7 @@ class ConfigDefinition:
         if any(ord(ch) < minimum or ord(ch) > 0x7E for ch in value):
             raise ValueError(f"{self.key} must contain only {hint}")
 
-    def _validate_bounds(self, value: object) -> None:
+    def _validate_bounds(self, value: ConfigValue) -> None:
         if self.kind is ConfigKind.STR:
             if not isinstance(value, str):
                 raise RuntimeError(f"{self.key} normalization did not produce text")
@@ -199,12 +202,12 @@ class ConfigValues:
         self,
         values: Mapping[str, object],
         *,
-        normalizer: Callable[[Mapping[str, object]], Mapping[str, object]],
+        normalizer: Callable[[Mapping[str, object]], Mapping[str, ConfigValue]],
     ) -> None:
         self._lock = threading.RLock()
         self._normalizer = normalizer
         candidate = dict(self._normalizer(values))
-        self._values: Mapping[str, object] = MappingProxyType(candidate)
+        self._values: Mapping[str, ConfigValue] = MappingProxyType(candidate)
 
     def replace(self, values: Mapping[str, object]) -> None:
         """Atomically replace the active snapshot after validation."""
@@ -213,13 +216,13 @@ class ConfigValues:
         with self._lock:
             self._values = MappingProxyType(candidate)
 
-    def snapshot(self) -> Mapping[str, object]:
+    def snapshot(self) -> Mapping[str, ConfigValue]:
         """Return the current immutable snapshot."""
 
         with self._lock:
             return self._values
 
-    def get(self, key: str, default: object | None = None) -> object:
+    def get(self, key: str, default: ConfigValue | None = None) -> ConfigValue | None:
         """Read one value from the current snapshot."""
 
         with self._lock:
@@ -261,7 +264,7 @@ class ConfigValues:
         with self._lock:
             return key in self._values
 
-    def __getattr__(self, name: str) -> object:
+    def __getattr__(self, name: str) -> ConfigValue:
         with self._lock:
             try:
                 return self._values[name]

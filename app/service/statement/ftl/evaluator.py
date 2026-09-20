@@ -1,5 +1,5 @@
 from app.service.statement.ftl.parser import _split_default_expr
-from app.service.statement.ftl.tokenizer import _tokenize_expr
+from app.service.statement.ftl.tokenizer import ExpressionToken, _tokenize_expr
 
 
 UNDEFINED = object()
@@ -119,7 +119,7 @@ def _compare_values(left: object, right: object, op: str) -> bool:
 
 
 class _ExprParser:
-    def __init__(self, tokens: list[tuple[str, object]], scope: dict[str, object]):
+    def __init__(self, tokens: list[ExpressionToken], scope: dict[str, object]):
         self.tokens = tokens
         self.scope = scope
         self.index = 0
@@ -127,12 +127,12 @@ class _ExprParser:
     def parse(self) -> object:
         return self._parse_or()
 
-    def _peek(self) -> tuple[str, object]:
+    def _peek(self) -> ExpressionToken:
         if self.index >= len(self.tokens):
             return ("eof", "")
         return self.tokens[self.index]
 
-    def _take(self) -> tuple[str, object]:
+    def _take(self) -> ExpressionToken:
         token = self._peek()
         if self.index < len(self.tokens):
             self.index += 1
@@ -296,4 +296,3 @@ def _eval_interpolation(expr: str, scope: dict[str, object]) -> str:
     if isinstance(value, (int, float, bool)):
         return _num_to_text(value)
     return str(value)
-

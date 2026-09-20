@@ -1,13 +1,15 @@
 import asyncio
 import tempfile
 import unittest
+from collections.abc import AsyncIterator
 from pathlib import Path
 from unittest.mock import patch
 
 from fastapi import Request
 from fastapi.testclient import TestClient
 from jinja2 import DictLoader
-from starlette.responses import StreamingResponse
+from starlette.responses import Response, StreamingResponse
+from starlette.types import Message, Receive, Scope, Send
 
 from app.impl.auth.middleware import AuthenticationMiddleware
 from app.impl.auth.shared import render_template
@@ -32,7 +34,6 @@ class TestRuntimeComposition(unittest.TestCase):
             runtime = build_runtime(settings)
             application = create_app(runtime)
 
-            self.assertIs(application.state.runtime, runtime)
             for _lifespan in range(2):
                 with TestClient(application) as client:
                     response = client.get("/login")
@@ -44,7 +45,7 @@ class TestRuntimeComposition(unittest.TestCase):
 
             clock = {"wall": 10.0, "cpu": 1.0}
 
-            def probe(value):
+            def probe(value: str) -> str:
                 clock["wall"] += 0.025
                 clock["cpu"] += 0.004
                 return value
@@ -53,7 +54,7 @@ class TestRuntimeComposition(unittest.TestCase):
             runtime.templates.env.filters["profile_probe"] = probe
 
             @application.get("/timing-probe")
-            def timed_page(request: Request):
+            def timed_page(request: Request) -> Response:
                 clock["wall"] += 0.010
                 return render_template(request, "timing.html", {"value": "rendered"})
 
@@ -69,9 +70,9 @@ class TestRuntimeComposition(unittest.TestCase):
                              "application;dur=35.000, template;dur=25.000, template_cpu;dur=4.000")
 
     def test_timing_headers_are_sent_before_stream_body_is_consumed(self) -> None:
-        messages = []
+        messages: list[Message] = []
 
-        async def body():
+        async def body() -> AsyncIterator[bytes]:
             self.assertEqual(messages[0]["type"], "http.response.start")
             headers = dict(messages[0]["headers"])
             self.assertIn(b"application;dur=", headers[b"server-timing"])
@@ -80,13 +81,13 @@ class TestRuntimeComposition(unittest.TestCase):
             self.assertEqual(messages[-1]["body"], b"first")
             yield b"second"
 
-        async def downstream(scope, receive, send):
+        async def downstream(scope: Scope, receive: Receive, send: Send) -> None:
             await StreamingResponse(body())(scope, receive, send)
 
-        async def receive():
+        async def receive() -> Message:
             return {"type": "http.request", "body": b""}
 
-        async def send(message):
+        async def send(message: Message) -> None:
             messages.append(message)
 
         asyncio.run(AuthenticationMiddleware(downstream)(

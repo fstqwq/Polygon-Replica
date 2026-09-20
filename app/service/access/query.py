@@ -1,5 +1,6 @@
 import sqlite3
 from collections.abc import Mapping, Sequence
+from typing import Literal
 
 from app.db import DB
 from app.service.access.model import (
@@ -13,6 +14,7 @@ from app.service.access.model import (
     Resource,
     VerificationAccessContext,
     WorkspaceAccessContext,
+    WritableProblemRow,
 )
 from app.service.access.policy import (
     agent_scope,
@@ -220,7 +222,7 @@ class AccessQuery:
         user_id: int,
         *,
         limit: int,
-    ) -> list[dict[str, object]]:
+    ) -> list[WritableProblemRow]:
         return self._store.directly_writable_problem_rows_excluding_contest(
             contest_id,
             user_id,
@@ -475,7 +477,7 @@ class AccessQuery:
         declared_scope: str,
         problem_id: int,
         user_id: int,
-    ) -> str:
+    ) -> AgentScope | Literal[""]:
         role = self.problem_context(problem_id, user_id)["role"]
         return effective_agent_scope(declared_scope, role) or ""
 

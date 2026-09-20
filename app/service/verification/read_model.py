@@ -2,7 +2,7 @@ from pathlib import Path
 from collections.abc import Sequence
 from typing import TypedDict
 
-from app.service.verification.task_store import VerificationTaskReadRow
+from app.service.verification.types import VerificationTaskReadRow
 from app.service.verification.types import VerificationTaskStatus
 
 
@@ -21,6 +21,16 @@ class TaskCounts(TypedDict):
     failed: int
     cancelled: int
     by_kind: dict[str, dict[str, int]]
+
+
+class VerificationRuntimeSummary(TypedDict):
+    task_graph: bool
+    task_counts: TaskCounts
+    running_tasks: list[dict[str, str]]
+    source_paths: list[str]
+    program_ids: list[str]
+    has_running: bool
+    test_names: list[str]
 
 
 def task_counts(rows: Sequence[VerificationTaskReadRow]) -> TaskCounts:

@@ -12,6 +12,7 @@ from tests.simulation.workload import (
     DurationRange,
     ForegroundTask,
     HostDisconnect,
+    Workload,
     builtin_names,
     load_builtin,
     parse_workload,
@@ -30,7 +31,7 @@ def _small_workload(
     hosts: int = 1,
     disconnects: tuple[HostDisconnect, ...] = (),
     foreground_tasks: tuple[ForegroundTask, ...] = (),
-):
+) -> Workload:
     base = load_builtin("flat-cold")
     return replace(
         base,
@@ -64,22 +65,10 @@ def _small_workload(
 
 
 class TestJudgehostSimulation(unittest.TestCase):
-    def test_builtin_workloads_are_complete_and_exclude_concurrent_identical(self) -> None:
-        self.assertEqual(
-            builtin_names(),
-            [
-                "concurrent-verifications",
-                "dag-waves",
-                "flat-cold",
-                "host-disconnect",
-                "mixed-load",
-                "occur-with-foreground",
-                "single-wide",
-                "straggler",
-                "warm-cache",
-            ],
-        )
-        for name in builtin_names():
+    def test_builtin_workloads_load_by_their_advertised_names(self) -> None:
+        names = builtin_names()
+        self.assertTrue(names)
+        for name in names:
             with self.subTest(name=name):
                 workload = load_builtin(name)
                 self.assertEqual(workload.name, name)

@@ -8,20 +8,30 @@ from tests.db_helpers import (
 from tests.execution_result_helpers import execution_result
 
 import asyncio
+import hashlib
+from html import unescape
 import io
-import os
+import re
+import threading
+import zipfile
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
-from fastapi import HTTPException
+from fastapi import HTTPException, UploadFile
+from fastapi.testclient import TestClient
 from starlette.responses import Response
 
 from app.config import CONFIG_REGISTRY
+from app.service.platform.worker_queue import WorkerQueueService
+from app.service.judgehost.domjudge.wire_model import DomjudgeWork
 from app.service.problem.test_spec import dumps_default_tests_spec
 from app.service.verification.workspace_fingerprint import verification_sources_signature
-from tests.common import E2ETestBase, override_config_values
+from tests.common import E2ETestBase, _wait_for_verification_workers, override_config_values
 from tests.identity_helpers import canonical_test_verification_id
+from tests.judgehost_support import JudgehostReply, reporting_judgehost
+from tests.package_support import publish_problem, verification_builder
 from tests.ui_support import (
+    AUTH_COOKIE_NAME,
     Path,
     UIHelpersMixin,
     _post_form_request,
@@ -39,7 +49,6 @@ from tests.ui_support import (
     tests_spec_reindex,
     runtime,
     json,
-    export_create,
     revision_commit,
     run_details_page,
     run_details_sample_json,
@@ -55,22 +64,19 @@ from tests.ui_support import (
 
 import app.impl.workspace.context_job as workspace_context_job
 from app.impl.workspace.run_view_list import run_list_rows
-import app.service.problem.readiness as problem_readiness_module
-import app.service.verification.workspace_fingerprint as workspace_fingerprint_module
-from app.service.problem.readiness import WorkspaceReadinessSubject
+from app.service.problem.readiness import ProblemReadiness, WorkspaceReadinessSubject
 from app.service.execution.model import (
     CAPTURE_COMPLETE,
     CAPTURE_METADATA_ONLY,
     ExecutionPassResult,
-    ExecutionResult,
     ExecutionUsage,
     PassArtifacts,
 )
 from app.service.execution.policy import normalize_execution_result
 from app.service.verification.lifecycle import PlannedTask, verification_task_id
 from app.service.verification.task_completion import TaskCompletion
-from app.service.verification.types import VerificationStatus, VerificationTaskStatus
-from app.service.verification.types import Kind
+from app.service.verification.types import VerificationTaskStatus
+from app.service.verification.types import Kind, VerificationDetail
 
 TEXTAREA_MAX_BYTES = int(CONFIG_REGISTRY.defaults()["TEXTAREA_MAX_BYTES"])
 STATEMENT_SAMPLE_MAX_BYTES = int(
@@ -82,15 +88,31 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
     seed_primary_workspace = False
     seed_default_workspace = True
 
-    class _FakeUpload:
-        def __init__(self, data: bytes):
-            self._buf = io.BytesIO(data)
+    def setUp(self) -> None:
+        super().setUp()
+        self._pending_verification_fixture_details: dict[str, VerificationDetail] = {}
 
-        async def read(self, size: int = -1) -> bytes:
-            return self._buf.read(size)
+    def _complete_judgehost_work(self, verification_id: str, *, output: bytes = b"7\n") -> list[str]:
+        service = runtime.judgehost_task_service
+        source_names: list[str] = []
 
-        async def close(self) -> None:
-            return None
+        def reply(work: DomjudgeWork) -> JudgehostReply:
+            files = service.domjudge_get_source_files(str(work["submitid"]))
+            names = [file.filename for file in files]
+            source_names.extend(names)
+            wrong_answer = any(name.startswith("sanity_") or name == "wa.cpp" for name in names)
+            return JudgehostReply(output=output, runresult="wrong-answer" if wrong_answer else "correct")
+
+        try:
+            with reporting_judgehost(service, reply):
+                _wait_for_verification_workers(timeout_sec=15)
+            record = runtime.verification_service.verification_record(verification_id)
+            self.assertIsNotNone(record)
+            self.assertEqual(record["status"], "ok", record)
+            return source_names
+        finally:
+            runtime.verification_execution_service.cancel_verification(verification_id, reason="judgehost fixture finished")
+            _wait_for_verification_workers(timeout_sec=5)
 
     @staticmethod
     def _edit_spec_request(
@@ -108,7 +130,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         sample_format: str | None = None,
         sample_json: str | None = None,
     ) -> Response:
-        form_data: dict[str, object] = {
+        form_data: dict[str, str | list[str]] = {
             "index": index,
             "test_id": test_id,
             "kind": kind,
@@ -317,7 +339,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         workspace_id: int,
         workspace_path: Path,
         dirty: bool = True,
-    ) -> dict[str, object]:
+    ) -> ProblemReadiness:
         workspace_row = runtime.workspace_service.workspace_rows(
             [problem_id],
             runtime.workspace_service.known_user_id("alice"),
@@ -332,27 +354,10 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             "upstream_revision": workspace_row["revision_upstream"],
             "needs_update": False,
         }
-        package = {
-            "problem_id": problem_id,
-            "published_commit": workspace_row["head_commit"],
-            "published_revision_number": workspace_row["revision_upstream"],
-            "native_package_revision_number": None,
-            "native_package_id": "",
-            "status": "none",
-            "verified": False,
-            "missing_reason": "Package not built",
-        }
-        with patch.object(
-            runtime.problem_package_service,
-            "published_readiness",
-            return_value=package,
-        ):
-            return dict(
-                runtime.problem_readiness_service.readiness(
-                    subject,
-                    explain_verification=True,
-                )
-            )
+        return runtime.problem_readiness_service.readiness(
+            subject,
+            explain_verification=True,
+        )
 
     def _admit_verification_fixture(
         self,
@@ -363,7 +368,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         signature: str = "",
         source_commit: str = "",
         kind: str = Kind.ALL,
-        detail: dict[str, object] | None = None,
+        detail: VerificationDetail | None = None,
     ) -> None:
         admission = admit_test_verification(
             verification_id=verification_id,
@@ -375,25 +380,22 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(admission.outcome, "admitted")
         if detail is not None:
-            pending = getattr(self, "_pending_verification_fixture_details", {})
-            pending[verification_id] = dict(detail)
-            self._pending_verification_fixture_details = pending
+            self._pending_verification_fixture_details[verification_id] = detail.copy()
 
     def _activate_verification_fixture(
         self,
         verification_id: str,
         *,
-        detail: dict[str, object] | None = None,
+        detail: VerificationDetail | None = None,
         tasks: list[PlannedTask],
         completions: list[TaskCompletion] | None = None,
         queued: list[tuple[str, str, str]] | None = None,
         leased: list[tuple[str, str, str]] | None = None,
     ) -> None:
-        pending = getattr(self, "_pending_verification_fixture_details", {})
         activation_detail = (
-            dict(pending.pop(verification_id, {}))
+            self._pending_verification_fixture_details.pop(verification_id, {})
             if detail is None
-            else dict(detail)
+            else detail.copy()
         )
         canonical_tasks = list(tasks)
         canonical_completions = list(completions or [])
@@ -454,223 +456,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 canonical_completions
             )
 
-    @staticmethod
-    def _fixture_result(
-        summary: dict[str, object],
-        *,
-        status: str,
-    ) -> ExecutionResult:
-        tests_obj = summary.get("tests")
-        tests = tests_obj if isinstance(tests_obj, list) else []
-        test = tests[0] if tests and isinstance(tests[0], dict) else {}
-        verdict = str(test.get("verdict") or summary.get("verdict") or "")
-        if not verdict and status == "ok":
-            verdict = "OK"
-        if not verdict and status == "failed":
-            verdict = "FL"
-        return execution_result(
-            verdict,
-            runtime_sec=float(test.get("runtime_sec") or 0.0),
-            cpu_sec=float(test.get("cpu_sec") or 0.0),
-            wall_sec=float(test.get("wall_sec") or 0.0),
-            memory_kb=int(test.get("memory_kb") or 0),
-            error=str(test.get("error") or summary.get("error") or ""),
-            feedback=str(test.get("feedback") or ""),
-            output_ref=str(test.get("output_ref") or ""),
-        )
-
-    def _insert_verification_row(
-        self,
-        *,
-        verification_id: str,
-        problem_id: int,
-        workspace_id: int,
-        build_id: str,
-        kind: str,
-        status: str,
-        created_at: str,
-        finished_at: str,
-        runs: list[dict[str, object]],
-        summary_extra: dict[str, object] | None = None,
-        activate_tasks: bool = True,
-    ) -> None:
-        verification_root = runtime.storage_layout.prepare_verification_root(verification_id).resolve()
-        verification_root.mkdir(parents=True, exist_ok=True)
-        existing_row = runtime.verification_service.verification_record(verification_id)
-        existing_metadata: dict[str, object] = {}
-        existing_created_at = ""
-        existing_finished_at = ""
-        existing_signature = ""
-        if existing_row is not None:
-            payload = runtime.verification_service.verification_detail(verification_id)
-            if isinstance(payload, dict):
-                existing_metadata = dict(payload)
-            existing_created_at = str(existing_row["created_at"] or "").strip()
-            existing_finished_at = str(existing_row["finished_at"] or "").strip()
-            existing_signature = str(existing_row["signature"] or "").strip()
-        mode_token = "pass-fail"
-        if isinstance(summary_extra, dict):
-            mode_token = str(summary_extra.get("mode") or "").strip() or mode_token
-        if isinstance(existing_metadata, dict) and existing_metadata:
-            mode_token = str(existing_metadata.get("mode") or mode_token).strip() or mode_token
-        runs_map: dict[str, object] = {}
-        existing_runs_obj = existing_metadata.get("runs") if isinstance(existing_metadata, dict) else None
-        if isinstance(existing_runs_obj, dict):
-            runs_map = {str(k): dict(v) for k, v in existing_runs_obj.items() if isinstance(v, dict)}
-        runs_order: list[str] = []
-        existing_order_obj = existing_metadata.get("runs_order") if isinstance(existing_metadata, dict) else None
-        if isinstance(existing_order_obj, list):
-            runs_order = [str(item or "").strip() for item in existing_order_obj if str(item or "").strip()]
-        source_paths: list[str] = []
-        existing_paths_obj = existing_metadata.get("source_paths") if isinstance(existing_metadata, dict) else None
-        if isinstance(existing_paths_obj, list):
-            source_paths = [str(item or "").strip() for item in existing_paths_obj if str(item or "").strip()]
-        signature = existing_signature or str(existing_metadata.get("signature") or "").strip()
-        for item in runs:
-            run_id = str(item.get("id") or "").strip()
-            if not run_id:
-                continue
-            summary_obj = dict(item.get("summary") or {})
-            source_label = str(item.get("source_label") or summary_obj.get("source") or run_id).strip() or run_id
-            expected_behavior = str(item.get("expected_behavior") or "unknown").strip() or "unknown"
-            source_path = str(summary_obj.get("source") or "").strip()
-            if source_path and source_path not in source_paths:
-                source_paths.append(source_path)
-            runs_map[run_id] = {
-                "key": run_id,
-                "status": str(item.get("status") or status).strip().lower() or "running",
-                "source_label": source_label,
-                "expected_behavior": expected_behavior,
-                "artifact_path": str(item.get("artifact_path") or verification_root),
-                "task_kind": str(item.get("task_kind") or "").strip(),
-                "summary": summary_obj,
-            }
-            if run_id not in runs_order:
-                runs_order.append(run_id)
-        summary_extra_obj = dict(summary_extra or {})
-        kind_token = str(kind or existing_metadata.get("kind") or Kind.ALL).strip() or Kind.ALL.value
-        safe_build_id = (
-            str(summary_extra_obj.get("artifact_verification_id") or "").strip()
-            or str(existing_metadata.get("artifact_verification_id") or "").strip()
-            or str(build_id or "").strip()
-        )
-        metadata = {
-            "kind": kind_token,
-            "mode": mode_token,
-            "status": str(status or existing_metadata.get("status") or "").strip().lower() or "running",
-            "verification_source": str(existing_metadata.get("verification_source") or "verification.start").strip() or "verification.start",
-            "error": str(existing_metadata.get("error") or "").strip(),
-            "updated_at": created_at,
-            "finished_at": finished_at,
-            "artifact_root": str(verification_root),
-            "source_paths": source_paths,
-            "artifact_verification_id": safe_build_id,
-            "signature": signature,
-            "runs_order": runs_order,
-            "runs": runs_map,
-            "tests": list(existing_metadata.get("tests") or []),
-            "lifecycle": dict(existing_metadata.get("lifecycle") or {"steps": []}),
-        }
-        if summary_extra_obj:
-            if str(summary_extra_obj.get("signature") or "").strip():
-                signature = str(summary_extra_obj.get("signature") or "").strip()
-            metadata.update(summary_extra_obj)
-        metadata["signature"] = signature
-        final_created_at = existing_created_at or created_at
-        final_finished_at = finished_at or existing_finished_at
-        if existing_row is not None:
-            db_execute(
-                "UPDATE verifications SET created_at=? WHERE id=?",
-                [final_created_at, verification_id],
-            )
-            return
-        self._admit_verification_fixture(
-            verification_id=verification_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            signature=signature,
-            source_commit="",
-            kind=kind_token,
-            detail=metadata,
-        )
-        if activate_tasks:
-            planned: list[PlannedTask] = []
-            completions: list[TaskCompletion] = []
-            leased: list[tuple[str, str, str]] = []
-            run_items = runs or [
-                {
-                    "id": f"fixture-{verification_id}",
-                    "status": status,
-                    "source_label": (source_paths[0] if source_paths else "solutions/fixture.cpp"),
-                    "expected_behavior": "accepted",
-                    "summary": {},
-                }
-            ]
-            for slot, item in enumerate(run_items):
-                run_id = str(item.get("id") or f"fixture-{verification_id}-{slot}")
-                summary_obj = dict(item.get("summary") or {})
-                tests_obj = summary_obj.get("tests")
-                tests = tests_obj if isinstance(tests_obj, list) else []
-                first_test = tests[0] if tests and isinstance(tests[0], dict) else {}
-                test_name = str(first_test.get("test") or "001.in")
-                program_id = f"solution-{slot}"
-                task_id = verification_task_id(
-                    verification_id,
-                    program_id,
-                    test_name,
-                )
-                source_path = str(
-                    summary_obj.get("source")
-                    or item.get("source_label")
-                    or f"solutions/fixture-{slot}.cpp"
-                )
-                planned.append(
-                    PlannedTask(
-                        task_id=task_id,
-                        predecessor_task_id=None,
-                        task_kind="solution-run",
-                        source_path=source_path,
-                        program_id=program_id,
-                        test_name=test_name,
-                        expected_behavior=str(item.get("expected_behavior") or "unknown"),
-                    )
-                )
-                item_status = str(item.get("status") or status).lower()
-                if item_status == "running":
-                    leased.append((task_id, run_id, f"jt-fixture-{slot}-{verification_id}"))
-                    continue
-                fail_reason = ""
-                if status == "failed" and not completions:
-                    fail_reason = str(metadata.get("error") or "verification fixture failed")
-                completions.append(
-                    TaskCompletion(
-                        task_id=task_id,
-                        status=VerificationTaskStatus.DONE,
-                        run_id=run_id,
-                        judgehost_task_id="",
-                        result=self._fixture_result(summary_obj, status=item_status),
-                        fail_reason=fail_reason,
-                    )
-                )
-            self._activate_verification_fixture(
-                verification_id,
-                detail=metadata,
-                tasks=planned,
-                completions=completions,
-                leased=leased,
-            )
-            if status == "failed":
-                record = runtime.verification_service.verification_record(verification_id)
-                if record is not None and str(record["status"]) == "running":
-                    runtime.verification_service.fail_verification(
-                        verification_id,
-                        reason=str(metadata.get("error") or "verification fixture failed"),
-                    )
-        db_execute(
-            "UPDATE verifications SET created_at=?, finished_at=? WHERE id=?",
-            [final_created_at, final_finished_at or None, verification_id],
-        )
-
     def _insert_stage_verification(
         self,
         *,
@@ -681,26 +466,11 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         signature: str = "",
         status: str = "ok",
         source_commit: str = "",
-        summary: dict[str, object] | None = None,
-        artifact_path: str | None = None,
+        summary: VerificationDetail | None = None,
         created_at: str = "2026-03-10T00:00:00Z",
         finished_at: str | None = "2026-03-10T00:00:01Z",
     ) -> None:
-        summary_obj: dict[str, object]
-        if isinstance(summary, str):
-            try:
-                parsed = json.loads(summary)
-                summary_obj = dict(parsed) if isinstance(parsed, dict) else {}
-            except Exception:
-                summary_obj = {}
-        else:
-            summary_obj = dict(summary or {})
-        root = (
-            Path(str(artifact_path)).resolve()
-            if artifact_path
-            else runtime.storage_layout.prepare_verification_root(verification_id).resolve()
-        )
-        root.mkdir(parents=True, exist_ok=True)
+        summary_obj = summary or {}
         self._admit_verification_fixture(
             verification_id=verification_id,
             problem_id=problem_id,
@@ -1009,15 +779,14 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertFalse((generator_dir / "003.in").exists())
 
     def test_tests_gen_script_save_error_returns_to_editor(self) -> None:
-        with patch(
-            "app.impl.tests_spec.routes.parse_gen_script_lines",
-            side_effect=ValueError("invalid generator command"),
-        ):
-            response = tests_spec_gen_script_save(
-                problem="alice/sample",
-                user="alice",
-                gen_script_text="bad command",
-            )
+        workspace = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        spec_path = workspace / "tests/spec.json"
+        before = spec_path.read_bytes()
+        response = tests_spec_gen_script_save(
+            problem="alice/sample",
+            user="alice",
+            gen_script_text='gen "unterminated argument',
+        )
 
         self.assertEqual(response.status_code, 303)
         self.assertTrue(
@@ -1025,6 +794,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 "/problems/alice/sample/tests?edit=gen-script"
             )
         )
+        self.assertEqual(spec_path.read_bytes(), before)
 
     def test_tests_spec_manual_payload_upload_and_download_routes(self) -> None:
         ws_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
@@ -1048,7 +818,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(add_manual.status_code, 303)
 
-        upload_payload = self._FakeUpload(b"7 8 9  \r\n10 11\t \r\n")
+        upload_payload = UploadFile(file=io.BytesIO(b"7 8 9  \r\n10 11\t \r\n"))
         uploaded = asyncio.run(
             tests_spec_payload_upload(
                 problem="alice/sample",
@@ -1093,7 +863,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 problem="alice/sample",
                 user="alice",
                 index="1",
-                payload_upload=self._FakeUpload(oversized),
+                payload_upload=UploadFile(file=io.BytesIO(oversized)),
             )
         )
         self.assertEqual(uploaded.status_code, 303)
@@ -1130,7 +900,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 problem="alice/sample",
                 user="alice",
                 index="1",
-                payload_upload=self._FakeUpload(b"\xff\xfe\xfd"),
+                payload_upload=UploadFile(file=io.BytesIO(b"\xff\xfe\xfd")),
             )
         )
         self.assertEqual(uploaded.status_code, 303)
@@ -1164,7 +934,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 problem="alice/sample",
                 user="alice",
                 index="1",
-                payload_upload=self._FakeUpload(b"x" * 1025),
+                payload_upload=UploadFile(file=io.BytesIO(b"x" * 1025)),
             )
         )
         self.assertEqual(uploaded.status_code, 303)
@@ -1184,7 +954,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             for p in generator_dir.glob("*.in"):
                 p.unlink(missing_ok=True)
 
-        upload = self._FakeUpload(b"11 22  \r\n33 44\t \r\n")
+        upload = UploadFile(file=io.BytesIO(b"11 22  \r\n33 44\t \r\n"))
         created = asyncio.run(
             tests_spec_add_manual_upload(
                 problem="alice/sample",
@@ -1230,7 +1000,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 user="alice",
                 test_id="",
                 sample="0",
-                manual_upload=self._FakeUpload(oversized),
+                manual_upload=UploadFile(file=io.BytesIO(oversized)),
             )
         )
         self.assertEqual(created.status_code, 303)
@@ -1265,7 +1035,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 user="alice",
                 test_id="",
                 sample="0",
-                manual_upload=self._FakeUpload(b"\xff\xfe\xfd"),
+                manual_upload=UploadFile(file=io.BytesIO(b"\xff\xfe\xfd")),
             )
         )
         self.assertEqual(created.status_code, 303)
@@ -1292,177 +1062,91 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 user="alice",
                 test_id="",
                 sample="0",
-                manual_upload=self._FakeUpload(b"x" * 1025),
+                manual_upload=UploadFile(file=io.BytesIO(b"x" * 1025)),
             )
         )
         self.assertEqual(created.status_code, 303)
         self.assertFalse((manual_dir / "001.in").exists())
 
-    def test_run_execute_without_tests_triggers_implicit_tests_generation(self) -> None:
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        ws = Path(str(ctx["workspace"]["path"]))
-        self._configure_solution_fixtures(
-            ws,
-            ("accepted.cpp", "accepted"),
-        )
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        db_execute("DELETE FROM verifications WHERE workspace_id=?", [workspace_id])
-        def _fake_start_verification_job(*args, **kwargs) -> bool:
-            verification_id = str(kwargs["verification_id"])
-            self._admit_verification_fixture(
-                verification_id=verification_id,
-                problem_id=problem_id,
-                workspace_id=workspace_id,
-                signature="deadbeef",
-                kind=Kind.ALL.value,
-            )
-            task_id = verification_task_id(
-                verification_id,
-                "solution-0",
-                "001.in",
-            )
-            self._activate_verification_fixture(
-                verification_id,
-                detail=dict(kwargs.get("initial_summary") or {}),
-                tasks=[
-                    PlannedTask(
-                        task_id=task_id,
-                        predecessor_task_id=None,
-                        task_kind="solution-run",
-                        source_path="solutions/accepted.cpp",
-                        program_id="solution-0",
-                        test_name="001.in",
-                        expected_behavior="accepted",
+    def test_run_http_creates_selected_tasks_and_preserves_uploaded_source(self) -> None:
+        from app.main import app
+
+        problem = f"alice/run-http-{uuid.uuid4().hex[:8]}"
+        workspace = self._prepare_verification_workspace(problem)
+        self._write_solution_fixture(workspace, "wa.cpp", "wrong_answer")
+        test_ids = ("001", "002", "003")
+        for test_id in test_ids:
+            (workspace / "tests/manual" / f"{test_id}.in").write_text("7\n")
+        (workspace / "tests/spec.json").write_text(json.dumps({
+            "tests": [{"id": test_id, "kind": "manual"} for test_id in test_ids],
+        }))
+        override_config_values(self, runtime.config_values, JUDGEHOST_ENABLE=True)
+        runtime.judgehost_task_service.domjudge_register_host(f"ui-run-{self.test_id}")
+        actor_id = workspace_service.known_user_id("alice")
+        self.assertIsNotNone(actor_id)
+        token = runtime.auth_service.create_session_for_user(actor_id)
+        headers = {"cookie": f"{AUTH_COOKIE_NAME}={token}", "origin": "https://testserver"}
+        upload_content = b"// exact uploaded source\r\nint main(){return 7;}\r\n"
+
+        with TestClient(app, base_url="https://testserver") as client:
+            for selected_tests, uploaded, traversal_only in (
+                ([], False, False),
+                (["001.in", "003.in"], True, False),
+                (["001.in"], False, True),
+            ):
+                with self.subTest(selected_tests=selected_tests, uploaded=uploaded, traversal_only=traversal_only):
+                    form = {
+                        "solution_paths": ["../../escape.cpp"] if traversal_only else ["solutions/accepted.cpp", "solutions/wa.cpp", "solutions/accepted.cpp"],
+                        "test_names": selected_tests,
+                    }
+                    response = client.post(
+                        f"/problems/{problem}/run/execute",
+                        data=form,
+                        files={"submission_upload": ("../tmp.cpp", upload_content, "text/plain")} if uploaded else None,
+                        headers=headers,
+                        follow_redirects=False,
                     )
-                ],
-            )
-            return True
-
-        with patch("app.impl.run_export.run.start_verification_job", side_effect=_fake_start_verification_job):
-            resp = run_execute(
-                problem="alice/sample",
-                user="alice",
-                artifact_verification_id="",
-                solution_paths=["solutions/accepted.cpp"],
-                submission_upload=None,
-            )
-        self.assertEqual(resp.status_code, 303)
-        loc = resp.headers.get("location", "")
-        self.assertIn("/problems/alice/sample/run/details?verification_id=", loc)
-        query = parse_qs(urlparse(loc).query)
-        verification_id = (query.get("verification_id") or [""])[0]
-        self.assertTrue(verification_id)
-        verification_row = _wait_for_row(
-            "SELECT id,status FROM verifications WHERE workspace_id=? AND id=? LIMIT 1",
-            [workspace_id, verification_id],
-            timeout_sec=10.0,
-        )
-        self.assertIsNotNone(verification_row)
-        self.assertIn(str(verification_row["status"] or ""), {"running", "ok", "failed"})
-        metadata = runtime.verification_service.verification_detail(verification_id)
-        self.assertIsInstance(metadata, dict)
-        self.assertEqual(str(metadata.get("mode") or ""), "pass-fail")
-
-    def test_run_execute_passes_canonical_targets_to_queue_start(self) -> None:
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        self._configure_solution_fixtures(
-            ws,
-            ("accepted.cpp", "accepted"),
-            ("wa.cpp", "wrong_answer"),
-        )
-        observed = {"checked": False}
-
-        def _fake_start_verification_job(*args, **kwargs) -> bool:
-            verification_id = str(kwargs.get("verification_id") or "")
-            targets = list(kwargs.get("targets") or [])
-            solution_program_ids = [
-                str(item.get("program_id") or "")
-                for item in targets
-                if str(item.get("program_id") or "")
-            ]
-            self.assertEqual(len(solution_program_ids), 2)
-            self.assertEqual(len(set(solution_program_ids)), 2)
-            self.assertTrue(verification_id)
-            observed["checked"] = True
-            return True
-
-        with patch("app.impl.run_export.run.start_verification_job", side_effect=_fake_start_verification_job):
-            resp = run_execute(
-                problem="alice/sample",
-                user="alice",
-                artifact_verification_id="",
-                solution_paths=["solutions/accepted.cpp", "solutions/wa.cpp"],
-                submission_upload=None,
-            )
-
-        self.assertEqual(resp.status_code, 303)
-        self.assertTrue(observed["checked"])
-        loc = resp.headers.get("location", "")
-        self.assertIn("/problems/alice/sample/run/details?verification_id=", loc)
-        verification_id = (parse_qs(urlparse(loc).query).get("verification_id") or [""])[0]
-        self.assertTrue(verification_id)
-
-    def test_run_execute_passes_selected_tests_to_runner(self) -> None:
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        self._configure_solution_fixtures(
-            ws,
-            ("accepted.cpp", "accepted"),
-        )
-        with patch("app.impl.run_export.run.start_verification_job", return_value=True) as start_batch:
-            resp = run_execute(
-                problem="alice/sample",
-                user="alice",
-                artifact_verification_id="",
-                solution_paths=["solutions/accepted.cpp"],
-                test_names=["001.in", "003.in"],
-                submission_upload=None,
-            )
-        self.assertEqual(resp.status_code, 303)
-        start_batch.assert_called_once()
-        kwargs = start_batch.call_args.kwargs
-        self.assertEqual(kwargs.get("selected_test_names"), ["001.in", "003.in"])
-        targets = kwargs.get("targets")
-        self.assertIsInstance(targets, list)
-        self.assertTrue(targets)
-        first = targets[0]
-        self.assertEqual(str(first.get("path") or ""), "solutions/accepted.cpp")
-        self.assertEqual(str(first.get("expected_behavior") or ""), "accepted")
-
-    def test_run_execute_uploaded_source_uses_task_graph_verification(self) -> None:
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        self._configure_solution_fixtures(
-            ws,
-            ("accepted.cpp", "accepted"),
-        )
-
-        class _FakeUpload:
-            def __init__(self, filename: str, data: bytes):
-                self.filename = filename
-                self.file = io.BytesIO(data)
-
-        upload = _FakeUpload("../tmp.cpp", b"int main(){return 0;}\n")
-        with patch("app.impl.run_export.run.start_verification_job", return_value=True) as start_job:
-            resp = run_execute(
-                problem="alice/sample",
-                user="alice",
-                artifact_verification_id="",
-                solution_paths=[],
-                test_names=["001.in"],
-                submission_upload=upload,
-            )
-        self.assertEqual(resp.status_code, 303)
-        start_job.assert_called_once()
-        kwargs = start_job.call_args.kwargs
-        self.assertEqual(kwargs.get("selected_test_names"), ["001.in"])
-        targets = list(kwargs.get("targets") or [])
-        self.assertEqual(len(targets), 2)
-        self.assertEqual(str(targets[0].get("path") or ""), "solutions/accepted.cpp")
-        uploaded_target = targets[1]
-        self.assertEqual(str(uploaded_target.get("upload_filename") or ""), "tmp.cpp")
-        self.assertEqual(bytes(uploaded_target.get("upload_content") or b""), b"int main(){return 0;}\n")
-        self.assertTrue(str(uploaded_target.get("path") or "").startswith("uploads/"))
-        self.assertTrue(str(uploaded_target.get("path") or "").endswith("/tmp.cpp"))
+                    self.assertEqual(response.status_code, 303)
+                    location = urlparse(response.headers["location"])
+                    self.assertEqual(location.path, f"/problems/{problem}/run/details")
+                    verification_id = parse_qs(location.query)["verification_id"][0]
+                    try:
+                        activated = _wait_for_row(
+                            "SELECT id FROM verification_tasks WHERE verification_id=? LIMIT 1",
+                            [verification_id],
+                        )
+                        self.assertIsNotNone(activated, runtime.verification_service.verification_record(verification_id))
+                        tasks = runtime.verification_task_store.list_rows(verification_id)
+                        expected_tests = selected_tests or [f"{test_id}.in" for test_id in test_ids]
+                        self.assertEqual({row["test_name"] for row in tasks}, set(expected_tests))
+                        cases = [row for row in tasks if row["task_kind"] != "generate-input"]
+                        expected_sources = {"solutions/accepted.cpp": "accepted"}
+                        if not traversal_only:
+                            expected_sources["solutions/wa.cpp"] = "wrong_answer"
+                        if uploaded:
+                            uploaded_sources = {row["source_path"] for row in cases if row["source_path"].startswith("uploads/")}
+                            self.assertEqual(len(uploaded_sources), 1)
+                            uploaded_source = uploaded_sources.pop()
+                            self.assertEqual(Path(uploaded_source).name, "tmp.cpp")
+                            expected_sources[uploaded_source] = "unknown"
+                            ref = runtime.runtime_blob_store.ref(hashlib.sha256(upload_content).hexdigest())
+                            descriptor = runtime.runtime_blob_store.descriptor(ref)
+                            self.assertIsNotNone(descriptor)
+                            self.assertEqual(descriptor.path.read_bytes(), upload_content)
+                        self.assertEqual(
+                            [(row["test_name"], row["source_path"], row["expected_behavior"]) for row in sorted(cases, key=lambda item: (item["test_name"], item["source_path"]))],
+                            [(test_name, source, expected) for test_name in sorted(expected_tests) for source, expected in sorted(expected_sources.items())],
+                        )
+                        generators = [row for row in tasks if row["task_kind"] == "generate-input"]
+                        self.assertEqual({row["test_name"] for row in generators}, set(expected_tests))
+                        metadata = runtime.verification_service.verification_detail(verification_id)
+                        self.assertEqual(metadata["mode"], "pass-fail")
+                        self.assertEqual(metadata["selected_test_names"], expected_tests)
+                    finally:
+                        runtime.verification_execution_service.cancel_verification(
+                            verification_id, reason="UI request coverage complete",
+                        )
+                        _wait_for_verification_workers(timeout_sec=5)
 
     def test_verification_start_requires_main_correct_solution_marker(self) -> None:
         problem = f"alice/verify-main-required-{uuid.uuid4().hex[:8]}"
@@ -1496,38 +1180,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
         self.assertIsNotNone(after)
         self.assertEqual(int(after["count"]), int(before["count"]))
-
-    def test_problem_reader_can_start_standard_verification_without_package_certification(self) -> None:
-        problem = f"alice/reader-verify-{uuid.uuid4().hex[:8]}"
-        self._prepare_verification_workspace(problem)
-        workspace_service.ensure_user("bob")
-        workspace_service.grant_repo_access(problem, "bob", "read")
-        bob_workspace = Path(
-            workspace_service.ensure_workspace(problem, "bob", refresh_status=False)
-        )
-        self._configure_solution_fixtures(
-            bob_workspace,
-            ("accepted.cpp", "accepted"),
-        )
-
-        with patch(
-            "app.impl.tests_spec.verification.start_verification_job",
-            return_value=True,
-        ) as start_job:
-            response = verification_start(problem=problem, user="bob", page="run")
-
-        self.assertEqual(response.status_code, 303)
-        start_job.assert_called_once()
-        bob_ctx = workspace_service.workspace_context(
-            problem,
-            "bob",
-            include_recent=False,
-        )
-        self.assertEqual(
-            start_job.call_args.kwargs["workspace_id"],
-            int(bob_ctx["workspace"]["id"]),
-        )
-        self.assertFalse(start_job.call_args.kwargs["allow_package_certification"])
 
     def test_problem_reader_cannot_start_custom_run(self) -> None:
         problem = f"alice/reader-custom-{uuid.uuid4().hex[:8]}"
@@ -1648,7 +1300,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         verification_id = canonical_test_verification_id(f"ver-clean-manifest-{uuid.uuid4().hex[:8]}")
-        signature = workspace_fingerprint_module.verification_sources_signature(ws)
+        signature = verification_sources_signature(ws)
         self._insert_stage_verification(
             verification_id=verification_id,
             problem_id=problem_id,
@@ -1698,282 +1350,94 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             status="ok",
         )
 
-        with patch.object(
-            problem_readiness_module,
-            "verification_sources_signature",
-            side_effect=AssertionError("clean source identity should avoid hashing"),
-        ) as full_hash:
-            status = self._problem_readiness(
-                problem_id=problem_id,
-                workspace_id=workspace_id,
-                workspace_path=ws,
-                dirty=False,
-            )["verification"]
-
-        full_hash.assert_not_called()
+        status = self._problem_readiness(
+            problem_id=problem_id,
+            workspace_id=workspace_id,
+            workspace_path=ws,
+            dirty=False,
+        )["verification"]
         self.assertEqual(status["verification_id"], verification_id)
         self.assertFalse(status["stale"])
 
-    def test_verification_sidebar_fingerprint_cache_skips_full_hash(self) -> None:
-        problem = f"alice/verify-fingerprint-cache-{uuid.uuid4().hex[:8]}"
+    def test_verification_readiness_tracks_source_edits_and_restoration(self) -> None:
+        problem = f"alice/verify-source-edits-{uuid.uuid4().hex[:8]}"
         ws = self._prepare_verification_workspace(problem)
-        (ws / "tests" / "manual" / "large.bin").write_bytes(b"x" * 4096)
         ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        verification_id = canonical_test_verification_id(f"ver-cache-{uuid.uuid4().hex[:8]}")
-        fingerprint = workspace_fingerprint_module.verification_sources_fingerprint(ws)
-
+        problem_id = ctx["problem"]["id"]
+        workspace_id = ctx["workspace"]["id"]
+        verification_id = canonical_test_verification_id(f"ver-source-edits-{uuid.uuid4().hex[:8]}")
         self._insert_stage_verification(
             verification_id=verification_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
-            signature=f"sig-{uuid.uuid4().hex}",
+            signature=verification_sources_signature(ws),
             status="ok",
         )
-        workspace_fingerprint_module.remember_verification_fingerprint(
-            problem_id,
-            workspace_id,
-            fingerprint,
-            verification_id,
-        )
+        source = ws / "solutions/accepted.cpp"
+        original = source.read_bytes()
+        for content, stale in ((original, False), (original + b"\n// edit\n", True), (original, False)):
+            source.write_bytes(content)
+            for repeat in range(2):
+                with self.subTest(stale=stale, repeat=repeat):
+                    status = self._problem_readiness(
+                        problem_id=problem_id,
+                        workspace_id=workspace_id,
+                        workspace_path=ws,
+                    )["verification"]
+                    self.assertEqual(status["verification_id"], verification_id)
+                    self.assertEqual(status["stale"], stale)
+                    self.assertEqual(status["result"], "ok")
 
-        with patch.object(
-            problem_readiness_module,
-            "verification_sources_signature",
-            side_effect=AssertionError("full hash should be skipped"),
-        ) as full_hash:
-            readiness = self._problem_readiness(
-                problem_id=problem_id,
-                workspace_id=workspace_id,
-                workspace_path=ws,
+    def test_rejudge_dispatches_work_even_when_case_results_are_cached(self) -> None:
+        problem = f"alice/rejudge-{uuid.uuid4().hex[:8]}"
+        workspace = self._prepare_verification_workspace(problem)
+        self._write_solution_fixture(workspace, "wa.cpp", "wrong_answer")
+        for filename in ("accepted.cpp", "wa.cpp"):
+            source = workspace / "solutions" / filename
+            source.write_bytes(source.read_bytes() + f"// cache fixture {problem}\n".encode())
+        override_config_values(self, runtime.config_values, JUDGEHOST_ENABLE=True)
+        hostname = f"ui-rejudge-{self.test_id}"
+        runtime.judgehost_task_service.domjudge_register_host(hostname)
+
+        def start() -> str:
+            response = run_execute(
+                problem=problem, user="alice",
+                solution_paths=["solutions/accepted.cpp", "solutions/wa.cpp"],
+                test_names=[], submission_upload=None,
             )
-            status = readiness["verification"]
+            self.assertEqual(response.status_code, 303)
+            return parse_qs(urlparse(response.headers["location"]).query)["verification_id"][0]
 
-        full_hash.assert_not_called()
-        self.assertEqual(status["verification_id"], verification_id)
-        self.assertFalse(status["stale"])
+        first_id = start()
+        first_sources = self._complete_judgehost_work(first_id)
+        self.assertIn("accepted.cpp", first_sources)
+        self.assertIn("wa.cpp", first_sources)
+        cached_id = start()
+        cached_sources = self._complete_judgehost_work(cached_id)
+        self.assertNotIn("accepted.cpp", cached_sources)
+        self.assertNotIn("wa.cpp", cached_sources)
 
-    def test_verification_sidebar_full_hash_match_populates_fingerprint_cache(self) -> None:
-        problem = f"alice/verify-fingerprint-fill-{uuid.uuid4().hex[:8]}"
-        ws = self._prepare_verification_workspace(problem)
-        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        signature = verification_sources_signature(ws)
-        verification_id = canonical_test_verification_id(f"ver-fill-{uuid.uuid4().hex[:8]}")
-
-        self._insert_stage_verification(
-            verification_id=verification_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            signature=signature,
-            status="ok",
-        )
-
-        first = self._problem_readiness(
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            workspace_path=ws,
-        )["verification"]
-        self.assertEqual(first["verification_id"], verification_id)
-        self.assertFalse(first["stale"])
-
-        with patch.object(
-            problem_readiness_module,
-            "verification_sources_signature",
-            side_effect=AssertionError("full hash should be cached after first match"),
-        ) as full_hash:
-            second = self._problem_readiness(
-                problem_id=problem_id,
-                workspace_id=workspace_id,
-                workspace_path=ws,
-            )["verification"]
-
-        full_hash.assert_not_called()
-        self.assertEqual(second["verification_id"], verification_id)
-        self.assertFalse(second["stale"])
-
-    def test_verification_sidebar_stale_fingerprint_cache_skips_repeated_full_hash(self) -> None:
-        problem = f"alice/verify-fingerprint-stale-{uuid.uuid4().hex[:8]}"
-        ws = self._prepare_verification_workspace(problem)
-        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        verification_id = canonical_test_verification_id(f"ver-stale-cache-{uuid.uuid4().hex[:8]}")
-
-        self._insert_stage_verification(
-            verification_id=verification_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            signature=f"old-{uuid.uuid4().hex}",
-            status="ok",
-        )
-
-        first = self._problem_readiness(
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            workspace_path=ws,
-        )["verification"]
-        self.assertEqual(first["verification_id"], verification_id)
-        self.assertTrue(first["stale"])
-
-        with patch.object(
-            problem_readiness_module,
-            "verification_sources_signature",
-            side_effect=AssertionError("stale fingerprint should cache current signature"),
-        ) as full_hash:
-            second = self._problem_readiness(
-                problem_id=problem_id,
-                workspace_id=workspace_id,
-                workspace_path=ws,
-            )["verification"]
-
-        full_hash.assert_not_called()
-        self.assertEqual(second["verification_id"], verification_id)
-        self.assertTrue(second["stale"])
-
-    def test_rejudge_uses_verification_id_endpoint_and_forces_recompile(self) -> None:
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        self._configure_solution_fixtures(
-            ws,
-            ("accepted.cpp", "accepted"),
-            ("wa.cpp", "wrong_answer"),
-        )
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        verification_id = canonical_test_verification_id(f"inv-rerun-link-{uuid.uuid4().hex[:8]}")
-        run_ok = f"r-rerun-link-ok-{uuid.uuid4().hex[:8]}"
-        run_wa = f"r-rerun-link-wa-{uuid.uuid4().hex[:8]}"
-        build_id = self.random_id("b-rerun-link")
-        summary_ok = {
-            "mode": "pass-fail",
-            "source": "solutions/accepted.cpp",
-            "tests": [{"test": "001.in", "verdict": "OK"}],
-            "verification": {
-                "id": verification_id,
-                "run_ids": [run_ok, run_wa],
-                "expected_behavior": "accepted",
-                "matched": True,
-                "completed": True,
-                "passed_all_tests": True,
-            },
-        }
-        summary_wa = {
-            "mode": "pass-fail",
-            "source": "solutions/wa.cpp",
-            "tests": [{"test": "001.in", "verdict": "WA"}],
-        }
-        self._insert_verification_row(
-            verification_id=verification_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            build_id=build_id,
-            activate_tasks=False,
-            kind=Kind.ALL,
-            status="ok",
-            created_at="2026-03-03T00:00:01Z",
-            finished_at="2026-03-03T00:00:04Z",
-            runs=[
-                {
-                    "id": run_ok,
-                    "status": "ok",
-                    "source_label": "solutions/accepted.cpp",
-                    "expected_behavior": "accepted",
-                    "summary": dict(summary_ok),
-                },
-                {
-                    "id": run_wa,
-                    "status": "ok",
-                    "source_label": "solutions/wa.cpp",
-                    "expected_behavior": "wrong_answer",
-                    "summary": dict(summary_wa),
-                },
-            ],
-        )
-        rerun_ok_task_id = verification_task_id(
-            verification_id,
-            "solution-0",
-            "001.in",
-        )
-        rerun_wa_task_id = verification_task_id(
-            verification_id,
-            "solution-1",
-            "001.in",
-        )
-        self._activate_verification_fixture(
-            verification_id,
-            tasks=[
-                PlannedTask(
-                    task_id=rerun_ok_task_id,
-                    predecessor_task_id=None,
-                    task_kind="solution-run",
-                    source_path="solutions/accepted.cpp",
-                    program_id="solution-0",
-                    test_name="001.in",
-                    expected_behavior="accepted",
-                ),
-                PlannedTask(
-                    task_id=rerun_wa_task_id,
-                    predecessor_task_id=None,
-                    task_kind="solution-run",
-                    source_path="solutions/wa.cpp",
-                    program_id="solution-1",
-                    test_name="001.in",
-                    expected_behavior="wrong_answer",
-                ),
-            ],
-            completions=[
-                TaskCompletion(
-                    task_id=rerun_ok_task_id,
-                    status=VerificationTaskStatus.DONE,
-                    run_id=run_ok,
-                    judgehost_task_id="",
-                    result=execution_result("OK"),
-                ),
-                TaskCompletion(
-                    task_id=rerun_wa_task_id,
-                    status=VerificationTaskStatus.DONE,
-                    run_id=run_wa,
-                    judgehost_task_id="",
-                    result=execution_result("WA"),
-                ),
-            ],
-        )
-        with patch("app.impl.run_export.run.start_verification_job", return_value=True) as start_job:
-            response = run_rejudge("alice/sample", "alice", verification_id=verification_id)
-
+        response = run_rejudge(problem, "alice", verification_id=cached_id)
         self.assertEqual(response.status_code, 303)
-        call_kwargs = start_job.call_args.kwargs
-        self.assertTrue(call_kwargs["bypass_case_result_cache"])
-        self.assertEqual(call_kwargs["selected_test_names"], [])
+        rejudge_id = parse_qs(urlparse(response.headers["location"]).query)["verification_id"][0]
+        self.assertNotIn(rejudge_id, {first_id, cached_id})
+        rejudge_sources = self._complete_judgehost_work(rejudge_id)
+        self.assertIn("accepted.cpp", rejudge_sources)
+        self.assertIn("wa.cpp", rejudge_sources)
+        tasks = runtime.verification_task_store.list_rows(rejudge_id)
         self.assertEqual(
-            [target["path"] for target in call_kwargs["targets"]],
-            ["solutions/accepted.cpp", "solutions/wa.cpp"],
+            {(row["source_path"], row["expected_behavior"]) for row in tasks if row["task_kind"] != "generate-input"},
+            {("solutions/accepted.cpp", "accepted"), ("solutions/wa.cpp", "wrong_answer")},
         )
 
     def test_published_verification_can_be_rejudged_but_not_cancelled(self) -> None:
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        self._configure_solution_fixtures(
-            ws,
-            ("accepted.cpp", "accepted"),
-            ("fixture.cpp", "unknown"),
-        )
+        ws = self._prepare_verification_workspace("alice/sample")
+        self._write_solution_fixture(ws, "fixture.cpp", "unknown")
+        published = revision_commit(problem="alice/sample", user="alice", message="publish rejudge fixture")
+        self.assertEqual(published.status_code, 303)
         workspace_service.ensure_user("bob")
         workspace_service.grant_repo_access("alice/sample", "bob", "read")
-        bob_ws = Path(
-            workspace_service.ensure_workspace(
-                "alice/sample",
-                "bob",
-                refresh_status=False,
-            )
-        )
-        self._configure_solution_fixtures(
-            bob_ws,
-            ("accepted.cpp", "accepted"),
-            ("fixture.cpp", "unknown"),
-        )
+        workspace_service.ensure_workspace("alice/sample", "bob", refresh_status=False)
         ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
         problem_id = int(ctx["problem"]["id"])
         published_id = canonical_test_verification_id(
@@ -2008,27 +1472,23 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(detail_page.status_code, 200)
 
-        with patch(
-            "app.impl.run_export.run.start_verification_job",
-            return_value=True,
-        ) as start_job:
-            rejudge_response = run_rejudge(
-                "alice/sample",
-                "bob",
-                verification_id=published_id,
-            )
+        override_config_values(self, runtime.config_values, JUDGEHOST_ENABLE=True)
+        runtime.judgehost_task_service.domjudge_register_host(f"ui-published-rejudge-{self.test_id}")
+        rejudge_response = run_rejudge("alice/sample", "bob", verification_id=published_id)
         self.assertEqual(rejudge_response.status_code, 303)
-        start_job.assert_called_once()
-        bob_ctx = workspace_service.workspace_context(
-            "alice/sample",
-            "bob",
-            include_recent=False,
-        )
-        self.assertEqual(
-            start_job.call_args.kwargs["workspace_id"],
-            int(bob_ctx["workspace"]["id"]),
-        )
-        self.assertFalse(start_job.call_args.kwargs["allow_package_certification"])
+        rejudge_id = parse_qs(urlparse(rejudge_response.headers["location"]).query)["verification_id"][0]
+        self.assertNotEqual(rejudge_id, published_id)
+        try:
+            activated = _wait_for_row(
+                "SELECT id FROM verification_tasks WHERE verification_id=? LIMIT 1", [rejudge_id],
+            )
+            self.assertIsNotNone(activated, runtime.verification_service.verification_record(rejudge_id))
+            bob_context = workspace_service.workspace_context("alice/sample", "bob", include_recent=False)
+            record = runtime.verification_service.verification_record(rejudge_id)
+            self.assertEqual(record["workspace_id"], bob_context["workspace"]["id"])
+        finally:
+            runtime.verification_execution_service.cancel_verification(rejudge_id, reason="published rejudge coverage complete")
+            _wait_for_verification_workers(timeout_sec=5)
         cancel_response = run_cancel(
             "alice/sample",
             "alice",
@@ -2125,24 +1585,11 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         workspace_id = int(ctx["workspace"]["id"])
         verification_id = canonical_test_verification_id(f"inv-cancel-{uuid.uuid4().hex[:8]}")
         run_id = f"r-cancel-running-{uuid.uuid4().hex[:8]}"
-        build_id = self.random_id("b-cancel-run")
-        self._insert_verification_row(
+        self._admit_verification_fixture(
             verification_id=verification_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
-            build_id=build_id,
-            activate_tasks=False,
-            kind=Kind.ALL,
-            status="running",
-            created_at="2026-02-23T00:00:00Z",
-            finished_at="",
-            runs=[],
-            summary_extra={
-                "mode": "pass-fail",
-                "build_id": build_id,
-                "task_graph": True,
-                "source_paths": ["solutions/accepted.cpp"],
-            },
+            detail={"mode": "pass-fail", "source_paths": ["solutions/accepted.cpp"]},
         )
         leased_task_id = verification_task_id(
             verification_id,
@@ -2221,19 +1668,11 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         verification_id = canonical_test_verification_id(f"inv-cancel-pending-{uuid.uuid4().hex[:8]}")
-        build_id = self.random_id("b-cancel-pending")
-        self._insert_verification_row(
+        self._admit_verification_fixture(
             verification_id=verification_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
-            build_id=build_id,
-            activate_tasks=False,
-            kind=Kind.ALL,
-            status="running",
-            created_at="2026-03-05T00:00:00Z",
-            finished_at="",
-            runs=[],
-            summary_extra={"task_graph": True, "source_paths": ["solutions/accepted.cpp"]},
+            detail={"mode": "pass-fail", "source_paths": ["solutions/accepted.cpp"]},
         )
         queued_task_ids = [
             verification_task_id(
@@ -2295,19 +1734,11 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         workspace_id = int(ctx["workspace"]["id"])
         verification_id = canonical_test_verification_id(f"inv-cancel-domjudge-pending-{uuid.uuid4().hex[:8]}")
         run_id = f"r-cancel-domjudge-pending-{uuid.uuid4().hex[:8]}"
-        build_id = self.random_id("b-cancel-domjudge-pending")
-        self._insert_verification_row(
+        self._admit_verification_fixture(
             verification_id=verification_id,
             problem_id=problem_id,
             workspace_id=workspace_id,
-            build_id=build_id,
-            activate_tasks=False,
-            kind=Kind.ALL,
-            status="running",
-            created_at="2026-03-05T00:00:00Z",
-            finished_at="",
-            runs=[],
-            summary_extra={"task_graph": True, "source_paths": ["solutions/accepted.cpp"]},
+            detail={"mode": "pass-fail", "source_paths": ["solutions/accepted.cpp"]},
         )
         queued_task_ids = [
             verification_task_id(
@@ -2361,133 +1792,119 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
 
 
-    def test_verification_start_stays_queued_until_activation(self) -> None:
-        problem = f"alice/verify-running-sidebar-{uuid.uuid4().hex[:8]}"
+    def test_verification_waits_for_worker_capacity_and_rejection_is_durable(self) -> None:
+        problem = f"alice/verify-queued-{uuid.uuid4().hex[:8]}"
         self._prepare_verification_workspace(problem)
-        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        workspace_key = workspace_context_job._verification_workspace_key(problem_id, workspace_id)
+        context = workspace_service.workspace_context(problem, "alice", include_recent=False)
+        rejected_problem = f"alice/verify-rejected-{uuid.uuid4().hex[:8]}"
+        rejected_workspace = self._prepare_verification_workspace(rejected_problem)
+        rejected_context = workspace_service.workspace_context(rejected_problem, "alice", include_recent=False)
+        rejected_id = canonical_test_verification_id(f"queue-rejection-{uuid.uuid4().hex}")
+        override_config_values(self, runtime.config_values, JUDGEHOST_ENABLE=True)
+        runtime.judgehost_task_service.domjudge_register_host(f"ui-queue-{self.test_id}")
+        started = threading.Event()
+        release = threading.Event()
+        queue = WorkerQueueService(worker_count=1, queue_capacity=1)
+        queued_id = ""
 
-        class _FakeWorker:
-            def __init__(self) -> None:
-                self._alive = True
+        def hold_worker() -> None:
+            started.set()
+            if not release.wait(timeout=10):
+                raise TimeoutError("test did not release worker")
 
-            def is_alive(self) -> bool:
-                return self._alive
+        with patch.object(runtime, "worker_queue_service", queue):
+            try:
+                blocker, accepted, reason = queue.submit(name="capacity blocker", fn=hold_worker)
+                self.assertTrue(accepted, reason)
+                self.assertTrue(started.wait(timeout=2))
+                response = verification_start(problem=problem, user="alice", page="run")
+                self.assertEqual(response.status_code, 303)
+                queued = runtime.verification_service.list_visible_verification_rows(
+                    context["problem"]["id"], context["workspace"]["id"], limit=1,
+                )
+                self.assertEqual(len(queued), 1)
+                queued_id = queued[0]["id"]
+                self.assertEqual(queued[0]["status"], "queued")
+                self.assertEqual(runtime.verification_task_store.list_rows(queued_id), [])
 
-            def stop(self) -> None:
-                self._alive = False
+                with self.assertRaisesRegex(RuntimeError, "queue rejected"):
+                    workspace_context_job.start_verification_job(
+                        runtime,
+                        rejected_problem,
+                        "alice",
+                        problem_id=rejected_context["problem"]["id"],
+                        workspace_id=rejected_context["workspace"]["id"],
+                        workspace_head=rejected_context["workspace"]["head_commit"],
+                        workspace_dirty=bool(rejected_context["workspace"]["dirty"]),
+                        targets=[],
+                        verification_id=rejected_id,
+                        allow_package_certification=True,
+                        workspace_path=rejected_workspace,
+                    )
+                rejected = db_fetch_one(
+                    "SELECT status,fail_reason,finished_at FROM verifications WHERE id=?",
+                    [rejected_id],
+                )
+                self.assertIsNotNone(rejected)
+                self.assertEqual(rejected["status"], "failed")
+                self.assertIn("queue rejected", rejected["fail_reason"])
+                self.assertTrue(rejected["finished_at"])
 
-        fake_worker = _FakeWorker()
-        try:
-            with patch.object(
-                runtime.worker_queue_service,
-                "submit",
-                return_value=(fake_worker, True, "queued"),
-            ):
-                start_resp = verification_start(problem=problem, user="alice", page="statement")
-            self.assertEqual(start_resp.status_code, 303)
-            row = runtime.verification_service.list_visible_verification_rows(
-                problem_id,
-                workspace_id,
-                limit=1,
-            )
-            self.assertIsNotNone(row)
-            assert row
-            self.assertEqual(str(row[0]["status"] or ""), "queued")
-        finally:
-            fake_worker.stop()
-            with runtime.verification_lock:
-                runtime.verification_inflight.discard(workspace_key)
-                runtime.verification_workers.discard(fake_worker)
+                release.set()
+                blocker.join(timeout=2)
+                self.assertIsNone(blocker.exception())
+                activated = _wait_for_row(
+                    "SELECT id FROM verification_tasks WHERE verification_id=? LIMIT 1",
+                    [queued_id],
+                )
+                self.assertIsNotNone(activated, runtime.verification_service.verification_record(queued_id))
+            finally:
+                release.set()
+                if queued_id:
+                    runtime.verification_execution_service.cancel_verification(queued_id, reason="queue test complete")
+                _wait_for_verification_workers(timeout_sec=5)
+                queue.stop()
 
-    def test_verification_queue_rejection_is_a_failure(self) -> None:
-        problem = f"alice/verify-queue-rejection-{uuid.uuid4().hex[:8]}"
+    def test_reader_verification_is_complete_but_only_writer_certifies_package(self) -> None:
+        problem = f"alice/certification-{uuid.uuid4().hex[:8]}"
         workspace = self._prepare_verification_workspace(problem)
-        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        verification_id = canonical_test_verification_id(
-            f"queue-rejection-{uuid.uuid4().hex}"
+        (workspace / "tests/spec.json").write_text(json.dumps({
+            "tests": [{"id": "001", "kind": "manual", "sample": True}],
+        }), encoding="utf-8")
+        published = revision_commit(problem=problem, user="alice", message="publish certification fixture")
+        self.assertEqual(published.status_code, 303)
+        alice_context = workspace_service.workspace_context(problem, "alice", include_recent=False)
+        problem_id = alice_context["problem"]["id"]
+        revision = runtime.problem_package_service.published_revision(problem_id)
+        package = runtime.problem_package_service.ensure_native_package(
+            revision,
+            verification_builder(problem_id, input_bytes=b"7\n", answer_bytes=b"7\n", verification_kind="package"),
         )
+        self.assertFalse(runtime.problem_package_service.native_package_verified(package))
+        package_verification_id = package["verification_id"]
+        workspace_service.ensure_user("bob")
+        workspace_service.grant_repo_access(problem, "bob", "read")
+        workspace_service.ensure_workspace(problem, "bob", refresh_status=False)
+        override_config_values(self, runtime.config_values, JUDGEHOST_ENABLE=True)
+        hostname = f"ui-certification-{self.test_id}"
+        runtime.judgehost_task_service.domjudge_register_host(hostname)
 
-        with (
-            patch.object(
-                runtime.worker_queue_service,
-                "submit",
-                return_value=(None, False, "capacity"),
-            ),
-            self.assertRaisesRegex(RuntimeError, "queue rejected"),
-        ):
-            workspace_context_job.start_verification_job(
-                runtime,
-                problem,
-                "alice",
-                problem_id=problem_id,
-                workspace_id=workspace_id,
-                workspace_head=str(ctx["workspace"].get("head_commit") or ""),
-                workspace_dirty=bool(ctx["workspace"].get("dirty")),
-                targets=[],
-                verification_id=verification_id,
-                allow_package_certification=True,
-                workspace_path=workspace,
-            )
-
-        row = db_fetch_one(
-            "SELECT status,fail_reason FROM verifications WHERE id=?",
-            [verification_id],
-        )
-        self.assertIsNotNone(row)
-        self.assertEqual(str(row["status"]), "failed")
-        self.assertIn("queue rejected", str(row["fail_reason"]))
-
-    def test_package_certification_requires_explicit_worker_admission(self) -> None:
-        commit = "a" * 40
-        worker_kwargs = {
-            "problem_id": 1,
-            "workspace_id": 1,
-            "workspace_head": commit,
-            "workspace_dirty": False,
-            "targets": [],
-            "source_commit": commit,
-            "kind": Kind.ALL.value,
-        }
-        with (
-            patch.object(runtime.verification_workflow, "run"),
-            patch.object(
-                runtime.verification_service,
-                "verification_record",
-                return_value={"status": VerificationStatus.OK},
-            ),
-            patch.object(
-                runtime.problem_package_service,
-                "promote_native_package_verification",
-                return_value="",
-            ) as promote,
-        ):
-            workspace_context_job._run_verification_start_worker(
-                runtime,
-                "alice/sample",
-                "alice",
-                verification_id="ver-reader-certification",
-                allow_package_certification=False,
-                **worker_kwargs,
-            )
-            promote.assert_not_called()
-            workspace_context_job._run_verification_start_worker(
-                runtime,
-                "alice/sample",
-                "alice",
-                verification_id="ver-writer-certification",
-                allow_package_certification=True,
-                **worker_kwargs,
-            )
-            promote.assert_called_once_with(
-                problem_id=1,
-                source_commit=commit,
-                verification_id="ver-writer-certification",
-            )
+        for user, can_certify in (("bob", False), ("alice", True)):
+            with self.subTest(user=user):
+                response = verification_start(problem=problem, user=user, page="run")
+                self.assertEqual(response.status_code, 303)
+                context = workspace_service.workspace_context(problem, user, include_recent=False)
+                rows = runtime.verification_service.list_visible_verification_rows(
+                    problem_id, context["workspace"]["id"], limit=1,
+                )
+                self.assertEqual(len(rows), 1)
+                verification_id = rows[0]["id"]
+                self.assertEqual(rows[0]["workspace_id"], context["workspace"]["id"])
+                self._complete_judgehost_work(verification_id)
+                current = runtime.problem_package_service.native_package(package["id"])
+                self.assertIsNotNone(current)
+                self.assertEqual(runtime.problem_package_service.native_package_verified(current), can_certify)
+                self.assertEqual(current["verification_id"], verification_id if can_certify else package_verification_id)
 
     def test_pass_fail_sample_json_exposes_every_pass(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")
@@ -2849,35 +2266,13 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         problem_id = int(alice_ctx["problem"]["id"])
         alice_workspace_id = int(alice_ctx["workspace"]["id"])
         verification_id = canonical_test_verification_id(f"ver-collab-detail-{uuid.uuid4().hex[:8]}")
-        artifact_root = runtime.storage_layout.prepare_verification_root(verification_id).resolve()
-        artifact_root.mkdir(parents=True, exist_ok=True)
-
-        self._insert_verification_row(
+        self._admit_verification_fixture(
             verification_id=verification_id,
             problem_id=problem_id,
             workspace_id=alice_workspace_id,
-            build_id=verification_id,
-            activate_tasks=False,
-            kind=Kind.ALL,
-            status="ok",
-            created_at="2026-05-04T00:00:00Z",
-            finished_at="2026-05-04T00:00:01Z",
-            runs=[
-                {
-                    "id": "r-collab-detail",
-                    "status": "ok",
-                    "artifact_path": str(artifact_root),
-                    "source_label": "solutions/std.cpp",
-                    "summary": {
-                        "mode": "pass-fail",
-                        "source": "solutions/std.cpp",
-                        "tests": [],
-                        "compile_log": "",
-                        "compile_diagnostics": [],
-                    },
-                }
-            ],
-            summary_extra={
+            detail={
+                "mode": "pass-fail",
+                "source_paths": ["solutions/std.cpp"],
                 "tests_meta_rows": [
                     {
                         "index": 1,
@@ -2966,8 +2361,12 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             headers={"cookie": f"{AUTH_COOKIE_NAME}={token}"},
         )
         self.assertEqual(scoped.status_code, 200)
-        link = scoped.context["problem_href"]("run_details_sample_json", query={"verification_id": verification_id, "test": "001.in", "program_id": "solution-0"})
+        links = [unescape(value) for value in re.findall(r'href="([^"]+)"', scoped.text)]
+        link = next(value for value in links if "/run/details/sample-json?" in value)
         self.assertEqual(parse_qs(urlparse(link).query)["contest"], [contest_slug])
+        sample_response = client.get(link, headers={"cookie": f"{AUTH_COOKIE_NAME}={token}"})
+        self.assertEqual(sample_response.status_code, 200, sample_response.text)
+        self.assertEqual(sample_response.json()["passes"][0]["output"], "6\n")
         workspace_service.grant_repo_access("alice/sample", "bob", "read")
         bob_ctx = workspace_service.workspace_context("alice/sample", "bob", include_recent=False)
         config = Path(bob_ctx["workspace"]["path"]) / "config/problem.json"
@@ -2975,11 +2374,10 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         before = dict(db_fetch_one("SELECT * FROM workspaces WHERE id=?", [bob_ctx["workspace"]["id"]]))
         try:
             config.write_text("{broken config", encoding="utf-8")
-            with patch("app.impl.run_export.run.page_ctx", side_effect=AssertionError("authoring context")):
-                history = run_details_test_fragment(
-                    _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in&program_id=solution-0"),
-                    "alice/sample", "bob",
-                )
+            history = run_details_test_fragment(
+                _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in&program_id=solution-0"),
+                "alice/sample", "bob",
+            )
             self.assertEqual(history.status_code, 200)
             self.assertIn("std.cpp", history.body.decode())
             after = dict(db_fetch_one("SELECT * FROM workspaces WHERE id=?", [bob_ctx["workspace"]["id"]]))
@@ -2994,252 +2392,30 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             )
         self.assertIn(denied.exception.status_code, {403, 404})
 
-    def test_package_create_reuses_existing_current_package(self) -> None:
-        context = workspace_service.workspace_context(
-            "alice/sample",
-            "alice",
-            include_recent=False,
-        )
-        problem_id = int(context["problem"]["id"])
-        native_package_id = "pm-current-package"
-        readiness = {
-            "problem_id": problem_id,
-            "published_commit": "a" * 40,
-            "published_revision_number": 3,
-            "native_package_revision_number": 3,
-            "native_package_id": native_package_id,
-            "status": "ready",
-            "verified": True,
-            "missing_reason": "",
-        }
-        native_package = {
-            "id": native_package_id,
-            "problem_id": problem_id,
-            "source_commit": "a" * 40,
-            "revision_number": 3,
-            "source_digest": "b" * 64,
-            "archive_rel_path": "materializations/current.zip",
-            "archive_sha256": "c" * 64,
-            "archive_size_bytes": 100,
-            "verification_id": "ver-current-package",
-            "status": "available",
-            "created_at": "2026-08-16T00:00:00Z",
-            "checked_at": "2026-08-16T00:00:00Z",
-            "unavailable_reason": "",
-        }
-        with (
-            patch.object(
-                runtime.problem_package_service,
-                "published_readiness",
-                return_value=readiness,
-            ),
-            patch.object(
-                runtime.problem_package_service,
-                "native_package",
-                return_value=native_package,
-            ),
-            patch.object(
-                runtime.export_service,
-                "materialization_packages",
-                return_value=[
-                    {
-                        "export_id": "e-current",
-                        "materialization_id": native_package_id,
-                        "export_type": "domjudge",
-                        "filename": "sample-domjudge-v3.zip",
-                    }
-                ],
-            ),
-            patch(
-                "app.impl.run_export.export.start_export_job"
-            ) as start_export,
-        ):
-            response = export_create(
-                _request(
-                    "/problems/alice/sample/export/create",
-                    method="POST",
-                ),
-                "alice/sample",
-                "alice",
-                format="domjudge",
-            )
-        self.assertEqual(response.status_code, 303)
-        self.assertEqual(
-            response.headers["location"],
-            "/problems/alice/sample/exports/e-current/sample-domjudge-v3.zip",
-        )
-        start_export.assert_not_called()
+    def test_package_create_redirects_to_a_retrievable_published_archive(self) -> None:
+        from app.main import app
 
-    def test_standard_only_controls_native_and_external_creation(self) -> None:
-        context = workspace_service.workspace_context(
-            "alice/sample",
-            "alice",
-            include_recent=False,
+        problem = f"alice/package-download-{uuid.uuid4().hex[:8]}"
+        workspace = self._prepare_verification_workspace(problem)
+        _workspace, problem_id, _commit = publish_problem(workspace, problem, "alice")
+        revision = runtime.problem_package_service.published_revision(problem_id)
+        package = runtime.problem_package_service.ensure_native_package(
+            revision, verification_builder(problem_id),
         )
-        problem_id = int(context["problem"]["id"])
-        native_package_id = "pm-unverified-package"
-        readiness = {
-            "problem_id": problem_id,
-            "published_commit": "a" * 40,
-            "published_revision_number": 3,
-            "native_package_revision_number": 3,
-            "native_package_id": native_package_id,
-            "status": "ready",
-            "verified": False,
-            "missing_reason": "",
-        }
-        native_package = {
-            "id": native_package_id,
-            "problem_id": problem_id,
-            "source_commit": "a" * 40,
-            "revision_number": 3,
-            "source_digest": "b" * 64,
-            "archive_rel_path": "materializations/unverified.zip",
-            "archive_sha256": "c" * 64,
-            "archive_size_bytes": 100,
-            "verification_id": "ver-package-only",
-            "status": "available",
-            "created_at": "2026-08-16T00:00:00Z",
-            "checked_at": "2026-08-16T00:00:00Z",
-            "unavailable_reason": "",
-        }
-        with (
-            patch.object(
-                runtime.problem_package_service,
-                "published_readiness",
-                return_value=readiness,
-            ),
-            patch.object(
-                runtime.problem_package_service,
-                "native_package",
-                return_value=native_package,
-            ),
-            patch(
-                "app.impl.run_export.export.start_export_job",
-                return_value=True,
-            ) as start_export,
-        ):
-            full_response = export_create(
-                _request(
-                    "/problems/alice/sample/export/create",
-                    method="POST",
-                ),
-                "alice/sample",
-                "alice",
-                format="native",
-                standard_solution_only=None,
-            )
-            self.assertEqual(full_response.status_code, 303)
-            start_export.assert_called_once()
-            self.assertFalse(
-                start_export.call_args.kwargs["standard_solution_only"]
-            )
-
-            start_export.reset_mock()
-            standard_response = export_create(
-                _request(
-                    "/problems/alice/sample/export/create",
-                    method="POST",
-                ),
-                "alice/sample",
-                "alice",
-                format="domjudge",
-                standard_solution_only="1",
-                create_native="1",
-            )
-
-            external_response = export_create(
-                _request(
-                    "/problems/alice/sample/export/create",
-                    method="POST",
-                ),
-                "alice/sample",
-                "alice",
-                format="domjudge",
-                standard_solution_only="1",
-            )
-
-        self.assertEqual(standard_response.status_code, 303)
-        self.assertEqual(
-            standard_response.headers["location"],
-            "/problems/alice/sample/native-packages/pm-unverified-package/download",
-        )
-        start_export.assert_called_once()
-        self.assertEqual(start_export.call_args.kwargs["requested_format"], "domjudge")
-        self.assertTrue(start_export.call_args.kwargs["standard_solution_only"])
-        self.assertEqual(external_response.status_code, 303)
-
-    def test_package_export_busy_returns_conflict(self) -> None:
-        context = workspace_service.workspace_context(
-            "alice/sample",
-            "alice",
-            include_recent=False,
-        )
-        with patch(
-            "app.impl.run_export.export.start_export_job",
-            return_value=False,
-        ):
-            with self.assertRaises(HTTPException) as raised:
-                export_create(
-                    _request(
-                        "/problems/alice/sample/export/create",
-                        method="POST",
-                    ),
-                    "alice/sample",
-                    "alice",
-                    format="domjudge",
-                )
-        self.assertEqual(raised.exception.status_code, 409)
-        self.assertTrue(int(context["problem"]["id"]) > 0)
-
-    def test_run_verification_details_reads_verification_record(self) -> None:
-        from app.impl.workspace.run_view_lifecycle_card import load_verification_detail_summary
-
-        workspace_service.ensure_workspace("alice/sample", "alice")
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        problem_id = int(ctx["problem"]["id"])
-        workspace_id = int(ctx["workspace"]["id"])
-        build_id = canonical_test_verification_id(
-            self.random_id("b-ver-details")
-        )
-        self._insert_stage_verification(
-            verification_id=build_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            signature="deadbeef",
-            status="ok",
-            summary=json.dumps({}),
-            artifact_path=str(Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / "alice" / "sample" / build_id),
-            created_at="2026-03-12T00:00:00Z",
-            finished_at="2026-03-12T00:00:01Z",
-        )
-        verification_id = canonical_test_verification_id(f"inv-ver-details-{uuid.uuid4().hex[:8]}")
-        self._insert_verification_row(
-            verification_id=verification_id,
-            problem_id=problem_id,
-            workspace_id=workspace_id,
-            build_id=build_id,
-            kind=Kind.ALL,
-            status="running",
-            created_at="2026-03-12T00:00:02Z",
-            finished_at="",
-            runs=[
-                {
-                    "id": "r-detail-a",
-                    "status": "running",
-                    "source_label": "solutions/accepted.cpp",
-                    "expected_behavior": "accepted",
-                    "summary": {
-                        "source": "solutions/accepted.cpp",
-                        "status": "running",
-                    },
-                }
-            ],
-            summary_extra={"status": "running"},
-        )
-        details_row = load_verification_detail_summary(problem_id, verification_id)
-        self.assertEqual(str(details_row.get("created_at") or ""), "2026-03-12T00:00:02Z")
-        details = details_row.get("details")
-        self.assertIsInstance(details, dict)
-        self.assertEqual(str(details.get("verification_id") or ""), verification_id)
-        self.assertEqual(str(details.get("status") or ""), "running")
+        actor_id = workspace_service.known_user_id("alice")
+        token = runtime.auth_service.create_session_for_user(actor_id)
+        headers = {"cookie": f"{AUTH_COOKIE_NAME}={token}", "origin": "https://testserver"}
+        with TestClient(app, base_url="https://testserver") as client:
+            for form in ({"format": "native"}, {"format": "domjudge", "create_native": "1"}):
+                with self.subTest(form=form):
+                    response = client.post(
+                        f"/problems/{problem}/export/create", data=form,
+                        headers=headers, follow_redirects=False,
+                    )
+                    self.assertEqual(response.status_code, 303, response.text)
+                    self.assertEqual(response.headers["location"], f"/problems/{problem}/native-packages/{package['id']}/download")
+                    archive_response = client.get(response.headers["location"], headers=headers)
+                    self.assertEqual(archive_response.status_code, 200)
+                    with zipfile.ZipFile(io.BytesIO(archive_response.content)) as archive:
+                        self.assertEqual(archive.read("solutions/accepted.cpp"), (workspace / "solutions/accepted.cpp").read_bytes())
+            self.assertEqual(runtime.export_service.problem_export_jobs(problem_id, limit=1), [])

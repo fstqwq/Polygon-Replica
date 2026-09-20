@@ -3,10 +3,11 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Mapping, NotRequired, TypedDict
 
 from tests.simulation.judgehost import JudgehostSimulation
 from tests.simulation.report import (
+    AggregateReport, ComparisonReport, SimulationReport,
     aggregate_reports,
     compare_aggregates,
     evaluate_assertions,
@@ -19,6 +20,30 @@ from tests.simulation.strategy import (
 )
 from tests.simulation.workload import Workload, builtin_names, load_builtin, load_workload
 
+
+class StrategyReport(TypedDict):
+    scenario: str
+    strategy: str
+    host_count: int
+    seeds: list[int]
+    runs: list[SimulationReport]
+    aggregate: AggregateReport
+    assertion_failures: list[str]
+    comparison: NotRequired[ComparisonReport]
+
+
+class AblationReport(TypedDict):
+    scenario: str
+    host_count: int
+    repeat: int
+    parallel_compile: bool
+    stage_labels: dict[str, str]
+    fallback: str
+    baseline_strategy: str
+    baseline: StrategyReport
+    presence: dict[str, StrategyReport]
+    orders: dict[str, StrategyReport]
+    assertion_failures: list[str]
 
 _SCORE_MODES = (
     ("spread-first", "score-parallel:"),
@@ -48,7 +73,7 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _load_baseline(path: Path) -> dict[str, Any]:
+def _load_baseline(path: Path) -> Mapping[str, object]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("baseline must be a JSON object")
@@ -74,7 +99,7 @@ def _write_json(path: Path, payload: object) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _print_summary(payload: dict[str, Any]) -> None:
+def _print_summary(payload: StrategyReport) -> None:
     aggregate_report = payload["aggregate"]
     aggregate = aggregate_report["aggregate"]
     print(
@@ -118,7 +143,7 @@ def _print_summary(payload: dict[str, Any]) -> None:
     )
 
 
-def _print_strategy_table(payloads: dict[str, dict[str, Any]]) -> None:
+def _print_strategy_table(payloads: dict[str, StrategyReport]) -> None:
     print(
         "| Strategy | Background median/p95/worst | Foreground median/p95/worst | "
         "Background leases while waiting (worst) | Compile median | Switches median |"
@@ -146,7 +171,7 @@ def _print_strategy_table(payloads: dict[str, dict[str, Any]]) -> None:
         )
 
 
-def _metric_median(payload: dict[str, Any], metric: str) -> float:
+def _metric_median(payload: StrategyReport, metric: str) -> float:
     return float(payload["aggregate"]["aggregate"][metric]["median"])
 
 
@@ -154,7 +179,7 @@ def _relative_percent(current: float, baseline: float) -> float:
     return 0.0 if baseline == 0.0 else 100.0 * (current - baseline) / baseline
 
 
-def _print_selection_stage_ablation(payload: dict[str, Any]) -> None:
+def _print_selection_stage_ablation(payload: AblationReport) -> None:
     baseline = payload["baseline"]
     baseline_makespan = _metric_median(baseline, "background_makespan_sec")
     print("\nPresence ablation")
@@ -197,7 +222,7 @@ def _print_selection_stage_ablation(payload: dict[str, Any]) -> None:
         )
 
 
-def _print_score_strategy_table(payloads: dict[str, dict[str, Any]]) -> None:
+def _print_score_strategy_table(payloads: dict[str, StrategyReport]) -> None:
     baseline = payloads["spread-first/pending-count"]
     baseline_makespan = _metric_median(baseline, "background_makespan_sec")
     print(
@@ -229,8 +254,8 @@ def _run_strategy(
     strategy: str,
     repeat: int,
     trace_enabled: bool,
-) -> tuple[dict[str, Any], list[str]]:
-    reports: list[dict[str, Any]] = []
+) -> tuple[StrategyReport, list[str]]:
+    reports: list[SimulationReport] = []
     failures: list[str] = []
     for index in range(repeat):
         run_workload = workload.with_overrides(seed=workload.seed + index)
@@ -263,14 +288,14 @@ def _run_selection_stage_ablation(
     *,
     repeat: int,
     parallel_compile: bool,
-) -> tuple[dict[str, Any], list[str]]:
+) -> tuple[AblationReport, list[str]]:
     _, baseline_stages, omissions, orders = selection_ablation_strategies()
     baseline_name = selection_strategy_name(
         baseline_stages,
         parallel_compile=parallel_compile,
     )
     stage_sets = {baseline_stages, *omissions.values(), *orders}
-    results: dict[tuple[str, ...], dict[str, Any]] = {}
+    results: dict[tuple[str, ...], StrategyReport] = {}
     failures: list[str] = []
     for stages in sorted(stage_sets):
         result, result_failures = _run_strategy(
@@ -350,7 +375,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         workload = workload.with_overrides(host_count=args.hosts, seed=args.seed)
         if args.score_strategies:
-            strategy_payloads: dict[str, dict[str, Any]] = {}
+            strategy_payloads: dict[str, StrategyReport] = {}
             failures: list[str] = []
             for mode, prefix in _SCORE_MODES:
                 for score_name in SCORE_STRATEGY_NAMES:
@@ -388,7 +413,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"FAIL: {failure}", file=sys.stderr)
             return 1 if failures else 0
         if args.all_strategies:
-            strategy_payloads: dict[str, dict[str, Any]] = {}
+            strategy_payloads: dict[str, StrategyReport] = {}
             failures: list[str] = []
             for strategy in STRATEGY_NAMES:
                 strategy_payload, strategy_failures = _run_strategy(

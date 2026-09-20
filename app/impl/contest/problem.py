@@ -12,12 +12,24 @@ from app.impl.contest.shared import (
     _contest_redirect,
     _problem_general_payload_map,
     _run_problem_general_update,
+    ContestPageContext,
+    ProblemGeneralFields,
 )
-from app.impl.contest.workspace_scope import add_contest_problem_hrefs
+from app.impl.contest.workspace_scope import ContestProblemHrefRow, add_contest_problem_hrefs
 from app.impl.runtime.dependency import runtime
-from app.impl.workspace.context_model import workspace_published_revision_pair
+from app.impl.workspace.context_model import RevisionPairView, workspace_published_revision_pair
 from app.main_util import form_text
 from app.service.contest.problem_index import normalize_contest_problem_idx
+from app.service.contest.service import ContestAvailableProblem
+
+
+class ContestProblemTableRow(ContestProblemHrefRow):
+    workspace_revision_pair: RevisionPairView | None
+
+
+class ContestAvailableProblemRow(ContestAvailableProblem):
+    slug_owner: str
+    href: str
 
 
 def contest_problems_page(request: Request, contest: str, user: Annotated[str, Depends(require_session_user)], q: str = ""):
@@ -34,10 +46,9 @@ def contest_problems_page(request: Request, contest: str, user: Annotated[str, D
             include_review=False,
         ),
     )
-    rows: list[dict[str, object]] = []
+    rows: list[ContestProblemTableRow] = []
     for source_row in source_rows:
-        row = dict(source_row)
-        row["workspace_revision_pair"] = (
+        revision_pair = (
             workspace_published_revision_pair(
                 source_row["workspace_revision_local"],
                 source_row["workspace_revision_upstream"],
@@ -47,7 +58,7 @@ def contest_problems_page(request: Request, contest: str, user: Annotated[str, D
             if source_row["workspace_revision_available"]
             else None
         )
-        rows.append(row)
+        rows.append(ContestProblemTableRow(**source_row, workspace_revision_pair=revision_pair))
     query = q.strip()
     available_rows = runtime().contest_service.available_problems(
         contest_id,
@@ -55,7 +66,7 @@ def contest_problems_page(request: Request, contest: str, user: Annotated[str, D
         limit=runtime().config_values.integer("API_PROBLEMS_LIST_LIMIT"),
         query=query,
     )
-    available_display_rows: list[dict[str, object]] = []
+    available_display_rows: list[ContestAvailableProblemRow] = []
     for available_row in available_rows:
         slug_owner, _separator, slug_leaf = available_row["problem_slug"].partition("/")
         available_display_rows.append(
@@ -243,16 +254,14 @@ def _contest_problem_index_pairs(
 
 
 def _apply_general_changes(
-    ctx: dict[str, object],
+    ctx: ContestPageContext,
     selected_ids: list[int],
-    requested_map: dict[int, dict[str, object]],
+    requested_map: dict[int, ProblemGeneralFields],
     *,
     message_prefix: str = "",
 ):
     contest_ctx = ctx["contest"]
     user_ctx = ctx["user"]
-    if not isinstance(contest_ctx, dict) or not isinstance(user_ctx, dict):
-        raise RuntimeError("invalid contest context")
     contest_id = int(contest_ctx["id"])
     actor_user_id = int(user_ctx["id"])
     if not selected_ids:
@@ -273,27 +282,19 @@ def _apply_general_changes(
     skipped_count = 0
     for row in rows:
         pid = int(row["problem_id"])
-        defaults = {
+        defaults: ProblemGeneralFields = {
             "time_limit_ms": str(_K.GENERAL_CONFIG_DEFAULTS["time_limit_ms"]),
             "memory_limit_mb": str(_K.GENERAL_CONFIG_DEFAULTS["memory_limit_mb"]),
         }
         requested = requested_map.get(pid, defaults)
-        requested_time_limit = requested.get("time_limit_ms")
-        requested_memory_limit = requested.get("memory_limit_mb")
         result = _run_problem_general_update(
             contest_slug=str(contest_ctx["slug"]),
             actor_username=str(user_ctx["username"]),
             actor_user_id=actor_user_id,
             problem_id=pid,
             problem_slug=str(row["problem_slug"]),
-            requested_time_limit_ms=(
-                requested_time_limit if isinstance(requested_time_limit, str) else ""
-            ),
-            requested_memory_limit_mb=(
-                requested_memory_limit
-                if isinstance(requested_memory_limit, str)
-                else ""
-            ),
+            requested_time_limit_ms=requested["time_limit_ms"],
+            requested_memory_limit_mb=requested["memory_limit_mb"],
         )
         status = result.get("status")
         if status == "success":

@@ -12,7 +12,7 @@ from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, TypeVar
+from typing import Iterable, TypeVar
 
 from app.config.model import ConfigValues
 from app.main_util import summarize_traced_sql
@@ -21,6 +21,7 @@ logger.setLevel(logging.INFO)
 
 
 _TxResult = TypeVar("_TxResult")
+type SQLValue = str | int | float | bytes | None
 
 
 class SchemaRequirementsError(RuntimeError):
@@ -1206,7 +1207,7 @@ class DB:  # pylint: disable=too-many-instance-attributes
             conn.execute("PRAGMA foreign_keys=ON")
             return result
 
-    def execute(self, sql: str, params: Iterable[Any] = ()) -> None:
+    def execute(self, sql: str, params: Iterable[SQLValue] = ()) -> None:
         """Execute and commit one statement on the exclusive writer."""
 
         values = tuple(params)
@@ -1214,13 +1215,13 @@ class DB:  # pylint: disable=too-many-instance-attributes
             conn.execute(sql, values)
             conn.commit()
 
-    def fetch_one(self, sql: str, params: Iterable[Any] = ()) -> sqlite3.Row | None:
+    def fetch_one(self, sql: str, params: Iterable[SQLValue] = ()) -> sqlite3.Row | None:
         """Fetch one row on an independent read connection."""
 
         with self.conn() as conn:
             return conn.execute(sql, tuple(params)).fetchone()
 
-    def fetch_all(self, sql: str, params: Iterable[Any] = ()) -> list[sqlite3.Row]:
+    def fetch_all(self, sql: str, params: Iterable[SQLValue] = ()) -> list[sqlite3.Row]:
         """Fetch all rows on an independent read connection."""
 
         with self.conn() as conn:

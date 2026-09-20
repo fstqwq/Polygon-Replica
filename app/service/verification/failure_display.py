@@ -1,9 +1,21 @@
 from pathlib import Path
+from typing import TypedDict
 
 from app.service.platform.error_text import bounded_display_text
 from app.service.verification.result_match import verification_solution_match
-from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
+from app.service.verification.types import VerificationTaskRow
+from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.types import VerificationTaskStatus
+
+
+class _FailureTest(TypedDict):
+    test: str
+    verdict: str
+
+
+class _FailureSummary(TypedDict):
+    tests: list[_FailureTest]
+    error: str
 
 
 def verification_solution_failure_hint(
@@ -66,7 +78,7 @@ def verification_task_failure_hint(
     for program_id in order:
         rows = grouped[program_id]
         first = rows[0]
-        summary: dict[str, object] = {
+        summary: _FailureSummary = {
             "tests": [
                 {"test": row["test_name"], "verdict": row["verdict"]}
                 for row in rows

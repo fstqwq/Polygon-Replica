@@ -1,6 +1,6 @@
-import sqlite3
 import uuid
 from pathlib import Path
+from typing import NotRequired, TypedDict
 
 from app.service.judgehost.domjudge.case_result import build_case_terminal_report
 from app.service.judgehost.ports.completion import CaseTerminalReport
@@ -21,17 +21,32 @@ from app.service.verification.lifecycle import (
     VerificationAdmission,
     VerificationCompileSpec,
     VerificationProgram,
+    VerificationTaskKind,
     verification_task_id,
 )
 from app.service.verification.service import VerificationService
 from app.service.verification.task_completion import TaskCompletion
-from app.service.verification.types import VerificationTaskStatus
+from app.service.verification.types import VerificationDetail, VerificationTaskStatus
 
 from tests.db_fixture import DBTestBase
 
 _ACTIVATION_TASK_ABORT_TRIGGER = "test_abort_verification_activation_task_insert"
 _COMPLETION_REF_ABORT_TRIGGER = "test_abort_verification_completion_ref_insert"
 _VERIFICATION_CANCEL_ABORT_TRIGGER = "test_abort_verification_cancel"
+
+
+class VerificationTaskFixture(TypedDict):
+    id: str
+    task_kind: VerificationTaskKind
+    source_path: str
+    program_id: str
+    test_name: str
+    expected_behavior: str
+    status: NotRequired[VerificationTaskStatus]
+    run_id: NotRequired[str]
+    judgehost_task_id: NotRequired[str]
+    verdict: NotRequired[str]
+    feedback_text: NotRequired[str]
 
 
 def make_execution_result(
@@ -198,7 +213,7 @@ class VerificationServiceTestBase(DBTestBase):
         workspace_id: int,
         signature: str = "",
         kind: str = "all",
-        detail: dict[str, object] | None = None,
+        detail: VerificationDetail | None = None,
     ) -> str:
         admission = self.verification_service.admit_verification(
             VerificationAdmission(
@@ -219,7 +234,7 @@ class VerificationServiceTestBase(DBTestBase):
         activation = self.verification_service.activate_verification(
             ActivationPlan.build(
                 verification_id,
-                detail=dict(detail or {}),
+                detail={} if detail is None else detail.copy(),
                 programs=(
                     self._verification_program(
                         program_id="accepted",
@@ -261,7 +276,7 @@ class VerificationServiceTestBase(DBTestBase):
         self,
         *,
         program_id: str,
-        kind: str,
+        kind: VerificationTaskKind,
         source_path: str,
         expected_behavior: str,
     ) -> VerificationProgram:
@@ -311,9 +326,9 @@ class VerificationServiceTestBase(DBTestBase):
         self,
         verification_id: str,
         *,
-        tasks: list[dict[str, object]],
+        tasks: list[VerificationTaskFixture],
         edges: list[tuple[str, str]],
-        detail: dict[str, object] | None = None,
+        detail: VerificationDetail | None = None,
     ) -> None:
         predecessor_by_child: dict[str, str] = {}
         for parent_id, child_id in edges:
@@ -322,13 +337,13 @@ class VerificationServiceTestBase(DBTestBase):
             predecessor_by_child[child_id] = parent_id
         planned = tuple(
             PlannedTask(
-                task_id=str(item["id"]),
-                predecessor_task_id=predecessor_by_child.get(str(item["id"])),
-                task_kind=str(item.get("task_kind") or ""),
-                source_path=str(item.get("source_path") or ""),
-                program_id=str(item.get("program_id") or ""),
-                test_name=str(item.get("test_name") or ""),
-                expected_behavior=str(item.get("expected_behavior") or ""),
+                task_id=item["id"],
+                predecessor_task_id=predecessor_by_child.get(item["id"]),
+                task_kind=item["task_kind"],
+                source_path=item["source_path"],
+                program_id=item["program_id"],
+                test_name=item["test_name"],
+                expected_behavior=item["expected_behavior"],
                 result=normalize_execution_result(
                     verdict=str(item.get("verdict") or ""),
                     feedback=str(item.get("feedback_text") or ""),
@@ -366,7 +381,7 @@ class VerificationServiceTestBase(DBTestBase):
         activation = self.verification_service.activate_verification(
             ActivationPlan.build(
                 verification_id,
-                detail=dict(detail or {}),
+                detail={} if detail is None else detail.copy(),
                 programs=self._programs_for_tasks(planned),
                 tasks=planned,
             )
@@ -375,18 +390,18 @@ class VerificationServiceTestBase(DBTestBase):
         if accepted_completion is not None:
             self.verification_task_store.commit_task_completions((accepted_completion,))
         for task_index, item in enumerate(tasks):
-            initial_status = str(item.get("status") or VerificationTaskStatus.PENDING)
+            initial_status = item.get("status", VerificationTaskStatus.PENDING)
             if initial_status not in {
                 VerificationTaskStatus.QUEUED,
                 VerificationTaskStatus.LEASED,
             }:
                 continue
-            task_id = str(item["id"])
+            task_id = item["id"]
             bound = self.verification_task_store.bind_and_expose_judgehost_runtime(
                 task_id,
                 expected_verification_id=verification_id,
-                expected_program_id=str(item["program_id"]),
-                expected_test_name=str(item["test_name"]),
+                expected_program_id=item["program_id"],
+                expected_test_name=item["test_name"],
                 run_id=str(item.get("run_id") or f"r-test-{task_index}"),
                 judgehost_task_id=str(item.get("judgehost_task_id") or f"jt-{task_id}"),
                 expose=lambda: None,
@@ -431,6 +446,3 @@ class VerificationServiceTestBase(DBTestBase):
 
     def _clear_verification_cancel_abort(self) -> None:
         self.db.execute(f"DROP TRIGGER IF EXISTS {_VERIFICATION_CANCEL_ABORT_TRIGGER}")
-
-    def _verification_rows(self) -> list[sqlite3.Row]:
-        return self.db.fetch_all("SELECT * FROM verifications ORDER BY id")

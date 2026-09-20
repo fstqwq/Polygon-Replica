@@ -86,18 +86,18 @@ class ContestPackageService:
     ) -> ContestPackageSnapshot:
         safe_format = self._package_adapters.require_format(package_format)
         contest = self._contest.contest_context(contest_slug)
-        if contest is None or int(contest["id"]) != int(contest_id):
+        if contest is None or contest["id"] != int(contest_id):
             raise ValueError("Contest is unavailable")
         roster = self._contest.contest_problems(contest_id)
         if not roster:
             raise ValueError("Contest has no problems")
         readiness = self._problem_packages.published_readiness_many(
-            [int(row["problem_id"]) for row in roster]
+            [row["problem_id"] for row in roster]
         )
         blocked = [
-            str(row["problem_slug"])
+            row["problem_slug"]
             for row in roster
-            if readiness[int(row["problem_id"])]["status"] != "ready"
+            if readiness[row["problem_id"]]["status"] != "ready"
         ]
         if blocked:
             raise ValueError("Packages are not ready: " + ", ".join(blocked))
@@ -105,8 +105,8 @@ class ContestPackageService:
         items: list[ContestPackageItem] = []
         language_sets: list[set[str]] = []
         for ordinal, row in enumerate(roster, start=1):
-            package = readiness[int(row["problem_id"])]
-            native_package_id = str(package["native_package_id"] or "")
+            package = readiness[row["problem_id"]]
+            native_package_id = package["native_package_id"]
             native_package = self._problem_packages.native_package(
                 native_package_id
             )
@@ -120,12 +120,12 @@ class ContestPackageService:
                 )
             items.append(
                 ContestPackageItem(
-                    contest_problem_id=int(row["contest_problem_id"]),
+                    contest_problem_id=row["contest_problem_id"],
                     ordinal=ordinal,
-                    idx=str(row["idx"]),
-                    problem_id=int(row["problem_id"]),
-                    problem_slug=str(row["problem_slug"]),
-                    statement_folder=str(row["statement_folder"]),
+                    idx=row["idx"],
+                    problem_id=row["problem_id"],
+                    problem_slug=row["problem_slug"],
+                    statement_folder=row["statement_folder"],
                     source_commit=native_package["source_commit"],
                     revision_number=native_package["revision_number"],
                     native_package_id=native_package["id"],
@@ -148,7 +148,7 @@ class ContestPackageService:
         return ContestPackageSnapshot(
             contest_id=int(contest_id),
             contest_slug=contest_slug,
-            source_generation=int(contest["source_generation"]),
+            source_generation=contest["source_generation"],
             package_format=safe_format,
             items=tuple(items),
             statement_languages=languages,

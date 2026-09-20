@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi.templating import Jinja2Templates
 from app.db import DB, SchemaRequirementsError
 from app.config import ConfigValues, build_config_values
+from app.config.model import ConfigValue
 from app.service.auth.service import AuthService
 from app.service.access.query import AccessQuery
 from app.service.access.command import AccessCommand
@@ -186,7 +187,7 @@ class ApplicationRuntime:  # pylint: disable=too-many-instance-attributes,invali
 
     def reload_config(
         self, *, include_restart_required: bool = False
-    ) -> dict[str, object]:
+    ) -> dict[str, ConfigValue]:
         """Refresh mutable runtime configuration from its durable store."""
         runtime_overrides = self.system_config_service.refresh(
             include_restart_required=include_restart_required,

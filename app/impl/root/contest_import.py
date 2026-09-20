@@ -3,13 +3,23 @@ import os
 import re
 import time
 import uuid
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import TypedDict
 
 import app.main_constant as _K
 from app.db import now_iso
 from app.impl.runtime.dependency import runtime
 from app.impl.workspace.context_operation import normalize_contest_slug_required
 from app.service.contest.problem_index import normalize_contest_problem_idx
+from app.service.importing.contest import ImportedContestProblem
+from app.service.problem.naming import (
+    PROBLEM_SEGMENT_RE,
+    normalize_problem_slug_segment_required,
+    problem_full_slug,
+    problem_slug_segment_max_len,
+    slugify_problem_id,
+)
 
 """
 Boundary:
@@ -24,7 +34,37 @@ Invariants:
 _CONTEST_IMPORT_SUFFIX_RE = re.compile(r"-\d+$")
 _CONTEST_IMPORT_DRAFT_ID_RE = re.compile(r"^[a-f0-9]{24}$")
 _CONTEST_IMPORT_DRAFT_TTL_SEC = 6 * 60 * 60
-_PROBLEM_SEGMENT_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+class ImportProblemDraftRow(TypedDict):
+    seq: int
+    index: str
+    source_slug: str
+    package_name: str
+    suggested_slug: str
+
+
+class ImportProblemReviewRow(TypedDict):
+    seq: int
+    index: str
+    source_slug: str
+    package_name: str
+    slug_input: str
+    slug_full: str
+    valid: bool
+    exists: bool
+    duplicate: bool
+    ok: bool
+    message: str
+    suggested: str
+
+
+class ContestSlugReview(TypedDict):
+    requested: str
+    valid: bool
+    exists: bool
+    suggested: str
+    message: str
 
 
 def _slugify_contest_id(raw: str) -> str:
@@ -147,53 +187,17 @@ def _cleanup_stale_contest_import_drafts() -> None:
     except OSError:
         return
 
-def _problem_slug_segment_max_len(owner: str) -> int:
-    safe_owner = owner.strip().lower()
-    if not _K.USER_IDENT_RE.fullmatch(safe_owner):
-        raise ValueError(_K.USERNAME_RULE_MESSAGE)
-    return max(1, int(_K.PROBLEM_ID_MAX_LEN) - len(safe_owner) - 1)
-
-
-def _slugify_problem_id(raw: str, *, max_len: int) -> str:
-    token = raw.strip().lower()
-    if not token:
-        return ""
-    token = re.sub(r"[^a-z0-9]+", "-", token)
-    token = re.sub(r"-{2,}", "-", token).strip("-")
-    if len(token) > max_len:
-        token = token[:max_len].rstrip("-")
-    return token
-
-
-def _normalize_problem_slug_segment_required(owner: str, raw: str) -> str:
-    token = _slugify_problem_id(raw, max_len=_problem_slug_segment_max_len(owner))
-    if not token or (not _PROBLEM_SEGMENT_RE.fullmatch(token)):
-        raise ValueError(_K.PROBLEM_ID_RULE_MESSAGE)
-    return token
-
-
-def _problem_full_slug(owner: str, slug_segment: str) -> str:
-    safe_owner = owner.strip().lower()
-    if not _K.USER_IDENT_RE.fullmatch(safe_owner):
-        raise ValueError(_K.USERNAME_RULE_MESSAGE)
-    safe_segment = _normalize_problem_slug_segment_required(safe_owner, slug_segment)
-    full_slug = f"{safe_owner}/{safe_segment}"
-    if len(full_slug) > _K.PROBLEM_ID_MAX_LEN:
-        raise ValueError(_K.PROBLEM_ID_RULE_MESSAGE)
-    return full_slug
-
-
 def _next_available_problem_slug(owner: str, base: str, reserved: set[str] | None = None) -> str:
     token = base.strip()
     if not token:
         token = "imported-problem"
-    token = _normalize_problem_slug_segment_required(owner, token)
-    max_len = _problem_slug_segment_max_len(owner)
+    token = normalize_problem_slug_segment_required(owner, token)
+    max_len = problem_slug_segment_max_len(owner)
     seen = set(reserved or set())
     candidate = token
     idx = 2
     while (candidate in seen) or (
-        runtime().workspace_service.known_problem_id(_problem_full_slug(owner, candidate)) is not None
+        runtime().workspace_service.known_problem_id(problem_full_slug(owner, candidate)) is not None
     ):
         suffix = f"-{idx}"
         prefix_len = max(1, max_len - len(suffix))
@@ -203,24 +207,20 @@ def _next_available_problem_slug(owner: str, base: str, reserved: set[str] | Non
     return candidate
 
 
-def _build_contest_import_problem_draft_rows(owner: str, parsed_rows: list[dict[str, object]]) -> list[dict[str, object]]:
-    rows: list[dict[str, object]] = []
+def _build_contest_import_problem_draft_rows(owner: str, parsed_rows: list[ImportedContestProblem]) -> list[ImportProblemDraftRow]:
+    rows: list[ImportProblemDraftRow] = []
     reserved: set[str] = set()
-    for seq, raw in enumerate(parsed_rows, start=1):
-        row = dict(raw) if isinstance(raw, dict) else {}
-        source_slug_obj = row.get("source_slug")
-        source_slug = _slugify_problem_id(
-            str(source_slug_obj) if source_slug_obj is not None else "",
-            max_len=_problem_slug_segment_max_len(owner),
+    for seq, row in enumerate(parsed_rows, start=1):
+        source_slug = slugify_problem_id(
+            row["source_slug"],
+            max_len=problem_slug_segment_max_len(owner),
         )
         if not source_slug:
             source_slug = f"problem-{seq}"
-        package_name_obj = row.get("package_name")
-        package_name = str(package_name_obj).strip() if package_name_obj is not None else ""
+        package_name = row["package_name"].strip()
         if not package_name:
             package_name = f"{source_slug}.zip"
-        index_obj = row.get("index")
-        index = str(index_obj).strip().upper() if index_obj is not None else ""
+        index = row["index"].strip().upper()
         if not index:
             index = _contest_idx_from_sequence(seq)
         suggested = _next_available_problem_slug(owner, source_slug, reserved=reserved)
@@ -246,7 +246,7 @@ def _create_contest_import_draft(
     contest_slug_input: str,
     contest_title_input: str,
     parsed_title: str,
-    problem_rows: list[dict[str, object]],
+    problem_rows: list[ImportProblemDraftRow],
 ) -> str:
     _cleanup_stale_contest_import_drafts()
     draft_id = uuid.uuid4().hex[:24]
@@ -266,7 +266,7 @@ def _create_contest_import_draft(
             "contest_slug_input": contest_slug_input.strip(),
             "contest_title_input": contest_title_input.strip(),
             "parsed_title": parsed_title.strip(),
-            "problem_rows": [dict(row) for row in problem_rows],
+            "problem_rows": problem_rows,
             "created_at": now_iso(),
         }
         meta_path.write_text(
@@ -336,25 +336,25 @@ def _rollback_imported_contest(contest_slug: str, imported_problem_slugs: list[s
 
 def _build_problem_slug_review_rows(
     owner: str,
-    draft_rows: list[dict[str, object]],
+    draft_rows: Sequence[Mapping[str, object]],
     requested_overrides: dict[int, str],
-) -> tuple[list[dict[str, object]], bool]:
-    def sequence(row: dict[str, object]) -> int:
+) -> tuple[list[ImportProblemReviewRow], bool]:
+    def sequence(row: Mapping[str, object]) -> int:
         value = row.get("seq")
         if isinstance(value, bool) or not isinstance(value, int):
             return 0
         return value
 
-    rows: list[dict[str, object]] = []
+    rows: list[ImportProblemReviewRow] = []
     requested_tokens: list[str] = []
     for row in draft_rows:
         seq = sequence(row)
         fallback_obj = row.get("suggested_slug")
         fallback = str(fallback_obj).strip() if fallback_obj is not None else ""
         requested_raw = requested_overrides.get(seq, fallback)
-        requested = _slugify_problem_id(
+        requested = slugify_problem_id(
             str(requested_raw).strip().lower(),
-            max_len=_problem_slug_segment_max_len(owner),
+            max_len=problem_slug_segment_max_len(owner),
         )
         requested_tokens.append(requested)
     duplicate_counts: dict[str, int] = {}
@@ -366,8 +366,8 @@ def _build_problem_slug_review_rows(
     for idx, row in enumerate(draft_rows):
         seq = sequence(row)
         requested = requested_tokens[idx]
-        valid = bool(requested and _PROBLEM_SEGMENT_RE.fullmatch(requested))
-        full_requested = _problem_full_slug(owner, requested) if valid else ""
+        valid = bool(requested and PROBLEM_SEGMENT_RE.fullmatch(requested))
+        full_requested = problem_full_slug(owner, requested) if valid else ""
         exists = bool(full_requested and (runtime().workspace_service.known_problem_id(full_requested) is not None))
         duplicate = bool(requested and int(duplicate_counts.get(requested, 0)) > 1)
         message = ""
@@ -384,9 +384,9 @@ def _build_problem_slug_review_rows(
             has_error = True
         suggested = ""
         if not ok:
-            base = requested if valid else _slugify_problem_id(
+            base = requested if valid else slugify_problem_id(
                 requested,
-                max_len=_problem_slug_segment_max_len(owner),
+                max_len=problem_slug_segment_max_len(owner),
             )
             if not base:
                 source_slug_obj = row.get("source_slug")
@@ -411,7 +411,7 @@ def _build_problem_slug_review_rows(
     return rows, has_error
 
 
-def _contest_slug_review_state(raw_slug: str, package_name: str) -> dict[str, object]:
+def _contest_slug_review_state(raw_slug: str, package_name: str) -> ContestSlugReview:
     requested = raw_slug.strip()
     if not requested:
         base = _import_contest_slug_base_from_package_name(package_name)

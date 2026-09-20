@@ -11,6 +11,7 @@ sys.path.insert(
 )
 
 from app.config.registry import build_config_values  # noqa: E402
+from app.config.model import ConfigValue  # noqa: E402
 from app.db import DB, now_iso  # noqa: E402
 from app.service.statement.render import seed_statement_sources  # noqa: E402
 
@@ -35,7 +36,7 @@ def _configure_database() -> None:
         config_values=build_config_values(),
     )
     db.init()
-    values: dict[str, object] = {
+    values: dict[str, ConfigValue] = {
         "JUDGEHOST_ENABLE": True,
         "JUDGEHOST_API_USERNAME": "judgehost",
         "JUDGEHOST_API_TOKEN": os.environ["POLYGON_REPLICA_E2E_JUDGEHOST_TOKEN"],

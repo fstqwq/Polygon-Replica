@@ -1,224 +1,92 @@
-import tempfile
-import unittest
-from pathlib import Path
-from typing import cast
+from tests.common import E2ETestBase, runtime
+from tests.db_helpers import admit_test_verification, db_execute, db_fetch_one
+from tests.identity_helpers import canonical_test_verification_id
 
-from app.service.problem.readiness import (
-    ProblemReadinessService,
-    WorkspaceReadinessSubject,
-)
-from app.service.problem_package.service import (
-    ProblemPackageService,
-    NativePackageReadiness,
-)
-from app.service.verification.service import VerificationService
-from app.service.verification.task_store import VerificationTaskStore
-from app.service.verification.types import VerificationStatus, WorkspaceVerificationRow
+from app.db import now_iso
+from app.service.problem.readiness import WorkspaceReadinessSubject
+from app.service.verification.types import VerificationStatus
 
 
-def _verification_row(
-    verification_id: str,
-    *,
-    source_commit: str,
-    status: VerificationStatus,
-    fail_reason: str = "",
-) -> WorkspaceVerificationRow:
-    return {
-        "id": verification_id,
-        "status": status,
-        "signature": "",
-        "source_commit": source_commit,
-        "kind": "all",
-        "fail_reason": fail_reason,
-        "error": "",
-        "sanity_status": "skipped",
-        "created_at": "2026-08-10T00:00:00Z",
-        "finished_at": "2026-08-10T00:00:01Z",
-    }
+class TestProblemReadinessService(E2ETestBase):
+    seed_default_workspace = False
 
-
-def _missing_package(problem_id: int) -> NativePackageReadiness:
-    return {
-        "problem_id": problem_id,
-        "published_commit": "a" * 40,
-        "published_revision_number": 1,
-        "native_package_revision_number": None,
-        "native_package_id": "",
-        "status": "none",
-        "verified": False,
-        "missing_reason": "Package not built",
-    }
-
-
-class _VerificationRows:
-    def __init__(
-        self,
-        rows: dict[tuple[int, int], list[WorkspaceVerificationRow]],
-    ) -> None:
-        self.rows = rows
-        self.single_calls = 0
-        self.batch_calls = 0
-        self.detail_calls = 0
-        self.task_store = cast(VerificationTaskStore, None)
-
-    def visible_verification_rows(
-        self,
-        problem_id: int,
-        workspace_id: int,
-        **_kwargs: object,
-    ) -> list[WorkspaceVerificationRow]:
-        self.single_calls += 1
-        return list(self.rows.get((problem_id, workspace_id), ()))
-
-    def visible_verification_rows_many(
-        self,
-        subjects: list[tuple[int, int]],
-        **_kwargs: object,
-    ) -> dict[tuple[int, int], list[WorkspaceVerificationRow]]:
-        self.batch_calls += 1
-        return {subject: list(self.rows.get(subject, ())) for subject in subjects}
-
-    def verification_detail(self, _verification_id: str) -> dict[str, object]:
-        self.detail_calls += 1
-        raise AssertionError("batch readiness must not read verification detail")
-
-
-class _PackageRows:
-    def __init__(self, rows: dict[int, NativePackageReadiness]) -> None:
-        self.rows = rows
-
-    def published_readiness(self, problem_id: int) -> NativePackageReadiness:
-        return self.rows[problem_id]
-
-    def published_readiness_many(
-        self,
-        problem_ids: list[int],
-    ) -> dict[int, NativePackageReadiness]:
-        return {problem_id: self.rows[problem_id] for problem_id in problem_ids}
-
-
-class TestProblemReadinessService(unittest.TestCase):
     def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory(prefix="readiness-service-")
-        self.addCleanup(self.temporary.cleanup)
-        self.workspace = Path(self.temporary.name)
+        super().setUp()
+        workspace = self._workspace_path()
+        head = runtime.git_service.commit(
+            workspace, "Published readiness source", self.user, f"{self.user}@example.com",
+        )
+        runtime.git_service.push(workspace, "main")
+        context = runtime.workspace_service.workspace_context(self.problem, self.user)
         self.subject: WorkspaceReadinessSubject = {
-            "problem_id": 11,
-            "workspace_id": 17,
-            "workspace_path": self.workspace,
-            "head_commit": "b" * 40,
+            "problem_id": context["problem"]["id"],
+            "workspace_id": context["workspace"]["id"],
+            "workspace_path": workspace,
+            "head_commit": head,
             "dirty": False,
             "local_revision": 1,
             "upstream_revision": 1,
             "needs_update": False,
         }
 
-    def _service(
-        self,
-        rows: list[WorkspaceVerificationRow],
-        *,
-        package: NativePackageReadiness | None = None,
-    ) -> tuple[ProblemReadinessService, _VerificationRows]:
-        verification = _VerificationRows(
-            {(self.subject["problem_id"], self.subject["workspace_id"]): rows}
+    def _historical_result(
+        self, name: str, *, status: VerificationStatus, source_commit: str,
+        published: bool = False, reason: str = "",
+    ) -> str:
+        verification_id = canonical_test_verification_id(f"{self.test_id}-{name}")
+        admitted = admit_test_verification(
+            verification_id=verification_id,
+            problem_id=self.subject["problem_id"],
+            workspace_id=None if published else self.subject["workspace_id"],
+            source_commit=source_commit,
         )
-        packages = _PackageRows(
-            {
-                self.subject["problem_id"]: package
-                or _missing_package(self.subject["problem_id"])
-            }
+        self.assertEqual(admitted.outcome, "admitted")
+        db_execute(
+            "UPDATE verifications SET status=?, fail_reason=?, finished_at=? WHERE id=?",
+            [status.value, reason, now_iso(), verification_id],
         )
-        return (
-            ProblemReadinessService(
-                cast(VerificationService, verification),
-                cast(ProblemPackageService, packages),
-            ),
-            verification,
-        )
+        return verification_id
 
-    def test_active_native_package_build_projects_as_queued(self) -> None:
-        service, _verification = self._service(
-            [],
-            package={
-                "problem_id": self.subject["problem_id"],
-                "published_commit": self.subject["head_commit"],
-                "published_revision_number": 2,
-                "native_package_revision_number": None,
-                "native_package_id": "",
-                "status": "queued",
-                "verified": False,
-                "missing_reason": "",
-            },
+    def test_active_published_build_is_queued_without_mutating_its_state(self) -> None:
+        build_id = f"build-{self.test_id}"
+        db_execute(
+            """INSERT INTO problem_package_builds
+               (id,problem_id,source_commit,phase,status,created_at)
+               VALUES(?,?,?,'queued','queued',?)""",
+            [build_id, self.subject["problem_id"], self.subject["head_commit"], now_iso()],
         )
-
-        readiness = service.readiness(self.subject)
-
+        before = db_fetch_one("SELECT * FROM problem_package_builds WHERE id=?", [build_id])
+        readiness = runtime.problem_readiness_service.readiness(self.subject)
         self.assertEqual(readiness["package"]["state"], "queued")
-        self.assertEqual(readiness["package"]["tone"], "normal")
+        self.assertEqual(readiness["package"]["published_commit"], self.subject["head_commit"])
+        after = db_fetch_one("SELECT * FROM problem_package_builds WHERE id=?", [build_id])
+        self.assertEqual(tuple(after), tuple(before))
 
-    def test_batch_projection_uses_bulk_rows_without_failure_details(self) -> None:
-        service, verification = self._service(
-            [
-                _verification_row(
-                    "ver-readiness-batch",
-                    source_commit=self.subject["head_commit"],
-                    status=VerificationStatus.FAILED,
-                    fail_reason="checker exited with code 1",
-                )
-            ]
+    def test_batch_and_workspace_reads_share_failure_but_only_workspace_explains_it(self) -> None:
+        verification_id = self._historical_result(
+            "failed", status=VerificationStatus.FAILED,
+            source_commit=self.subject["head_commit"], reason="checker exited with code 1",
         )
+        single = runtime.problem_readiness_service.readiness(self.subject)["verification"]
+        batch = runtime.problem_readiness_service.readiness_many([self.subject])[
+            self.subject["problem_id"]
+        ]["verification"]
+        for result in (single, batch):
+            self.assertEqual(result["verification_id"], verification_id)
+            self.assertEqual(result["result"], "failed")
+            self.assertFalse(result["stale"])
+        self.assertEqual(single["reason_short"], "checker exited with code 1")
+        self.assertEqual(batch["reason_short"], "")
 
-        result = service.readiness_many([self.subject])
-
-        self.assertEqual(verification.batch_calls, 1)
-        self.assertEqual(verification.single_calls, 0)
-        self.assertEqual(verification.detail_calls, 0)
-        readiness = result[self.subject["problem_id"]]
-        self.assertEqual(readiness["verification"]["result"], "failed")
-        self.assertEqual(readiness["verification"]["reason_short"], "")
-        self.assertEqual(readiness["package"]["state"], "none")
-
-    def test_workspace_projection_explains_current_workspace_failure(self) -> None:
-        verification_id = "ver-readiness-workspace"
-        service, verification = self._service(
-            [
-                _verification_row(
-                    verification_id,
-                    source_commit=self.subject["head_commit"],
-                    status=VerificationStatus.FAILED,
-                    fail_reason="checker exited with code 1",
-                )
-            ]
+    def test_current_published_result_wins_over_newer_stale_workspace_failure(self) -> None:
+        published_id = self._historical_result(
+            "published", status=VerificationStatus.OK,
+            source_commit=self.subject["head_commit"], published=True,
         )
-
-        readiness = service.readiness(self.subject)
-
-        self.assertEqual(verification.single_calls, 1)
-        projected = readiness["verification"]
-        self.assertEqual(projected["verification_id"], verification_id)
-        self.assertEqual(projected["result"], "failed")
-        self.assertEqual(projected["reason_short"], "checker exited with code 1")
-
-    def test_problem_level_verification_matching_workspace_head_is_current(self) -> None:
-        published_id = "ver-readiness-published"
-        service, _verification = self._service(
-            [
-                _verification_row(
-                    "ver-readiness-newer-stale",
-                    source_commit="c" * 40,
-                    status=VerificationStatus.FAILED,
-                ),
-                _verification_row(
-                    published_id,
-                    source_commit=self.subject["head_commit"],
-                    status=VerificationStatus.OK,
-                ),
-            ]
+        self._historical_result(
+            "stale", status=VerificationStatus.FAILED, source_commit="c" * 40,
         )
-
-        readiness = service.readiness(self.subject)
-
-        projected = readiness["verification"]
+        projected = runtime.problem_readiness_service.readiness(self.subject)["verification"]
         self.assertEqual(projected["verification_id"], published_id)
         self.assertEqual(projected["result"], "ok")
         self.assertFalse(projected["stale"])

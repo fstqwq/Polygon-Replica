@@ -4,7 +4,11 @@ from app.db import now_iso
 from app.service.judgehost.batch.model import HostLeaseRelease
 from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
 from app.service.judgehost.configuration import JudgehostSettings
-from app.service.judgehost.host.model import judgehost_name_sort_key
+from app.service.judgehost.host.model import (
+    JudgehostStatus,
+    JudgehostStatusRow,
+    judgehost_name_sort_key,
+)
 from app.service.judgehost.host.registry import JudgehostHostRegistry
 from app.service.judgehost.task.registry import JudgehostTaskRegistry
 from app.service.judgehost.task.time import parse_iso_utc
@@ -37,7 +41,7 @@ class JudgehostHostStatus:
             return HostLeaseRelease(0, 0, (), (), ())
         return self._batch_runtime.release_host_leases(safe_host, now_text=now_iso())
 
-    def status(self, settings: JudgehostSettings) -> dict[str, object]:
+    def status(self, settings: JudgehostSettings) -> JudgehostStatus:
         now = datetime.now(timezone.utc)
         active_by_host = self._batch_runtime.active_lease_counts()
         runtime_telemetry = self._batch_runtime.host_telemetry_snapshot()
@@ -49,7 +53,7 @@ class JudgehostHostStatus:
             self._hosts.host_rows(),
             key=lambda row: judgehost_name_sort_key(row["hostname"]),
         )
-        rows: list[dict[str, object]] = []
+        rows: list[JudgehostStatusRow] = []
         online_count = 0
         for row in host_rows:
             hostname = row["hostname"]

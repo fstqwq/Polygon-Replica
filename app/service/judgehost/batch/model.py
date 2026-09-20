@@ -42,6 +42,22 @@ class CaseSpec:
     status: str
 
 
+class CaseInput(TypedDict):
+    verification_task_id: str
+    task_id: str
+    run_id: str
+    test_name: str
+    ordinal: int
+    scope_sequence: int
+    testcase_id: int | None
+    testcase_hash: str
+    testcase_input_hash: str
+    testcase_answer_hash: str
+    input_ref: str | None
+    answer_ref: str | None
+    status: str
+
+
 CaseResult: TypeAlias = ExecutionResult
 
 
@@ -193,6 +209,27 @@ class CaseExecutionRow(TypedDict):
     run_config_json: str
     compare_config_json: str
     compile_success: int | None
+
+
+class TaskCaseRow(JudgehostCaseRow):
+    batch_status: str
+    compile_success: int | None
+
+
+class CaseOutputRow(TypedDict):
+    id: int
+    output_run_ref: str
+
+
+class CaseDebugContext(TypedDict):
+    batch_id: int
+    case_debug_text: str
+    batch_debug_text: str
+
+
+class TestcaseReferences(TypedDict):
+    input_ref: str
+    answer_ref: str
 
 
 @dataclass(frozen=True, slots=True)

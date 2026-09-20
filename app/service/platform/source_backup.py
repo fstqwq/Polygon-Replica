@@ -16,6 +16,7 @@ from typing import Callable, TypedDict
 
 from app.db import now_iso
 from app.service.platform.fs.layout import StorageLayout
+from app.service.platform.maintenance.plan import MaintenanceResult, SourceTreeStats
 
 
 SOURCE_BACKUP_DOWNLOAD_NAME = "polygon-replica-source-backup.tar.gz"
@@ -45,7 +46,7 @@ class SourceBackupPreflight(TypedDict):
 
     roots: dict[str, Path]
     database_path: Path
-    source_stats: dict[str, dict[str, int]]
+    source_stats: dict[str, SourceTreeStats]
 
 
 def _fsync_directory(path: Path) -> None:
@@ -145,7 +146,7 @@ class SourceBackupService:
         """Validate durable inputs and the application-owned destination."""
 
         roots = self._storage_layout.validate()
-        source_stats: dict[str, dict[str, int]] = {}
+        source_stats: dict[str, SourceTreeStats] = {}
         for setting_name, archive_name in _SOURCE_ROOTS:
             root = roots[setting_name]
             if not root.exists() or not root.is_dir() or root.is_symlink():
@@ -270,7 +271,7 @@ class SourceBackupService:
         started_at: str,
         roots: dict[str, Path],
         database_snapshot: Path,
-        source_stats: dict[str, dict[str, int]],
+        source_stats: dict[str, SourceTreeStats],
     ) -> None:
         manifest = json.dumps(
             {
@@ -346,7 +347,7 @@ class SourceBackupService:
             raise RuntimeError("source backup SHA-256 sidecar does not match archive")
         with tarfile.open(archive_path, mode="r:gz") as archive:
             names: set[str] = set()
-            manifest: dict[str, object] | None = None
+            manifest: object = None
             for member in archive:
                 path = PurePosixPath(member.name)
                 if path.is_absolute() or ".." in path.parts:
@@ -376,7 +377,7 @@ class SourceBackupService:
                         )
                     while stream.read(1024 * 1024):
                         pass
-        if manifest is None:
+        if not isinstance(manifest, dict):
             raise RuntimeError("source backup manifest has invalid contents")
         if manifest.get("contents") != list(_ARCHIVE_CONTENTS):
             raise RuntimeError("source backup manifest has invalid contents")
@@ -440,12 +441,12 @@ class SourceBackupService:
         operation_id: str,
         started_at: str,
         set_stage: Callable[[str], None],
-    ) -> dict[str, object]:
+    ) -> MaintenanceResult:
         """Build and atomically publish the single latest source backup."""
 
         started = time.monotonic()
         stage = "preflight"
-        result: dict[str, object] = {
+        result: MaintenanceResult = {
             "operation_id": operation_id,
             "started_at": started_at,
             "completed_stage": "admission",

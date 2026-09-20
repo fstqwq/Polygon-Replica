@@ -4,12 +4,16 @@ import json
 import re
 import time
 import uuid
+import sqlite3
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from urllib.parse import quote_plus, urlencode
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from starlette.requests import Request
+from starlette.responses import Response
+from starlette.types import Message
 
 import app.impl.admin.panel as admin_panel_module
 from app.impl.auth.csrf import issue_password_form_csrf_token
@@ -37,20 +41,18 @@ import app.impl.root.auth_pages as root_auth_pages_module
 import app.impl.root.contests as root_contests_module
 import app.impl.root.problems as root_problems_module
 import app.impl.run_export.artifact as run_export_artifact_module
-import app.impl.run_export.export as run_export_export_module
 import app.impl.run_export.run as run_export_run_module
 import app.impl.tests_spec.routes as tests_spec_module
 import app.impl.tests_spec.verification as tests_spec_verification_module
 import app.impl.workspace.context_ui as workspace_ui_module
-import app.service.repository.revision as repository_revision_module
 from app.config import CONFIG_REGISTRY
+from app.db import SQLValue
 from app.main import runtime
 
 
 AUTH_COOKIE_NAME = runtime.config_values.AUTH_COOKIE_NAME
 DEFAULT_CONFIG_VALUES = CONFIG_REGISTRY.defaults()
 session_user = auth_session_module.session_user
-workspace_revision_info = repository_revision_module.workspace_revision_info
 auth_password_meta = root_auth_pages_module.auth_password_meta
 auth_password_envelope = root_auth_pages_module.auth_password_envelope
 artifact_file = run_export_artifact_module.artifact_file
@@ -69,7 +71,6 @@ checker_rename_source = problem_checker_module.checker_rename_source
 checker_save_source = problem_checker_module.checker_save_source
 checker_set_standard = problem_checker_module.checker_set_standard
 db = runtime.db
-export_create = run_export_export_module.export_create
 export_service = runtime.export_service
 files_create_template = problem_file_module.files_create_template
 files_page = problem_file_module.files_page
@@ -92,7 +93,6 @@ setup_page = root_auth_pages_module.setup_page
 setup_submit = root_auth_pages_module.setup_submit
 problems_root_import = root_problems_module.problems_root_import
 problems_root_import_slug_hint = root_problems_module.problems_root_import_slug_hint
-preview_page = preview_module.preview_page
 preview_save = preview_module.preview_save
 statement_templates_reset = preview_module.statement_templates_reset
 statement_examples_template_save = preview_module.statement_examples_template_save
@@ -146,7 +146,6 @@ validator_page = problem_validator_module.validator_page
 validator_rename_source = problem_validator_module.validator_rename_source
 validator_save_source = problem_validator_module.validator_save_source
 workspace_page = workspace_ui_module.render_workspace_page
-access_page = lambda request, problem, user: workspace_page(request, problem, user, show_access_admin=True)
 workspace_access_grant = problem_access_module.workspace_access_grant
 workspace_access_revoke = problem_access_module.workspace_access_revoke
 workspace_service = runtime.workspace_service
@@ -195,24 +194,8 @@ def _request_with_cookie(
     return _request(path, query, method=method, headers=headers, scheme=scheme)
 
 
-def _response_set_cookie_headers(response) -> list[str]:
-    headers = getattr(response, "headers", None)
-    if headers is None:
-        return []
-    values: list[str] = []
-    try:
-        values = [str(item or "") for item in headers.getlist("set-cookie")]
-    except Exception:
-        values = []
-    if not values:
-        raw_headers = list(getattr(response, "raw_headers", []) or [])
-        for key, value in raw_headers:
-            if bytes(key).lower() == b"set-cookie":
-                values.append(bytes(value).decode("latin-1", errors="ignore"))
-    if values:
-        return values
-    single = str(headers.get("set-cookie", "") or "")
-    return [single] if single else []
+def _response_set_cookie_headers(response: Response) -> list[str]:
+    return response.headers.getlist("set-cookie")
 
 
 def _extract_cookie_value(set_cookie: str | list[str], cookie_name: str) -> str:
@@ -242,11 +225,11 @@ def _extract_hidden_input_value(html: str, name: str) -> str:
     return ""
 
 
-def _cookie_value_from_response(response, cookie_name: str) -> str:
+def _cookie_value_from_response(response: Response, cookie_name: str) -> str:
     return _extract_cookie_value(_response_set_cookie_headers(response), cookie_name)
 
 
-def _response_set_cookie_blob(response) -> str:
+def _response_set_cookie_blob(response: Response) -> str:
     return "\n".join(_response_set_cookie_headers(response))
 
 
@@ -331,17 +314,17 @@ def _post_request(path: str, *, origin: str = "http://testserver") -> Request:
     return _request(path, method="POST", headers=[(b"origin", origin.encode("utf-8"))])
 
 
-def _post_form_request(path: str, form_data: dict[str, object], *, origin: str = "http://testserver") -> Request:
+def _post_form_request(path: str, form_data: Mapping[str, str | list[str]], *, origin: str = "http://testserver") -> Request:
     parts: list[tuple[str, str]] = []
-    for key, raw_value in dict(form_data or {}).items():
-        key_text = str(key or "").strip()
+    for key, raw_value in form_data.items():
+        key_text = key.strip()
         if not key_text:
             continue
         if isinstance(raw_value, list):
             for item in raw_value:
-                parts.append((key_text, str(item if item is not None else "")))
+                parts.append((key_text, item))
         else:
-            parts.append((key_text, str(raw_value if raw_value is not None else "")))
+            parts.append((key_text, raw_value))
     body = urlencode(parts, doseq=True).encode("utf-8")
     headers = [
         (b"origin", origin.encode("utf-8")),
@@ -350,7 +333,7 @@ def _post_form_request(path: str, form_data: dict[str, object], *, origin: str =
     ]
     sent = {"done": False}
 
-    async def receive():
+    async def receive() -> Message:
         if sent["done"]:
             return {"type": "http.request", "body": b"", "more_body": False}
         sent["done"] = True
@@ -373,7 +356,7 @@ def _post_form_request(path: str, form_data: dict[str, object], *, origin: str =
         receive,
     )
 
-def _register_with_password_envelope(username: str, password: str, *, next_path: str = "/"):
+def _register_with_password_envelope(username: str, password: str, *, next_path: str = "/") -> Response:
     page = register_page(_request("/register"))
     html = page.body.decode("utf-8", errors="replace")
     csrf = _extract_hidden_input_value(html, "csrf_token")
@@ -402,7 +385,7 @@ def _register_with_password_envelope(username: str, password: str, *, next_path:
         terms_accepted="yes",
     )
 
-def _login_with_password_envelope(username: str, password: str, *, next_path: str = "/"):
+def _login_with_password_envelope(username: str, password: str, *, next_path: str = "/") -> Response:
     page = login_page(_request("/login"))
     html = page.body.decode("utf-8", errors="replace")
     csrf = _extract_hidden_input_value(html, "csrf_token")
@@ -436,7 +419,7 @@ def _setup_with_password_envelope(
     email_allow_regex: str | None = None,
     confirm_config: str = "1",
     next_path: str = "/",
-):
+) -> Response:
     page = setup_page(_request("/setup"))
     html = page.body.decode("utf-8", errors="replace")
     csrf = _extract_hidden_input_value(html, "csrf_token")
@@ -469,7 +452,7 @@ def _setup_with_password_envelope(
         next=next_path,
     )
 
-def _sudo_with_password_envelope(cookie_header: str, password: str, *, next_path: str = "/"):
+def _sudo_with_password_envelope(cookie_header: str, password: str, *, next_path: str = "/") -> Response:
     query = f"next={quote_plus(next_path)}" if next_path else ""
     page = sudo_page(_request_with_cookie("/sudo", cookie_header, query=query))
     html = page.body.decode("utf-8", errors="replace")
@@ -502,7 +485,7 @@ def _sudo_with_password_envelope(cookie_header: str, password: str, *, next_path
 
 def _settings_password_update_with_envelope(
     user: str, current_password: str, new_password: str, *, request: Request | None = None,
-):
+) -> Response:
     request = request if request is not None else _post_request("/settings/password")
     csrf = issue_password_form_csrf_token("settings-password")
     auth_row = db.fetch_one("SELECT id,password_salt,password_iters FROM users WHERE username=?", [user])
@@ -545,7 +528,7 @@ def _settings_password_update_with_envelope(
     )
 
 
-def _settings_admin_password_update_with_envelope(actor_user: str, target_user: str, new_password: str):
+def _settings_admin_password_update_with_envelope(actor_user: str, target_user: str, new_password: str) -> Response:
     csrf = issue_password_form_csrf_token("admin-password")
     new_salt = uuid.uuid4().hex
     new_iters = int(runtime.config_values.PASSWORD_HASH_ITERS)
@@ -570,7 +553,7 @@ def _settings_admin_password_update_with_envelope(actor_user: str, target_user: 
     )
 
 
-def _wait_for_row(sql: str, params: list[object], timeout_sec: float = 8.0):
+def _wait_for_row(sql: str, params: Sequence[SQLValue], timeout_sec: float = 8.0) -> sqlite3.Row | None:
     deadline = time.monotonic() + timeout_sec
     while time.monotonic() < deadline:
         row = db.fetch_one(sql, params)
@@ -584,13 +567,6 @@ class UIHelpersMixin:
     """UI helpers without database, workspace, or worker lifecycle ownership."""
 
     @staticmethod
-    def _update_problem_config(workspace: Path, **changes: object) -> None:
-        path = workspace / "config/problem.json"
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        payload.update(changes)
-        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-
-    @staticmethod
     def _write_solution_fixture(
         workspace: Path,
         filename: str,
@@ -601,22 +577,6 @@ class UIHelpersMixin:
         source.write_text("int main(){return 0;}\n", encoding="utf-8")
         Path(f"{source}.desc").write_text(
             f"expected: {expected}\n", encoding="utf-8"
-        )
-
-    def _configure_solution_fixtures(
-        self,
-        workspace: Path,
-        *solutions: tuple[str, str],
-        accepted: str = "accepted.cpp",
-    ) -> None:
-        for filename, expected in solutions:
-            self._write_solution_fixture(workspace, filename, expected)
-        build_path = workspace / "config" / "build.json"
-        build = json.loads(build_path.read_text(encoding="utf-8"))
-        build["accepted_solution_source"] = f"solutions/{accepted}"
-        build_path.write_text(
-            json.dumps(build, indent=2) + "\n",
-            encoding="utf-8",
         )
 
     def _prepare_verification_workspace(self, problem: str, user: str = "alice") -> Path:

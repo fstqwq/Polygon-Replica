@@ -19,7 +19,8 @@ from app.service.verification.task_completion import (
     CompletionCommit,
     TaskCompletion,
 )
-from app.service.verification.task_store import VerificationTaskContext, VerificationTaskStore
+from app.service.verification.types import VerificationTaskContext
+from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.types import VerificationStatus, VerificationTaskStatus
 
 

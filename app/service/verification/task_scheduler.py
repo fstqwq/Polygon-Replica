@@ -1,12 +1,13 @@
 import queue
 from collections import deque
 from dataclasses import dataclass
-from typing import Callable, cast
+from typing import Callable
 
 from app.service.execution.limits import VERIFICATION_RUNTIME_BATCH_SIZE
 from app.service.verification.completion import VerificationTaskCompletionService
 from app.service.verification.task_completion import CompletionCommit, TaskCompletion
-from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
+from app.service.verification.types import VerificationTaskRow
+from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.types import VerificationTaskStatus
 
 
@@ -56,7 +57,7 @@ class _IncrementalDagState:
             for index, row in enumerate(ordered_rows)
         }
         self.rows_by_id = {
-            str(row["id"]): cast(VerificationTaskRow, dict(row))
+            str(row["id"]): row.copy()
             for row in ordered_rows
         }
         self.status_by_id = {

@@ -2,12 +2,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from app.config import ConfigValues
+from app.config.model import ConfigValue
 from app.service.problem.runtime_config import ProblemConfigLimits
 
 
 @dataclass(frozen=True, slots=True)
 class JudgehostSettings:
-    values: Mapping[str, object]
+    values: Mapping[str, ConfigValue]
     enabled: bool
     api_token: str
     api_username: str
@@ -29,28 +30,28 @@ class JudgehostConfiguration:
         self._settings: JudgehostSettings | None = None
 
     @staticmethod
-    def _bool(values: Mapping[str, object], key: str) -> bool:
+    def _bool(values: Mapping[str, ConfigValue], key: str) -> bool:
         value = values[key]
         if not isinstance(value, bool):
             raise RuntimeError(f"invalid internal boolean configuration: {key}")
         return value
 
     @staticmethod
-    def _int(values: Mapping[str, object], key: str) -> int:
+    def _int(values: Mapping[str, ConfigValue], key: str) -> int:
         value = values[key]
         if isinstance(value, bool) or not isinstance(value, int):
             raise RuntimeError(f"invalid internal integer configuration: {key}")
         return value
 
     @staticmethod
-    def _float(values: Mapping[str, object], key: str) -> float:
+    def _float(values: Mapping[str, ConfigValue], key: str) -> float:
         value = values[key]
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise RuntimeError(f"invalid internal numeric configuration: {key}")
         return float(value)
 
     @staticmethod
-    def _text(values: Mapping[str, object], key: str) -> str:
+    def _text(values: Mapping[str, ConfigValue], key: str) -> str:
         value = values[key]
         if not isinstance(value, str):
             raise RuntimeError(f"invalid internal text configuration: {key}")

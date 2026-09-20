@@ -11,10 +11,12 @@ from pathlib import Path
 from typing import TypedDict
 
 from app.service.access.query import AccessQuery
+from app.service.access.model import ProblemAccessContext
 from app.service.contest.service import ContestProblem, ContestService
 from app.service.contest.snapshot import ContestSourceSnapshotService
 from app.service.contest.statement import ContestStatementService
 from app.service.statement.preview_state import (
+    ContestStatementPreviewItem,
     StatementPreviewRepository,
     StatementPreviewRow,
     StatementPreviewSource,
@@ -34,15 +36,6 @@ class ContestStatementPreviewLinkGroup(TypedDict):
     source: StatementPreviewSource
     label: str
     languages: list[str]
-
-
-class ContestStatementPreviewItem(TypedDict):
-    idx: str
-    problem_id: int
-    problem_slug: str
-    preview_id: str
-    status: str
-    error: str
 
 
 class ContestStatementPreviewService:
@@ -198,7 +191,6 @@ class ContestStatementPreviewService:
             output_kind="html",
             language=language,
             input_identity=identity,
-            options={},
         )
         if cached is not None:
             return cached
@@ -213,7 +205,6 @@ class ContestStatementPreviewService:
             output_kind="html",
             language=language,
             input_identity=identity,
-            options={},
         )
         successful = sum(item["status"] == "ok" for item in items)
         status = "ok" if successful else "failed"
@@ -282,7 +273,6 @@ class ContestStatementPreviewService:
             user_id,
         )
 
-        options: dict[str, object] = {}
         contest = self._contests.contest_context(contest_slug)
         if contest is None or contest["id"] != contest_id:
             raise ValueError("contest not found")
@@ -321,7 +311,6 @@ class ContestStatementPreviewService:
             output_kind="pdf",
             language=language,
             input_identity=identity,
-            options=options,
         )
         if (
             cached is not None
@@ -362,7 +351,6 @@ class ContestStatementPreviewService:
                 output_kind="pdf",
                 language=language,
                 input_identity=identity,
-                options=options,
             )
             if (
                 cached is not None
@@ -383,7 +371,6 @@ class ContestStatementPreviewService:
                 output_kind="pdf",
                 language=language,
                 input_identity=identity,
-                options=options,
             )
             preview_root = self._storage.resolve_preview_root(preview_id)
             try:
@@ -458,30 +445,13 @@ class ContestStatementPreviewService:
     def items(row: StatementPreviewRow | None) -> list[ContestStatementPreviewItem]:
         if row is None:
             return []
-        raw_items = row["summary"].get("items")
-        if not isinstance(raw_items, list):
-            return []
-        items: list[ContestStatementPreviewItem] = []
-        for raw in raw_items:
-            if not isinstance(raw, dict):
-                continue
-            items.append(
-                {
-                    "idx": str(raw.get("idx") or ""),
-                    "problem_id": int(raw.get("problem_id") or 0),
-                    "problem_slug": str(raw.get("problem_slug") or ""),
-                    "preview_id": str(raw.get("preview_id") or ""),
-                    "status": str(raw.get("status") or "failed"),
-                    "error": str(raw.get("error") or ""),
-                }
-            )
-        return items
+        return row["summary"].get("items", [])
 
     def _workspace_language_sets(
         self,
         rows: list[ContestProblem],
         *,
-        access: dict,
+        access: Mapping[int, ProblemAccessContext],
         user_id: int,
         username: str,
     ) -> list[set[str]]:
@@ -515,7 +485,7 @@ class ContestStatementPreviewService:
         self,
         rows: list[ContestProblem],
         *,
-        access: dict,
+        access: Mapping[int, ProblemAccessContext],
     ) -> list[set[str]]:
         eligible = [row for row in rows if access[row["problem_id"]]["can_read"]]
         readiness = self._packages.published_readiness_many(

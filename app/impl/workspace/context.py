@@ -4,16 +4,11 @@ from fastapi import HTTPException
 from typing import TypedDict
 
 from app.impl.runtime.dependency import runtime
-
-
-class PageUser(TypedDict):
-    id: int
-    username: str
-    is_system_admin: int
+from app.service.repository.workspace import GlobalUserContext
 
 
 class GlobalUserPageContext(TypedDict):
-    user: PageUser
+    user: GlobalUserContext
     default_problem: str
 
 
@@ -24,72 +19,15 @@ def count_label(count: int, singular: str, plural: str | None = None) -> str:
     return f"{safe_count} {token}"
 
 
-def _default_user_problem_selector(user_id: int, *, limit: int = 1) -> list[dict[str, object]]:
-    out: list[dict[str, object]] = []
-    for slug in runtime().workspace_service.accessible_problem_slugs(int(user_id), limit=max(1, int(limit))):
-        if slug:
-            out.append({"slug": slug})
-    return out
-
-
-def default_problem_slug_for_user(
-    username: str,
-    *,
-    user_ident_re=None,
-    user_problem_selector=None,
-) -> str:
-    if user_ident_re is None:
-        user_ident_re = _K.USER_IDENT_RE
+def global_user_ctx(username: str) -> GlobalUserPageContext:
     safe_user = str(username or "").strip()
-    if not user_ident_re.fullmatch(safe_user):
-        return ""
-    if user_problem_selector is None:
-        return runtime().workspace_service.default_problem_slug_for_username(safe_user)
-    user_id = runtime().workspace_service.known_user_id(safe_user)
-    if user_id is None:
-        return ""
-    items = user_problem_selector(int(user_id), limit=1)
-    if items:
-        return str(items[0]["slug"])
-    return ""
-
-
-def global_user_ctx(
-    username: str,
-    *,
-    user_ident_re=None,
-    username_rule_message: str | None = None,
-    default_problem_selector=None,
-) -> GlobalUserPageContext:
-    if user_ident_re is None:
-        user_ident_re = _K.USER_IDENT_RE
-    if username_rule_message is None:
-        username_rule_message = str(_K.USERNAME_RULE_MESSAGE)
-    selector = default_problem_selector
-    if selector is None:
-        selector = lambda token: default_problem_slug_for_user(
-            token,
-            user_ident_re=user_ident_re,
-            user_problem_selector=_default_user_problem_selector,
-        )
-    safe_user = str(username or "").strip()
-    if not user_ident_re.fullmatch(safe_user):
-        raise HTTPException(status_code=400, detail=username_rule_message)
+    if not _K.USER_IDENT_RE.fullmatch(safe_user):
+        raise HTTPException(status_code=400, detail=_K.USERNAME_RULE_MESSAGE)
     try:
         row = runtime().workspace_service.global_user_context(safe_user)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    user_id = row["id"]
-    is_system_admin = row["is_system_admin"]
-    if not isinstance(user_id, int) or isinstance(user_id, bool):
-        raise RuntimeError("global user id must be an integer")
-    if not isinstance(is_system_admin, int) or isinstance(is_system_admin, bool):
-        raise RuntimeError("global admin flag must be an integer")
     return {
-        "user": {
-            "id": user_id,
-            "username": str(row["username"]),
-            "is_system_admin": is_system_admin,
-        },
-        "default_problem": str(selector(safe_user) or ""),
+        "user": row,
+        "default_problem": runtime().workspace_service.default_problem_slug_for_username(safe_user),
     }

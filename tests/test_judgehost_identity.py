@@ -1,6 +1,7 @@
 import hashlib
 import unittest
 from pathlib import Path
+from typing import TypedDict
 
 from app.service.execution.identity import canonical_run_id, new_run_id
 from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
@@ -13,8 +14,17 @@ from app.service.judgehost.domjudge.identity import (
     job_id,
     submit_id,
 )
+from app.service.judgehost.domjudge.wire_model import DomjudgeCompileConfig
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.verification.identity import canonical_verification_id
+
+
+class CompileKeyInputs(TypedDict):
+    source_hash: str
+    compile_hash: str
+    compile_config: DomjudgeCompileConfig
+    entry_point: str
+    memory_limit: int
 
 
 class TestJudgehostIdentity(unittest.TestCase):
@@ -52,10 +62,18 @@ class TestJudgehostIdentity(unittest.TestCase):
                 canonical_verification_id(token)
 
     def test_compile_key_contains_every_compile_input(self) -> None:
-        baseline = {
+        baseline: CompileKeyInputs = {
             "source_hash": "1" * 64,
             "compile_hash": "2" * 32,
-            "compile_config": {"toolchain_cmd_digest": "3" * 64, "script_timelimit": 30},
+            "compile_config": {
+                "hash": "2" * 32,
+                "toolchain_cmd_digest": "3" * 64,
+                "filter_compiler_files": False,
+                "language_extensions": ["cpp"],
+                "script_timelimit": 30,
+                "script_memory_limit": 262144,
+                "script_filesize_limit": 65536,
+            },
             "entry_point": "Main",
             "memory_limit": 262144,
         }
@@ -63,7 +81,7 @@ class TestJudgehostIdentity(unittest.TestCase):
         self.assertRegex(expected, r"^[0-9a-f]{64}$")
         self.assertEqual(compile_key(**baseline), expected)
 
-        variants = (
+        variants: tuple[CompileKeyInputs, ...] = (
             {**baseline, "source_hash": "4" * 64},
             {**baseline, "compile_hash": "5" * 32},
             {**baseline, "compile_config": {**baseline["compile_config"], "script_timelimit": 31}},

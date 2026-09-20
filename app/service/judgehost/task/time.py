@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 
-def parse_iso_utc(raw: object) -> datetime | None:
+def parse_iso_utc(raw: str | None) -> datetime | None:
     text = str(raw or "").strip()
     if not text:
         return None

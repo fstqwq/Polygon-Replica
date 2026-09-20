@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import TypedDict
 
 from app.impl.runtime.dependency import runtime
 from app.impl.workspace.context_operation import normalize_page_target
@@ -12,6 +13,7 @@ from app.impl.workspace.test_spec import (
 )
 from app.service.problem.test_spec import (
     TestSpecEntry,
+    TestSpecDocumentEntry,
     next_test_id,
     normalize_gen_command,
     normalize_sample_input,
@@ -23,7 +25,12 @@ from app.service.problem.test_spec import (
 from app.service.problem.sample_json import SampleJson, normalize_sample_json
 
 
-def tests_spec_gen_script_context(workspace: Path) -> dict[str, object]:
+class GeneratorScriptContext(TypedDict):
+    text: str
+    count: int
+
+
+def tests_spec_gen_script_context(workspace: Path) -> GeneratorScriptContext:
     lines: list[str] = []
     with runtime().workspace_service.workspace_lock(workspace):
         entries, _spec_path = read_tests_spec(
@@ -36,8 +43,7 @@ def tests_spec_gen_script_context(workspace: Path) -> dict[str, object]:
             ),
         )
         for entry in entries:
-            kind = kind.strip().lower() if isinstance(kind := entry.get("kind"), str) else ""
-            if kind != "gen":
+            if entry["kind"] != "gen":
                 continue
             command = str(tests_spec_read_payload(workspace, entry) or "").replace("\r\n", "\n").replace("\r", "\n").strip()
             if not command:
@@ -46,11 +52,11 @@ def tests_spec_gen_script_context(workspace: Path) -> dict[str, object]:
     return {"text": "\n".join(lines), "count": len(lines)}
 
 
-def parse_gen_script_lines(raw: object) -> list[str]:
-    normalized = str(raw or "").replace("\r\n", "\n").replace("\r", "\n")
+def parse_gen_script_lines(raw: str) -> list[str]:
+    normalized = raw.replace("\r\n", "\n").replace("\r", "\n")
     commands: list[str] = []
     for line in normalized.split("\n"):
-        cmd = str(line or "").strip()
+        cmd = line.strip()
         if not cmd:
             continue
         commands.append(normalize_gen_command(cmd))
@@ -90,7 +96,7 @@ def tests_spec_sample_json_value(
     raw: str | None,
     fallback: SampleJson | None = None,
 ) -> SampleJson | None:
-    value: object = fallback if raw is None else tests_spec_form_text(raw).strip()
+    value = fallback if raw is None else tests_spec_form_text(raw).strip()
     return normalize_sample_json(
         value,
         max_bytes=runtime().config_values.integer("STATEMENT_SAMPLE_MAX_BYTES"),
@@ -108,7 +114,7 @@ def tests_spec_row(
     sample_json: SampleJson | None = None,
     index: int = 0,
 ) -> TestSpecEntry:
-    payload: dict[str, object] = {
+    payload: TestSpecDocumentEntry = {
         "id": normalize_test_id(test_id),
         "kind": normalize_test_kind(kind),
         "sample": bool(sample),

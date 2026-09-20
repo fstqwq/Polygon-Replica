@@ -1,8 +1,5 @@
-import io
-from pathlib import Path
-
 from app.main import runtime
-from app.service.statement.render import statement_title_for_language
+from app.service.verification.types import VerificationDetail
 from app.service.verification.lifecycle import (
     ActivationPlan,
     PlannedTask,
@@ -26,7 +23,7 @@ class BackendE2ETestBase(E2ETestBase):
         workspace_id: int,
         signature: str = "",
         kind: str = "all",
-        detail: dict[str, object] | None = None,
+        detail: VerificationDetail | None = None,
     ) -> str:
         admission = runtime.verification_service.admit_verification(
             VerificationAdmission(
@@ -47,7 +44,7 @@ class BackendE2ETestBase(E2ETestBase):
         activation = runtime.verification_service.activate_verification(
             ActivationPlan.build(
                 verification_id,
-                detail=dict(detail or {}),
+                detail={} if detail is None else detail.copy(),
                 programs=(
                     VerificationProgram(
                         program_id="accepted",
@@ -77,25 +74,3 @@ class BackendE2ETestBase(E2ETestBase):
         )
         self.assertEqual(activation.outcome, "activated")
         return task_id
-
-    def _statement_title(
-        self,
-        workspace: Path,
-        language: str = "english",
-    ) -> str:
-        return statement_title_for_language(
-            workspace,
-            language,
-            fallback_title=Path(self.problem).name,
-        )
-
-    class _FakeUpload:
-        def __init__(self, filename: str, data: bytes):
-            self.filename = filename
-            self._buf = io.BytesIO(data)
-
-        async def read(self, size: int = -1) -> bytes:
-            return self._buf.read(size)
-
-        async def close(self) -> None:
-            self._buf.close()

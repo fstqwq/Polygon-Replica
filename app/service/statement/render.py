@@ -1,6 +1,8 @@
 import os
 import shutil
+from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
+from typing import NotRequired, TypedDict
 
 from app.main_util import problem_slug_leaf
 from app.service.problem.test_spec import (
@@ -29,7 +31,7 @@ from app.service.statement.constant import (
     STATEMENT_TEMPLATE_REL,
     _read_required_text,
 )
-from app.service.statement.examples import StatementExamplesBundle
+from app.service.statement.examples import StatementExamplesBundle, StatementExamplesContext
 from app.service.statement.context import (
     normalize_statement_language,
     pick_statement_language,
@@ -38,6 +40,37 @@ from app.service.statement.ftl.renderer import render_ftl_template
 
 
 PROBLEM_TITLE_MAX_LEN = 255
+
+
+class StatementProblemContext(TypedDict):
+    name: str
+    inputFile: str
+    outputFile: str
+    timeLimit: int
+    memoryLimit: int
+    legend: str
+    input: str
+    output: str
+    interaction: str
+    notes: str
+    sampleTests: list[dict[str, str]]
+    examples: NotRequired[StatementExamplesContext]
+
+
+class _StatementContestContext(TypedDict):
+    name: str
+    location: str
+    date: str
+    language: str
+
+
+class _StatementTemplateContext(TypedDict):
+    problem: StatementProblemContext
+    language: str
+    contest: _StatementContestContext
+    shortProblemTitle: bool
+    providedStatementsCommands: list[str]
+    statements: list[dict[str, str]]
 
 
 def normalize_problem_title(raw: object, *, fallback_title: str) -> str:
@@ -237,14 +270,14 @@ def _problem_context_for_language(
     sample_tests: list[dict[str, str]] | None = None,
     examples_bundle: StatementExamplesBundle | None = None,
     problem_limits: ProblemConfigLimits,
-) -> dict[str, object]:
+) -> StatementProblemContext:
     cfg = load_problem_config(workspace, limits=problem_limits)
     input_file = "standard input"
     output_file = "standard output"
     time_limit_ms = cfg["time_limit_ms"]
     memory_limit_mb = cfg["memory_limit_mb"]
     resolved_title = statement_title_for_language(workspace, language, problem_title)
-    context: dict[str, object] = {
+    context: StatementProblemContext = {
         "name": resolved_title,
         "inputFile": input_file,
         "outputFile": output_file,
@@ -296,9 +329,9 @@ def _write_statement_example_resources(
 
 
 def _statement_problem_template_context(
-    problem_ctx: dict[str, object],
+    problem_ctx: StatementProblemContext,
     language: str,
-) -> dict[str, object]:
+) -> _StatementTemplateContext:
     return {
         "problem": problem_ctx,
         "language": language,
@@ -319,7 +352,7 @@ def _write_rendered_problem_templates(
     *,
     problem_template_text: str,
     examples_template_text: str,
-    context: dict[str, object],
+    context: Mapping[str, object],
 ) -> Path:
     rendered_examples_tex = render_ftl_template(examples_template_text, context)
     (target_dir / "examples.tex").write_text(
@@ -413,12 +446,11 @@ def ensure_statement_language_sources(workspace: Path, language: str) -> None:
             path.write_text(content, encoding="utf-8")
 
 
-def _seed_polygon_statement_sources(workspace: Path) -> None:
+def seed_statement_sources(workspace: Path) -> None:
     ensure_statement_language_sources(workspace, "english")
 
 
-def _render_polygon_statement(
-    workspace: Path,
+def render_statement_main(
     statement_root: Path,
     problem_title: str | None = None,
     *,
@@ -429,6 +461,7 @@ def _render_polygon_statement(
     statement_sample_max_bytes: int,
     problem_limits: ProblemConfigLimits,
 ) -> Path:
+    workspace = statement_root.parent
     template_text = _read_required_text(
         workspace / STATEMENT_TEMPLATE_REL,
         label=f"statement template ({STATEMENT_TEMPLATE_REL.as_posix()})",
@@ -505,7 +538,7 @@ def _render_statement_problem_assets_for_language(
     tests_spec_max_bytes: int,
     statement_sample_max_bytes: int,
     problem_limits: ProblemConfigLimits,
-) -> tuple[Path, dict[str, object]]:
+) -> tuple[Path, StatementProblemContext]:
     template_text = _safe_read_text(
         workspace / STATEMENT_PROBLEM_REL,
         DEFAULT_STATEMENT_PROBLEM_TEMPLATE,
@@ -626,32 +659,3 @@ def render_statement_offline_tree(
     entrypoint = target_dir / "statements.tex"
     entrypoint.write_text(rendered_main, encoding="utf-8")
     return entrypoint
-
-
-def seed_statement_sources(workspace: Path) -> None:
-    _seed_polygon_statement_sources(workspace)
-
-
-def render_statement_main(
-    statement_root: Path,
-    problem_title: str | None = None,
-    *,
-    language: str,
-    include_sample_tests: bool = True,
-    examples_bundle: StatementExamplesBundle | None = None,
-    tests_spec_max_bytes: int,
-    statement_sample_max_bytes: int,
-    problem_limits: ProblemConfigLimits,
-) -> Path:
-    workspace = statement_root.parent
-    return _render_polygon_statement(
-        workspace,
-        statement_root,
-        problem_title=problem_title,
-        language=language,
-        include_sample_tests=include_sample_tests,
-        examples_bundle=examples_bundle,
-        tests_spec_max_bytes=tests_spec_max_bytes,
-        statement_sample_max_bytes=statement_sample_max_bytes,
-        problem_limits=problem_limits,
-    )

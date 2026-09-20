@@ -80,7 +80,7 @@ def _required_int(value: object, column: str) -> int:
     return value
 
 
-def _contest_context_record(row: dict[str, object]) -> ContestContextRecord:
+def _contest_context_record(row: sqlite3.Row) -> ContestContextRecord:
     return {
         "id": _required_int(row["id"], "id"),
         "slug": str(row["slug"] or ""),
@@ -94,7 +94,7 @@ def _contest_context_record(row: dict[str, object]) -> ContestContextRecord:
     }
 
 
-def _contest_member_record(row: dict[str, object]) -> ContestMemberRecord:
+def _contest_member_record(row: sqlite3.Row) -> ContestMemberRecord:
     return {
         "user_id": _required_int(row["user_id"], "member user_id"),
         "username": str(row["username"] or ""),
@@ -106,7 +106,7 @@ def _contest_member_record(row: dict[str, object]) -> ContestMemberRecord:
     }
 
 
-def _contest_overview_record(row: dict[str, object]) -> ContestOverviewRecord:
+def _contest_overview_record(row: sqlite3.Row) -> ContestOverviewRecord:
     return {
         "id": _required_int(row["id"], "overview id"),
         "slug": str(row["slug"] or ""),
@@ -124,7 +124,7 @@ def _contest_overview_record(row: dict[str, object]) -> ContestOverviewRecord:
     }
 
 
-def _contest_attachment_record(row: dict[str, object]) -> ContestAttachmentRecord:
+def _contest_attachment_record(row: sqlite3.Row) -> ContestAttachmentRecord:
     return {
         "key": str(row["key"] or ""),
         "rel_path": str(row["rel_path"] or ""),
@@ -173,7 +173,7 @@ class ContestDiskStore:
             """,
             [int(user_id), int(user_id), int(user_id), max(1, int(limit))],
         )
-        return [_contest_overview_record(dict(row)) for row in rows]
+        return [_contest_overview_record(row) for row in rows]
 
     def all_contest_rows(self, user_id: int, *, limit: int) -> list[ContestOverviewRecord]:
         rows = self.db.fetch_all(
@@ -210,7 +210,7 @@ class ContestDiskStore:
             """,
             [int(user_id), int(user_id), max(1, int(limit))],
         )
-        return [_contest_overview_record(dict(row)) for row in rows]
+        return [_contest_overview_record(row) for row in rows]
 
     def contest_slug_exists(self, contest_slug: str) -> bool:
         row = self.db.fetch_one("SELECT id FROM contests WHERE slug=?", [contest_slug])
@@ -293,7 +293,7 @@ class ContestDiskStore:
             """,
             [contest_slug],
         )
-        return None if row is None else _contest_context_record(dict(row))
+        return None if row is None else _contest_context_record(row)
 
     def agent_roster(self, contest_slug: str) -> AgentContestRoster | None:
         with self.db.conn() as connection:
@@ -384,7 +384,7 @@ class ContestDiskStore:
             """,
             [int(contest_id)],
         )
-        return [_contest_member_record(dict(row)) for row in rows]
+        return [_contest_member_record(row) for row in rows]
 
     def user_id_by_username(self, username: str) -> int | None:
         row = self.db.fetch_one(
@@ -507,7 +507,7 @@ class ContestDiskStore:
             """,
             [int(contest_id)],
         )
-        return [_contest_attachment_record(dict(row)) for row in rows]
+        return [_contest_attachment_record(row) for row in rows]
 
     def replace_attachment_rows(
         self,
@@ -750,7 +750,7 @@ class ContestDiskStore:
         return items
 
     def bump_source_generation(self, contest_id: int) -> int:
-        def transaction(connection) -> int:
+        def transaction(connection: sqlite3.Connection) -> int:
             connection.execute(
                 "UPDATE contests SET source_generation=source_generation+1 WHERE id=?",
                 [int(contest_id)],

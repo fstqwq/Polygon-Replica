@@ -1,6 +1,5 @@
 import app.main_constant as _K
 
-import os
 from pathlib import Path
 
 from app.service.platform.workspace_path import normalize_workspace_rel_path
@@ -9,35 +8,6 @@ from app.service.problem.solution_metadata import (
     expected_behavior_label,
 )
 
-
-
-def list_solution_sources(workspace: Path, limit: int = 64) -> tuple[list[str], bool]:
-    base = workspace / "solutions"
-    try:
-        if not base.exists() or not base.is_dir() or base.is_symlink():
-            return ([], False)
-    except OSError:
-        return ([], False)
-    names: list[str] = []
-    try:
-        with os.scandir(base) as entries:
-            for entry in entries:
-                name = str(entry.name or "")
-                if Path(name).suffix.lower() not in _K.SOLUTION_SOURCE_EXTENSIONS:
-                    continue
-                try:
-                    if not entry.is_file(follow_symlinks=False):
-                        continue
-                except OSError:
-                    continue
-                names.append(f"solutions/{name}")
-    except OSError:
-        return ([], False)
-    names.sort()
-    truncated = len(names) > int(limit)
-    if truncated:
-        names = names[: int(limit)]
-    return (names, truncated)
 
 
 def solution_behavior_options() -> list[dict]:

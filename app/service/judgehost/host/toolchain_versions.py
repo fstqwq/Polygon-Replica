@@ -6,7 +6,7 @@ import json
 import logging
 import shlex
 from dataclasses import dataclass
-from typing import cast
+from typing import TypedDict
 
 from app.db import now_iso
 from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
@@ -33,6 +33,11 @@ class ToolchainVersionReport:
     runner: str
 
 
+class ToolchainVersionCommands(TypedDict, total=False):
+    compiler_version_command: str
+    runner_version_command: str
+
+
 class ToolchainVersionCollector:
     """Own the optional DOMjudge toolchain-version handshake.
 
@@ -56,11 +61,14 @@ class ToolchainVersionCollector:
         self._hosts = hosts
 
     @staticmethod
-    def _config_object(raw: str) -> dict[str, object]:
+    def _config_text(raw: str, key: str) -> str:
         payload = json.loads(raw)
         if not isinstance(payload, dict):
             raise RuntimeError("judgehost toolchain config must be an object")
-        return cast(dict[str, object], payload)
+        value = payload[key]
+        if not isinstance(value, str):
+            raise RuntimeError(f"judgehost toolchain {key} must be text")
+        return value
 
     def _version_context(self, judgetask_id: int) -> _VersionContext | None:
         case = self._batch_runtime.fetch_case(judgetask_id)
@@ -69,11 +77,10 @@ class ToolchainVersionCollector:
         batch = self._batch_runtime.fetch_batch(case["batch_id"])
         if batch is None:
             return None
-        compile_config = self._config_object(batch["compile_config_json"])
-        if compile_config["toolchain_cmd_digest"] == self._SKIP_COMPILE_DIGEST:
+        digest = self._config_text(batch["compile_config_json"], "toolchain_cmd_digest")
+        if digest == self._SKIP_COMPILE_DIGEST:
             return None
-        run_config = self._config_object(batch["run_config_json"])
-        language_id = cast(str, run_config["language_id"])
+        language_id = self._config_text(batch["run_config_json"], "language_id")
         if language_id not in self._LANGUAGE_IDS:
             raise RuntimeError(
                 f"unsupported judgehost toolchain language: {language_id}"
@@ -117,7 +124,7 @@ class ToolchainVersionCollector:
             "exit 127\n"
         )
 
-    def version_commands(self, judgetask_id: int) -> dict[str, object]:
+    def version_commands(self, judgetask_id: int) -> ToolchainVersionCommands:
         context = self._version_context(int(judgetask_id))
         if context is None:
             return {}
@@ -240,7 +247,7 @@ class ToolchainTelemetryHandler:
         )
         self._hosts = hosts
 
-    def version_commands(self, judgetask_id: int) -> dict[str, object]:
+    def version_commands(self, judgetask_id: int) -> ToolchainVersionCommands:
         """Return optional commands while containing telemetry-only failures."""
 
         try:

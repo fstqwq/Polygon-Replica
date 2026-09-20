@@ -5,7 +5,7 @@ from app.service.judgehost.batch.model import CaseResult
 from app.service.judgehost.domjudge.case_result import build_case_result
 from app.service.judgehost.callback.pass_bundle import PassBundle
 from app.service.judgehost.domjudge.result import (
-    feedback_text_and_files,
+    read_feedback_text,
     bounded_feedback_text,
     parse_nonnegative_float,
     parse_int,
@@ -44,7 +44,6 @@ class CapturedCaseArtifact:
 
 @dataclass(frozen=True)
 class CapturedJudgehostCase:
-    test_name: str
     input_ref: str
     interactive: bool
     raw_runresult: str
@@ -189,7 +188,7 @@ def normalize_captured_case(
     metadata_ref = _ref("program.meta")
     compare_metadata_ref = _ref("compare.meta")
     team_message_ref = _ref("teammessage.txt")
-    feedback_text, feedback_files = feedback_text_and_files(
+    feedback_text = read_feedback_text(
         read_blob=refs_to_content.get,
         runresult=runresult,
         output_error_ref=output_error_ref,
@@ -256,10 +255,7 @@ def normalize_captured_case(
                 bundled_pass.number,
                 "program.err",
             )
-            (
-                historical_feedback,
-                _historical_feedback_files,
-            ) = feedback_text_and_files(
+            historical_feedback = read_feedback_text(
                 read_blob=refs_to_content.get,
                 runresult="correct",
                 output_error_ref=historical_error_ref,
@@ -330,7 +326,6 @@ def normalize_captured_case(
             else "historical pass artifact capture was incomplete: " + metadata_warning
         )
     result = build_case_result(
-        test_name=captured.test_name,
         runresult=runresult,
         verdict=verdict,
         runtime_sec=runtime_sec,
@@ -346,7 +341,6 @@ def normalize_captured_case(
         compare_metadata_ref=compare_metadata_ref,
         team_message_ref=team_message_ref,
         feedback_text=feedback_text,
-        feedback_files=feedback_files,
         answer_correct=_answer_correct_from_compare_exit_code(compare_exit_code),
         input_ref=final_input_ref,
         interactive=captured.interactive,

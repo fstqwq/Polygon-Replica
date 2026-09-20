@@ -1,5 +1,6 @@
 import re
 
+from app.service.judgehost.domjudge.wire_model import DomjudgeCompileConfig
 from app.service.platform.hashing import sha256_hex_json
 
 _DOMJUDGE_NUMERIC_ID_MODULUS = 1 << 63
@@ -26,7 +27,7 @@ def compile_key(
     *,
     source_hash: str,
     compile_hash: str,
-    compile_config: dict[str, object],
+    compile_config: DomjudgeCompileConfig,
     entry_point: str | None,
     memory_limit: int,
 ) -> str:

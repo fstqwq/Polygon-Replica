@@ -1,8 +1,9 @@
 from app.db import now_iso
 from app.main_constant import RUN_TEST_NAME_RE
 from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
+from app.service.judgehost.batch.model import CaseInput
 from app.service.judgehost.domjudge.codec import decode_text
-from app.service.judgehost.task.model import ExecutionTemplate, PreparedTest
+from app.service.judgehost.task.model import ExecutionTemplate, PreparedTest, TaskPayload
 from app.service.judgehost.task.registry import JudgehostTaskRegistry
 from app.service.judgehost.task.retention import compact_payload_for_retention
 
@@ -33,7 +34,7 @@ class TaskBatchAdmission:
         run_id: str,
         tests_rows: list[PreparedTest],
         scope_sequence: int,
-    ) -> list[dict[str, object]]:
+    ) -> list[CaseInput]:
         return [
             {
                 "task_id": task_id,
@@ -54,7 +55,7 @@ class TaskBatchAdmission:
         ]
 
     @staticmethod
-    def _prepare_payload(payload: dict[str, object]) -> tuple[ExecutionTemplate, list[PreparedTest]]:
+    def _prepare_payload(payload: TaskPayload) -> tuple[ExecutionTemplate, list[PreparedTest]]:
         template = payload.get("precomputed")
         if not isinstance(template, ExecutionTemplate):
             raise RuntimeError("prepared execution template is required")
@@ -71,15 +72,13 @@ class TaskBatchAdmission:
             tests.append(test)
         return template, tests
 
-    def stage(self, task: dict[str, object]) -> int:
-        task_id = decode_text(raw=task.get("task_id"))
+    def stage(self, *, task_id: str, run_id: str, payload: TaskPayload) -> int:
+        task_id = decode_text(raw=task_id)
         if not task_id:
             raise RuntimeError("missing task_id for DOMjudge compatibility")
         latest = self._tasks.get(task_id)
-        payload = latest["payload"] if latest is not None else task.get("payload")
-        if not isinstance(payload, dict):
-            raise RuntimeError("judgehost task payload must be an object")
-        run_id = decode_text(raw=latest["run_id"] if latest is not None else task.get("run_id"))
+        payload = latest["payload"] if latest is not None else payload
+        run_id = decode_text(raw=latest["run_id"] if latest is not None else run_id)
         template, tests = self._prepare_payload(payload)
         verification_id = decode_text(raw=payload.get("verification_id"))
         if not verification_id:

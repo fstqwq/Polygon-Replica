@@ -2,11 +2,8 @@ import sqlite3
 
 from app.config import ConfigValues
 from app.db import now_iso
-from app.service.auth.model import AuthSessionIdentity, SudoSessionIdentity
-from app.service.disk.auth_store import (
-    AuthStore,
-    AuthUserRow,
-)
+from app.service.auth.model import AuthSessionIdentity, AuthUserRow, RateLimitHit, SudoSessionIdentity
+from app.service.disk.auth_store import AuthStore
 from app.service.disk.system_config_store import SystemConfigStore
 from app.service.auth.password_hash import password_verifier_storage_hash
 
@@ -82,8 +79,8 @@ class AuthService:
     def registration_conflict(self, username: str, email_normalized: str) -> str:
         return self._store.registration_conflict(username, email_normalized)
 
-    def hit_rate_limit(self, bucket_key: str, *, limit: int, window_sec: int) -> dict[str, object]:
-        return dict(self._store.hit_rate_limit(bucket_key, limit=int(limit), window_sec=int(window_sec)))
+    def hit_rate_limit(self, bucket_key: str, *, limit: int, window_sec: int) -> RateLimitHit:
+        return self._store.hit_rate_limit(bucket_key, limit=int(limit), window_sec=int(window_sec))
 
     def create_pending_registration(
         self,

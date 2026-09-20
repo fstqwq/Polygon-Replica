@@ -14,6 +14,7 @@ from app.impl.auth.shared import redirect_response, template_response
 from app.impl.contest.workspace_scope import contest_workspace_context_from_request
 from app.impl.runtime.dependency import runtime
 from app.impl.tests_spec.shared import (
+    GeneratorScriptContext,
     parse_gen_script_lines,
     tests_spec_add_single_entry,
     tests_spec_gen_script_context,
@@ -106,7 +107,7 @@ def render_tests_page(request: Request, problem: str, user: Annotated[str, Depen
     )
     workspace = Path(ctx['workspace']['path'])
     tests_editor_error = ''
-    tests_gen_script = {'text': '', 'count': 0}
+    tests_gen_script: GeneratorScriptContext = {'text': '', 'count': 0}
     try:
         tests_editor = tests_spec_editor_context(
             workspace,
@@ -119,11 +120,8 @@ def render_tests_page(request: Request, problem: str, user: Annotated[str, Depen
         tests_gen_script = tests_spec_gen_script_context(workspace)
     except (ValueError, OSError):
         tests_gen_script = {'text': '', 'count': 0}
-    generated_count = tests_gen_script.get("count")
-    if not isinstance(generated_count, int) or isinstance(generated_count, bool):
-        raise RuntimeError("generator script count must be an integer")
     tests_gen_script_configured = bool(
-        generated_count or int(tests_editor['summary'].get('gen') or 0)
+        tests_gen_script["count"] or tests_editor['summary']['gen']
     )
     template_context = {
         'ctx': ctx,

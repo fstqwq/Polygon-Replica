@@ -175,7 +175,7 @@ def dumps_problem_config(
     *,
     limits: ProblemConfigLimits,
 ) -> str:
-    payload: dict[str, object] = {
+    payload: ProblemConfig = {
         "time_limit_ms": config["time_limit_ms"],
         "memory_limit_mb": config["memory_limit_mb"],
         "mode": config["mode"],

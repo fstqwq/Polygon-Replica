@@ -13,6 +13,7 @@ from app.service.platform.maintenance.plan import (
     REDUNDANT_DATABASE_INDEXES,
     ArtifactUsageSnapshot,
     CleanupFilesystemClass,
+    MaintenanceResult,
 )
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
@@ -84,10 +85,10 @@ class ArtifactCleanupService:
         operation_id: str,
         started_at: str,
         set_stage: Callable[[str], None],
-    ) -> dict[str, object]:
+    ) -> MaintenanceResult:
         started = time.monotonic()
         stage = "preflight"
-        result: dict[str, object] = {
+        result: MaintenanceResult = {
             "operation_id": operation_id,
             "started_at": started_at,
             "completed_stage": "admission",

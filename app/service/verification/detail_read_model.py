@@ -3,9 +3,10 @@
 import json
 import re
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import TypedDict
 
 from app.service.execution.codec import compile_diagnostics_payload
+from app.service.execution.model import JsonValue
 from app.service.judgehost.domjudge.case_result import decode_case_test_row
 from app.service.platform.error_text import bounded_display_text
 from app.service.verification.lifecycle import (
@@ -14,11 +15,8 @@ from app.service.verification.lifecycle import (
 )
 import app.service.verification.read_model
 from app.service.verification.read_model import TaskCounts
-from app.service.verification.task_store import (
-    VerificationTaskReadRow,
-    VerificationTaskRow,
-)
-from app.service.verification.types import VerificationTaskStatus
+from app.service.verification.types import VerificationCaseTestRow, VerificationProgramDetailSummary, VerificationTaskRow
+from app.service.verification.types import VerificationDetail, VerificationStatus, VerificationTaskStatus
 
 _SOLUTION_TASK_KINDS = frozenset(("solution-run", "main-correct"))
 _TEST_NAME_RE = re.compile(r"^(\d+)\.in$")
@@ -30,14 +28,28 @@ class VerificationProgramDetailRow(TypedDict):
     mode: str
     status: str
     source_label: str
-    summary: dict[str, object]
+    summary: VerificationProgramDetailSummary
     created_at: str
     finished_at: str
 
 
+class VerificationPageDetail(VerificationDetail):
+    verification_id: str
+    artifact_verification_id: str
+    status: VerificationStatus
+    created_at: str
+    finished_at: str
+    task_graph: bool
+    task_counts: TaskCounts
+    running_tasks: list[dict[str, str]]
+    program_ids: list[str]
+    has_running: bool
+    test_names: list[str]
+
+
 class VerificationDetailReadModel(TypedDict):
     record: VerificationSnapshotRecord
-    details: dict[str, object]
+    details: VerificationPageDetail
     tasks: list[VerificationTaskRow]
     has_task_graph: bool
     mode: str
@@ -50,7 +62,7 @@ class VerificationDetailReadModel(TypedDict):
 
 class VerificationTestDetailReadModel(TypedDict):
     record: VerificationSnapshotRecord
-    details: dict[str, object]
+    details: VerificationDetail
     test_name: str
     mode: str
     tasks: list[VerificationTaskRow]
@@ -60,7 +72,7 @@ class VerificationTestDetailReadModel(TypedDict):
 def build_verification_test_detail_read_model(
     snapshot: VerificationSnapshot, *, test_name: str, program_id: str | None,
 ) -> VerificationTestDetailReadModel:
-    tasks = cast(list[VerificationTaskRow], snapshot["tasks"])
+    tasks = snapshot["tasks"]
     details = snapshot["detail"]
     mode = str(details.get("mode") or "")
     return {
@@ -82,15 +94,6 @@ def _test_order(test_name: str) -> tuple[int, str]:
     token = Path(test_name).name
     match = _TEST_NAME_RE.fullmatch(token)
     return (int(match.group(1)), token) if match is not None else (10**9, token)
-
-
-def _row_int(row: dict[str, object], key: str, *, default: int = 0) -> int:
-    value = row.get(key)
-    if value is None:
-        return default
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise RuntimeError(f"verification detail {key} must be an integer")
-    return value
 
 
 def _late_diagnostic_text(row: VerificationTaskRow, limit: int) -> str:
@@ -119,7 +122,7 @@ def _late_diagnostic_text(row: VerificationTaskRow, limit: int) -> str:
 
 def verification_case_test_row(
     row: VerificationTaskRow, *, display_limit: int, include_pass_details: bool = True,
-) -> dict[str, object]:
+) -> VerificationCaseTestRow:
     test_row = decode_case_test_row(
         row["result"], test_name=row["test_name"], include_passes=include_pass_details,
     )
@@ -129,9 +132,11 @@ def verification_case_test_row(
             "\n\n".join(value for value in (str(test_row.get("message") or ""), late) if value),
             limit_bytes=display_limit,
         )
-    test_row["late_diagnostics"] = list(cast(list[object], row.get("late_diagnostics") or []))
-    test_row["late_diagnostic_text"] = late
-    return test_row
+    return {
+        **test_row,
+        "late_diagnostics": list(row.get("late_diagnostics") or []),
+        "late_diagnostic_text": late,
+    }
 
 
 def _program_status(rows: list[VerificationTaskRow]) -> str:
@@ -154,7 +159,7 @@ def _program_rows(
     rows: list[VerificationTaskRow],
     *,
     record: VerificationSnapshotRecord,
-    details: dict[str, object],
+    details: VerificationDetail,
     mode: str,
     pass_limit: int,
     display_limit: int,
@@ -185,9 +190,9 @@ def _program_rows(
             unsorted_rows,
             key=lambda row: (_test_order(row["test_name"]), row["id"]),
         )
-        tests: list[dict[str, object]] = []
+        tests: list[VerificationCaseTestRow] = []
         compile_log = ""
-        compile_diagnostics: list[dict[str, object]] = []
+        compile_diagnostics: list[dict[str, JsonValue]] = []
         error_text = ""
         late_messages: list[str] = []
         max_time_ms = 0
@@ -206,15 +211,8 @@ def _program_rows(
                     include_pass_details=include_pass_details,
                 )
                 tests.append(test_row)
-                runtime_ms = _row_int(test_row, "time_ms")
-                max_time_ms = max(
-                    max_time_ms,
-                    _row_int(test_row, "time_user_ms", default=runtime_ms),
-                )
-                max_memory_kb = max(
-                    max_memory_kb,
-                    _row_int(test_row, "memory_kb"),
-                )
+                max_time_ms = max(max_time_ms, test_row["time_user_ms"])
+                max_memory_kb = max(max_memory_kb, test_row["memory_kb"])
             if not compile_log and row["compile_log"]:
                 compile_log = row["compile_log"]
             compile_diagnostics.extend(
@@ -235,7 +233,7 @@ def _program_rows(
             1 for row in program_tasks if row["verdict"].upper() == "SK"
         )
         first = program_tasks[0]
-        summary: dict[str, object] = {
+        summary: VerificationProgramDetailSummary = {
             "mode": mode,
             "source": first["source_path"],
             "task_kind": first["task_kind"],
@@ -286,10 +284,10 @@ def build_verification_detail_read_model(
     include_pass_details: bool = True,
 ) -> VerificationDetailReadModel:
     record = snapshot["record"]
-    tasks = cast(list[VerificationTaskRow], snapshot["tasks"])
-    read_rows = cast(list[VerificationTaskReadRow], tasks)
-    runtime_counts = app.service.verification.read_model.task_counts(read_rows)
-    details = {
+    tasks = snapshot["tasks"]
+    runtime_counts = app.service.verification.read_model.task_counts(tasks)
+    active_tasks = app.service.verification.read_model.running_tasks(tasks)
+    details: VerificationPageDetail = {
         **snapshot["detail"],
         "verification_id": record["id"],
         "artifact_verification_id": record["id"],
@@ -298,11 +296,11 @@ def build_verification_detail_read_model(
         "finished_at": record["finished_at"],
         "task_graph": bool(tasks),
         "task_counts": runtime_counts,
-        "running_tasks": app.service.verification.read_model.running_tasks(read_rows),
+        "running_tasks": active_tasks,
         "source_paths": app.service.verification.read_model.solution_source_paths(
-            read_rows
+            tasks
         ),
-        "program_ids": app.service.verification.read_model.program_ids(read_rows),
+        "program_ids": app.service.verification.read_model.program_ids(tasks),
         "has_running": bool(
             runtime_counts["pending"]
             or runtime_counts["queued"]
@@ -337,14 +335,11 @@ def build_verification_detail_read_model(
             record=record,
             details=details,
             mode=mode,
-            pass_limit=_row_int(details, "pass_limit", default=1),
+            pass_limit=details.get("pass_limit", 1),
             display_limit=display_limit,
             include_pass_details=include_pass_details,
         ),
         "task_status_by_program_and_test": status_by_case,
         "task_counts": runtime_counts,
-        "running_tasks": cast(
-            list[dict[str, str]],
-            details["running_tasks"],
-        ),
+        "running_tasks": active_tasks,
     }

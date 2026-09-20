@@ -6,6 +6,7 @@ from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.verification.lifecycle import (
     VerificationCompileSpec,
     VerificationProgram,
+    VerificationTaskKind,
 )
 from app.service.verification.plan import VerificationTestPlan
 
@@ -24,7 +25,7 @@ class VerificationPolicyTestBase(unittest.TestCase):
         self,
         *,
         program_id: str,
-        kind: str,
+        kind: VerificationTaskKind,
         source_path: str,
         expected_behavior: str,
     ) -> VerificationProgram:

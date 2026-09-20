@@ -80,6 +80,12 @@ Re-exports are explicit. Application packages do not synthesize exports through 
 
 Persistence implementations under `app.service.disk` and `app.service.memory` are private storage boundaries. Their import allowlist records current owners and should shrink as boundaries improve.
 
+Persistence adapters consume SQLite rows internally and return typed domain
+records. HTTP implementation modules delegate SQL to service boundaries. Test
+cases use their database fixture helpers for setup and durable-state assertions.
+The import-policy gate enforces these ownership rules alongside its import
+checks.
+
 ## What the checks enforce
 
 The default import-policy gate scans Python files in `app/`, `tests/`, and

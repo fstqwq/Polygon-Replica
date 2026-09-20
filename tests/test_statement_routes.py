@@ -1,8 +1,10 @@
 import asyncio
+import io
 import shutil
 from pathlib import Path
 
 from fastapi import HTTPException
+from starlette.datastructures import UploadFile
 
 from app.impl.preview.preview import (
     preview_save,
@@ -116,7 +118,7 @@ class TestStatementRoutes(BackendE2ETestBase):
 
     def test_statement_compile_asset_upload_stores_file_under_shared_root(self) -> None:
         ws = Path(runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
-        upload = self._FakeUpload("diagram.png", b"PNG")
+        upload = UploadFile(io.BytesIO(b"PNG"), filename="diagram.png")
 
         resp = asyncio.run(
             statement_compile_asset_upload(
@@ -135,7 +137,9 @@ class TestStatementRoutes(BackendE2ETestBase):
 
     def test_statement_attachment_upload_stores_file_under_attachments_root(self) -> None:
         ws = Path(runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
-        upload = self._FakeUpload("guess_number_testing_tool.py", b"print('ok')\n")
+        upload = UploadFile(
+            io.BytesIO(b"print('ok')\n"), filename="guess_number_testing_tool.py"
+        )
 
         resp = asyncio.run(
             statement_attachment_upload(

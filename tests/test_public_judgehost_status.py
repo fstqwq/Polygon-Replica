@@ -1,6 +1,7 @@
 import unittest
 
 from app.service.judgehost.host.public_status import project_public_status
+from app.service.judgehost.host.model import JudgehostStatus, JudgehostStatusRow
 
 
 def _host(
@@ -9,7 +10,7 @@ def _host(
     online: bool = True,
     enabled: bool = True,
     compiler: str = "command=/usr/bin/g++\ng++ 14.2.0",
-) -> dict[str, object]:
+) -> JudgehostStatusRow:
     return {
         "hostname": name,
         "peer_addr": "203.0.113.10",
@@ -17,8 +18,11 @@ def _host(
         "online": online,
         "age_sec": 75,
         "last_seen_at": "2026-08-10T01:02:03+00:00",
+        "first_seen_at": "2026-08-10T01:02:03+00:00",
         "active_leases": 1 if online else 0,
         "judged_case_count": 12,
+        "last_judging_at": None,
+        "last_judging": None,
         "recent_avg_per_case_sec": 0.125,
         "toolchains": [
             {
@@ -32,15 +36,21 @@ def _host(
     }
 
 
+def _status(hosts: list[JudgehostStatusRow], *, queued: int = 0) -> JudgehostStatus:
+    return {
+        "enabled": True,
+        "auth_configured": True,
+        "hosts_online": sum(host["online"] and host["enabled"] for host in hosts),
+        "hosts_total": len(hosts),
+        "hosts": hosts,
+        "queue": {"queued": queued, "leased": 0, "completed": 0, "failed": 0},
+    }
+
+
 class PublicJudgehostStatusTests(unittest.TestCase):
     def test_projection_exposes_only_anonymous_host_fields(self) -> None:
-        raw = {
-            "enabled": True,
-            "hosts_online": 1,
-            "hosts_total": 1,
-            "hosts": [_host("private-hostname")],
-            "queue": {"queued": 2, "leased": 1, "completed": 99, "failed": 7},
-        }
+        raw = _status([_host("private-hostname")], queued=2)
+        raw["queue"] = {"queued": 2, "leased": 1, "completed": 99, "failed": 7}
         projected = project_public_status(
             raw,
             [
@@ -75,31 +85,23 @@ class PublicJudgehostStatusTests(unittest.TestCase):
 
     def test_footer_summary_states(self) -> None:
         cases = (
-            ({"enabled": False, "hosts_online": 0, "hosts_total": 0}, ("disabled", "muted")),
-            ({"enabled": True, "hosts_online": 0, "hosts_total": 2}, ("offline", "danger")),
-            (
-                {"enabled": True, "hosts_online": 1, "hosts_total": 2},
-                ("1/2 online (0 busy)", "warn"),
-            ),
-            (
-                {"enabled": True, "hosts_online": 2, "hosts_total": 2},
-                ("2 online (0 busy)", "ok"),
-            ),
+            (False, 0, 0, ("disabled", "muted")),
+            (True, 0, 2, ("offline", "danger")),
+            (True, 1, 2, ("1/2 online (0 busy)", "warn")),
+            (True, 2, 2, ("2 online (0 busy)", "ok")),
         )
-        for raw, expected in cases:
-            with self.subTest(raw=raw):
-                projected = project_public_status({**raw, "hosts": [], "queue": {}}, [])
+        for enabled, online, total, expected in cases:
+            with self.subTest(enabled=enabled, online=online, total=total):
+                raw = _status([])
+                raw["enabled"] = enabled
+                raw["hosts_online"] = online
+                raw["hosts_total"] = total
+                projected = project_public_status(raw, [])
                 self.assertEqual((projected["summary"], projected["tone"]), expected)
 
     def test_disabled_host_uses_public_offline_idle_vocabulary(self) -> None:
         projected = project_public_status(
-            {
-                "enabled": True,
-                "hosts_online": 0,
-                "hosts_total": 1,
-                "hosts": [_host("disabled", enabled=False)],
-                "queue": {},
-            },
+            _status([_host("disabled", enabled=False)]),
             [],
         )
 
@@ -108,17 +110,13 @@ class PublicJudgehostStatusTests(unittest.TestCase):
         self.assertEqual(projected["busy_hosts"], 0)
 
     def test_online_toolchain_mismatch_marks_reported_versions(self) -> None:
-        raw = {
-            "enabled": True,
-            "hosts_online": 2,
-            "hosts_total": 3,
-            "hosts": [
+        raw = _status(
+            [
                 _host("one", compiler="command=/usr/bin/g++\ng++ 14.2.0"),
                 _host("two", compiler="command=/custom/g++\ng++ 13.3.0"),
                 _host("offline", online=False, compiler="command=/old/g++\ng++ 9.5.0"),
             ],
-            "queue": {},
-        }
+        )
         projected = project_public_status(raw, [])
         self.assertTrue(projected["toolchain_mismatch"])
         self.assertEqual(len(projected["toolchains"]), 1)
@@ -130,13 +128,9 @@ class PublicJudgehostStatusTests(unittest.TestCase):
         self.assertNotIn("g++ 9.5.0", repr(projected))
 
     def test_missing_online_reports_do_not_create_mismatch(self) -> None:
-        raw = {
-            "enabled": True,
-            "hosts_online": 2,
-            "hosts_total": 2,
-            "hosts": [_host("one"), {**_host("two"), "toolchains": []}],
-            "queue": {},
-        }
+        missing = _host("two")
+        missing["toolchains"] = []
+        raw = _status([_host("one"), missing])
         projected = project_public_status(raw, [])
         self.assertFalse(projected["toolchain_mismatch"])
         self.assertEqual(len(projected["toolchains"]), 1)
@@ -147,25 +141,23 @@ class PublicJudgehostStatusTests(unittest.TestCase):
         hosts = [_host(f"full-{index}") for index in range(2)]
         for host in hosts:
             toolchains = host["toolchains"]
-            self.assertIsInstance(toolchains, list)
             toolchains.append(
                 {
                     "language_id": "py",
                     "compiler": "command=/usr/bin/python3\nPython 3.9.16",
                     "runner": "",
+                    "observed_at": "2026-08-10T01:02:03+00:00",
+                    "judgetask_id": 42,
                 }
             )
         hosts.extend(_host(f"cpp-{index}") for index in range(3))
-        hosts.extend({**_host(f"missing-{index}"), "toolchains": []} for index in range(3))
+        for index in range(3):
+            missing = _host(f"missing-{index}")
+            missing["toolchains"] = []
+            hosts.append(missing)
 
         projected = project_public_status(
-            {
-                "enabled": True,
-                "hosts_online": 8,
-                "hosts_total": 8,
-                "hosts": hosts,
-                "queue": {},
-            },
+            _status(hosts),
             [],
         )
 

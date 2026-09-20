@@ -1,7 +1,7 @@
 import shutil
 from dataclasses import dataclass, field
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import cast
 
 from app.service.judgehost.task.model import ExecutionTemplate, PreparedTest
 from app.service.execution.identity import new_run_id
@@ -34,7 +34,7 @@ from app.service.verification.lifecycle import (
     VerificationProgram,
 )
 from app.service.verification.payload import answer_name, prepared_payload_for_uploaded_source
-from app.service.verification.plan import VerificationTestPlan
+from app.service.verification.plan import VerificationPayloadBase, VerificationTestPlan
 from app.service.verification.runtime_threshold import time_limit_ms_from_run_config_json
 from app.service.verification.sanity import (
     SANITY_FAILED,
@@ -50,7 +50,8 @@ from app.service.verification.signature import (
 )
 from app.service.verification.task_completion import TaskCompletion
 from app.service.verification.task_scheduler import TaskPublishResult
-from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
+from app.service.verification.types import VerificationTaskRow
+from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.types import Kind, VerificationStatus, VerificationTaskStatus
 from app.service.verification.workflow_policy import (
     build_graph,
@@ -73,8 +74,8 @@ class TaskExecutionContext:
     program_by_id: dict[str, VerificationProgram]
     execution_template_by_program_id: dict[str, ExecutionTemplate]
     test_plan_by_name: dict[str, VerificationTestPlan]
-    run_verification_payload_base: dict[str, object]
-    generate_verification_payload_base: dict[str, object]
+    run_verification_payload_base: VerificationPayloadBase
+    generate_verification_payload_base: VerificationPayloadBase
     bypass_case_result_cache: bool
     service_class: str
     judgehost: Judgehost
@@ -86,10 +87,9 @@ class TaskExecutionContext:
 
 def _require_online_judgehost(judgehost: Judgehost) -> None:
     try:
-        status = cast(dict[str, object], judgehost.status())
+        hosts_online = judgehost.status()["hosts_online"]
     except Exception:
-        status = {}
-    hosts_online = status.get("hosts_online")
+        hosts_online = 0
     if (
         not isinstance(hosts_online, int)
         or isinstance(hosts_online, bool)
@@ -157,7 +157,7 @@ def _generate_feedback_by_test(
 
 
 def _uploaded_source_files(
-    targets: list[dict[str, object]],
+    targets: Sequence[Mapping[str, object]],
     runtime_blob_store: RuntimeBlobStore,
 ) -> dict[str, PayloadFile]:
     values: dict[str, PayloadFile] = {}
@@ -533,7 +533,7 @@ def run_workspace_verification_dag(
     workspace_id: int | None,
     workspace_head: str,
     workspace_dirty: bool,
-    targets: list[dict[str, object]],
+    targets: Sequence[Mapping[str, object]],
     verification_id: str,
     sample_only: bool = False,
     snapshot_root_override: Path | None = None,
@@ -657,7 +657,6 @@ def run_workspace_verification_dag(
                     "pass_limit": verification_pass_limit,
                     "source_paths": [item.source_path for item in solution_programs],
                     "selected_test_names": list(test_names),
-                    "bypass_case_result_cache": bool(bypass_case_result_cache),
                     "sanity_checks": list(sanity_checks),
                     "sanity_status": sanity_status,
                     "run_config_json": str(
@@ -721,7 +720,7 @@ def run_workspace_verification_dag(
         if snapshot is None:
             raise RuntimeError("verification disappeared after scheduling")
         detail = snapshot["detail"]
-        rows = cast(list[VerificationTaskRow], snapshot["tasks"])
+        rows = snapshot["tasks"]
         parent_status = snapshot["record"]["status"]
         if (
             parent_status == VerificationStatus.RUNNING
@@ -760,7 +759,7 @@ def run_workspace_verification_dag(
                 bypass_case_result_cache=execution.bypass_case_result_cache,
                 service_class=execution.service_class,
             )
-            updated_detail = dict(detail)
+            updated_detail = detail.copy()
             updated_detail["sanity_status"] = sanity_result.status
             updated_detail["sanity_checked_count"] = int(sanity_result.checked_count)
             updated_detail["validation_status"] = sanity_result.status
@@ -937,7 +936,7 @@ class VerificationWorkflow:
         workspace_id: int | None,
         workspace_head: str,
         workspace_dirty: bool,
-        targets: list[dict[str, object]],
+        targets: Sequence[Mapping[str, object]],
         verification_id: str,
         sample_only: bool = False,
         snapshot_root_override: Path | None = None,

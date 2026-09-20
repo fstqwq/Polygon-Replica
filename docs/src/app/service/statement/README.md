@@ -7,6 +7,9 @@ Inputs are workspace or native package statement source, problem limits, and sam
 Preview cache lookup reuses the selected actor-scoped record to validate its
 payload path. HTML text is read when the caller requests the fragment. Payload
 validation and retrieval share the same regular-file and root-confinement checks.
+Pandoc output is sanitized before `content.html` is persisted, so direct and
+cached HTML reads return the same safe fragment. Preview metadata is narrowed
+to typed summaries at the SQLite JSON boundary.
 
 Problem and contest rendering share one sample model for pair, multi-pass, interactive, and multi-pass interactive examples. The optional authored `statement/examples.tex` overrides the canonical fallback and is rendered beside `problem.tex`.
 

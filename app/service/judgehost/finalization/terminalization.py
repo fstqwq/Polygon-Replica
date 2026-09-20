@@ -3,7 +3,7 @@ from app.service.judgehost.task.registry import JudgehostTaskRegistry
 from app.service.judgehost.task.retention import compact_payload_for_retention
 from app.service.judgehost.task.summary import load_run_summary
 from app.service.judgehost.task.summary import summary_error_text
-from app.service.judgehost.task.summary import summary_mapping
+from app.service.judgehost.task.result_model import TaskFinalizationPayload, TaskSummary
 
 
 class JudgehostTaskTerminalization:
@@ -12,36 +12,12 @@ class JudgehostTaskTerminalization:
     def __init__(self, tasks: JudgehostTaskRegistry) -> None:
         self._tasks = tasks
 
-    @staticmethod
-    def compact_payload_for_retention(payload: object) -> dict[str, object]:
-        return compact_payload_for_retention(payload)
-
-    def compact_task_payload(self, task_id: str) -> None:
-        if not task_id:
-            return
-        row = self._tasks.get(task_id)
-        if row is None:
-            return
-        row["payload"] = compact_payload_for_retention(row["payload"])
-        self._tasks.update(task_id, {"payload": row["payload"]})
-
     def finalize_task(
         self,
         *,
         task_id: str,
-        payload: dict[str, object],
-    ) -> dict[str, object]:
-        return self._commit_result(
-            task_id=task_id,
-            payload=payload,
-        )
-
-    def _commit_result(
-        self,
-        *,
-        task_id: str,
-        payload: dict[str, object],
-    ) -> dict[str, object]:
+        payload: TaskFinalizationPayload,
+    ) -> None:
         if not task_id:
             raise RuntimeError("task_id is required")
         raw_status = payload.get("run_status")
@@ -59,22 +35,13 @@ class JudgehostTaskTerminalization:
             error_text = raw_error.strip()
         else:
             raise RuntimeError("judgehost error must be a string")
-        raw_summary = payload.get("summary")
-        payload_summary = None if raw_summary is None else summary_mapping(raw_summary)
+        payload_summary = payload["summary"]
 
         row = self._tasks.claim_reporting(task_id, now_text=now_iso())
         if row is None:
             raise RuntimeError("judgehost task not found")
         if row["status"] in {"completed", "failed"}:
-            return {
-                "task_id": task_id,
-                "verification_id": row["verification_id"],
-                "run_id": row["run_id"],
-                "artifact_path": "",
-                "status": row.get("run_status")
-                or ("ok" if row["status"] == "completed" else "failed"),
-                "summary": row["summary"].copy(),
-            }
+            return
 
         try:
             existing = load_run_summary(
@@ -82,14 +49,14 @@ class JudgehostTaskTerminalization:
                 row["run_id"],
                 row["verification_id"],
             ) or row["summary"].copy()
-            summary = existing if payload_summary is None else {**existing, **payload_summary}
+            summary: TaskSummary = {**existing, **payload_summary}
             if run_status != "ok":
                 if error_text:
                     summary["error"] = error_text
                 elif "error" not in summary:
                     summary["error"] = "judgehost reported failure"
             summary["status"] = run_status
-            judgehost = summary_mapping(summary.get("judgehost"))
+            judgehost = summary.get("judgehost", {}).copy()
             judgehost.update(
                 {
                     "task_id": task_id,
@@ -114,9 +81,9 @@ class JudgehostTaskTerminalization:
                 "result": {
                     "run_status": run_status,
                     "error": error_text,
-                    "summary": dict(summary),
+                    "summary": summary.copy(),
                 },
-                "summary": dict(summary),
+                "summary": summary.copy(),
                 "run_status": run_status,
                 "error_text": error_text,
                 "updated_at": finished_at,
@@ -125,11 +92,3 @@ class JudgehostTaskTerminalization:
         )
         if completed is None:
             raise RuntimeError("judgehost task reporting claim was lost")
-        return {
-            "task_id": task_id,
-            "verification_id": row["verification_id"],
-            "run_id": row["run_id"],
-            "artifact_path": "",
-            "status": run_status,
-            "summary": summary,
-        }

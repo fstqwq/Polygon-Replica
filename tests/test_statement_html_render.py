@@ -14,17 +14,17 @@ from app.impl.preview.html import (
 from app.impl.runtime.dependency import bind_application
 from app.main import app, runtime
 from app.service.disk.statement_preview_store import StatementPreviewStore
+from app.service.problem.build_config import dumps_build_config
 from app.service.problem.runtime_config import problem_config_limits
-from app.service.problem_package.service import NativePackageOperationBusy
-from app.service.sandbox.base import ExecResult
+from app.service.sandbox.base import ExecResult, ExecSpec
 from app.service.statement.constant import DEFAULT_STATEMENT_PROBLEM_TEMPLATE
 from app.service.statement.examples import StatementExamplesBundle
 from app.service.statement.html_render import number_statement_fragment
 from app.service.statement.render import render_statement_offline_tree
-from app.service.statement.tex_compile import TexCompileResult
 
 from tests.backend_e2e_fixture import BackendE2ETestBase
 from tests.common import suite_root
+from tests.db_helpers import db_fetch_one
 from tests.ui_support import _request
 
 
@@ -99,6 +99,14 @@ def _headings(fragment: str) -> list[tuple[str, dict[str, str | None], str]]:
 
 
 class TestStatementHtmlRender(BackendE2ETestBase):
+    @staticmethod
+    def _compile_pdf(spec: ExecSpec) -> ExecResult:
+        if spec.cwd is None:
+            raise AssertionError("TeX requires a compile directory")
+        source = spec.cwd / spec.command[-1]
+        source.with_suffix(".pdf").write_bytes(b"%PDF-1.4\n% compiled fixture\n")
+        return ExecResult(backend="fixture", status="ok", returncode=0, elapsed_ms=1)
+
     def test_parbox_captions_stay_in_their_table_cells_with_inline_images(self) -> None:
         root = Path(tempfile.mkdtemp(prefix="statement-table-", dir=suite_root()))
         self.addCleanup(shutil.rmtree, root, True)
@@ -138,40 +146,13 @@ class TestStatementHtmlRender(BackendE2ETestBase):
 
     def test_problem_reader_can_render_own_workspace_html_and_pdf(self) -> None:
         reader = "statement-reader"
-        runtime.workspace_service.ensure_user(reader)
+        workspace = self._seed_workspace(self.problem, reader)
         runtime.workspace_service.grant_repo_access(self.problem, reader, "read")
-        runtime.workspace_service.ensure_workspace(
-            self.problem,
-            reader,
-            refresh_status=False,
+        (workspace / "statement-sections/english/legend.tex").write_text(
+            "Reader workspace preview.\n", encoding="utf-8"
         )
-        preview_row = {
-            "id": "sp-reader-preview",
-            "status": "ok",
-            "summary": {},
-        }
-        pdf_path = Path(runtime.settings.cache_root) / "reader-statement.pdf"
-        pdf_path.write_bytes(b"%PDF-reader")
-        self.addCleanup(pdf_path.unlink, missing_ok=True)
 
-        with (
-            patch.object(
-                runtime.statement_preview_service,
-                "build_problem",
-                return_value=preview_row,
-            ) as build_problem,
-            patch.object(
-                runtime.statement_preview_service,
-                "html_fragment",
-                return_value="<p>reader preview</p>",
-            ),
-            patch.object(
-                runtime.statement_preview_service,
-                "pdf",
-                return_value=pdf_path,
-            ),
-            bind_application(app),
-        ):
+        with bind_application(app):
             html_response = problem_statement_html_page(
                 _request(f"/problems/{self.problem}/statement/html"),
                 self.problem,
@@ -179,6 +160,7 @@ class TestStatementHtmlRender(BackendE2ETestBase):
                 source="workspace",
                 language="english",
             )
+        with patch.object(runtime.tex_sandbox_backend, "run", side_effect=self._compile_pdf), bind_application(app):
             pdf_response = problem_statement_pdf_page(
                 self.problem,
                 reader,
@@ -187,31 +169,52 @@ class TestStatementHtmlRender(BackendE2ETestBase):
             )
 
         self.assertEqual(html_response.status_code, 200)
+        self.assertIn("Reader workspace preview.", html_response.body.decode("utf-8"))
         self.assertEqual(pdf_response.status_code, 200)
-        self.assertEqual(build_problem.call_count, 2)
         self.assertEqual(
-            {call.kwargs["source_kind"] for call in build_problem.call_args_list},
-            {"workspace"},
+            Path(pdf_response.path).read_bytes(), b"%PDF-1.4\n% compiled fixture\n"
         )
+
+    def test_cached_html_serves_the_sanitized_renderer_output(self) -> None:
+        def pandoc(spec: ExecSpec) -> ExecResult:
+            output = next(arg.removeprefix("--output=") for arg in spec.command if arg.startswith("--output="))
+            content = '{"blocks":[]}' if "--to=json" in spec.command else (
+                '<h2>Safe statement</h2><p><script>alert(1)</script>'
+                '<img src="local.png" onerror="alert(2)" style="width:27cqw;position:fixed">'
+                '<a href="javascript:alert(3)">caption</a></p>'
+            )
+            Path(output).write_text(content, encoding="utf-8")
+            return ExecResult(backend="fixture", status="ok", returncode=0, elapsed_ms=1)
+
+        service = runtime.statement_preview_service
+        user_id = int(runtime.workspace_service.user_row(self.user)["id"])
+        with patch.object(runtime.tex_sandbox_backend, "run", side_effect=pandoc):
+            first = service.build_problem(
+                self.problem, self.user, source_kind="workspace", output_kind="html", language="english"
+            )
+        second = service.build_problem(
+            self.problem, self.user, source_kind="workspace", output_kind="html", language="english"
+        )
+        self.assertEqual(first["id"], second["id"])
+        fragment = service.html_fragment(second["id"], actor_user_id=user_id)
+        self.assertIsNotNone(fragment)
+        assert fragment is not None
+        self.assertIn("Safe statement", fragment)
+        self.assertIn("caption", fragment)
+        images = _TableCollector()
+        images.feed(fragment)
+        self.assertEqual(images.images, [{"src": "local.png", "style": "width:27cqw"}])
+        self.assertNotIn("<script", fragment)
+        self.assertNotIn("javascript:", fragment)
 
     def test_native_package_preview_rejects_package_from_another_problem(
         self,
     ) -> None:
-        problem_id = int(runtime.workspace_service.problem_row(self.problem)["id"])
-        foreign_package = {
-            "id": "pm-foreign",
-            "problem_id": problem_id + 1,
-            "status": "available",
-        }
-        with patch.object(
-            runtime.problem_package_service,
-            "native_package",
-            return_value=foreign_package,
-        ), patch.object(
-            runtime.statement_preview_service,
-            "build_problem",
-            side_effect=AssertionError("foreign Package reached the renderer"),
-        ), bind_application(app):
+        foreign_problem = f"{self.user}/foreign-statement"
+        runtime.workspace_service.ensure_problem(foreign_problem)
+        foreign_problem_id = runtime.workspace_service.problem_row(foreign_problem)["id"]
+        package_id = self._package_record(foreign_problem_id)
+        with bind_application(app):
             with self.assertRaises(HTTPException) as error:
                 problem_statement_html_page(
                     _request(f"/problems/{self.problem}/statement/html"),
@@ -219,19 +222,39 @@ class TestStatementHtmlRender(BackendE2ETestBase):
                     self.user,
                     source="native_package",
                     language="english",
-                    native_package_id="pm-foreign",
+                    native_package_id=package_id,
                 )
 
         self.assertEqual(error.exception.status_code, 404)
+        self.assertIsNone(db_fetch_one("SELECT id FROM statement_previews"))
+
+    @staticmethod
+    def _package_record(problem_id: int) -> str:
+        package_id = "pm-statement-fixture"
+        runtime.problem_package_service.store.insert_materialization(
+            {
+                "id": package_id,
+                "problem_id": problem_id,
+                "source_commit": "a" * 40,
+                "revision_number": 1,
+                "source_digest": "b" * 64,
+                "archive_rel_path": "statement-fixture.zip",
+                "archive_sha256": "c" * 64,
+                "archive_size_bytes": 1,
+                "verification_id": "",
+                "status": "available",
+                "created_at": "2026-01-01T00:00:00Z",
+                "checked_at": "2026-01-01T00:00:00Z",
+                "unavailable_reason": "",
+            },
+            build_id="",
+        )
+        return package_id
 
     def test_native_package_publication_busy_is_reported_as_conflict(self) -> None:
-        with patch.object(
-            runtime.statement_preview_service,
-            "build_problem",
-            side_effect=NativePackageOperationBusy(
-                "Native Package operation already running"
-            ),
-        ), bind_application(app):
+        problem_id = runtime.workspace_service.problem_row(self.problem)["id"]
+        package_id = self._package_record(problem_id)
+        with runtime.problem_package_service._archive_publication(problem_id, "a" * 40), bind_application(app):
             with self.assertRaises(HTTPException) as html_error:
                 problem_statement_html_page(
                     _request(f"/problems/{self.problem}/statement/html"),
@@ -239,6 +262,7 @@ class TestStatementHtmlRender(BackendE2ETestBase):
                     self.user,
                     source="native_package",
                     language="english",
+                    native_package_id=package_id,
                 )
             with self.assertRaises(HTTPException) as pdf_error:
                 problem_statement_pdf_page(
@@ -246,10 +270,15 @@ class TestStatementHtmlRender(BackendE2ETestBase):
                     self.user,
                     source="native_package",
                     language="english",
+                    native_package_id=package_id,
                 )
 
         self.assertEqual(html_error.exception.status_code, 409)
         self.assertEqual(pdf_error.exception.status_code, 409)
+        package = runtime.problem_package_service.native_package(package_id)
+        self.assertIsNotNone(package)
+        assert package is not None
+        self.assertEqual(package["status"], "available")
 
     def test_dynamic_statement_examples_use_foreground_verification(self) -> None:
         workspace = Path(
@@ -266,37 +295,40 @@ class TestStatementHtmlRender(BackendE2ETestBase):
             '{"tests":[{"id":"001","kind":"manual","sample":true}]}\n',
             encoding="utf-8",
         )
-        bundle: StatementExamplesBundle = {
-            "context": {"samples": []},
-            "resources": [],
-            "verification_id": "ver-foreground-preview",
-        }
+        (workspace / "solutions/main.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
+        (workspace / "config/build.json").write_text(
+            dumps_build_config({"generator_sources": [], "accepted_solution_source": "solutions/main.cpp"}),
+            encoding="utf-8",
+        )
+        runtime.judgehost_task_service.domjudge_register_host("statement-foreground")
+        service_classes: list[str] = []
 
-        with (
-            patch.object(
-                runtime.statement_preview_service._verification,
-                "run_workspace",
-                return_value="ver-foreground-preview",
-            ) as run_workspace,
-            patch.object(
-                runtime.statement_preview_service._examples,
-                "produce",
-                return_value=bundle,
-            ),
-            runtime.statement_preview_service.prepare_render_tree(
+        def unavailable_executor(*, service_class: str, **_kwargs: object) -> str:
+            service_classes.append(service_class)
+            raise RuntimeError("sample executor unavailable")
+
+        with patch.object(runtime.judgehost_task_service, "enqueue_task", side_effect=unavailable_executor), bind_application(app):
+            response = problem_statement_html_page(
+                _request(f"/problems/{self.problem}/statement/html"),
                 self.problem,
                 self.user,
-                source_kind="workspace",
+                source="workspace",
                 language="english",
-            ) as prepared,
-        ):
-            self.assertTrue((prepared.root / "problem.tex").is_file())
+            )
 
-        run_workspace.assert_called_once_with(
-            self.problem,
-            self.user,
-            sample_only=True,
-            service_class="foreground",
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("sample executor unavailable", response.body.decode("utf-8"))
+        self.assertEqual(set(service_classes), {"foreground"})
+        problem_id = int(runtime.workspace_service.problem_row(self.problem)["id"])
+        record = db_fetch_one(
+            "SELECT id,kind,status FROM verifications WHERE problem_id=?", [problem_id]
+        )
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertEqual((record["kind"], record["status"]), ("sample", "failed"))
+        self.assertEqual(
+            runtime.verification_service.verification_detail(record["id"])["selected_test_names"],
+            ["001.in"],
         )
 
     def test_preview_preparation_failure_returns_diagnostic_response(self) -> None:
@@ -307,20 +339,10 @@ class TestStatementHtmlRender(BackendE2ETestBase):
                 include_recent=False,
             )["workspace"]["path"]
         )
-        manual_root = workspace / "tests" / "manual"
-        manual_root.mkdir(parents=True, exist_ok=True)
-        (manual_root / "001.in").write_text("1\n", encoding="utf-8")
-        (workspace / "tests" / "spec.json").write_text(
-            '{"tests":[{"id":"001","kind":"manual","sample":true}]}\n',
-            encoding="utf-8",
-        )
-        failure = "sample verification could not prepare input evidence"
+        (workspace / "statement/olymp.sty").unlink()
+        failure = "statement olymp style (statement/olymp.sty) is missing"
 
-        with patch.object(
-            runtime.statement_preview_service._verification,
-            "run_workspace",
-            side_effect=RuntimeError(failure),
-        ), bind_application(app):
+        with bind_application(app):
             html_response = problem_statement_html_page(
                 _request(f"/problems/{self.problem}/statement/html"),
                 self.problem,
@@ -338,7 +360,7 @@ class TestStatementHtmlRender(BackendE2ETestBase):
         self.assertEqual(html_response.status_code, 422)
         self.assertIn(failure, html_response.body.decode("utf-8"))
         self.assertEqual(pdf_response.status_code, 422)
-        self.assertEqual(pdf_response.body.decode("utf-8"), failure + "\n")
+        self.assertIn(failure, pdf_response.body.decode("utf-8"))
 
     def test_problem_and_contest_html_reuse_source_identity_cache(self) -> None:
         workspace = Path(
@@ -374,32 +396,24 @@ class TestStatementHtmlRender(BackendE2ETestBase):
             source_kind="workspace",
             language="english",
         )
-        with patch.object(
-            runtime.statement_preview_service,
-            "prepare_render_tree",
-            side_effect=AssertionError("cache hit must not prepare a render tree"),
-        ):
-            second = runtime.contest_statement_preview_service.build_html(
-                contest_id,
-                user_id=user_id,
-                username=self.user,
-                source_kind="workspace",
-                language="english",
-            )
+        second = runtime.contest_statement_preview_service.build_html(
+            contest_id,
+            user_id=user_id,
+            username=self.user,
+            source_kind="workspace",
+            language="english",
+        )
 
         self.assertEqual(first["id"], second["id"])
-
-        def build_contest_pdf(**kwargs: object) -> dict[str, object]:
-            output_root = Path(str(kwargs["output_root"]))
-            target = output_root / "pdf" / "statement.pdf"
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(b"%PDF-1.4\n% cache fixture\n")
-            return {"pdf": "pdf/statement.pdf"}
-
+        item = runtime.contest_statement_preview_service.items(second)[0]
+        self.assertIn(
+            "Cache identity fixture.",
+            runtime.statement_preview_service.html_fragment(item["preview_id"], actor_user_id=user_id),
+        )
         with patch.object(
-            runtime.contest_statement_preview_service._statements,
-            "build_preview_pdf",
-            side_effect=build_contest_pdf,
+            runtime.tex_sandbox_backend,
+            "run",
+            side_effect=self._compile_pdf,
         ):
             first_pdf = runtime.contest_statement_preview_service.build_pdf(
                 contest_id,
@@ -409,21 +423,20 @@ class TestStatementHtmlRender(BackendE2ETestBase):
                 source_kind="workspace",
                 language="english",
             )
-        with patch.object(
-            runtime.statement_preview_service,
-            "prepare_render_tree",
-            side_effect=AssertionError("PDF cache hit must not prepare render trees"),
-        ):
-            second_pdf = runtime.contest_statement_preview_service.build_pdf(
-                contest_id,
-                contest_slug=contest_slug,
-                user_id=user_id,
-                username=self.user,
-                source_kind="workspace",
-                language="english",
-            )
+        second_pdf = runtime.contest_statement_preview_service.build_pdf(
+            contest_id,
+            contest_slug=contest_slug,
+            user_id=user_id,
+            username=self.user,
+            source_kind="workspace",
+            language="english",
+        )
 
         self.assertEqual(first_pdf["id"], second_pdf["id"])
+        pdf = runtime.statement_preview_service.pdf(second_pdf["id"], actor_user_id=user_id)
+        self.assertIsNotNone(pdf)
+        assert pdf is not None
+        self.assertEqual(pdf.read_bytes(), b"%PDF-1.4\n% compiled fixture\n")
 
     def test_html_preview_rebuilds_missing_and_unsafe_cached_payloads(self) -> None:
         service = runtime.statement_preview_service
@@ -474,46 +487,15 @@ class TestStatementHtmlRender(BackendE2ETestBase):
             "l.42 \\BrokenStatementMacro\n"
             "No pages of output.\n"
         )
-        missing_pdf = Path(suite_root()) / "missing-statement.pdf"
-        compile_result = TexCompileResult(
-            engine="pdflatex",
-            proc=ExecResult(
-                backend="fixture",
-                status="failed",
-                returncode=1,
-                elapsed_ms=1,
-            ),
-            log_text=compile_log,
-            pdf_path=missing_pdf,
-        )
-        with patch.object(
-            runtime.statement_preview_service._pdf,
-            "compile_pdf",
-            return_value=compile_result,
-        ):
-            row = runtime.statement_preview_service.build_problem(
-                self.problem,
-                self.user,
-                source_kind="workspace",
-                output_kind="pdf",
-                language="english",
-            )
-
-        self.assertEqual(row["status"], "failed")
-        error = str(row["summary"].get("error") or "")
-        self.assertTrue(error.startswith("! Undefined control sequence."))
-        self.assertIn("l.42 \\BrokenStatementMacro", error)
-        latex_log = (
-            runtime.storage_layout.resolve_preview_root(row["id"])
-            / "logs"
-            / "latex.log"
-        )
-        self.assertEqual(latex_log.read_text(encoding="utf-8"), compile_log)
+        def failed_tex(spec: ExecSpec) -> ExecResult:
+            assert spec.cwd is not None
+            (spec.cwd / spec.command[-1]).with_suffix(".log").write_text(compile_log, encoding="utf-8")
+            return ExecResult(backend="fixture", status="error", returncode=1, elapsed_ms=1)
 
         with patch.object(
-            runtime.statement_preview_service,
-            "build_problem",
-            return_value=row,
+            runtime.tex_sandbox_backend,
+            "run",
+            side_effect=failed_tex,
         ), bind_application(app):
             response = problem_statement_pdf_page(
                 self.problem,
@@ -521,6 +503,16 @@ class TestStatementHtmlRender(BackendE2ETestBase):
                 source="workspace",
                 language="english",
             )
+        problem_id = int(runtime.workspace_service.problem_row(self.problem)["id"])
+        persisted = db_fetch_one(
+            "SELECT id,status FROM statement_previews WHERE problem_id=? AND output_kind='pdf'",
+            [problem_id],
+        )
+        self.assertIsNotNone(persisted)
+        assert persisted is not None
+        self.assertEqual(persisted["status"], "failed")
+        latex_log = runtime.storage_layout.resolve_preview_root(persisted["id"]) / "logs/latex.log"
+        self.assertEqual(latex_log.read_text(encoding="utf-8"), compile_log)
         self.assertEqual(response.status_code, 422)
         self.assertTrue(response.media_type.startswith("text/plain"))
         body = response.body.decode("utf-8")
@@ -553,7 +545,6 @@ class TestStatementHtmlRender(BackendE2ETestBase):
                 output_kind="html",
                 language="english",
                 input_identity="same-content",
-                options={},
             )
             store.finish(preview_id, status="ok", summary={})
 

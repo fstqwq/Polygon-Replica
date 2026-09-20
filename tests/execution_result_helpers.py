@@ -1,5 +1,3 @@
-from collections.abc import Iterable
-
 from app.service.execution.model import (
     CAPTURE_COMPLETE,
     ExecutionPassResult,
@@ -20,7 +18,6 @@ def execution_result(
     output_ref: str = "",
     feedback: str = "",
     error: str = "",
-    diagnostics: Iterable[dict[str, object]] = (),
     answer_correct: bool | None = None,
 ) -> ExecutionResult:
     accepted = verdict.upper() in {"AC", "OK"} if answer_correct is None else answer_correct
@@ -64,5 +61,4 @@ def execution_result(
         answer_correct=accepted,
         error=error,
         feedback=feedback,
-        compile_diagnostics=diagnostics,
     )

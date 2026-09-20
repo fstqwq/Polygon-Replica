@@ -6,7 +6,7 @@ import os
 import re
 import stat
 from pathlib import Path, PurePosixPath
-from typing import Literal, NotRequired, TypedDict, cast
+from typing import Literal, NotRequired, TypedDict
 
 from app.service.platform.hashing import sha256_file
 from app.service.problem.build_config import load_build_config
@@ -55,6 +55,13 @@ class NativePackageManifest(TypedDict):
     tests: list[NativePackageTestEntry]
 
 
+class _SourceDigestEntry(TypedDict):
+    path: str
+    mode: NotRequired[int]
+    size: NotRequired[int]
+    sha256: NotRequired[str]
+
+
 def canonical_rel_path(raw: str) -> str:
     """Return a safe canonical package-relative POSIX path."""
 
@@ -89,7 +96,7 @@ def source_digest(source_root: Path) -> str:
 
     root = source_root.resolve()
     derived_roots = PACKAGE_DERIVED_ROOT_NAMES
-    entries: list[dict[str, object]] = []
+    entries: list[_SourceDigestEntry] = []
     for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
         parent = Path(dirpath)
         rel_parent = parent.relative_to(root)
@@ -127,6 +134,55 @@ def dumps_manifest(manifest: NativePackageManifest) -> str:
     return json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
 
+def _file_entry(raw: object, *, test_id: str, key: str) -> NativePackageFileEntry:
+    if not isinstance(raw, dict) or not {"path", "sha256", "size"}.issubset(raw):
+        raise ValueError(f"Native Package payload descriptor is invalid: {test_id}/{key}")
+    path, checksum, size = raw["path"], raw["sha256"], raw["size"]
+    if not isinstance(path, str):
+        raise ValueError(f"Native Package payload path is invalid: {test_id}/{key}")
+    if not isinstance(checksum, str) or not re.fullmatch(r"[0-9a-f]{64}", checksum):
+        raise ValueError(f"Native Package payload checksum is invalid: {test_id}/{key}")
+    if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+        raise ValueError(f"Native Package payload size is invalid: {test_id}/{key}")
+    return {"path": path, "sha256": checksum, "size": size}
+
+
+def _test_entry(raw: object) -> NativePackageTestEntry:
+    if not isinstance(raw, dict):
+        raise ValueError("Native Package test entry must be an object")
+    if not {"id", "kind", "sample", "input"}.issubset(raw):
+        raise ValueError("Native Package test entry has an unsupported shape")
+    test_id, kind, sample = raw["id"], raw["kind"], raw["sample"]
+    if not isinstance(test_id, str) or not isinstance(kind, str):
+        raise ValueError("Native Package test identity is invalid")
+    if not isinstance(sample, bool):
+        raise ValueError("Native Package test sample flag is invalid")
+    entry: NativePackageTestEntry = {
+        "id": test_id,
+        "kind": kind,
+        "sample": sample,
+        "input": _file_entry(raw["input"], test_id=test_id, key="input"),
+    }
+    optional_keys: tuple[Literal["answer", "sample_input", "sample_output"], ...] = (
+        "answer", "sample_input", "sample_output",
+    )
+    for key in optional_keys:
+        if key in raw:
+            entry[key] = _file_entry(raw[key], test_id=test_id, key=key)
+    return entry
+
+
+def _solution_entry(raw: object) -> NativePackageSolutionEntry:
+    if not isinstance(raw, dict) or not {"source_path", "expected_behavior"}.issubset(raw):
+        raise ValueError("Native Package solution entry has an unsupported shape")
+    source_path, behavior = raw["source_path"], raw["expected_behavior"]
+    if not isinstance(source_path, str):
+        raise ValueError("Native Package solution path is invalid")
+    if not isinstance(behavior, str):
+        raise ValueError(f"Native Package solution behavior is invalid: {source_path}")
+    return {"source_path": source_path, "expected_behavior": behavior}
+
+
 def load_manifest(path: Path) -> NativePackageManifest:
     if path.is_symlink() or not path.is_file():
         raise ValueError("Polygon Replica package test-data/manifest.json is missing")
@@ -148,30 +204,28 @@ def load_manifest(path: Path) -> NativePackageManifest:
     }
     if not required.issubset(raw):
         raise ValueError("Polygon Replica package manifest has an unsupported shape")
-    if not isinstance(raw["mode"], str) or raw["mode"] not in {
-        "pass-fail",
-        "interactive",
-    }:
+    mode = raw["mode"]
+    if mode == "pass-fail":
+        problem_mode: ProblemMode = "pass-fail"
+    elif mode == "interactive":
+        problem_mode = "interactive"
+    else:
         raise ValueError("Polygon Replica package mode is invalid")
-    if not isinstance(raw["source_commit"], str) or not re.fullmatch(
-        r"[0-9a-f]{40}", raw["source_commit"]
+    source_commit = raw["source_commit"]
+    if not isinstance(source_commit, str) or not re.fullmatch(
+        r"[0-9a-f]{40}", source_commit
     ):
         raise ValueError("Polygon Replica package source_commit is invalid")
-    if (
-        not isinstance(raw["revision_number"], int)
-        or isinstance(raw["revision_number"], bool)
-        or raw["revision_number"] < 1
-    ):
+    revision_number = raw["revision_number"]
+    if not isinstance(revision_number, int) or isinstance(revision_number, bool) or revision_number < 1:
         raise ValueError("Polygon Replica package revision_number is invalid")
-    if not isinstance(raw["source_digest"], str) or not re.fullmatch(
-        r"[0-9a-f]{64}", raw["source_digest"]
+    digest = raw["source_digest"]
+    if not isinstance(digest, str) or not re.fullmatch(
+        r"[0-9a-f]{64}", digest
     ):
         raise ValueError("Polygon Replica package source_digest is invalid")
-    if (
-        not isinstance(raw["pass_limit"], int)
-        or isinstance(raw["pass_limit"], bool)
-        or raw["pass_limit"] < 1
-    ):
+    pass_limit = raw["pass_limit"]
+    if not isinstance(pass_limit, int) or isinstance(pass_limit, bool) or pass_limit < 1:
         raise ValueError("Polygon Replica package pass_limit is invalid")
     solutions = raw["solutions"]
     if not isinstance(solutions, list) or not solutions:
@@ -179,7 +233,15 @@ def load_manifest(path: Path) -> NativePackageManifest:
     tests = raw["tests"]
     if not isinstance(tests, list) or not tests:
         raise ValueError("Polygon Replica package must contain tests")
-    return cast(NativePackageManifest, raw)
+    return {
+        "source_commit": source_commit,
+        "revision_number": revision_number,
+        "source_digest": digest,
+        "mode": problem_mode,
+        "pass_limit": pass_limit,
+        "solutions": [_solution_entry(row) for row in solutions],
+        "tests": [_test_entry(row) for row in tests],
+    }
 
 
 def validate_manifest_files(
@@ -205,14 +267,7 @@ def validate_manifest_files(
         for source_path in committed_solution_paths
     }
     for solution in manifest["solutions"]:
-        if not isinstance(solution, dict) or not {
-            "source_path",
-            "expected_behavior",
-        }.issubset(solution):
-            raise ValueError("Native Package solution entry has an unsupported shape")
         source_path = solution["source_path"]
-        if not isinstance(source_path, str):
-            raise ValueError("Native Package solution path is invalid")
         canonical_rel_path(source_path)
         manifest_solution_paths.append(source_path)
         expected_behavior = solution["expected_behavior"]
@@ -238,14 +293,6 @@ def validate_manifest_files(
     )
     manifest_shape: list[tuple[str, str, bool]] = []
     for test in manifest["tests"]:
-        if not isinstance(test, dict):
-            raise ValueError("Native Package test entry must be an object")
-        if not {"id", "kind", "sample", "input"}.issubset(test):
-            raise ValueError("Native Package test entry has an unsupported shape")
-        if not isinstance(test["id"], str) or not isinstance(test["kind"], str):
-            raise ValueError("Native Package test identity is invalid")
-        if not isinstance(test["sample"], bool):
-            raise ValueError("Native Package test sample flag is invalid")
         test_id = test["id"]
         if not test_id or test_id in test_ids:
             raise ValueError("Native Package test IDs must be non-empty and unique")
@@ -261,28 +308,13 @@ def validate_manifest_files(
         test_id = test["id"]
         if manifest["mode"] != "interactive" and "answer" not in test:
             raise ValueError(f"Native Package answer is required: {test_id}")
-        for key in ("input", "answer", "sample_input", "sample_output"):
+        file_keys: tuple[Literal["input", "answer", "sample_input", "sample_output"], ...] = (
+            "input", "answer", "sample_input", "sample_output",
+        )
+        for key in file_keys:
             descriptor = test.get(key)
             if descriptor is None:
                 continue
-            if not isinstance(descriptor, dict) or not {
-                "path",
-                "sha256",
-                "size",
-            }.issubset(descriptor):
-                raise ValueError(f"Native Package payload descriptor is invalid: {test_id}/{key}")
-            if not isinstance(descriptor["path"], str):
-                raise ValueError(f"Native Package payload path is invalid: {test_id}/{key}")
-            if not isinstance(descriptor["sha256"], str) or not re.fullmatch(
-                r"[0-9a-f]{64}", descriptor["sha256"]
-            ):
-                raise ValueError(f"Native Package payload checksum is invalid: {test_id}/{key}")
-            if (
-                not isinstance(descriptor["size"], int)
-                or isinstance(descriptor["size"], bool)
-                or descriptor["size"] < 0
-            ):
-                raise ValueError(f"Native Package payload size is invalid: {test_id}/{key}")
             rel = canonical_rel_path(descriptor["path"])
             file_name = {
                 "input": "input",

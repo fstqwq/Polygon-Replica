@@ -157,10 +157,9 @@ def history_snapshot(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         source_commit = selected["commit"]
         revision_number = selected["version"]
-    workspace_context = cast(dict[str, object], ctx["workspace"])
     archive = runtime().export_service.create_workspace_snapshot(
         problem,
-        workspace_id=cast(int, workspace_context["id"]),
+        workspace_id=ctx["workspace"]["id"],
         source_commit=source_commit,
         revision_number=revision_number,
     )
@@ -192,8 +191,7 @@ def history_import(
         package_name = (package_upload.filename or "").strip()
         if not package_name:
             raise ValueError("archive filename is required")
-        workspace_context = cast(dict[str, object], ctx["workspace"])
-        workspace = Path(cast(str, workspace_context["path"]))
+        workspace = Path(ctx["workspace"]["path"])
         with spool_fileobj(
             package_upload.file,
             root=runtime().storage_layout.archive_upload_root,

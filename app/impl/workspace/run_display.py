@@ -1,4 +1,8 @@
+from collections.abc import Sequence
+
+from app.impl.workspace.run_view_model import RunFailureReason
 from app.service.verification.failure_display import verification_solution_failure_hint
+from app.service.verification.types import VerificationProgramSummaryFields
 from app.service.verification.result_match import (
     run_actual_failed_codes,
     run_actual_short,
@@ -19,7 +23,7 @@ def run_error_display(error: str) -> str:
     return error
 
 
-def run_actual_display(run_status: str, summary: dict | None) -> str:
+def run_actual_display(run_status: str, summary: VerificationProgramSummaryFields | None) -> str:
     failed_codes = run_actual_failed_codes(run_status, summary)
     if failed_codes:
         return "/".join(failed_codes)
@@ -39,7 +43,7 @@ def run_cpu_wall_ms_text(cpu_ms: int, wall_ms: int) -> str:
 
 def rewrite_failure_reason_with_source(
     current_reason: str,
-    columns: list[dict[str, object]],
+    columns: Sequence[RunFailureReason],
     *,
     limit_bytes: int,
 ) -> str:

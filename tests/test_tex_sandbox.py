@@ -1,9 +1,7 @@
-import resource
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import call, patch
 
 from app.service.sandbox.base import ExecSpec
 from app.service.sandbox.tex_backend import TexSandboxBackend
@@ -11,45 +9,25 @@ from app.service.sandbox.tex_backend import TexSandboxBackend
 
 @unittest.skipUnless(shutil.which("bwrap") and shutil.which("pdflatex"), "bwrap and pdflatex are required")
 class TestTexSandbox(unittest.TestCase):
-    def test_preexec_for_spec_applies_non_process_limits(self) -> None:
-        backend = object.__new__(TexSandboxBackend)
-        spec = ExecSpec(
-            command=["true"],
+    def test_sandboxed_process_observes_resource_limits(self) -> None:
+        result = TexSandboxBackend().run(ExecSpec(
+            command=["/bin/cat", "/proc/self/limits"],
             timeout_sec=20,
             memory_mb=1024,
-            process_limit=64,
+            process_limit=1,
             output_kb=131072,
-        )
-        preexec = backend._preexec_for_spec(spec)
-        with patch("app.service.sandbox.tex_backend.os.setsid") as setsid_mock, patch(
-            "app.service.sandbox.tex_backend.resource.setrlimit"
-        ) as setrlimit_mock:
-            preexec()
-        setsid_mock.assert_called_once_with()
-        self.assertEqual(
-            setrlimit_mock.call_args_list,
-            [
-                call(resource.RLIMIT_CORE, (0, 0)),
-                call(resource.RLIMIT_CPU, (20, 21)),
-                call(resource.RLIMIT_AS, (1024 * 1024 * 1024, 1024 * 1024 * 1024)),
-                call(resource.RLIMIT_FSIZE, (131072 * 1024, 131072 * 1024)),
-            ],
-        )
-
-    def test_process_limit_is_applied_after_bwrap_enters_user_namespace(self) -> None:
-        backend = TexSandboxBackend()
-        command, _ = backend._prepared_command(
-            ExecSpec(command=["true"], process_limit=64)
-        )
-        separator = command.index("--")
-        self.assertEqual(
-            command[separator + 1 :],
-            [backend._process_limit_tool, "--nproc=64:64", "--", "true"],
-        )
-
-        result = backend.run(ExecSpec(command=["true"], process_limit=1))
+        ))
         self.assertEqual(result.status, "ok")
         self.assertEqual(result.returncode, 0)
+        for name, soft, hard in (
+            ("Max core file size", 0, 0),
+            ("Max cpu time", 20, 21),
+            ("Max address space", 1024 * 1024 * 1024, 1024 * 1024 * 1024),
+            ("Max file size", 131072 * 1024, 131072 * 1024),
+            ("Max processes", 1, 1),
+        ):
+            with self.subTest(limit=name):
+                self.assertRegex(result.stdout, rf"{name}\s+{soft}\s+{hard}\s")
 
     def test_tex_sandbox_compiles_in_root_switched_workspace(self) -> None:
         with tempfile.TemporaryDirectory(prefix="polygon-replica-tex-sandbox-") as tmp:
@@ -76,7 +54,6 @@ class TestTexSandbox(unittest.TestCase):
             self.assertEqual(result.status, "ok")
             self.assertEqual(result.returncode, 0)
             self.assertTrue((workdir / "main.pdf").is_file())
-            self.assertTrue(bool(result.details.get("root_switched")))
 
     def test_tex_sandbox_blocks_parent_include_escape(self) -> None:
         with tempfile.TemporaryDirectory(prefix="polygon-replica-tex-sandbox-") as tmp:

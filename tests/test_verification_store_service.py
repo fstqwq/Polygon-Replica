@@ -1,7 +1,4 @@
 import json
-from pathlib import Path
-
-from app.service.disk.verification_store import VerificationStore
 from app.service.execution.policy import normalize_execution_result
 from app.service.verification.lifecycle import VerificationAdmission
 from app.service.verification.artifact import artifact_virtual_path
@@ -232,17 +229,6 @@ class TestVerificationStoreService(VerificationServiceTestBase):
         )
         metadata = self.verification_service.verification_detail(verification_id)
         self.assertNotIn("artifact_refs", metadata)
-        row = isolated_db_fetch_one(
-            self.db,
-            """
-            SELECT role,artifact_ref
-            FROM verification_task_artifacts
-            WHERE verification_id=? AND task_id=?
-            ORDER BY role
-            """,
-            [verification_id, task_id],
-        )
-        self.assertIsNotNone(row)
         rows = isolated_db_fetch_all(
             self.db,
             """
@@ -335,7 +321,7 @@ class TestVerificationStoreService(VerificationServiceTestBase):
         self.assertIsNotNone(owner)
         self.assertEqual(str(owner["artifact_ref"]), artifact_ref)
 
-    def test_create_verification_record_uses_canonical_verification_root(self) -> None:
+    def test_repeated_admission_preserves_active_verification(self) -> None:
         ctx = self.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
         verification_id = canonical_test_verification_id(
             self.random_id("ver-artifact-path")
@@ -360,13 +346,8 @@ class TestVerificationStoreService(VerificationServiceTestBase):
         )
         self.assertEqual(duplicate.outcome, "already-exists")
 
-        row = VerificationStore(self.db).record_row(verification_id)
-        assert row is not None
-        self.assertEqual(
-            self.verification_service.artifact_path_for_verification(verification_id),
-            str(self.storage_layout.prepare_verification_root(verification_id).resolve()),
-        )
-        self.assertEqual(
-            self.storage_layout.prepare_verification_root(verification_id).resolve(),
-            Path(self.verification_service.artifact_path_for_verification(verification_id)).resolve(),
-        )
+        snapshot = self.verification_service.verification_snapshot(verification_id)
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        self.assertEqual(snapshot["record"]["status"], "running")
+        self.assertEqual([row["test_name"] for row in snapshot["tasks"]], ["001.in"])

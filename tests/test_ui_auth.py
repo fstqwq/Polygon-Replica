@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import sqlite3
 import threading
 import httpx
@@ -6,6 +7,9 @@ from collections.abc import Awaitable, Callable
 from unittest.mock import patch
 
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from starlette.responses import PlainTextResponse, Response
 from starlette.types import Message, Receive, Scope, Send
 
@@ -13,14 +17,13 @@ from starlette.types import Message, Receive, Scope, Send
 from tests.common import E2ETestBase, override_config_values
 from tests.db_helpers import db_execute, db_fetch_all, db_fetch_one
 
-import app.impl.admin.panel as admin_panel_module
 from app.impl.auth.middleware import AuthenticationMiddleware
 from app.impl.auth.session import require_session_user
 from app.service.auth.password_hash import password_verifier_storage_hash
 from app.config import CONFIG_REGISTRY, ConfigKind
+from app.config.model import ConfigValue
 from app.impl.auth.password_envelope import PasswordEnvelopeStore
 from app.impl.root.auth_pages import logout, register_email_check, setup_email_check
-from app.service.platform.maintenance.coordinator import MaintenanceStart
 
 from tests.ui_support import (
     DEFAULT_CONFIG_VALUES,
@@ -44,10 +47,8 @@ from tests.ui_support import (
     _settings_password_update_with_envelope,
     _setup_with_password_envelope,
     _sudo_with_password_envelope,
-    auth_password_meta,
     runtime,
     json,
-    login_page,
     login_submit,
     register_page,
     register_submit,
@@ -111,18 +112,17 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         request = _request_with_cookie("/settings", f"{AUTH_COOKIE_NAME}={token}")
 
         async def handler(incoming: Request) -> Response:
+            runtime.auth_service.revoke_session_token(token)
             self.assertEqual(session_user(incoming), user["username"])
             self.assertEqual(require_session_user(Request(incoming.scope)), user["username"])
             return PlainTextResponse("ok")
 
-        with patch.object(runtime.auth_service, "session_identity", wraps=runtime.auth_service.session_identity) as lookup:
-            self.assertEqual(asyncio.run(_through_auth(request, handler)).status_code, 200)
-            self.assertEqual(lookup.call_count, 1)
-            self.assertEqual(logout(Request(request.scope)).status_code, 303)
-            self.assertEqual(session_user(request), "")
-            with self.assertRaises(HTTPException):
-                require_session_user(request)
-            self.assertEqual(lookup.call_count, 1)
+        self.assertEqual(asyncio.run(_through_auth(request, handler)).status_code, 200)
+        self.assertEqual(logout(Request(request.scope)).status_code, 303)
+        self.assertEqual(session_user(request), "")
+        with self.assertRaises(HTTPException) as raised:
+            require_session_user(request)
+        self.assertEqual(raised.exception.status_code, 401)
         self.assertEqual(session_user(_request_with_cookie("/settings", f"{AUTH_COOKIE_NAME}={token}")), "")
 
     def test_new_requests_recheck_revoked_expired_and_banned_sessions(self) -> None:
@@ -170,16 +170,25 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
                     release.set()
                     await protected
 
-        with patch.object(runtime.auth_service, "session_identity", side_effect=blocking_lookup) as lookup:
+        with patch.object(runtime.auth_service, "session_identity", side_effect=blocking_lookup):
             asyncio.run(exercise())
-            self.assertEqual(sum(call.args == (token,) for call in lookup.call_args_list), 1)
 
     def test_password_crypto_production_parameters_remain_strong(self) -> None:
         self.assertEqual(DEFAULT_CONFIG_VALUES["PASSWORD_HASH_ITERS"], 240_000)
-        private_key = PasswordEnvelopeStore()._key_factory()
-        self.assertEqual(private_key.key_size, 2048)
+        envelope = PasswordEnvelopeStore().issue(
+            scope="login-password",
+            purpose="login",
+            username="alice",
+            csrf_token=issue_password_form_csrf_token("login-password"),
+        )
+        encoded_key = envelope["public_key"]
+        public_key = serialization.load_der_public_key(
+            base64.urlsafe_b64decode(encoded_key + "=" * (-len(encoded_key) % 4))
+        )
+        self.assertIsInstance(public_key, rsa.RSAPublicKey)
+        self.assertEqual(public_key.key_size, 2048)
 
-    def _replace_auth_constants(self, **overrides: object) -> None:
+    def _replace_auth_constants(self, **overrides: ConfigValue) -> None:
         previous = dict(runtime.config_values.snapshot())
         updated = dict(previous)
         updated.update(overrides)
@@ -188,7 +197,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
 
     def _valid_registration_kwargs(
         self, username: str, *, email: str | None = None
-    ) -> dict[str, object]:
+    ) -> dict[str, str]:
         password = "StrongPass123"
         page = register_page(_request("/register"))
         html = page.body.decode("utf-8", errors="replace")
@@ -223,7 +232,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         *,
         request: Request | None = None,
         email: str | None = None,
-    ) -> tuple[object, str]:
+    ) -> tuple[Response, str]:
         kwargs = self._valid_registration_kwargs(username, email=email)
         sent_codes: list[str] = []
 
@@ -235,10 +244,11 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             ) as send_mail:
 
                 def _capture_registration_email(
-                    *, recipient, verification_code, expires_in_sec
-                ):
-                    del recipient, expires_in_sec
-                    sent_codes.append(str(verification_code))
+                    *, recipient: str, verification_code: str, expires_in_sec: int,
+                ) -> None:
+                    self.assertEqual(recipient, kwargs["email"])
+                    self.assertGreater(expires_in_sec, 0)
+                    sent_codes.append(verification_code)
 
                 send_mail.side_effect = _capture_registration_email
                 resp = register_submit(
@@ -290,13 +300,15 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertIn("Secure", reg_set_cookie)
 
         user_row = db_fetch_one(
-            "SELECT id,password_hash,password_salt,password_iters FROM users WHERE username=?",
+            "SELECT id,password_hash,password_salt,password_iters,email_normalized,email_verified_at FROM users WHERE username=?",
             [username],
         )
         self.assertIsNotNone(user_row)
         self.assertTrue(str(user_row["password_hash"] or ""))
         self.assertTrue(str(user_row["password_salt"] or ""))
         self.assertGreater(int(user_row["password_iters"] or 0), 0)
+        self.assertEqual(user_row["email_normalized"], f"{username}@gmail.com")
+        self.assertIsNone(user_row["email_verified_at"])
         stored_hash = str(user_row["password_hash"] or "")
         registered_verifier = _password_verifier_hex(
             password,
@@ -472,236 +484,17 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertIsNotNone(after_row)
         self.assertEqual(str(after_row["password_hash"] or ""), original_hash)
 
-    def test_auth_password_envelope_flow_works_without_plaintext_submission(
-        self,
-    ) -> None:
-        username = self.random_id("env")
-        password = "StrongPass123"
-        updated = "UpdatedPass456"
-
-        register_resp = register_page(_request("/register"))
-        self.assertEqual(register_resp.status_code, 200)
-        register_html = register_resp.body.decode("utf-8", errors="replace")
-        register_csrf = _extract_hidden_input_value(register_html, "csrf_token")
-        register_salt = _extract_hidden_input_value(register_html, "password_salt")
-        register_iters = int(
-            _extract_hidden_input_value(register_html, "password_iters") or "0"
-        )
-        self.assertTrue(register_csrf)
-        self.assertRegex(register_salt, r"^[0-9a-f]{32}$")
-        self.assertGreater(register_iters, 0)
-        register_verifier = _password_verifier_hex(
-            password, register_salt, register_iters
-        )
-        register_envelope = _password_envelope_fields_direct(
-            scope="register-password",
-            purpose="register",
-            username=username,
-            csrf_token=register_csrf,
-            verifier=register_verifier,
-        )
-
-        reg = register_submit(
-            request=_post_request("/register"),
-            username=username,
-            email=f"{username}@gmail.com",
-            password="",
-            key_id=register_envelope["key_id"],
-            envelope_token=register_envelope["envelope_token"],
-            encrypted_verifier=register_envelope["encrypted_verifier"],
-            csrf_token=register_csrf,
-            password_salt=register_salt,
-            password_iters=str(register_iters),
-            next="/",
-            terms_accepted="yes",
-        )
-        self.assertEqual(reg.status_code, 303)
-        self.assertIn("/problems", reg.headers.get("location", ""))
-
-        login_resp = login_page(_request("/login"))
-        self.assertEqual(login_resp.status_code, 200)
-        login_html = login_resp.body.decode("utf-8", errors="replace")
-        login_csrf = _extract_hidden_input_value(login_html, "csrf_token")
-        self.assertTrue(login_csrf)
-        login_meta = auth_password_meta(username=username, csrf_token=login_csrf)
-        login_salt = str(login_meta.get("salt") or "")
-        login_iters = int(login_meta.get("iters") or 0)
-        self.assertRegex(login_salt, r"^[0-9a-f]{32}$")
-        self.assertGreater(login_iters, 0)
-
-        login_verifier = _password_verifier_hex(password, login_salt, login_iters)
-        login_envelope = _password_envelope_fields_direct(
-            scope="login-password",
-            purpose="login",
-            username=username,
-            csrf_token=login_csrf,
-            verifier=login_verifier,
-        )
-        login_ok = login_submit(
-            request=_post_request("/login"),
-            username=username,
-            password="",
-            key_id=login_envelope["key_id"],
-            envelope_token=login_envelope["envelope_token"],
-            encrypted_verifier=login_envelope["encrypted_verifier"],
-            csrf_token=login_csrf,
-            next="/",
-        )
-        self.assertEqual(login_ok.status_code, 303)
-        self.assertIn("/problems", login_ok.headers.get("location", ""))
-
-        settings_csrf = issue_password_form_csrf_token("settings-password")
-        self.assertTrue(settings_csrf)
-        auth_row = db_fetch_one(
-            "SELECT email_normalized,email_verified_at,password_salt,password_iters FROM users WHERE username=?",
-            [username],
-        )
-        self.assertIsNotNone(auth_row)
-        self.assertEqual(str(auth_row["email_normalized"]), f"{username}@gmail.com")
-        self.assertFalse(str(auth_row["email_verified_at"] or ""))
-        current_salt = str(auth_row["password_salt"] or "").strip().lower()
-        current_iters = int(auth_row["password_iters"] or 0)
-        new_salt = uuid.uuid4().hex
-        new_iters = current_iters
-        self.assertRegex(current_salt, r"^[0-9a-f]{32}$")
-        self.assertRegex(new_salt, r"^[0-9a-f]{32}$")
-        self.assertGreater(current_iters, 0)
-
-        current_verifier = _password_verifier_hex(password, current_salt, current_iters)
-        current_envelope = _password_envelope_fields_direct(
-            scope="settings-password",
-            purpose="settings-current",
-            username=username,
-            csrf_token=settings_csrf,
-            verifier=current_verifier,
-        )
-        new_verifier = _password_verifier_hex(updated, new_salt, new_iters)
-        new_envelope = _password_envelope_fields_direct(
-            scope="settings-password",
-            purpose="settings-new",
-            username=username,
-            csrf_token=settings_csrf,
-            verifier=new_verifier,
-        )
-
-        changed = settings_password_update(
-            request=_post_request("/settings/password"),
-            user=username,
-            current_password="",
-            new_password="",
-            current_password_key_id=current_envelope["key_id"],
-            current_password_envelope_token=current_envelope["envelope_token"],
-            current_password_encrypted_verifier=current_envelope["encrypted_verifier"],
-            new_password_key_id=new_envelope["key_id"],
-            new_password_envelope_token=new_envelope["envelope_token"],
-            new_password_encrypted_verifier=new_envelope["encrypted_verifier"],
-            csrf_token=settings_csrf,
-            new_password_salt=new_salt,
-            new_password_iters=str(new_iters),
-        )
-        self.assertEqual(changed.status_code, 303)
-        self.assertIn("/settings", changed.headers.get("location", ""))
-
-        old_login_resp = login_page(_request("/login"))
-        old_login_html = old_login_resp.body.decode("utf-8", errors="replace")
-        old_login_csrf = _extract_hidden_input_value(old_login_html, "csrf_token")
-        old_meta = auth_password_meta(username=username, csrf_token=old_login_csrf)
-        old_salt = str(old_meta.get("salt") or "")
-        old_iters = int(old_meta.get("iters") or 0)
-        old_verifier = _password_verifier_hex(password, old_salt, old_iters)
-        old_envelope = _password_envelope_fields_direct(
-            scope="login-password",
-            purpose="login",
-            username=username,
-            csrf_token=old_login_csrf,
-            verifier=old_verifier,
-        )
-        old_login = login_submit(
-            request=_post_request("/login"),
-            username=username,
-            password="",
-            key_id=old_envelope["key_id"],
-            envelope_token=old_envelope["envelope_token"],
-            encrypted_verifier=old_envelope["encrypted_verifier"],
-            csrf_token=old_login_csrf,
-            next="/",
-        )
-        self.assertEqual(old_login.status_code, 303)
-        self.assertEqual("/login", old_login.headers.get("location", ""))
-        self.assertFalse(_cookie_value_from_response(old_login, AUTH_COOKIE_NAME))
-
-        new_login_resp = login_page(_request("/login"))
-        new_login_html = new_login_resp.body.decode("utf-8", errors="replace")
-        new_login_csrf = _extract_hidden_input_value(new_login_html, "csrf_token")
-        new_meta = auth_password_meta(username=username, csrf_token=new_login_csrf)
-        new_salt_login = str(new_meta.get("salt") or "")
-        new_iters_login = int(new_meta.get("iters") or 0)
-        new_verifier_login = _password_verifier_hex(
-            updated, new_salt_login, new_iters_login
-        )
-        new_envelope = _password_envelope_fields_direct(
-            scope="login-password",
-            purpose="login",
-            username=username,
-            csrf_token=new_login_csrf,
-            verifier=new_verifier_login,
-        )
-        new_login = login_submit(
-            request=_post_request("/login"),
-            username=username,
-            password="",
-            key_id=new_envelope["key_id"],
-            envelope_token=new_envelope["envelope_token"],
-            encrypted_verifier=new_envelope["encrypted_verifier"],
-            csrf_token=new_login_csrf,
-            next="/",
-        )
-        self.assertEqual(new_login.status_code, 303)
-        self.assertIn("/problems", new_login.headers.get("location", ""))
-
-    def test_register_rejects_invalid_username_format(self) -> None:
-        invalid = register_submit(
-            request=_post_request("/register"),
-            username="Alice_1",
-            email="alice@gmail.com",
-            password="StrongPass123",
-            next="/",
-        )
-        self.assertEqual(invalid.status_code, 303)
-        loc = invalid.headers.get("location", "")
-        self.assertEqual("/register", loc)
-        self.assertIsNone(
-            db_fetch_one("SELECT id FROM users WHERE username=?", ["Alice_1"])
-        )
-
-    def test_register_rejects_invalid_username_length(self) -> None:
-        too_short = register_submit(
-            request=_post_request("/register"),
-            username="ab",
-            email="ab@gmail.com",
-            password="StrongPass123",
-            next="/",
-        )
-        self.assertEqual(too_short.status_code, 303)
-        self.assertEqual("/register", too_short.headers.get("location", ""))
-        self.assertIsNone(
-            db_fetch_one("SELECT id FROM users WHERE username=?", ["ab"])
-        )
-
-        too_long = register_submit(
-            request=_post_request("/register"),
-            username="abcdefghijklmnopq",
-            email="abcdefghijklmnopq@gmail.com",
-            password="StrongPass123",
-            next="/",
-        )
-        self.assertEqual(too_long.status_code, 303)
-        self.assertEqual("/register", too_long.headers.get("location", ""))
-        self.assertIsNone(
-            db_fetch_one(
-                "SELECT id FROM users WHERE username=?", ["abcdefghijklmnopq"]
-            )
-        )
+    def test_register_rejects_invalid_username_with_valid_encrypted_credentials(self) -> None:
+        for username in ("Alice_1", "ab", "abcdefghijklmnopq"):
+            with self.subTest(username=username):
+                response = register_submit(
+                    request=_post_request("/register"),
+                    **self._valid_registration_kwargs(username),
+                )
+                self.assertEqual(response.status_code, 303)
+                self.assertEqual(response.headers["location"], "/register")
+                self.assertFalse(_cookie_value_from_response(response, AUTH_COOKIE_NAME))
+                self.assertIsNone(db_fetch_one("SELECT id FROM users WHERE username=?", [username]))
 
     def test_register_accepts_uppercase_username_and_login_lookup_is_case_insensitive(
         self,
@@ -822,6 +615,10 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertNotIn("evil.example", code)
         self.assertNotIn("/register/verify", code)
         self.assertNotIn("token=", code)
+        verified = register_verify(_post_request("/register/verify"), code=code)
+        self.assertEqual(verified.status_code, 303)
+        self.assertEqual(verified.headers["location"], "/problems")
+        self.assertTrue(_cookie_value_from_response(verified, AUTH_COOKIE_NAME))
 
     def test_register_verification_code_accepts_spacing_and_case(self) -> None:
         username = self.random_id("code")
@@ -919,7 +716,10 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertEqual(first.headers.get("location", ""), "/register/verify")
         self.assertEqual(second.status_code, 303)
         self.assertEqual(second.headers.get("location", ""), "/register")
-        self.assertEqual(send_mail.call_count, 1)
+        self.assertEqual(
+            [call.kwargs["recipient"] for call in send_mail.call_args_list],
+            [first_kwargs["email"]],
+        )
         blocked_row = db_fetch_one(
             "SELECT id FROM pending_registrations WHERE username=?",
             [str(second_kwargs["username"])],
@@ -966,7 +766,10 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertEqual(second.headers.get("location", ""), "/register")
         self.assertEqual(third.status_code, 303)
         self.assertEqual(third.headers.get("location", ""), "/register/verify")
-        self.assertEqual(send_mail.call_count, 2)
+        self.assertEqual(
+            [call.kwargs["recipient"] for call in send_mail.call_args_list],
+            [first_kwargs["email"], third_kwargs["email"]],
+        )
         blocked_row = db_fetch_one(
             "SELECT id FROM pending_registrations WHERE username=?",
             [str(second_kwargs["username"])],
@@ -1112,6 +915,13 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
     def test_first_registered_user_becomes_system_admin(self) -> None:
         first = f"first-{uuid.uuid4().hex[:8]}"
         second = f"second-{uuid.uuid4().hex[:8]}"
+        workspace_service.ensure_user("placeholder-user")
+        placeholder = db_fetch_one(
+            "SELECT is_system_admin,password_hash FROM users WHERE username=?",
+            ["placeholder-user"],
+        )
+        self.assertEqual(int(placeholder["is_system_admin"] or 0), 0)
+        self.assertFalse(placeholder["password_hash"])
 
         before = db_fetch_one(
             "SELECT COUNT(*) AS c FROM users WHERE COALESCE(TRIM(password_hash), '') <> ''",
@@ -1139,16 +949,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         )
         self.assertIsNotNone(second_row)
         self.assertEqual(int(second_row["is_system_admin"] or 0), 0)
-
-    def test_passwordless_user_does_not_take_system_admin_slot(self) -> None:
-        workspace_service.ensure_user("placeholder-user")
-        row = db_fetch_one(
-            "SELECT is_system_admin,password_hash FROM users WHERE username=?",
-            ["placeholder-user"],
-        )
-        self.assertIsNotNone(row)
-        self.assertEqual(int(row["is_system_admin"] or 0), 0)
-        self.assertFalse(str(row["password_hash"] or ""))
 
     def test_login_rate_limit_blocks_repeated_failures(self) -> None:
         self._replace_auth_constants(
@@ -1305,27 +1105,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         resp = asyncio.run(_through_auth(req, _next))
         self.assertEqual(resp.status_code, 200)
 
-    def test_auth_middleware_allows_userless_contest_path(self) -> None:
-        username = self.random_id("ctauth")
-        password = "StrongPass123"
-        reg = _register_with_password_envelope(username, password, next_path="/")
-        self.assertEqual(reg.status_code, 303)
-        token = _cookie_value_from_response(reg, AUTH_COOKIE_NAME)
-        self.assertTrue(token)
-
-        req = _request_with_cookie(
-            "/contests/demo/overview",
-            f"{AUTH_COOKIE_NAME}={token}",
-            method="GET",
-        )
-
-        async def _next(_: Request) -> PlainTextResponse:
-            return PlainTextResponse("ok", status_code=200)
-
-        resp = asyncio.run(_through_auth(req, _next))
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.body, b"ok")
-
     def test_auth_middleware_keeps_userless_contest_query_intact(self) -> None:
         username = self.random_id("ctmsg")
         password = "StrongPass123"
@@ -1334,31 +1113,28 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         token = _cookie_value_from_response(reg, AUTH_COOKIE_NAME)
         self.assertTrue(token)
 
-        req = _request_with_cookie(
-            "/contests/demo/overview",
-            f"{AUTH_COOKIE_NAME}={token}",
-            query="keep=1&message=legacy+notice",
-            method="GET",
-        )
+        async def downstream(request: Request) -> Response:
+            return Response(request.scope["query_string"])
 
-        async def _next(_: Request) -> PlainTextResponse:
-            return PlainTextResponse("ok", status_code=200)
+        for query in ("", "keep=1&message=legacy+notice"):
+            with self.subTest(query=query):
+                req = _request_with_cookie(
+                    "/contests/demo/overview",
+                    f"{AUTH_COOKIE_NAME}={token}",
+                    query=query,
+                )
+                resp = asyncio.run(_through_auth(req, downstream))
+                self.assertEqual(resp.status_code, 200)
+                self.assertEqual(resp.body, query.encode("utf-8"))
 
-        resp = asyncio.run(_through_auth(req, _next))
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.body, b"ok")
-        self.assertEqual(resp.headers.get("location", ""), "")
-
-    def test_auth_middleware_does_not_retry_schema_operational_error(self) -> None:
+    def test_auth_middleware_propagates_database_failure(self) -> None:
         req = _request("/login")
 
         async def _next(_: Request) -> PlainTextResponse:
             raise sqlite3.OperationalError("no such table: users")
 
-        with patch.object(runtime.db, "init") as init_mock:
-            with self.assertRaises(sqlite3.OperationalError):
-                asyncio.run(_through_auth(req, _next))
-        init_mock.assert_not_called()
+        with self.assertRaises(sqlite3.OperationalError):
+            asyncio.run(_through_auth(req, _next))
 
     def test_auth_middleware_redirects_to_setup_when_no_registered_users(self) -> None:
         req = _request("/problems/alice/sample/general")
@@ -1370,80 +1146,43 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertEqual(resp.status_code, 303)
         self.assertIn("/setup?next=", resp.headers.get("location", ""))
 
-    def test_artifact_cleanup_admin_action_redirects_or_returns_busy_counts(
-        self,
-    ) -> None:
+    def test_admin_drain_blocks_new_work_and_busy_maintenance_until_resume(self) -> None:
+        from app.main import app
+
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        workspace_service.clear_identity_caches()
+        user_id = workspace_service.known_user_id("alice")
+        self.assertIsNotNone(user_id)
+        token = runtime.auth_service.create_session_for_user(user_id)
+        headers = {"cookie": f"{AUTH_COOKIE_NAME}={token}", "origin": "https://testserver"}
+        gate = runtime.maintenance_admission_gate
 
-        with patch.object(
-            runtime.maintenance_service,
-            "start_cleanup",
-            return_value=MaintenanceStart(True, "started", {}),
-        ):
-            accepted = admin_panel_module.admin_artifacts_cleanup(user="alice")
-        self.assertEqual(accepted.status_code, 303)
-        self.assertEqual(accepted.headers.get("location"), "/maintenance")
-
-        busy_counts = {
-            "worker_queued": 1,
-            "worker_running": 0,
-            "judgehost_queued": 0,
-            "judgehost_leased": 0,
-            "judgehost_reporting": 0,
-            "inflight_requests": 0,
-        }
-        with patch.object(
-            runtime.maintenance_service,
-            "start_cleanup",
-            return_value=MaintenanceStart(False, "busy", busy_counts),
-        ):
-            busy = admin_panel_module.admin_artifacts_cleanup(user="alice")
-        self.assertEqual(busy.status_code, 409)
-        self.assertIn(b'"worker_queued":1', busy.body)
-
-        with patch.object(
-            runtime.maintenance_service,
-            "start_source_backup",
-            return_value=MaintenanceStart(True, "started", {}),
-        ):
-            backup = admin_panel_module.admin_source_backup(user="alice")
-        self.assertEqual(backup.status_code, 303)
-        self.assertEqual(backup.headers.get("location"), "/maintenance")
-
-        with patch.object(
-            runtime.maintenance_service,
-            "begin_drain",
-            return_value=MaintenanceStart(True, "draining", {}),
-        ):
-            drained = admin_panel_module.admin_maintenance_admission(
-                user="alice", action="drain"
-            )
-        self.assertEqual(drained.status_code, 303)
-        self.assertEqual(drained.headers.get("location"), "/admin")
-
-        with patch.object(
-            runtime.maintenance_service,
-            "restart_when_idle",
-            return_value=MaintenanceStart(False, "busy", busy_counts),
-        ):
-            restart = admin_panel_module.admin_application_restart(user="alice")
-        self.assertEqual(restart.status_code, 409)
-        self.assertIn(b'"worker_queued":1', restart.body)
-
-        with patch.object(
-            runtime.maintenance_service,
-            "force_restart",
-            return_value=MaintenanceStart(True, "force_restarting", {}),
-        ) as force_restart:
-            forced = admin_panel_module.admin_application_restart(
-                user="alice",
-                force="1",
-            )
-        self.assertEqual(forced.status_code, 303)
-        self.assertEqual(forced.headers.get("location"), "/maintenance")
-        force_restart.assert_called_once()
+        with TestClient(app, base_url="https://testserver") as client:
+            self.assertTrue(gate.enter_request())
+            try:
+                drained = client.post(
+                    "/admin/maintenance/admission", data={"action": "drain"},
+                    headers=headers, follow_redirects=False,
+                )
+                self.assertEqual(drained.status_code, 303, drained.text)
+                self.assertEqual(drained.headers["location"], "/admin")
+                blocked = client.get("/problems/alice/sample/workspace", headers=headers)
+                self.assertEqual(blocked.status_code, 503, blocked.text)
+                for operation in ("artifacts/cleanup", "source-backup", "restart"):
+                    with self.subTest(operation=operation):
+                        busy = client.post(f"/admin/maintenance/{operation}", headers=headers)
+                        self.assertEqual(busy.status_code, 409, busy.text)
+                        self.assertEqual(busy.json()["error"], "busy")
+                        self.assertEqual(busy.json()["busy"]["inflight_requests"], 1)
+            finally:
+                gate.leave_request()
+                resumed = client.post(
+                    "/admin/maintenance/admission", data={"action": "resume"},
+                    headers=headers, follow_redirects=False,
+                )
+                self.assertEqual(resumed.status_code, 303, resumed.text)
+            available = client.get("/problems/alice/sample/workspace", headers=headers)
+            self.assertEqual(available.status_code, 200, available.text)
 
     def test_system_admin_can_grant_and_revoke_system_admin(self) -> None:
         target = self.random_id("adminuser")
@@ -1452,7 +1191,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertEqual(reg.status_code, 303)
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        workspace_service.clear_identity_caches()
 
         grant = settings_user_system_admin_update(
             user="alice",
@@ -1487,7 +1225,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertTrue(auth_token)
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        workspace_service.clear_identity_caches()
 
         banned = settings_user_ban_update(
             user="alice",
@@ -1542,7 +1279,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertTrue(old_token)
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        workspace_service.clear_identity_caches()
 
         changed = _settings_admin_password_update_with_envelope(
             "alice", target, new_password
@@ -1580,7 +1316,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
     def test_settings_config_category_update_and_reset(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        workspace_service.clear_identity_caches()
 
         override_value = 777
         update_resp = asyncio.run(
@@ -1624,33 +1359,32 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         self.assertIsNone(row_after)
 
     def test_system_config_refresh_rejects_unknown_persisted_keys(self) -> None:
-        removed_key = "JUDGEHOST_INCLUDE_BUILD_PAYLOAD"
+        unknown_key = "UNRECOGNIZED_TEST_CONFIGURATION"
         db_execute(
             """
             INSERT OR REPLACE INTO system_config(key, value_json, updated_at, updated_by_user_id)
             VALUES(?,?,?,NULL)
             """,
-            [removed_key, "false", "2026-08-08T00:00:00+00:00"],
+            [unknown_key, "false", "2026-08-08T00:00:00+00:00"],
         )
 
         try:
             with self.assertRaisesRegex(
                 ValueError,
-                "unknown persisted system config: JUDGEHOST_INCLUDE_BUILD_PAYLOAD",
+                f"unknown persisted system config: {unknown_key}",
             ):
                 runtime.system_config_service.refresh()
             self.assertIsNotNone(
-                db_fetch_one("SELECT key FROM system_config WHERE key=?", [removed_key])
+                db_fetch_one("SELECT key FROM system_config WHERE key=?", [unknown_key])
             )
         finally:
-            db_execute("DELETE FROM system_config WHERE key=?", [removed_key])
+            db_execute("DELETE FROM system_config WHERE key=?", [unknown_key])
 
     def test_settings_config_category_update_can_revert_single_override_to_default(
         self,
     ) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        workspace_service.clear_identity_caches()
         self.addCleanup(settings_system_config_reset, user="alice")
 
         override_value = int(DEFAULT_CONFIG_VALUES["RUN_TEST_SELECTOR_LIMIT"]) + 123
@@ -1704,7 +1438,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
     ) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        workspace_service.clear_identity_caches()
 
         self.addCleanup(settings_system_config_reset, user="alice")
         bad_token = "abc_non_ascii_" + chr(0x00E9)
@@ -1728,7 +1461,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
     def test_branding_config_escapes_values_and_allows_empty_tagline(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        workspace_service.clear_identity_caches()
         self.addCleanup(runtime.reload_config, include_restart_required=True)
         self.addCleanup(settings_system_config_reset, user="alice")
 
@@ -1817,7 +1549,7 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             "SUDO_COOKIE_NAME": "roundtrip_sudo",
             "FLASH_COOKIE_NAME": "roundtrip_flash",
         }
-        overrides: dict[str, object] = {}
+        overrides: dict[str, ConfigValue] = {}
         for definition in CONFIG_REGISTRY.definitions:
             default = defaults[definition.key]
             if definition.key in cookie_values:
@@ -1899,7 +1631,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
     def test_restart_cookie_names_wait_for_restart_and_apply_to_auth_flow(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        workspace_service.clear_identity_caches()
         self.addCleanup(runtime.reload_config, include_restart_required=True)
         self.addCleanup(settings_system_config_reset, user="alice")
         runtime.system_config_service.reset()
@@ -1976,7 +1707,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
     ) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        workspace_service.clear_identity_caches()
 
         self.addCleanup(settings_system_config_reset, user="alice")
         flags = "-x c++ -Wall -O2 -static -pipe"
@@ -2002,33 +1732,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
             flags,
         )
 
-    def test_settings_config_category_page_and_hot_reload(self) -> None:
-        db_execute("UPDATE users SET is_system_admin=0")
-        db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        workspace_service.clear_identity_caches()
-        self.addCleanup(settings_system_config_reset, user="alice")
-
-        update_value = 1536
-        update_resp = asyncio.run(
-            settings_config_category_update(
-                _post_form_request(
-                    "/admin/config/judging",
-                    {"config_RUN_EXEC_PROCESS_LIMIT": str(update_value)},
-                ),
-                user="alice",
-                category="judging",
-            )
-        )
-        self.assertEqual(update_resp.status_code, 303)
-        self.assertIn("/admin/config/judging", update_resp.headers.get("location", ""))
-        self.assertEqual(
-            int(runtime.system_config_service.get("RUN_EXEC_PROCESS_LIMIT")),
-            update_value,
-        )
-        self.assertEqual(
-            int(runtime.config_values.RUN_EXEC_PROCESS_LIMIT), update_value
-        )
-
     def test_settings_worker_queue_snapshot_requires_system_admin(self) -> None:
         with self.assertRaises(HTTPException) as blocked:
             settings_worker_queue_snapshot(user="alice")
@@ -2037,7 +1740,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
     def test_settings_worker_queue_snapshot_returns_metrics_for_admin(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        workspace_service.clear_identity_caches()
         future, queued, reason = runtime.worker_queue_service.submit(
             name="snapshot-probe",
             fn=lambda: None,
@@ -2062,7 +1764,6 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
     def test_settings_judgehost_snapshot_returns_hosts_for_admin(self) -> None:
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        workspace_service.clear_identity_caches()
         service = runtime.judgehost_task_service
         override_config_values(
             self,

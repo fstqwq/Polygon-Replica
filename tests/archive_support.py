@@ -11,7 +11,7 @@ from app.service.problem.runtime_config import (
 )
 
 
-class ProblemImporter(Protocol):
+class ProblemImporter[Result](Protocol):
     def import_package(
         self,
         workspace: Path,
@@ -22,7 +22,7 @@ class ProblemImporter(Protocol):
         text_limit_bytes: int,
         statement_sample_max_bytes: int,
         problem_config_limits: ProblemConfigLimits,
-    ) -> dict[str, object]: ...
+    ) -> Result: ...
 
 
 @contextmanager
@@ -49,8 +49,8 @@ def archive_view_from_bytes(
             yield archive
 
 
-def import_problem_package(
-    service: ProblemImporter,
+def import_problem_package[Result](
+    service: ProblemImporter[Result],
     workspace: Path,
     package_name: str,
     payload: bytes,
@@ -59,7 +59,7 @@ def import_problem_package(
     max_expanded_bytes: int = 256 * 1024 * 1024,
     text_limit_bytes: int = 256 * 1024,
     statement_sample_max_bytes: int = 32 * 1024,
-) -> dict[str, object]:
+) -> Result:
     """Invoke one problem importer through its canonical ArchiveView input."""
 
     with archive_view_from_bytes(

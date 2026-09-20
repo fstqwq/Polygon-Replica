@@ -709,7 +709,6 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
                     "program_id": "solution-0",
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
-                    "queue_index": 1,
                     "status": VerificationTaskStatus.PENDING,
                 }
             ],
@@ -788,7 +787,6 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
                     "program_id": "generator-0",
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
-                    "queue_index": 1,
                     "status": VerificationTaskStatus.PENDING,
                 },
                 {
@@ -798,7 +796,6 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
                     "program_id": "generator-0",
                     "test_name": "002.in",
                     "expected_behavior": "accepted",
-                    "queue_index": 2,
                     "status": VerificationTaskStatus.PENDING,
                 },
                 {
@@ -808,7 +805,6 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
                     "program_id": "accepted",
                     "test_name": "002.in",
                     "expected_behavior": "accepted",
-                    "queue_index": 3,
                     "status": VerificationTaskStatus.PENDING,
                 },
                 {
@@ -818,7 +814,6 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
                     "program_id": "solution-0",
                     "test_name": "002.in",
                     "expected_behavior": "wrong_answer",
-                    "queue_index": 4,
                     "status": VerificationTaskStatus.PENDING,
                 },
             ],
@@ -1022,7 +1017,6 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
                     "program_id": "generator-0",
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
-                    "queue_index": 1,
                     "status": VerificationTaskStatus.PENDING,
                 },
                 {
@@ -1032,7 +1026,6 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
                     "program_id": "accepted",
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
-                    "queue_index": 2,
                     "status": VerificationTaskStatus.PENDING,
                 },
             ],
@@ -1148,7 +1141,6 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
                     "program_id": "generator-0",
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
-                    "queue_index": 1,
                     "status": VerificationTaskStatus.PENDING,
                 }
             ],
@@ -1213,7 +1205,6 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
                     "program_id": "generator-0",
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
-                    "queue_index": 1,
                     "status": VerificationTaskStatus.PENDING,
                 }
             ],
@@ -1296,7 +1287,6 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
                     "program_id": "accepted",
                     "test_name": "001.in",
                     "expected_behavior": "accepted",
-                    "queue_index": 1,
                     "status": VerificationTaskStatus.PENDING,
                 },
                 {
@@ -1306,7 +1296,6 @@ class TestVerificationCompletionService(VerificationServiceTestBase):
                     "program_id": "generator-0",
                     "test_name": "002.in",
                     "expected_behavior": "accepted",
-                    "queue_index": 2,
                     "status": VerificationTaskStatus.PENDING,
                 },
             ],

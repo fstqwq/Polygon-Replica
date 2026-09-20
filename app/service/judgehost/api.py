@@ -1,7 +1,8 @@
 import logging
 import secrets
 import threading
-from typing import BinaryIO, TypeVar
+from collections.abc import Mapping
+from typing import TypeVar
 
 from app.service.judgehost.task.model import ExecutionTemplate, PreparedTest
 from app.db import now_iso
@@ -17,8 +18,12 @@ from app.service.judgehost.maintenance.terminal_cleanup import JudgehostTerminal
 from app.service.judgehost.ports.execution_port import JudgehostExecutionPort
 from app.service.judgehost.configuration import JudgehostConfiguration
 from app.service.judgehost.host.registry import JudgehostHostRegistry
+from app.service.judgehost.host.model import JudgehostStatus
 from app.service.judgehost.host.status import JudgehostHostStatus
-from app.service.judgehost.host.toolchain_versions import ToolchainTelemetryHandler
+from app.service.judgehost.host.toolchain_versions import (
+    ToolchainTelemetryHandler,
+    ToolchainVersionCommands,
+)
 from app.service.judgehost.host.version_callback import JudgehostVersionCallback
 from app.service.judgehost.cache.case_result import CaseResultCache
 from app.service.judgehost.cache.executable import ExecutableCache
@@ -47,7 +52,15 @@ from app.service.judgehost.finalization.terminalization import JudgehostTaskTerm
 from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
 from app.service.judgehost.batch.model import ExecutionBatchRow, JudgehostCaseRow
 from app.service.judgehost.domjudge.wire import DomjudgeWireProjector
+from app.service.judgehost.domjudge.wire_model import (
+    DomjudgeConfiguration,
+    DomjudgeHost,
+    DomjudgeLanguage,
+    DomjudgeWork,
+    DomjudgeWorkdir,
+)
 from app.service.judgehost.domjudge.scripts import DomjudgeScriptCatalog
+from app.service.judgehost.domjudge.compile_spec import CompileSpecStatus
 
 Acknowledgement = TypeVar("Acknowledgement")
 logger = logging.getLogger(__name__)
@@ -215,55 +228,12 @@ class Judgehost:
             and secrets.compare_digest(settings.api_token, provided_password)
         )
 
-    def prepare_enqueue_payload(
-        self,
-        *,
-        problem: str,
-        username: str,
-        artifact_verification_id: str,
-        submission_path: str | None,
-        upload_content: bytes | None,
-        upload_file: PayloadFile | None = None,
-        upload_filename: str | None,
-        run_id: str,
-        selected_tests: list[str] | None,
-        verification_id: str,
-        verification_task_id: str = "",
-        verification_program_id: str,
-        expected_behavior: str,
-        verification_source: str,
-        task_kind: str = "",
-        bypass_case_result_cache: bool = False,
-        compile_only: bool = False,
-        verification_payload_override: dict[str, object] | None = None,
-    ) -> dict[str, object]:
-        return self._payload_preparation.prepare_enqueue_payload(
-            problem=problem,
-            username=username,
-            artifact_verification_id=artifact_verification_id,
-            submission_path=submission_path,
-            upload_content=upload_content,
-            upload_file=upload_file,
-            upload_filename=upload_filename,
-            run_id=run_id,
-            selected_tests=selected_tests,
-            verification_id=verification_id,
-            verification_task_id=verification_task_id,
-            verification_program_id=verification_program_id,
-            expected_behavior=expected_behavior,
-            verification_source=verification_source,
-            task_kind=task_kind,
-            bypass_case_result_cache=bypass_case_result_cache,
-            compile_only=compile_only,
-            verification_payload_override=verification_payload_override,
-        )
-
     def prepare_execution_template(
         self,
         *,
         upload_file: PayloadFile,
         upload_filename: str,
-        verification_payload: dict[str, object],
+        verification_payload: Mapping[str, object],
         expected_behavior: str,
         verification_source: str,
         task_kind: str,
@@ -319,7 +289,7 @@ class Judgehost:
         bypass_case_result_cache: bool = False,
         compile_only: bool = False,
         persist_verification_run: bool = False,
-        prepared_payload: dict[str, object] | None = None,
+        prepared_payload: Mapping[str, object] | None = None,
         execution_template: ExecutionTemplate | None = None,
         service_class: str = "background",
     ) -> str:
@@ -363,7 +333,7 @@ class Judgehost:
         verification_program_id: str,
         expected_behavior: str = "compile",
         verification_source: str = "compile.only",
-        prepared_payload: dict[str, object] | None = None,
+        prepared_payload: Mapping[str, object] | None = None,
     ) -> str:
         task_id = self._enqueue.enqueue_compile_only_task(
             problem=problem,
@@ -466,9 +436,6 @@ class Judgehost:
     ) -> CaseTerminalReport | None:
         return self._task_query.poll_task_case_result(task_id, test_name)
 
-    def wait_for_task(self, task_id: str, timeout_sec: float | None = None) -> str:
-        return self._task_query.wait_for_task(task_id, timeout_sec)
-
     def record_host_peer_addr(self, hostname: str, peer_addr: str) -> None:
         self._host_status.record_peer(hostname, peer_addr)
 
@@ -481,12 +448,12 @@ class Judgehost:
             "released_cases": release.lease_count,
         }
 
-    def status(self) -> dict[str, object]:
+    def status(self) -> JudgehostStatus:
         return self._host_status.status(self._configuration.snapshot())
 
     def _public_status_sources(
         self,
-    ) -> tuple[dict[str, object], list[dict[str, object]]]:
+    ) -> tuple[JudgehostStatus, list[CompileSpecStatus]]:
         settings = self._configuration.snapshot()
         return (
             self._host_status.status(settings),
@@ -540,9 +507,6 @@ class Judgehost:
 
     def task_snapshot_for_run(self, run_id: str) -> JudgehostTaskRow | None:
         return self._tasks.get_for_run(run_id)
-
-    def run_summary(self, run_id: str, verification_id: str = "") -> dict[str, object]:
-        return self._task_query.load_run_summary(run_id, verification_id)
 
     def cancel_all_batches(self) -> int:
         batch_ids = self._maintenance.cancel_all_batches()
@@ -601,25 +565,22 @@ class Judgehost:
             self._batch_finalizer.finalize_host_lease_release(release)
         return list(outcome.released_task_ids)
 
-    def touch_verification_runtime(self, verification_id: str) -> None:
-        self._terminal_cleanup.touch(verification_id)
-
     def resolve_artifact_blob(self, token: str) -> bytes | None:
         descriptor = self._runtime_blob_store.descriptor(token)
         if descriptor is None:
             return None
         return self._runtime_blob_store.read(descriptor)
 
-    def domjudge_config(self) -> dict[str, object]:
+    def domjudge_config(self) -> DomjudgeConfiguration:
         return self._wire.configuration(self._configuration.snapshot())
 
-    def domjudge_languages(self) -> list[dict[str, object]]:
+    def domjudge_languages(self) -> list[DomjudgeLanguage]:
         return self._wire.languages()
 
-    def domjudge_list_hosts(self) -> list[dict[str, object]]:
+    def domjudge_list_hosts(self) -> list[DomjudgeHost]:
         return self._wire.hosts(self._hosts.host_rows())
 
-    def domjudge_register_host(self, hostname: str) -> list[dict[str, object]]:
+    def domjudge_register_host(self, hostname: str) -> list[DomjudgeWorkdir]:
         outcome = self._dispatch.domjudge_register_host(hostname)
         self._publish_batches(outcome.terminal_batch_ids)
         return list(outcome.workdirs)
@@ -628,7 +589,7 @@ class Judgehost:
         self,
         hostname: str,
         max_batchsize: int | None = None,
-    ) -> list[dict[str, object]]:
+    ) -> list[DomjudgeWork]:
         outcome = self._dispatch.domjudge_fetch_work(
             hostname,
             max_batchsize,
@@ -711,7 +672,7 @@ class Judgehost:
             raise RuntimeError(outcome.error)
         return list(outcome.files)
 
-    def domjudge_get_version_commands(self, judgetask_id: int) -> dict[str, object]:
+    def domjudge_get_version_commands(self, judgetask_id: int) -> ToolchainVersionCommands:
         return self._version_callback.commands(judgetask_id)
 
     def domjudge_check_versions(
@@ -799,111 +760,11 @@ class Judgehost:
         )
         return self._complete_callback(outcome)
 
-    def run_submission(
-        self,
-        *,
-        problem: str,
-        username: str,
-        artifact_verification_id: str,
-        submission_path: str | None = None,
-        upload_content: bytes | None = None,
-        upload_filename: str | None = None,
-        upload_stream: BinaryIO | None = None,
-        run_id: str | None = None,
-        selected_tests: list[str] | None = None,
-        verification_id: str,
-        verification_program_id: str,
-        verification_source: str = "run.execute",
-        expected_behavior: str | None = None,
-        task_kind: str = "",
-        bypass_case_result_cache: bool = False,
-        prepared_payload: dict[str, object] | None = None,
-    ) -> str:
-        if not self.enabled():
-            raise RuntimeError("judgehost backend is disabled")
-        if not self.auth_token_configured():
-            raise RuntimeError("judgehost backend token is missing")
-        if upload_stream is not None:
-            raise RuntimeError("judgehost backend does not support upload_stream")
-        task_id = self.enqueue_task(
-            problem=problem,
-            username=username,
-            artifact_verification_id=artifact_verification_id,
-            submission_path=submission_path,
-            upload_content=upload_content,
-            upload_filename=upload_filename,
-            run_id=run_id,
-            selected_tests=selected_tests,
-            verification_id=str(verification_id or ""),
-            verification_program_id=verification_program_id,
-            expected_behavior=str(expected_behavior or "unknown"),
-            verification_source=str(verification_source or "run.execute"),
-            task_kind=str(task_kind or ""),
-            bypass_case_result_cache=bool(bypass_case_result_cache),
-            prepared_payload=(
-                None if prepared_payload is None else dict(prepared_payload)
-            ),
-            service_class="foreground",
-        )
-        task = self._tasks.get(task_id)
-        runtime_verification_id = "" if task is None else str(task["verification_id"])
-        try:
-            return self.wait_for_task(task_id, timeout_sec=None)
-        finally:
-            self.schedule_verification_cleanup(runtime_verification_id)
-
-    def compile_only_submission(
-        self,
-        *,
-        problem: str,
-        username: str,
-        artifact_verification_id: str,
-        upload_content: bytes,
-        upload_filename: str,
-        run_id: str | None = None,
-        verification_id: str,
-        verification_program_id: str,
-        verification_source: str = "compile.only",
-        expected_behavior: str = "compile",
-        prepared_payload: dict[str, object] | None = None,
-    ) -> TaskPollResult:
-        if not self.enabled():
-            raise RuntimeError("judgehost backend is disabled")
-        if not self.auth_token_configured():
-            raise RuntimeError("judgehost backend token is missing")
-        task_id = self.enqueue_compile_only_task(
-            problem=problem,
-            username=username,
-            artifact_verification_id=artifact_verification_id,
-            upload_content=bytes(upload_content),
-            upload_filename=str(upload_filename or "submission.cpp"),
-            run_id=str(run_id or ""),
-            verification_id=str(verification_id or ""),
-            verification_program_id=verification_program_id,
-            expected_behavior=str(expected_behavior or "compile"),
-            verification_source=str(verification_source or "compile.only"),
-            prepared_payload=(
-                None if prepared_payload is None else dict(prepared_payload)
-            ),
-        )
-        task = self._tasks.get(task_id)
-        runtime_verification_id = "" if task is None else str(task["verification_id"])
-        try:
-            return self.wait_for_task_result(task_id, timeout_sec=None)
-        finally:
-            self.schedule_verification_cleanup(runtime_verification_id)
-
     def case_output_for_task(self, task_id: str, test_name: str) -> tuple[str, int]:
         row = self._batch_runtime.case_output_for_task(task_id, test_name)
         if row is None:
             return ("", 0)
-        case_id = row["id"]
-        output_ref = row["output_run_ref"]
-        if isinstance(case_id, bool) or not isinstance(case_id, int):
-            raise RuntimeError("judgehost case output has invalid case id")
-        if not isinstance(output_ref, str):
-            raise RuntimeError("judgehost case output has invalid artifact reference")
-        return (output_ref, case_id)
+        return (row["output_run_ref"], row["id"])
 
     def case_feedback_blob_for_task(self, task_id: str, test_name: str) -> bytes | None:
         row = self._batch_runtime.case_for_task(task_id, test_name)

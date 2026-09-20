@@ -1,21 +1,74 @@
 from pathlib import Path
+from typing import Literal, NotRequired, TypedDict
 from urllib.parse import quote
 
 from fastapi import HTTPException, Request
 
 from app.impl.auth.shared import redirect_response
-from app.impl.contest.workspace_scope import contest_workspace_context_for_contest_page
+from app.impl.contest.workspace_scope import (
+    ContestWorkspaceContext, contest_workspace_context_for_contest_page,
+)
 from app.impl.runtime.dependency import runtime
 from app.impl.workspace.context import global_user_ctx
 from app.impl.workspace.context_operation import normalize_contest_slug_required
 from app.impl.workspace.problem_config import read_problem_config
 from app.service.platform.git_process import run_git
+from app.service.access.model import ContestAccessContext
+from app.service.contest.service import ContestContext
+from app.service.contest.statement_preview import ContestStatementPreviewLinkGroup
+from app.service.repository.workspace import GlobalUserContext
 from app.service.problem.runtime_config import (
     ProblemConfig, dumps_problem_config, problem_config_limits,
 )
 
 
-def _contest_nav(contest_slug: str, active: str) -> list[dict[str, str | bool]]:
+class ContestNavItem(TypedDict):
+    key: str
+    label: str
+    href: str
+    active: bool
+
+
+class ContestStatementReviewLink(TypedDict):
+    html_label: str
+    pdf_label: str
+    language: str
+    href: str
+    pdf_href: str
+
+
+class ContestStatementReviewLinkGroup(ContestStatementPreviewLinkGroup):
+    links: list[ContestStatementReviewLink]
+
+
+class ContestPageContext(TypedDict):
+    user: GlobalUserContext
+    contest: ContestContext
+    access: ContestAccessContext
+    active_main: str
+    contest_nav: list[ContestNavItem]
+    contest_access_href: str
+    contest_access_active: bool
+    statement_review_link_groups: list[ContestStatementReviewLinkGroup]
+    contest_workspace: NotRequired[ContestWorkspaceContext]
+    page_single_column: NotRequired[bool]
+
+
+class ProblemGeneralFields(TypedDict):
+    time_limit_ms: str
+    memory_limit_mb: str
+
+
+class ProblemGeneralUpdateResult(TypedDict):
+    problem_id: int
+    problem_slug: str
+    requested: ProblemGeneralFields
+    status: Literal["failed", "skipped", "success"]
+    commit_id: str
+    error: str
+
+
+def _contest_nav(contest_slug: str, active: str) -> list[ContestNavItem]:
     base = f"/contests/{contest_slug}"
     return [
         {"key": "problems", "label": "Problems", "href": f"{base}/overview", "active": active == "overview"},
@@ -34,7 +87,7 @@ def _contest_ctx(
     active_page: str,
     *,
     request: Request | None = None,
-) -> dict:
+) -> ContestPageContext:
     gctx = global_user_ctx(user)
     safe_slug = normalize_contest_slug_required(contest_slug)
     contest_row = runtime().contest_service.contest_context(safe_slug)
@@ -50,7 +103,7 @@ def _contest_ctx(
             status_code=403,
             detail=str(read_block_reason) if read_block_reason is not None else "contest access required",
         )
-    context = {
+    context: ContestPageContext = {
         "user": gctx["user"],
         "contest": {
             "id": int(contest_row["id"]),
@@ -130,8 +183,8 @@ def _problem_general_payload_map(
     problem_ids: list[str],
     time_limit_ms_values: list[str],
     memory_limit_mb_values: list[str],
-) -> dict[int, dict[str, object]]:
-    result: dict[int, dict[str, object]] = {}
+) -> dict[int, ProblemGeneralFields]:
+    result: dict[int, ProblemGeneralFields] = {}
     for index, raw_pid in enumerate(list(problem_ids or [])):
         try:
             pid = int(str(raw_pid or "").strip())
@@ -153,8 +206,8 @@ def _run_problem_general_update(
     problem_slug: str,
     requested_time_limit_ms: str,
     requested_memory_limit_mb: str,
-) -> dict[str, object]:
-    result: dict[str, object] = {
+) -> ProblemGeneralUpdateResult:
+    result: ProblemGeneralUpdateResult = {
         "problem_id": int(problem_id),
         "problem_slug": str(problem_slug),
         "requested": {

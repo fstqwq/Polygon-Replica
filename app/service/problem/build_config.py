@@ -282,8 +282,8 @@ def load_build_config(
     return parse_build_config(text, problem_mode=problem_mode)
 
 
-def ordered_build_config(payload: BuildConfig) -> dict[str, object]:
-    ordered: dict[str, object] = {}
+def ordered_build_config(payload: BuildConfig) -> dict[str, str | list[str]]:
+    ordered: dict[str, str | list[str]] = {}
     if "accepted_solution_source" in payload:
         ordered["accepted_solution_source"] = payload["accepted_solution_source"]
     if "validator_source" in payload:

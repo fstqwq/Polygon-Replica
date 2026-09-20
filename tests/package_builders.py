@@ -1,5 +1,22 @@
 import io
 import zipfile
+from pathlib import Path
+
+from app.service.sandbox.base import ExecResult, ExecSpec, SandboxBackend
+
+
+class PdfSandbox(SandboxBackend):
+    """Replace the external TeX process while exercising real package rendering."""
+
+    def run(self, spec: ExecSpec) -> ExecResult:
+        if spec.cwd is None:
+            raise ValueError("PDF compilation requires a working directory")
+        source = spec.cwd / Path(spec.command[-1])
+        source.read_bytes()
+        source.with_suffix(".pdf").write_bytes(
+            b"%PDF-1.4\n" + spec.cwd.name.encode("utf-8") + b"\n"
+        )
+        return ExecResult(backend="test-pdf", status="ok", returncode=0, elapsed_ms=1)
 
 
 def polygon_problem_package(

@@ -1,9 +1,11 @@
 from dataclasses import dataclass
 
+from app.service.judgehost.domjudge.wire_model import DomjudgeWork, DomjudgeWorkdir
+
 
 @dataclass(frozen=True)
 class DispatchOutcome:
-    work: tuple[dict[str, object], ...]
+    work: tuple[DomjudgeWork, ...]
     terminal_batch_ids: tuple[int, ...]
 
 
@@ -15,5 +17,5 @@ class CacheProbeOutcome:
 
 @dataclass(frozen=True)
 class HostRegistrationOutcome:
-    workdirs: tuple[dict[str, object], ...]
+    workdirs: tuple[DomjudgeWorkdir, ...]
     terminal_batch_ids: tuple[int, ...]

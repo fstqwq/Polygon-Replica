@@ -1,7 +1,6 @@
 import math
 from collections.abc import Iterable, Mapping
 from dataclasses import replace
-from typing import cast
 
 from app.service.execution.model import (
     CAPTURE_COMPLETE,
@@ -14,6 +13,7 @@ from app.service.execution.model import (
     ExecutionResult,
     ExecutionUsage,
     ExecutionWarning,
+    FrozenDiagnosticValue,
     PassArtifacts,
 )
 
@@ -23,7 +23,7 @@ def _canonical_optional_float(value: float | int | None, *, label: str) -> float
         return None
     if type(value) not in {int, float}:
         raise ValueError(f"execution {label} must be numeric or null")
-    result = float(cast(float | int, value))
+    result = float(value)
     if not math.isfinite(result) or result < 0:
         raise ValueError(f"execution {label} must be finite and non-negative")
     return result
@@ -46,7 +46,7 @@ def canonical_execution_usage(usage: ExecutionUsage) -> ExecutionUsage:
 def _require_string(value: object, *, label: str) -> str:
     if type(value) is not str:
         raise ValueError(f"execution {label} must be a string")
-    return cast(str, value)
+    return value
 
 
 def _canonical_artifacts(artifacts: PassArtifacts) -> PassArtifacts:
@@ -105,24 +105,22 @@ def _canonical_pass(pass_result: ExecutionPassResult) -> ExecutionPassResult:
     )
 
 
-def _usage_max(
-    passes: tuple[ExecutionPassResult, ...],
-    attribute: str,
-) -> float | int | None:
-    if not passes:
-        return None
-    values = [getattr(pass_result.usage, attribute) for pass_result in passes]
-    if any(value is None for value in values):
-        return None
-    return max(cast(list[float | int], values))
+def _usage_max[Number: (int, float)](values: Iterable[Number | None]) -> Number | None:
+    maximum: Number | None = None
+    for value in values:
+        if value is None:
+            return None
+        if maximum is None or value > maximum:
+            maximum = value
+    return maximum
 
 
 def aggregate_usage(passes: Iterable[ExecutionPassResult]) -> ExecutionUsage:
     ordered = tuple(passes)
-    runtime_sec = _usage_max(ordered, "runtime_sec")
-    cpu_sec = _usage_max(ordered, "cpu_sec")
-    wall_sec = _usage_max(ordered, "wall_sec")
-    memory_kb = _usage_max(ordered, "memory_kb")
+    runtime_sec = _usage_max(item.usage.runtime_sec for item in ordered)
+    cpu_sec = _usage_max(item.usage.cpu_sec for item in ordered)
+    wall_sec = _usage_max(item.usage.wall_sec for item in ordered)
+    memory_kb = _usage_max(item.usage.memory_kb for item in ordered)
     return ExecutionUsage(
         runtime_sec=None if runtime_sec is None else float(runtime_sec),
         cpu_sec=None if cpu_sec is None else float(cpu_sec),
@@ -131,11 +129,11 @@ def aggregate_usage(passes: Iterable[ExecutionPassResult]) -> ExecutionUsage:
     )
 
 
-def _frozen_json_value(value: object, *, label: str) -> object:
-    if value is None or type(value) in {str, bool, int}:
+def _frozen_json_value(value: object, *, label: str) -> FrozenDiagnosticValue:
+    if value is None or type(value) is str or type(value) is bool or type(value) is int:
         return value
     if type(value) is float:
-        if not math.isfinite(cast(float, value)):
+        if not math.isfinite(value):
             raise ValueError(f"{label} contains a non-finite number")
         return value
     if isinstance(value, Mapping):
@@ -147,10 +145,10 @@ def _frozen_json_value(value: object, *, label: str) -> object:
                 for key, item in sorted(value.items())
             )
         )
-    if type(value) in {list, tuple}:
+    if type(value) is list or type(value) is tuple:
         return tuple(
             _frozen_json_value(item, label=f"{label}[{index}]")
-            for index, item in enumerate(cast(Iterable[object], value))
+            for index, item in enumerate(value)
         )
     raise ValueError(f"{label} contains a non-JSON value")
 

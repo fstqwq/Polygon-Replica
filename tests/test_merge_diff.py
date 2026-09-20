@@ -2,10 +2,10 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from app.service.repository.merge_diff import (
     MAX_DIFF_BYTES,
+    MergeComparison,
     MergeDiffSide,
     compare_merge_files,
 )
@@ -35,7 +35,7 @@ class TestMergeDiff(unittest.TestCase):
         right: Path | None,
         *,
         change_kind: str = "modified",
-    ):
+    ) -> MergeComparison:
         return compare_merge_files(
             path="statement-sections/english/name.tex",
             change_kind=change_kind,
@@ -104,21 +104,12 @@ class TestMergeDiff(unittest.TestCase):
                 self.assertEqual(comparison.rows, ())
                 self.assertIn("cannot be compared as text", comparison.message)
 
-    def test_size_limit_does_not_open_file(self) -> None:
+    def test_size_limit_uses_restricted_preview(self) -> None:
         payload = self.root / "large.txt"
-        payload.write_text("small", encoding="utf-8")
-        oversized = MergeDiffSide("current", True, MAX_DIFF_BYTES + 1, False, "current")
-        missing = MergeDiffSide("latest", False, 0, False, "")
+        with payload.open("wb") as stream:
+            stream.truncate(MAX_DIFF_BYTES + 1)
 
-        with patch.object(Path, "read_bytes", side_effect=AssertionError("file was opened")):
-            comparison = compare_merge_files(
-                path="large.txt",
-                change_kind="deleted",
-                left_path=payload,
-                left_side=oversized,
-                right_path=None,
-                right_side=missing,
-            )
+        comparison = self._compare(payload, None, change_kind="deleted")
 
         self.assertTrue(comparison.truncated)
         self.assertEqual(comparison.rows, ())

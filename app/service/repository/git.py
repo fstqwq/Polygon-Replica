@@ -44,6 +44,15 @@ class StatusChangeSummary(TypedDict):
     limit: int | None
 
 
+class GitStatus(TypedDict):
+    status: str
+    diff: str
+    status_truncated: bool
+    status_line_limit: int
+    diff_truncated: bool
+    diff_char_limit: int
+
+
 class GitService:
     STATUS_MAX_LINES = 512
     DIFF_MAX_CHARS = 131072
@@ -140,7 +149,7 @@ class GitService:
             return text, False
         return text[:max_chars], True
 
-    def status(self, workspace: Path) -> dict:
+    def status(self, workspace: Path) -> GitStatus:
         proc = run_git(["git", "-C", str(workspace), "status", "--short", "--branch"])
         filtered_lines: list[str] = []
         status_truncated = False

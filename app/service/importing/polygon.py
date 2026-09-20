@@ -5,7 +5,7 @@ import xml.etree.ElementTree
 ET = xml.etree.ElementTree
 import zipfile
 from pathlib import Path, PurePosixPath
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 from app.main_constant import CPP_SOURCE_EXTENSIONS
 from app.service.importing.archive import (
@@ -52,6 +52,7 @@ from app.service.statement.constant import (
 )
 from app.service.statement.render import default_olymp_sty_text
 from app.service.problem.test_spec import (
+    TestSpecDocumentEntry,
     dumps_tests_spec,
     normalize_gen_command,
     parse_gen_command_tokens,
@@ -147,6 +148,18 @@ SolutionImportSummary = TypedDict(
         "accepted_source": str,
     },
 )
+
+
+class PolygonImportResult(TypedDict):
+    commit: NotRequired[str]
+    package_name: str
+    title: str
+    statement: StatementImportSummary
+    tests: TestsImportSummary
+    components: ComponentImportSummary
+    solutions: SolutionImportSummary
+    problem_cfg: ProblemConfig
+    warnings: list[str]
 
 
 def _xml_attr(node: ET.Element | None, name: str) -> str:
@@ -618,7 +631,7 @@ class PolygonPackageImportService:
         manual_dir.mkdir(parents=True, exist_ok=True)
         gen_dir.mkdir(parents=True, exist_ok=True)
 
-        spec_entries: list[dict[str, object]] = []
+        spec_entries: list[TestSpecDocumentEntry] = []
         input_pattern = meta["input_pattern"]
         answer_pattern = meta["answer_pattern"]
         manual_count = 0
@@ -644,7 +657,7 @@ class PolygonPackageImportService:
                         answer_payload = _normalize_text_newlines_bytes(answer_payload)
                     sample_output_text = answer_payload.decode("utf-8", errors="replace")
                     answer_count += 1
-            spec_row: dict[str, object] = {"id": test_id, "sample": sample}
+            spec_row: TestSpecDocumentEntry = {"id": test_id, "kind": "manual", "sample": sample}
             if sample and sample_output_text:
                 spec_row["sample_output"] = sample_output_text
             if sample:
@@ -945,7 +958,7 @@ class PolygonPackageImportService:
         text_limit_bytes: int,
         statement_sample_max_bytes: int,
         problem_config_limits: ProblemConfigLimits,
-    ) -> dict[str, object]:
+    ) -> PolygonImportResult:
         rooted = package.rooted_at("problem.xml")
         zf = rooted.zip_file
         entry_map = {

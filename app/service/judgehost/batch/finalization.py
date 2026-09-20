@@ -202,22 +202,6 @@ class BatchFinalization:
                 in self._state._cancelled_verification_ids
             )
 
-    def schedule_batch_finalization_retry(
-        self,
-        batch_id: int,
-        *,
-        delay_sec: float = 0.25,
-    ) -> bool:
-        with self._state._lock:
-            batch = self._state._batches.get(int(batch_id))
-            if batch is None or (
-                batch.status not in {"open", "finalize-pending", "finalizing"}
-                and not self._has_terminal_work_locked(batch.batch_id)
-            ):
-                return False
-            self._schedule_retry_locked(batch.batch_id, delay_sec=delay_sec)
-            return True
-
     def due_batch_finalizations(self, *, limit: int) -> list[int]:
         due: list[int] = []
         now = time.monotonic()

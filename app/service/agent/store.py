@@ -1,6 +1,6 @@
 import sqlite3
 from collections.abc import Callable
-from typing import Any, Literal, TypedDict
+from typing import Literal, TypedDict
 
 from app.db import DB, now_iso
 from app.service.access.model import AgentGeneralScope, AgentScope
@@ -91,7 +91,7 @@ class AgentApprovalResult(TypedDict):
 ApprovalAccessCheck = Callable[[sqlite3.Connection, int, int, str], bool]
 
 
-def _session_row(row: dict[str, Any]) -> AgentSessionRow:
+def _session_row(row: sqlite3.Row) -> AgentSessionRow:
     return {
         "id": str(row["id"] or ""),
         "user_id": int(row["user_id"]),
@@ -107,7 +107,7 @@ def _session_row(row: dict[str, Any]) -> AgentSessionRow:
     }
 
 
-def _access_request_row(row: dict[str, Any]) -> AgentAccessRequestRow:
+def _access_request_row(row: sqlite3.Row) -> AgentAccessRequestRow:
     return {
         "id": str(row["id"] or ""),
         "agent_session_id": str(row["agent_session_id"] or ""),
@@ -222,7 +222,7 @@ class AgentStore:
             """,
             [int(user_id), identity_hash],
         )
-        return None if row is None else _session_row(dict(row))
+        return None if row is None else _session_row(row)
 
     def active_session_by_credential_sha256(
         self,
@@ -236,7 +236,7 @@ class AgentStore:
             """,
             [credential_sha256],
         )
-        return None if row is None else _session_row(dict(row))
+        return None if row is None else _session_row(row)
 
     def insert_session(
         self,
@@ -314,7 +314,7 @@ class AgentStore:
             self._session_select() + " WHERE s.id=? LIMIT 1",
             [session_id],
         )
-        return None if row is None else _session_row(dict(row))
+        return None if row is None else _session_row(row)
 
     def set_general_scope(
         self,
@@ -390,7 +390,7 @@ class AgentStore:
             cls._access_request_select() + " WHERE r.id=? LIMIT 1",
             [request_id],
         ).fetchone()
-        return None if row is None else _access_request_row(dict(row))
+        return None if row is None else _access_request_row(row)
 
     def access_request_by_id(
         self,
@@ -400,7 +400,7 @@ class AgentStore:
             self._access_request_select() + " WHERE r.id=? LIMIT 1",
             [request_id],
         )
-        return None if row is None else _access_request_row(dict(row))
+        return None if row is None else _access_request_row(row)
 
     def pending_access_request(
         self,
@@ -421,7 +421,7 @@ class AgentStore:
             """,
             [agent_session_id, int(problem_id), requested_scope, now_text],
         )
-        return None if row is None else _access_request_row(dict(row))
+        return None if row is None else _access_request_row(row)
 
     def resolve_pending_request(
         self,

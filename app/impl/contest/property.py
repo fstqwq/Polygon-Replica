@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, TypedDict
 
 from fastapi import Depends, Form, HTTPException, Request
 
@@ -7,6 +7,7 @@ from app.impl.auth.shared import template_response
 from app.impl.contest.shared import (
     _contest_ctx,
     _contest_redirect,
+    ContestPageContext,
 )
 from app.impl.contest.statement_source import (
     contest_statement_source_context,
@@ -26,9 +27,37 @@ from app.service.contest.property import (
 )
 
 
+class ContestPropertyValue(TypedDict):
+    key: str
+    value: str
+    editor_rows: int
+    scope_label: str
+    required: bool
+    persisted: bool
+
+
+class ContestPropertyGroup(TypedDict):
+    key: str
+    values: list[ContestPropertyValue]
+    edit_values: list[ContestPropertyValue]
+    existing_keys: list[str]
+    boolean: bool
+    deletable: bool
+    localizable: bool
+    persisted: bool
+    kind_label: str
+    popup_id: str
+
+
+class ContestPropertyTable(TypedDict):
+    groups: list[ContestPropertyGroup]
+    can_insert_banner: bool
+    can_insert_blank_page: bool
+
+
 def _contest_property_table(
     properties: dict[str, str],
-) -> dict[str, object]:
+) -> ContestPropertyTable:
     displayed_properties = dict(properties)
 
     preferred_bases = {
@@ -48,7 +77,7 @@ def _contest_property_table(
             language,
         )
 
-    grouped: dict[str, list[dict[str, object]]] = {}
+    grouped: dict[str, list[ContestPropertyValue]] = {}
     for key in sorted(displayed_properties, key=property_sort_key):
         language = contest_property_language(key)
         base_key = key.partition(".")[0]
@@ -66,7 +95,7 @@ def _contest_property_table(
             }
         )
 
-    groups: list[dict[str, object]] = []
+    groups: list[ContestPropertyGroup] = []
     for base_key, values in grouped.items():
         edit_values = list(values)
         if not any(str(row["key"]) == base_key for row in edit_values):
@@ -157,7 +186,7 @@ def contest_properties_save(
     actor_user_id = int(ctx["user"]["id"])
     if len(property_keys) != len(property_values):
         raise HTTPException(status_code=400, detail="invalid contest property form")
-    values: dict[str, object] = {}
+    values: dict[str, str | None] = {}
     for key, value in zip(property_keys, property_values, strict=True):
         raw_key = str(key).strip()
         raw_value = str(value).strip()
@@ -306,7 +335,7 @@ def contest_property_insert_preset(
 ):
     ctx = _contest_ctx(contest, user, "properties")
     _require_contest_property_write(ctx)
-    presets: dict[str, object] = {
+    presets: dict[str, str | bool] = {
         BANNER_PROPERTY: DEFAULT_CONTEST_BANNER,
         INSERT_BLANK_PAGE_PROPERTY: True,
     }
@@ -328,9 +357,8 @@ def contest_property_insert_preset(
     )
 
 
-def _require_contest_property_write(ctx: dict[str, object]) -> None:
+def _require_contest_property_write(ctx: ContestPageContext) -> None:
     access = ctx["access"]
-    assert isinstance(access, dict)
     if bool(access.get("can_write")):
         return
     reason = access.get("write_block_reason")

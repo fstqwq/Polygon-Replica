@@ -1,6 +1,6 @@
 import json
-from dataclasses import asdict, dataclass
-from typing import Literal, cast
+from dataclasses import dataclass
+from typing import Literal, TypedDict
 
 from app.service.platform.error_text import (
     bounded_display_text,
@@ -11,7 +11,14 @@ from app.service.execution.model import ExecutionResult
 
 DiagnosticKind = Literal["debug-info", "internal-error"]
 DiagnosticMergeOutcome = Literal["persisted", "duplicate", "not-applicable"]
-DIAGNOSTIC_KINDS = frozenset(("debug-info", "internal-error"))
+
+
+def _diagnostic_kind(value: str) -> DiagnosticKind:
+    if value == "debug-info":
+        return "debug-info"
+    if value == "internal-error":
+        return "internal-error"
+    raise ValueError(f"unknown verification diagnostic kind: {value}")
 
 
 @dataclass(frozen=True)
@@ -28,9 +35,34 @@ class TaskDiagnosticSnapshot:
     items: tuple[TaskDiagnosticItem, ...] = ()
 
 
+class TaskDiagnosticPayload(TypedDict):
+    kind: DiagnosticKind
+    hostname: str
+    text: str
+    received_at: str
+    digest: str
+
+
+class TaskDiagnosticDisplay(TypedDict):
+    canonical_error: str
+    canonical_feedback: str
+    late_diagnostics: list[TaskDiagnosticPayload]
+    late_text: str
+
+
+def _diagnostic_payload(item: TaskDiagnosticItem) -> TaskDiagnosticPayload:
+    return {
+        "kind": item.kind,
+        "hostname": item.hostname,
+        "text": item.text,
+        "received_at": item.received_at,
+        "digest": item.digest,
+    }
+
+
 def task_diagnostic_snapshot_json(snapshot: TaskDiagnosticSnapshot) -> str:
     return canonical_json(
-        {"items": [asdict(item) for item in snapshot.items]},
+        {"items": [_diagnostic_payload(item) for item in snapshot.items]},
         ensure_ascii=False,
     )
 
@@ -43,15 +75,19 @@ def task_diagnostic_snapshot_from_json(raw: str) -> TaskDiagnosticSnapshot:
     if not isinstance(payload, dict):
         return TaskDiagnosticSnapshot()
     values: list[TaskDiagnosticItem] = []
-    for raw_item in cast(list[object], payload.get("items") or []):
+    raw_items = payload.get("items")
+    if not isinstance(raw_items, list):
+        return TaskDiagnosticSnapshot()
+    for raw_item in raw_items:
         if not isinstance(raw_item, dict):
             continue
-        kind = str(raw_item.get("kind") or "")
-        if kind not in DIAGNOSTIC_KINDS:
+        try:
+            kind = _diagnostic_kind(str(raw_item.get("kind") or ""))
+        except ValueError:
             continue
         values.append(
             TaskDiagnosticItem(
-                kind=cast(DiagnosticKind, kind),
+                kind=kind,
                 hostname=str(raw_item.get("hostname") or ""),
                 text=str(raw_item.get("text") or ""),
                 received_at=str(raw_item.get("received_at") or ""),
@@ -69,8 +105,7 @@ def new_task_diagnostic_item(
     received_at: str,
     limit_bytes: int,
 ) -> TaskDiagnosticItem:
-    if kind not in DIAGNOSTIC_KINDS:
-        raise ValueError(f"unknown verification diagnostic kind: {kind}")
+    diagnostic_kind = _diagnostic_kind(kind)
     if not hostname or len(hostname) > 255:
         raise ValueError("verification diagnostic hostname is invalid")
     if not received_at or len(received_at) > 64:
@@ -83,7 +118,7 @@ def new_task_diagnostic_item(
         ensure_ascii=False,
     )
     return TaskDiagnosticItem(
-        kind=cast(DiagnosticKind, kind),
+        kind=diagnostic_kind,
         hostname=hostname,
         text=normalized_text,
         received_at=received_at,
@@ -167,7 +202,7 @@ def compose_task_diagnostic_display(
     snapshot: TaskDiagnosticSnapshot,
     *,
     limit_bytes: int,
-) -> dict[str, object]:
+) -> TaskDiagnosticDisplay:
     """Build display-only diagnostics without changing the canonical result."""
 
     late_text = bounded_display_text(
@@ -183,28 +218,6 @@ def compose_task_diagnostic_display(
     return {
         "canonical_error": result.outcome.error,
         "canonical_feedback": result.outcome.feedback,
-        "late_diagnostics": [asdict(item) for item in snapshot.items],
+        "late_diagnostics": [_diagnostic_payload(item) for item in snapshot.items],
         "late_text": late_text,
     }
-
-
-def truncate_inline_text(value: str, max_chars: int) -> tuple[str, bool]:
-    cap = max(1, int(max_chars))
-    text = str(value or "")
-    if len(text) <= cap:
-        return text, False
-    return text[:cap] + f"... [truncated; showing first {cap} characters]", True
-
-
-def normalize_diagnostics_for_db(entries: list[dict], message_limit: int) -> list[dict]:
-    normalized: list[dict] = []
-    cap = max(1, int(message_limit))
-    for item in entries:
-        message = item.get("message") or ""
-        msg, msg_truncated = truncate_inline_text(message, cap)
-        row = dict(item)
-        row["message"] = msg
-        row["message_truncated"] = bool(msg_truncated)
-        row["message_limit"] = cap
-        normalized.append(row)
-    return normalized

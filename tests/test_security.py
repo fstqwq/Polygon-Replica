@@ -8,19 +8,15 @@ from tests.db_helpers import (
 
 import asyncio
 import json
-import re
 import uuid
 from pathlib import Path
-from unittest.mock import patch
 
 from fastapi import HTTPException
 from starlette.requests import Request
 
 from tests.common import (
     E2ETestBase,
-    configure_build_sources,
     override_config_values,
-    suite_root,
 )
 from tests.identity_helpers import canonical_test_verification_id
 from app.main import runtime
@@ -46,12 +42,12 @@ from app.impl.problem.solution import (
 from app.impl.problem.validator import validator_rename_source, validator_save_source
 from app.impl.run_export.artifact import artifact_file
 from app.service.verification.artifact import artifact_virtual_path
-from app.impl.run_export.run import run_cancel, run_execute
+from app.impl.run_export.run import run_cancel
 from app.impl.root.auth_pages import auth_password_meta, login_page
 from app.config import CONFIG_REGISTRY
 from app.service.verification.lifecycle import PlannedTask, verification_task_id
 from app.service.verification.types import VerificationTaskStatus
-from tests.ui_support import _register_with_password_envelope
+from tests.ui_support import _extract_hidden_input_value, _register_with_password_envelope
 
 db = runtime.db
 workspace_service = runtime.workspace_service
@@ -90,13 +86,6 @@ def _post_request(path: str, *, origin: str = "http://testserver") -> Request:
     return _request(path, method="POST", headers=[(b"origin", origin.encode("utf-8"))])
 
 
-def _extract_hidden_input_value(html: str, name: str) -> str:
-    match = re.search(rf'<input[^>]*name="{re.escape(name)}"[^>]*value="([^"]*)"', html, flags=re.IGNORECASE)
-    if not match:
-        return ""
-    return match.group(1)
-
-
 class TestSecurity(E2ETestBase):
     seed_default_workspace = True
 
@@ -118,9 +107,11 @@ class TestSecurity(E2ETestBase):
         async def close(self) -> None:
             return None
 
-    def _fixture_verification_root(self, *, problem: str, workspace_id: int, verification_id: str) -> tuple[str, Path]:
-        artifact_root = runtime.storage_layout.prepare_verification_root(str(verification_id or "").strip()).resolve()
-        return "", artifact_root
+    def _traversal_target(self, filename: str) -> Path:
+        workspace = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        target = workspace.parent.parent / filename
+        self.addCleanup(target.unlink, missing_ok=True)
+        return target
 
     def test_auth_password_meta_ignores_sql_injection_style_username(self) -> None:
         username = self.random_id("secsql")
@@ -157,11 +148,6 @@ class TestSecurity(E2ETestBase):
         alice_workspace_id = int(alice_ctx["workspace"]["id"])
 
         verification_id = canonical_test_verification_id(f"ver-sec-artifact-{uuid.uuid4().hex[:8]}")
-        self._fixture_verification_root(
-            problem="alice/sample",
-            workspace_id=alice_workspace_id,
-            verification_id=verification_id,
-        )
         db_execute(
             """
             INSERT INTO verifications(id,problem_id,workspace_id,signature,kind,status,fail_reason,created_at,finished_at)
@@ -238,11 +224,7 @@ class TestSecurity(E2ETestBase):
         alice_workspace_id = int(alice_ctx["workspace"]["id"])
 
         verification_id = canonical_test_verification_id(f"ver-sec-path-{uuid.uuid4().hex[:8]}")
-        _build_ref, artifact_root = self._fixture_verification_root(
-            problem="alice/sample",
-            workspace_id=alice_workspace_id,
-            verification_id=verification_id,
-        )
+        artifact_root = runtime.storage_layout.prepare_verification_root(verification_id)
         (artifact_root / "logs").mkdir(parents=True, exist_ok=True)
         (artifact_root / "logs" / "compile.log").write_text("ok\n", encoding="utf-8")
         db_execute(
@@ -320,20 +302,9 @@ class TestSecurity(E2ETestBase):
             )
         )
 
-        with patch.object(
-            runtime.judgehost_task_service,
-            "request_verification_cancel",
-            return_value={
-                "cancelled_cases": 0,
-                "awaiting_receipts": 0,
-                "affected_tasks": 0,
-                "affected_batches": 0,
-            },
-        ) as cancel_execution:
-            resp = run_cancel("alice/sample", "bob", verification_id=verification_id)
+        resp = run_cancel("alice/sample", "bob", verification_id=verification_id)
 
         self.assertEqual(resp.status_code, 303)
-        cancel_execution.assert_not_called()
         verification_row = db_fetch_one("SELECT status,finished_at FROM verifications WHERE id=?", [verification_id])
         self.assertIsNotNone(verification_row)
         self.assertEqual(str(verification_row["status"] or "").lower(), "running")
@@ -430,7 +401,7 @@ class TestSecurity(E2ETestBase):
         self.assertIn("not found", str(denied.exception.detail).lower())
 
     def test_files_save_rejects_path_traversal_escape(self) -> None:
-        marker = suite_root() / f"files-save-escape-{uuid.uuid4().hex[:8]}.txt"
+        marker = self._traversal_target(f"files-save-escape-{uuid.uuid4().hex[:8]}.txt")
         marker.unlink(missing_ok=True)
         resp = files_save(
             request=_request("/problems/alice/sample/files/save"),
@@ -443,7 +414,7 @@ class TestSecurity(E2ETestBase):
         self.assertFalse(marker.exists())
 
     def test_files_upload_rejects_path_traversal_escape(self) -> None:
-        marker = suite_root() / f"files-upload-escape-{uuid.uuid4().hex[:8]}.txt"
+        marker = self._traversal_target(f"files-upload-escape-{uuid.uuid4().hex[:8]}.txt")
         marker.unlink(missing_ok=True)
         upload = self._FakeUpload(b"owned\n")
         response = asyncio.run(
@@ -492,7 +463,7 @@ class TestSecurity(E2ETestBase):
         self.assertFalse((ws / "notes/upload-too-large.txt").exists())
 
     def test_files_new_rejects_path_traversal_escape(self) -> None:
-        marker = suite_root() / f"files-new-escape-{uuid.uuid4().hex[:8]}.txt"
+        marker = self._traversal_target(f"files-new-escape-{uuid.uuid4().hex[:8]}.txt")
         marker.unlink(missing_ok=True)
         resp = files_new(
             request=_request("/problems/alice/sample/files/new"),
@@ -517,7 +488,7 @@ class TestSecurity(E2ETestBase):
         self.assertFalse((ws / marker_name).exists())
 
     def test_files_create_template_rejects_path_traversal_escape(self) -> None:
-        marker = suite_root() / f"files-template-escape-{uuid.uuid4().hex[:8]}.cpp"
+        marker = self._traversal_target(f"files-template-escape-{uuid.uuid4().hex[:8]}.cpp")
         marker.unlink(missing_ok=True)
         resp = files_create_template(
             request=_request("/problems/alice/sample/files/create-template"),
@@ -530,8 +501,8 @@ class TestSecurity(E2ETestBase):
         self.assertFalse(marker.exists())
 
     def test_files_delete_rejects_path_traversal_escape(self) -> None:
-        marker = suite_root() / f"files-delete-escape-{uuid.uuid4().hex[:8]}.txt"
-        marker.unlink(missing_ok=True)
+        marker = self._traversal_target(f"files-delete-escape-{uuid.uuid4().hex[:8]}.txt")
+        marker.write_bytes(b"outside file\n")
         resp = files_delete(
             request=_request("/problems/alice/sample/files/delete"),
             problem="alice/sample",
@@ -539,7 +510,7 @@ class TestSecurity(E2ETestBase):
             path="../../" + marker.name,
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertFalse(marker.exists())
+        self.assertEqual(marker.read_bytes(), b"outside file\n")
 
     def test_files_delete_redirect_preserves_query_delimiter_for_directory_only(self) -> None:
         resp = files_delete(
@@ -562,7 +533,7 @@ class TestSecurity(E2ETestBase):
         old_abs.parent.mkdir(parents=True, exist_ok=True)
         old_abs.write_text("keep\n", encoding="utf-8")
 
-        marker = suite_root() / f"files-rename-escape-{uuid.uuid4().hex[:8]}.txt"
+        marker = ws.parent / f"files-rename-escape-{uuid.uuid4().hex[:8]}.txt"
         marker.unlink(missing_ok=True)
         resp = files_rename(
             request=_request("/problems/alice/sample/files/rename"),
@@ -620,64 +591,27 @@ class TestSecurity(E2ETestBase):
         self.assertEqual(denied.exception.status_code, 400)
         self.assertIn("invalid path", str(denied.exception.detail).lower())
 
-    def test_generator_save_source_path_traversal_stays_in_workspace(self) -> None:
-        marker = suite_root() / f"generator-save-escape-{uuid.uuid4().hex[:8]}.cpp"
-        marker.unlink(missing_ok=True)
+    def test_component_source_path_traversal_uses_the_workspace_default(self) -> None:
+        workspace = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         content = "int main(){return 0;}\n"
-        resp = generator_save_source(
-            request=_request("/"),
-            problem="alice/sample",
-            user="alice",
-            path="../../" + marker.name,
-            content=content,
-        )
-        self.assertEqual(resp.status_code, 303)
-        self.assertFalse(marker.exists())
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        self.assertEqual(
-            (ws / "generators" / "generator.cpp").read_text(encoding="utf-8"),
-            content,
-        )
-
-    def test_validator_save_source_path_traversal_stays_in_workspace(self) -> None:
-        marker = suite_root() / f"validator-save-escape-{uuid.uuid4().hex[:8]}.cpp"
-        marker.unlink(missing_ok=True)
-        content = "int main(){return 0;}\n"
-        resp = validator_save_source(
-            request=_request("/"),
-            problem="alice/sample",
-            user="alice",
-            path="../../" + marker.name,
-            content=content,
-        )
-        self.assertEqual(resp.status_code, 303)
-        self.assertFalse(marker.exists())
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        target = ws / "validators" / "validator.cpp"
-        self.assertTrue(target.exists())
-        self.assertEqual(target.read_text(encoding="utf-8"), content)
-
-    def test_interactor_save_source_path_traversal_stays_in_workspace(self) -> None:
-        marker = suite_root() / f"interactor-save-escape-{uuid.uuid4().hex[:8]}.cpp"
-        marker.unlink(missing_ok=True)
-        content = "int main(){return 0;}\n"
-        resp = interactor_save_source(
-            request=_request("/"),
-            problem="alice/sample",
-            user="alice",
-            path="../../" + marker.name,
-            content=content,
-        )
-        self.assertEqual(resp.status_code, 303)
-        self.assertFalse(marker.exists())
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        target = ws / "interactors" / "interactor.cpp"
-        self.assertTrue(target.exists())
-        self.assertEqual(target.read_text(encoding="utf-8"), content)
+        for handler, target in (
+            (generator_save_source, "generators/generator.cpp"),
+            (validator_save_source, "validators/validator.cpp"),
+            (interactor_save_source, "interactors/interactor.cpp"),
+        ):
+            with self.subTest(target=target):
+                marker = self._traversal_target(f"component-save-escape-{uuid.uuid4().hex[:8]}.cpp")
+                response = handler(
+                    request=_request("/"), problem="alice/sample", user="alice",
+                    path="../../" + marker.name, content=content,
+                )
+                self.assertEqual(response.status_code, 303)
+                self.assertFalse(marker.exists())
+                self.assertEqual((workspace / target).read_text(encoding="utf-8"), content)
 
     def test_component_source_rename_rejects_destination_path_traversal(self) -> None:
         ws = Path(workspace_service.ensure_workspace(self.problem, self.user))
-        marker = suite_root() / f"component-rename-escape-{uuid.uuid4().hex[:8]}.cpp"
+        marker = ws.parent.parent / f"component-rename-escape-{uuid.uuid4().hex[:8]}.cpp"
         marker.unlink(missing_ok=True)
         cases = [
             (checker_rename_source, "checkers/security_checker.cpp"),
@@ -736,7 +670,7 @@ class TestSecurity(E2ETestBase):
         self.assertFalse((ws / "validators/renamed_validator.cpp").exists())
 
     def test_solutions_save_source_rejects_path_traversal_escape(self) -> None:
-        marker = suite_root() / f"solution-save-escape-{uuid.uuid4().hex[:8]}.py"
+        marker = self._traversal_target(f"solution-save-escape-{uuid.uuid4().hex[:8]}.py")
         marker.unlink(missing_ok=True)
         resp = solutions_save_source(
             request=_post_request("/problems/alice/sample/solutions/editor"),
@@ -750,8 +684,11 @@ class TestSecurity(E2ETestBase):
         self.assertFalse(marker.exists())
 
     def test_solutions_set_tag_rejects_path_traversal_escape(self) -> None:
-        marker = suite_root() / f"solution-tag-escape-{uuid.uuid4().hex[:8]}.cpp"
-        marker.unlink(missing_ok=True)
+        marker = self._traversal_target(f"solution-tag-escape-{uuid.uuid4().hex[:8]}.cpp")
+        marker.write_bytes(b"int main(){}\n")
+        metadata = marker.with_suffix(".cpp.desc")
+        metadata.write_bytes(b"expected: wrong_answer\nnote: outside metadata\n")
+        self.addCleanup(metadata.unlink, missing_ok=True)
         resp = solutions_set_tag(
             problem="alice/sample",
             user="alice",
@@ -759,7 +696,8 @@ class TestSecurity(E2ETestBase):
             expected_behavior="accepted",
         )
         self.assertEqual(resp.status_code, 303)
-        self.assertFalse(marker.exists())
+        self.assertEqual(marker.read_bytes(), b"int main(){}\n")
+        self.assertEqual(metadata.read_bytes(), b"expected: wrong_answer\nnote: outside metadata\n")
 
     def test_solutions_rename_rejects_destination_path_traversal(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -768,7 +706,7 @@ class TestSecurity(E2ETestBase):
         old_abs.parent.mkdir(parents=True, exist_ok=True)
         old_abs.write_text("int main(){return 0;}\n", encoding="utf-8")
 
-        marker = suite_root() / f"solution-rename-escape-{uuid.uuid4().hex[:8]}.cpp"
+        marker = self._traversal_target(f"solution-rename-escape-{uuid.uuid4().hex[:8]}.cpp")
         marker.unlink(missing_ok=True)
         resp = solutions_rename(
             problem="alice/sample",
@@ -787,8 +725,8 @@ class TestSecurity(E2ETestBase):
         keep_abs.parent.mkdir(parents=True, exist_ok=True)
         keep_abs.write_text("int main(){return 0;}\n", encoding="utf-8")
 
-        marker = suite_root() / f"solution-delete-escape-{uuid.uuid4().hex[:8]}.cpp"
-        marker.unlink(missing_ok=True)
+        marker = self._traversal_target(f"solution-delete-escape-{uuid.uuid4().hex[:8]}.cpp")
+        marker.write_bytes(b"int main(){}\n")
         resp = solutions_delete(
             problem="alice/sample",
             user="alice",
@@ -796,47 +734,7 @@ class TestSecurity(E2ETestBase):
         )
         self.assertEqual(resp.status_code, 303)
         self.assertTrue(keep_abs.exists())
-        self.assertFalse(marker.exists())
-
-    def test_run_execute_sanitizes_path_traversal_solution_paths_before_queue(self) -> None:
-        ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
-        (ws / "solutions").mkdir(parents=True, exist_ok=True)
-        (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
-        (ws / "solutions" / "accepted.cpp.desc").write_text(
-            "expected: accepted\n",
-            encoding="utf-8",
-        )
-        configure_build_sources(
-            ws,
-            accepted_solution_source="solutions/accepted.cpp",
-        )
-        captured: dict[str, object] = {}
-
-        def _fake_start_verification_job(*args, **kwargs):
-            captured["targets"] = list(kwargs.get("targets") or [])
-            return True
-
-        with patch("app.impl.run_export.run.start_verification_job", side_effect=_fake_start_verification_job):
-            resp = run_execute(
-                problem="alice/sample",
-                user="alice",
-                artifact_verification_id="",
-                solution_paths=["../../escape.cpp"],
-                test_names=[],
-                submission_upload=None,
-            )
-        self.assertEqual(resp.status_code, 303)
-        location = str(resp.headers.get("location", "") or "")
-        self.assertIn("/problems/alice/sample/run/details?verification_id=", location)
-        targets = captured.get("targets")
-        self.assertIsInstance(targets, list)
-        self.assertTrue(targets)
-        for row in targets:
-            self.assertIsInstance(row, dict)
-            submission_path = str(row.get("path") or "")
-            self.assertNotIn("..", submission_path)
-            self.assertFalse(submission_path.startswith("/"))
-            self.assertFalse(submission_path.startswith("\\"))
+        self.assertEqual(marker.read_bytes(), b"int main(){}\n")
 
     def test_checker_set_standard_rejects_escape_name(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))

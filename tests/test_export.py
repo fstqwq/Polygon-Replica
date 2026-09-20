@@ -5,8 +5,7 @@ import threading
 import unittest
 import zipfile
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 import yaml
@@ -16,44 +15,34 @@ from app.impl.runtime.dependency import bind_application
 from app.main import app, runtime
 import app.impl.workspace.context_job as workspace_context_job
 from app.service.execution.codec import execution_result_json
-from app.service.execution.model import (
-    CAPTURE_COMPLETE,
-    ExecutionPassResult,
-    ExecutionUsage,
-    PassArtifacts,
-)
-from app.service.execution.policy import normalize_execution_result
 from app.service.importing.polygon_replica import PolygonReplicaPackageImportService
 from app.service.platform.git_process import run_git
 from app.service.problem.build_config import (
     BuildConfig,
     dumps_build_config,
-    load_build_config,
 )
 from app.service.problem_package.manifest import load_manifest, validate_manifest_files
 from app.service.problem_package.service import (
     NativePackageOperationBusy,
-    PublishedRevision,
 )
 from app.service.problem_package.store import MaterializationRow
 from app.service.problem_package.workflow import (
-    NativePackageWorkflow,
     build_full_verification_targets,
     build_standard_solution_verification_targets,
 )
-from app.service.verification.lifecycle import PlannedTask, verification_task_id
-from app.service.verification.task_completion import TaskCompletion
-from app.service.verification.types import VerificationStatus, VerificationTaskStatus
 from tests.archive_support import import_problem_package
-from tests.common import E2ETestBase, configure_interactive_workspace
+from tests.common import E2ETestBase, override_config_values
 from tests.db_helpers import (
-    activate_test_verification,
     admit_test_verification,
+    db_execute,
+    db_fetch_all,
     db_fetch_one,
-    verification_programs_for_tasks,
 )
 from tests.ui_support import _request
 from tests.execution_result_helpers import execution_result
+from tests.package_builders import PdfSandbox
+from tests.judgehost_support import JudgehostReply, reporting_judgehost
+from tests.package_support import blocked_export_queue, publish_problem, verification_builder
 
 
 def _archive_payloads(path: Path) -> list[tuple[str, bytes]]:
@@ -126,93 +115,6 @@ class TestNativePackageWorkflow(unittest.TestCase):
             ],
         )
 
-    def test_standard_solution_package_workflow_uses_background_package_verification(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            source_root = Path(temp_dir)
-            solutions = source_root / "solutions"
-            solutions.mkdir(parents=True)
-            (solutions / "accepted.cpp").write_text(
-                "int main() { return 0; }\n",
-                encoding="utf-8",
-            )
-            config_path = source_root / "config" / "build.json"
-            config_path.parent.mkdir(parents=True)
-            config = BuildConfig(generator_sources=[])
-            config["accepted_solution_source"] = "solutions/accepted.cpp"
-            config_path.write_text(dumps_build_config(config), encoding="utf-8")
-
-            package_service = Mock()
-            verification_service = Mock()
-            verification_workflow = Mock()
-            verification_service.admit_verification.return_value = SimpleNamespace(
-                outcome="admitted"
-            )
-            verification_service.verification_record.return_value = {
-                "status": VerificationStatus.OK,
-                "fail_reason": "",
-            }
-            captured_reuse: list[bool] = []
-
-            def ensure_native_package(
-                revision: PublishedRevision,
-                verification_builder,
-                *,
-                reuse_unverified: bool,
-            ) -> dict[str, object]:
-                captured_reuse.append(reuse_unverified)
-                completed = verification_builder(
-                    source_root,
-                    revision.source_commit,
-                    revision.revision_number,
-                    "ver-package-workflow",
-                )
-                self.assertEqual(completed, "ver-package-workflow")
-                return {"id": "pm-package-workflow"}
-
-            package_service.ensure_native_package.side_effect = ensure_native_package
-            service = NativePackageWorkflow(
-                package_service,
-                verification_service,
-                verification_workflow,
-            )
-            revision = PublishedRevision(
-                problem={
-                    "id": 17,
-                    "slug": "alice/package-workflow",
-                    "repo_name": "alice-package-workflow.git",
-                },
-                source_commit="a" * 40,
-                revision_number=3,
-                bare_repo=source_root,
-            )
-
-            native_package = service.ensure(
-                revision=revision,
-                actor_username="alice",
-                standard_solution_only=True,
-            )
-
-        self.assertEqual(native_package["id"], "pm-package-workflow")
-        self.assertEqual(captured_reuse, [True])
-        verification_workflow.run.assert_called_once()
-        run_kwargs = verification_workflow.run.call_args.kwargs
-        admission = verification_service.admit_verification.call_args.args[0]
-        self.assertEqual(admission.kind, "package")
-        self.assertEqual(run_kwargs["service_class"], "background")
-        self.assertTrue(run_kwargs["skip_sanity"])
-        self.assertEqual(
-            run_kwargs["targets"],
-            [
-                {
-                    "path": "solutions/accepted.cpp",
-                    "expected_behavior": "accepted",
-                    "program_id": "accepted",
-                }
-            ],
-        )
-
 
 class TestPublishedRevisionExport(E2ETestBase):
     def _publish_problem(
@@ -223,289 +125,55 @@ class TestPublishedRevisionExport(E2ETestBase):
         extra_solutions: dict[str, str] | None = None,
         mode: str = "pass-fail",
     ) -> tuple[Path, int, str]:
-        selected_test_ids = (test_id,) if test_ids is None else test_ids
-        workspace = Path(self._workspace_path())
-        if mode == "interactive":
-            configure_interactive_workspace(
-                workspace,
-                time_limit_ms=2000,
-                memory_limit_mb=1024,
-                pass_limit=1,
-            )
-        elif mode != "pass-fail":
-            raise AssertionError(f"unsupported fixture mode: {mode}")
-        (workspace / "tests" / "manual").mkdir(parents=True, exist_ok=True)
-        for selected_test_id in selected_test_ids:
-            (workspace / "tests" / "manual" / f"{selected_test_id}.in").write_text(
-                "1\n",
-                encoding="utf-8",
-            )
-        (workspace / "tests" / "spec.json").write_text(
-            json.dumps(
-                {
-                    "tests": [
-                        {
-                            "id": selected_test_id,
-                            "kind": "manual",
-                            "sample": True,
-                            "sample_input": "display input\n",
-                            "sample_output": "display output\n",
-                        }
-                        for selected_test_id in selected_test_ids
-                    ]
-                },
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        accepted = workspace / "solutions" / "accepted.cpp"
-        accepted.write_text("int main() { return 0; }\n", encoding="utf-8")
-        for filename, expected_behavior in (extra_solutions or {}).items():
-            source = workspace / "solutions" / filename
-            source.write_text("int main() { return 0; }\n", encoding="utf-8")
-            source.with_name(f"{source.name}.desc").write_text(
-                f"expected: {expected_behavior}\n",
-                encoding="utf-8",
-            )
-        build = load_build_config(workspace)
-        build["accepted_solution_source"] = "solutions/accepted.cpp"
-        (workspace / "config" / "build.json").write_text(
-            dumps_build_config(build),
-            encoding="utf-8",
-        )
-        commit = runtime.git_service.commit(
-            workspace,
-            "publish Native Package fixture",
-            self.user,
-            f"{self.user}@polygonlike.local",
-        )
-        runtime.git_service.push(workspace, "main")
-        context = runtime.workspace_service.workspace_context(
+        return publish_problem(
+            Path(self._workspace_path()),
             self.problem,
             self.user,
-            include_recent=False,
+            test_id=test_id,
+            test_ids=test_ids,
+            extra_solutions=extra_solutions,
+            mode=mode,
         )
-        return workspace, int(context["problem"]["id"]), commit
 
-    @staticmethod
-    def _verification_builder(
-        problem_id: int,
-        *,
-        input_bytes: bytes = b"1\n",
-        answer_bytes: bytes | None = b"2\n",
-        test_ids: tuple[str, ...] = ("001",),
-        solution_verdicts: dict[str, tuple[str, str]] | None = None,
-        mode: str = "pass-fail",
-        pre_skipped_ordinals: frozenset[int] = frozenset(),
-        verification_kind: str = "all",
-    ):
-        def build(
-            _snapshot: Path,
-            commit: str,
-            _revision_number: int,
-            verification_id: str,
-        ) -> str:
-            build_row = db_fetch_one(
-                """SELECT status,phase FROM problem_package_builds
-                   WHERE verification_id=?""",
-                [verification_id],
-            )
-            if build_row is not None and (
-                str(build_row["status"]),
-                str(build_row["phase"]),
-            ) != ("running", "verification"):
-                raise AssertionError("Native Package build phase is not verification")
-            admission = admit_test_verification(
-                verification_id=verification_id,
-                problem_id=problem_id,
-                workspace_id=None,
-                signature="native-package-test",
-                source_commit=commit,
-                kind=verification_kind,
-            )
-            if admission.outcome != "admitted":
-                raise AssertionError(f"unexpected admission outcome: {admission.outcome}")
-            tasks: list[PlannedTask] = []
-            generator_completions: list[TaskCompletion] = []
-            run_completions: list[TaskCompletion] = []
-            for ordinal, test_id in enumerate(test_ids, start=1):
-                test_name = f"{ordinal:03d}.in"
-                input_ref = (runtime.runtime_blob_store.put_bytes(input_bytes).blob_ref or "")
-                answer_ref = ""
-                if answer_bytes is not None:
-                    answer_ref = (runtime.runtime_blob_store.put_bytes(answer_bytes).blob_ref or "")
-                generator_id = verification_task_id(
-                    verification_id,
-                    f"generator-{ordinal}",
-                    test_name,
-                )
-                tasks.append(
-                    PlannedTask(
-                        task_id=generator_id,
-                        predecessor_task_id=None,
-                        task_kind="generate-input",
-                        source_path=f"tests/manual/{test_id}.in",
-                        program_id=f"generator-{ordinal}",
-                        test_name=test_name,
-                        expected_behavior="accepted",
-                    )
-                )
-                generator_completions.append(
-                    TaskCompletion(
-                        task_id=generator_id,
-                        status=VerificationTaskStatus.DONE,
-                        run_id="",
-                        judgehost_task_id="",
-                        result=execution_result(
-                            "SK" if ordinal in pre_skipped_ordinals else "OK",
-                            output_ref=input_ref,
-                        ),
-                        input_ref=input_ref,
-                    )
-                )
-
-                accepted_id = verification_task_id(
-                    verification_id,
-                    "accepted",
-                    test_name,
-                )
-                captured_ref = answer_ref or input_ref
-                tasks.append(
-                    PlannedTask(
-                        task_id=accepted_id,
-                        predecessor_task_id=generator_id,
-                        task_kind="main-correct",
-                        source_path="solutions/accepted.cpp",
-                        program_id="accepted",
-                        test_name=test_name,
-                        expected_behavior="accepted",
-                    )
-                )
-                run_completions.append(
-                    TaskCompletion(
-                        task_id=accepted_id,
-                        status=VerificationTaskStatus.DONE,
-                        run_id="",
-                        judgehost_task_id="",
-                        result=normalize_execution_result(
-                            passes=(
-                                ExecutionPassResult(
-                                    number=1,
-                                    capture_status=CAPTURE_COMPLETE,
-                                    runresult="correct",
-                                    verdict="OK",
-                                    score_text="",
-                                    answer_correct=True,
-                                    usage=ExecutionUsage(),
-                                    feedback="",
-                                    artifacts=PassArtifacts(
-                                        input_ref=input_ref,
-                                        output_ref=captured_ref,
-                                        stderr_ref=captured_ref,
-                                        system_ref=captured_ref,
-                                        judge_message_ref=captured_ref,
-                                        team_message_ref=captured_ref,
-                                        metadata_ref=captured_ref,
-                                        compare_metadata_ref=captured_ref,
-                                    ),
-                                ),
-                            ),
-                            verdict="OK",
-                            answer_correct=True,
-                        ),
-                        answer_ref=answer_ref,
-                    )
-                )
-                for index, (
-                    source_path,
-                    (expected_behavior, verdict),
-                ) in enumerate((solution_verdicts or {}).items(), start=1):
-                    program_id = f"solution-{index}"
-                    solution_task_id = verification_task_id(
-                        verification_id,
-                        program_id,
-                        test_name,
-                    )
-                    tasks.append(
-                        PlannedTask(
-                            task_id=solution_task_id,
-                            predecessor_task_id=accepted_id,
-                            task_kind="solution-run",
-                            source_path=source_path,
-                            program_id=program_id,
-                            test_name=test_name,
-                            expected_behavior=expected_behavior,
-                        )
-                    )
-                    run_completions.append(
-                        TaskCompletion(
-                            task_id=solution_task_id,
-                            status=VerificationTaskStatus.DONE,
-                            run_id="",
-                            judgehost_task_id="",
-                            result=execution_result(verdict),
-                        )
-                    )
-            activation = activate_test_verification(
-                verification_id,
-                programs=verification_programs_for_tasks(tasks),
-                tasks=tasks,
-                detail={
-                    "verification_id": verification_id,
-                    "task_graph": True,
-                    "mode": mode,
-                    "pass_limit": 1,
-                    "tests_meta_rows": [
-                        {
-                            "index": ordinal,
-                            "test_name": f"{ordinal:03d}.in",
-                            "kind": "manual",
-                            "id": test_id,
-                            "sample": True,
-                        }
-                        for ordinal, test_id in enumerate(test_ids, start=1)
-                    ],
-                },
-            )
-            if activation.outcome != "activated":
-                raise AssertionError(f"unexpected activation outcome: {activation.outcome}")
-            runtime.verification_task_store.commit_task_completions(
-                generator_completions
-            )
-            remaining: list[TaskCompletion] = []
-            for task_completion in run_completions:
-                task_row = db_fetch_one(
-                    "SELECT final_status FROM verification_tasks WHERE id=?",
-                    [task_completion.task_id],
-                )
-                if task_row is None:
-                    raise AssertionError(
-                        f"verification task disappeared: {task_completion.task_id}"
-                    )
-                if not str(task_row["final_status"]):
-                    remaining.append(task_completion)
-            completion = runtime.verification_task_store.commit_task_completions(remaining)
-            if completion.parent_transition != "ok":
-                raise AssertionError(
-                    "unexpected verification transition: "
-                    f"{completion.parent_transition}"
-                )
-            return verification_id
-
-        return build
-
-    def _native_package(self):
+    def _native_package(self) -> tuple[int, str, MaterializationRow]:
         _workspace, problem_id, commit = self._publish_problem()
         revision = runtime.problem_package_service.published_revision(problem_id)
         self.assertEqual(revision.source_commit, commit)
         verified = runtime.problem_package_service.ensure_native_package(
             revision,
-            self._verification_builder(problem_id),
+            verification_builder(problem_id),
         )
         self.assertRegex(verified["verification_id"], r"^ver-[0-9a-f]+$")
         return problem_id, commit, verified
+
+    def test_standard_solution_workflow_materializes_only_main_correct_evidence(self) -> None:
+        _workspace, problem_id, commit = self._publish_problem(
+            extra_solutions={"unneeded.cpp": "wrong_answer"},
+        )
+        override_config_values(self, runtime.config_values, JUDGEHOST_ENABLE=True)
+        with reporting_judgehost(
+            runtime.judgehost_task_service,
+            lambda _work: JudgehostReply(output=b"2\n"),
+        ):
+            package = runtime.native_package_workflow.ensure(
+                revision=runtime.problem_package_service.published_revision(problem_id),
+                actor_username=self.user,
+                standard_solution_only=True,
+            )
+        record = runtime.verification_service.verification_record(package["verification_id"])
+        self.assertEqual(record["kind"], "package")
+        self.assertEqual(record["status"], "ok")
+        tasks = db_fetch_all(
+            "SELECT task_kind,source_path FROM verification_tasks WHERE verification_id=?",
+            [package["verification_id"]],
+        )
+        self.assertFalse(any(row["task_kind"] == "solution-run" for row in tasks))
+        self.assertTrue(any(row["source_path"] == "solutions/accepted.cpp" for row in tasks))
+        with runtime.problem_package_service.open_reader(package["id"]) as reader:
+            self.assertEqual(reader.manifest["source_commit"], commit)
+            answer = reader.payload(reader.manifest["tests"][0], "answer")
+            self.assertIsNotNone(answer)
+            self.assertEqual(answer.read_bytes(), b"2\n")
 
     def test_package_revision_statement_links_select_exact_package(self) -> None:
         _problem_id, commit, native_package = self._native_package()
@@ -536,89 +204,10 @@ class TestPublishedRevisionExport(E2ETestBase):
             )
             self.assertEqual(query["language"], ["english"])
 
-    @staticmethod
-    def _compile_statement(tex_path: Path) -> SimpleNamespace:
-        pdf_path = tex_path.parent / "statement.pdf"
-        pdf_path.write_bytes(b"%PDF-1.4\n%%EOF\n")
-        return SimpleNamespace(
-            proc=SimpleNamespace(returncode=0, stderr="", stdout=""),
-            pdf_path=pdf_path,
-        )
-
     def test_package_export_job_stays_queued_until_worker_starts(self) -> None:
-        _workspace, problem_id, commit = self._publish_problem()
-        actor = db_fetch_one("SELECT id FROM users WHERE username=?", [self.user])
-        self.assertIsNotNone(actor)
-        captured_runner: list[object] = []
-
-        class FakeWorker:
-            alive = True
-
-            def is_alive(self) -> bool:
-                return self.alive
-
-        worker = FakeWorker()
-
-        def submit(*, fn, **_kwargs):
-            captured_runner.append(fn)
-            return worker, True, "queued"
-
-        key = f"{problem_id}:{commit}:domjudge"
-        try:
-            with patch.object(
-                runtime.worker_queue_service,
-                "submit",
-                side_effect=submit,
-            ):
-                started = workspace_context_job.start_export_job(
-                    runtime,
-                    self.problem,
-                    self.user,
-                    actor_user_id=int(actor["id"]),
-                    problem_id=problem_id,
-                    requested_format="domjudge",
-                    export_job_id="export-queued-worker-boundary",
-                )
-
-            self.assertTrue(started)
-            self.assertEqual(len(captured_runner), 1)
-            row = db_fetch_one(
-                "SELECT status,export_type,started_at FROM export_jobs WHERE id=?",
-                ["export-queued-worker-boundary"],
-            )
-            self.assertIsNotNone(row)
-            self.assertEqual(str(row["status"]), "queued")
-            self.assertEqual(str(row["export_type"]), "domjudge")
-            self.assertIsNone(row["started_at"])
-        finally:
-            worker.alive = False
-            with runtime.export_lock:
-                runtime.export_inflight.pop(key, None)
-                runtime.export_workers.discard(worker)
-
-    def test_native_package_job_finishes_with_the_native_package(self) -> None:
         problem_id, commit, native_package = self._native_package()
         actor = db_fetch_one("SELECT id FROM users WHERE username=?", [self.user])
-        self.assertIsNotNone(actor)
-
-        class CompletedWorker:
-            @staticmethod
-            def is_alive() -> bool:
-                return False
-
-        def submit(*, fn, **_kwargs):
-            fn()
-            return CompletedWorker(), True, "queued"
-
-        with (
-            patch.object(runtime.worker_queue_service, "submit", side_effect=submit),
-            patch.object(
-                runtime.native_package_workflow,
-                "ensure",
-                return_value=native_package,
-            ),
-            patch.object(runtime.export_service, "create_export") as create_export,
-        ):
+        with blocked_export_queue():
             started = workspace_context_job.start_export_job(
                 runtime,
                 self.problem,
@@ -626,234 +215,115 @@ class TestPublishedRevisionExport(E2ETestBase):
                 actor_user_id=int(actor["id"]),
                 problem_id=problem_id,
                 requested_format="native",
-                export_job_id="export-native-native-package",
+                export_job_id="export-queued-worker-boundary",
             )
-
-        self.assertTrue(started)
+            self.assertTrue(started)
+            row = db_fetch_one(
+                "SELECT status,export_type,started_at FROM export_jobs WHERE id=?",
+                ["export-queued-worker-boundary"],
+            )
+            self.assertEqual(row["status"], "queued")
+            self.assertEqual(row["export_type"], "native")
+            self.assertIsNone(row["started_at"])
         row = db_fetch_one(
-            """SELECT status,source_commit,materialization_id,export_id
-               FROM export_jobs WHERE id=?""",
-            ["export-native-native-package"],
+            "SELECT status,source_commit,materialization_id,export_id FROM export_jobs WHERE id=?",
+            ["export-queued-worker-boundary"],
         )
-        self.assertIsNotNone(row)
-        self.assertEqual(str(row["status"]), "succeeded")
-        self.assertEqual(str(row["source_commit"]), commit)
-        self.assertEqual(str(row["materialization_id"]), native_package["id"])
+        self.assertEqual(row["status"], "succeeded")
+        self.assertEqual(row["source_commit"], commit)
+        self.assertEqual(row["materialization_id"], native_package["id"])
         self.assertIsNone(row["export_id"])
-        create_export.assert_not_called()
+        with runtime.problem_package_service.open_reader(str(row["materialization_id"])) as reader:
+            self.assertEqual(reader.manifest["source_commit"], commit)
 
-    def test_same_published_commit_exports_different_formats_independently(self) -> None:
-        _workspace, problem_id, commit = self._publish_problem()
+    def test_same_commit_exports_distinct_formats_but_deduplicates_the_same_format(self) -> None:
+        problem_id, _commit, native_package = self._native_package()
         actor = db_fetch_one("SELECT id FROM users WHERE username=?", [self.user])
-        self.assertIsNotNone(actor)
-        captured_runner: list[object] = []
-
-        class FakeWorker:
-            def is_alive(self) -> bool:
-                return True
-
-        worker = FakeWorker()
-
-        def submit(*, fn, **_kwargs):
-            captured_runner.append(fn)
-            return worker, True, "queued"
-
-        keys = (
-            f"{problem_id}:{commit}:domjudge",
-            f"{problem_id}:{commit}:icpc-2025-09",
-        )
-        try:
-            with patch.object(runtime.worker_queue_service, "submit", side_effect=submit):
-                first = workspace_context_job.start_export_job(
+        with patch.object(
+            runtime.tex_compile_service, "sandbox", PdfSandbox(),
+        ), blocked_export_queue():
+            for export_id, package_format, accepted in (
+                ("export-first", "domjudge", True),
+                ("export-second", "icpc-2025-09", True),
+                ("export-duplicate", "domjudge", False),
+            ):
+                started = workspace_context_job.start_export_job(
                     runtime,
                     self.problem,
                     self.user,
                     actor_user_id=int(actor["id"]),
                     problem_id=problem_id,
-                    requested_format="domjudge",
-                    export_job_id="export-first",
+                    requested_format=package_format,
+                    export_job_id=export_id,
                 )
-                second = workspace_context_job.start_export_job(
-                    runtime,
-                    self.problem,
-                    self.user,
-                    actor_user_id=int(actor["id"]),
-                    problem_id=problem_id,
-                    requested_format="icpc-2025-09",
-                    export_job_id="export-second",
-                )
-
-            self.assertTrue(first)
-            self.assertTrue(second)
-            self.assertEqual(len(captured_runner), 2)
-            self.assertIsNotNone(
-                db_fetch_one("SELECT id FROM export_jobs WHERE id='export-second'")
+                self.assertEqual(started, accepted)
+            self.assertIsNone(db_fetch_one("SELECT id FROM export_jobs WHERE id='export-duplicate'"))
+        for export_id, package_format in (
+            ("export-first", "domjudge"),
+            ("export-second", "icpc-2025-09"),
+        ):
+            row = db_fetch_one("SELECT status,materialization_id FROM export_jobs WHERE id=?", [export_id])
+            self.assertEqual(row["status"], "succeeded")
+            self.assertEqual(row["materialization_id"], native_package["id"])
+            cached = runtime.export_service.cached_external_package(
+                problem_id=problem_id,
+                native_package_id=native_package["id"],
+                package_format=package_format,
             )
-        finally:
-            with runtime.export_lock:
-                for key in keys:
-                    runtime.export_inflight.pop(key, None)
-                runtime.export_workers.discard(worker)
+            self.assertIsNotNone(cached)
+            with zipfile.ZipFile(cached.path) as package:
+                self.assertIn("problem.yaml", package.namelist())
 
-    def test_same_published_commit_and_format_share_inflight_export(self) -> None:
-        _workspace, problem_id, commit = self._publish_problem()
+    def test_contest_export_shares_inflight_work_and_consumes_the_frozen_revision(self) -> None:
+        problem_id, commit, native_package = self._native_package()
         actor = db_fetch_one("SELECT id FROM users WHERE username=?", [self.user])
-        self.assertIsNotNone(actor)
-        captured_runner: list[object] = []
-
-        class FakeWorker:
-            @staticmethod
-            def is_alive() -> bool:
-                return True
-
-        worker = FakeWorker()
-
-        def submit(*, fn, **_kwargs):
-            captured_runner.append(fn)
-            return worker, True, "queued"
-
-        key = f"{problem_id}:{commit}:domjudge"
-        try:
-            with patch.object(runtime.worker_queue_service, "submit", side_effect=submit):
-                first = workspace_context_job.start_export_job(
-                    runtime,
-                    self.problem,
-                    self.user,
-                    actor_user_id=int(actor["id"]),
-                    problem_id=problem_id,
-                    requested_format="domjudge",
-                    export_job_id="export-shared-first",
-                )
-                second = workspace_context_job.start_export_job(
-                    runtime,
-                    self.problem,
-                    self.user,
-                    actor_user_id=int(actor["id"]),
-                    problem_id=problem_id,
-                    requested_format="domjudge",
-                    export_job_id="export-shared-second",
-                )
-
-            self.assertTrue(first)
-            self.assertFalse(second)
-            self.assertEqual(len(captured_runner), 1)
-            self.assertIsNone(
-                db_fetch_one(
-                    "SELECT id FROM export_jobs WHERE id='export-shared-second'"
-                )
+        workspace = Path(self._workspace_path())
+        (workspace / "published-later.txt").write_text("new revision\n", encoding="utf-8")
+        later_commit = runtime.git_service.commit(workspace, "publish newer revision", self.user, "test@example.org")
+        runtime.git_service.push(workspace, "main")
+        self.assertNotEqual(later_commit, commit)
+        with patch.object(
+            runtime.tex_compile_service, "sandbox", PdfSandbox(),
+        ), blocked_export_queue():
+            first_job, first_future = workspace_context_job.start_ready_external_export_job(
+                runtime,
+                self.problem,
+                actor_user_id=int(actor["id"]),
+                problem_id=problem_id,
+                requested_format="domjudge",
+                source_commit=commit,
+                native_package_id=native_package["id"],
+                native_archive_sha256=native_package["archive_sha256"],
+                export_job_id="export-contest-first",
             )
-        finally:
-            with runtime.export_lock:
-                runtime.export_inflight.pop(key, None)
-                runtime.export_workers.discard(worker)
-
-    def test_contest_export_admission_returns_the_existing_job_and_future(self) -> None:
-        _workspace, problem_id, commit = self._publish_problem()
-        actor = db_fetch_one("SELECT id FROM users WHERE username=?", [self.user])
-        self.assertIsNotNone(actor)
-
-        class FakeWorker:
-            @staticmethod
-            def is_alive() -> bool:
-                return True
-
-        worker = FakeWorker()
-
-        def submit(**_kwargs):
-            return worker, True, "queued"
-
-        key = f"{problem_id}:{commit}:domjudge"
-        try:
-            with patch.object(runtime.worker_queue_service, "submit", side_effect=submit):
-                first_job, first_future = (
-                    workspace_context_job.start_ready_external_export_job(
-                        runtime,
-                        self.problem,
-                        actor_user_id=int(actor["id"]),
-                        problem_id=problem_id,
-                        requested_format="domjudge",
-                        source_commit=commit,
-                        native_package_id="np-frozen",
-                        native_archive_sha256="a" * 64,
-                        export_job_id="export-contest-first",
-                    )
-                )
-                second_job, second_future = (
-                    workspace_context_job.start_ready_external_export_job(
-                        runtime,
-                        self.problem,
-                        actor_user_id=int(actor["id"]),
-                        problem_id=problem_id,
-                        requested_format="domjudge",
-                        source_commit=commit,
-                        native_package_id="np-frozen",
-                        native_archive_sha256="a" * 64,
-                        export_job_id="export-contest-second",
-                    )
-                )
-
-            self.assertEqual(first_job, "export-contest-first")
+            second_job, second_future = workspace_context_job.start_ready_external_export_job(
+                runtime,
+                self.problem,
+                actor_user_id=int(actor["id"]),
+                problem_id=problem_id,
+                requested_format="domjudge",
+                source_commit=commit,
+                native_package_id=native_package["id"],
+                native_archive_sha256=native_package["archive_sha256"],
+                export_job_id="export-contest-second",
+            )
             self.assertEqual(second_job, first_job)
-            self.assertIs(second_future, first_future)
-            self.assertIsNone(
-                db_fetch_one(
-                    "SELECT id FROM export_jobs WHERE id='export-contest-second'"
-                )
-            )
-        finally:
-            with runtime.export_lock:
-                runtime.export_inflight.pop(key, None)
-                runtime.export_workers.discard(worker)
-
-    def test_contest_export_worker_consumes_only_the_frozen_native_package(self) -> None:
-        export_service = Mock()
-        export_service.require_job_format.return_value = "domjudge"
-        export_service.create_export.return_value = (
-            "e-frozen",
-            Path("frozen.zip"),
-            "",
-        )
-        native_workflow = Mock()
-        frozen_runtime = SimpleNamespace(
-            export_service=export_service,
-            problem_package_service=SimpleNamespace(
-                native_package=Mock(
-                    return_value={
-                        "problem_id": 17,
-                        "status": "available",
-                        "source_commit": "b" * 40,
-                        "archive_sha256": "c" * 64,
-                    }
-                )
-            ),
-            native_package_workflow=native_workflow,
-        )
-
-        workspace_context_job._run_ready_external_export_worker(
-            frozen_runtime,
-            "owner/problem",
-            problem_id=17,
-            requested_format="domjudge",
-            source_commit="b" * 40,
-            native_package_id="np-frozen",
-            native_archive_sha256="c" * 64,
-            export_job_id="export-frozen",
-        )
-
-        native_workflow.ensure.assert_not_called()
-        export_service.create_export.assert_called_once_with(
-            "owner/problem",
-            "domjudge",
-            native_package_id="np-frozen",
-            expected_archive_sha256="c" * 64,
-        )
+            self.assertIsNone(db_fetch_one("SELECT id FROM export_jobs WHERE id='export-contest-second'"))
+        self.assertFalse(first_future.is_alive())
+        self.assertFalse(second_future.is_alive())
+        self.assertIsNone(first_future.exception())
+        row = db_fetch_one("SELECT status,source_commit,materialization_id FROM export_jobs WHERE id=?", [first_job])
+        self.assertEqual(row["status"], "succeeded")
+        self.assertEqual(row["source_commit"], commit)
+        self.assertEqual(row["materialization_id"], native_package["id"])
+        self.assertIsNone(runtime.problem_package_service.store.materialization_for_revision(problem_id, later_commit))
 
     def test_native_package_contains_source_payloads_and_statement_build(self) -> None:
         workspace, problem_id, commit = self._publish_problem()
         revision = runtime.problem_package_service.published_revision(problem_id)
         verified = runtime.problem_package_service.ensure_native_package(
             revision,
-            self._verification_builder(problem_id),
+            verification_builder(problem_id),
         )
         (workspace / "dirty-only.txt").write_text(
             "must not be exported\n",
@@ -905,7 +375,7 @@ class TestPublishedRevisionExport(E2ETestBase):
                 ],
             )
 
-    def test_multilanguage_statement_build_projects_examples_once(self) -> None:
+    def test_multilanguage_package_extracts_the_selected_offline_statement(self) -> None:
         workspace = Path(self._workspace_path())
         shutil.copytree(
             workspace / "statement-sections" / "english",
@@ -913,73 +383,27 @@ class TestPublishedRevisionExport(E2ETestBase):
         )
         _workspace, problem_id, _commit = self._publish_problem()
         revision = runtime.problem_package_service.published_revision(problem_id)
-        producer = runtime.statement_examples_producer
-
-        with patch.object(
-            producer,
-            "produce",
-            wraps=producer.produce,
-        ) as produce:
-            verified = runtime.problem_package_service.ensure_native_package(
-                revision,
-                self._verification_builder(problem_id),
-            )
-
-        self.assertEqual(produce.call_count, 1)
-        archive = runtime.storage_layout.artifacts_root / verified["archive_rel_path"]
-        with zipfile.ZipFile(archive) as package:
-            english_input = package.read(
-                "statement-build/english/examples/sample-1/display.in"
-            )
-            chinese_input = package.read(
-                "statement-build/chinese/examples/sample-1/display.in"
-            )
-        self.assertEqual(english_input, chinese_input)
-
-    def test_native_package_statement_extraction_opens_only_selected_language(
-        self,
-    ) -> None:
-        workspace = Path(self._workspace_path())
-        shutil.copytree(
-            workspace / "statement-sections" / "english",
-            workspace / "statement-sections" / "chinese",
-        )
-        _workspace, problem_id, _commit = self._publish_problem()
-        revision = runtime.problem_package_service.published_revision(problem_id)
-        native_package = runtime.problem_package_service.ensure_native_package(
+        package = runtime.problem_package_service.ensure_native_package(
             revision,
-            self._verification_builder(problem_id),
+            verification_builder(problem_id),
         )
-        opened: list[str] = []
-        original_open = zipfile.ZipFile.open
-
-        def tracking_open(package, member, *args, **kwargs):
-            opened.append(
-                member.filename if isinstance(member, zipfile.ZipInfo) else member
-            )
-            return original_open(package, member, *args, **kwargs)
-
+        archive = runtime.storage_layout.artifacts_root / package["archive_rel_path"]
+        with zipfile.ZipFile(archive) as bundle:
+            english_input = bundle.read("statement-build/english/examples/sample-1/display.in")
+            chinese_input = bundle.read("statement-build/chinese/examples/sample-1/display.in")
+            expected_tex = bundle.read("statement-build/english/problem.tex")
+        self.assertEqual(english_input, b"display input\n")
+        self.assertEqual(chinese_input, english_input)
         with tempfile.TemporaryDirectory(prefix="statement-extract-test-") as temp:
             destination = Path(temp) / "render"
             destination.mkdir()
-            with patch.object(zipfile.ZipFile, "open", new=tracking_open):
-                extracted = (
-                    runtime.problem_package_service.extract_statement_render_tree(
-                        native_package["id"],
-                        "english",
-                        destination,
-                    )
-                )
-
-            self.assertEqual(extracted["id"], native_package["id"])
-            self.assertTrue((destination / "problem.tex").is_file())
-            self.assertTrue((destination / "examples.tex").is_file())
+            runtime.problem_package_service.extract_statement_render_tree(
+                package["id"], "english", destination,
+            )
+            self.assertEqual((destination / "problem.tex").read_bytes(), expected_tex)
+            self.assertEqual((destination / "examples/sample-1/display.in").read_bytes(), english_input)
             self.assertFalse((destination / "test-data").exists())
             self.assertFalse((destination / "statement-build").exists())
-            self.assertTrue(opened)
-            self.assertTrue(
-                all(name.startswith("statement-build/english/") for name in opened)
-            )
 
     def test_missing_statement_language_does_not_invalidate_native_package(
         self,
@@ -1008,25 +432,21 @@ class TestPublishedRevisionExport(E2ETestBase):
         problem_id, _commit, first = self._native_package()
         revision = runtime.problem_package_service.published_revision(problem_id)
 
-        def unexpected_verification(*_args, **_kwargs):
-            raise AssertionError("a valid Native Package must be reused")
 
         second = runtime.problem_package_service.ensure_native_package(
             revision,
-            unexpected_verification,
+            verification_builder(problem_id),
         )
 
         self.assertEqual(second["id"], first["id"])
-        self.assertEqual(second["archive_sha256"], first["archive_sha256"])
+        self.assertEqual(second, first)
 
     def test_corrupt_native_package_is_reverified_in_the_same_export_job(self) -> None:
         problem_id, commit, first = self._native_package()
         actor = db_fetch_one("SELECT id FROM users WHERE username=?", [self.user])
         self.assertIsNotNone(actor)
         with patch.object(
-            runtime.tex_compile_service,
-            "compile_pdf",
-            side_effect=self._compile_statement,
+            runtime.tex_compile_service, "sandbox", PdfSandbox(),
         ):
             old_export_id, old_external_package, _warning = runtime.export_service.create_export(
                 self.problem,
@@ -1038,28 +458,11 @@ class TestPublishedRevisionExport(E2ETestBase):
         )
         native_archive.write_bytes(b"corrupt Native Package")
 
-        def ensure(*, revision, **_kwargs):
-            return runtime.problem_package_service.ensure_native_package(
-                revision,
-                self._verification_builder(problem_id, answer_bytes=b"changed\n"),
-            )
-
-        class CompletedWorker:
-            def is_alive(self) -> bool:
-                return False
-
-        def submit(*, fn, **_kwargs):
-            fn()
-            return CompletedWorker(), True, "queued"
-
+        override_config_values(self, runtime.config_values, JUDGEHOST_ENABLE=True)
         with (
-            patch.object(runtime.worker_queue_service, "submit", side_effect=submit),
-            patch.object(runtime.native_package_workflow, "ensure", side_effect=ensure),
-            patch.object(
-                runtime.tex_compile_service,
-                "compile_pdf",
-                side_effect=self._compile_statement,
-            ),
+            reporting_judgehost(runtime.judgehost_task_service, lambda _work: JudgehostReply(output=b"changed\n")),
+            patch.object(runtime.tex_compile_service, "sandbox", PdfSandbox()),
+            blocked_export_queue(),
         ):
             started = workspace_context_job.start_export_job(
                 runtime,
@@ -1069,6 +472,7 @@ class TestPublishedRevisionExport(E2ETestBase):
                 problem_id=problem_id,
                 requested_format="icpc-2025-09",
                 export_job_id="export-reverify-corrupt",
+                standard_solution_only=True,
             )
 
         self.assertTrue(started)
@@ -1093,9 +497,7 @@ class TestPublishedRevisionExport(E2ETestBase):
     def test_domjudge_and_icpc_2025_are_independent_external_packages(self) -> None:
         _problem_id, commit, verified = self._native_package()
         with patch.object(
-            runtime.tex_compile_service,
-            "compile_pdf",
-            side_effect=self._compile_statement,
+            runtime.tex_compile_service, "sandbox", PdfSandbox(),
         ):
             domjudge_id, domjudge_archive, domjudge_warning = runtime.export_service.create_export(
                 self.problem,
@@ -1141,9 +543,7 @@ class TestPublishedRevisionExport(E2ETestBase):
     def test_cached_external_package_discards_a_corrupt_archive(self) -> None:
         problem_id, _commit, verified = self._native_package()
         with patch.object(
-            runtime.tex_compile_service,
-            "compile_pdf",
-            side_effect=self._compile_statement,
+            runtime.tex_compile_service, "sandbox", PdfSandbox(),
         ):
             export_id, archive_path, _warning = runtime.export_service.create_export(
                 self.problem,
@@ -1166,9 +566,7 @@ class TestPublishedRevisionExport(E2ETestBase):
     def test_qoj_adapter_publishes_a_root_test_data_archive(self) -> None:
         _problem_id, _commit, verified = self._native_package()
         with patch.object(
-            runtime.tex_compile_service,
-            "compile_pdf",
-            side_effect=self._compile_statement,
+            runtime.tex_compile_service, "sandbox", PdfSandbox(),
         ):
             export_id, archive_path, warning = (
                 runtime.export_service.create_export(
@@ -1210,7 +608,7 @@ class TestPublishedRevisionExport(E2ETestBase):
         revision = runtime.problem_package_service.published_revision(problem_id)
         verified = runtime.problem_package_service.ensure_native_package(
             revision,
-            self._verification_builder(
+            verification_builder(
                 problem_id,
                 solution_verdicts={
                     "solutions/rejected.cpp": ("compile_error", "CE"),
@@ -1218,9 +616,7 @@ class TestPublishedRevisionExport(E2ETestBase):
             ),
         )
         with patch.object(
-            runtime.tex_compile_service,
-            "compile_pdf",
-            side_effect=self._compile_statement,
+            runtime.tex_compile_service, "sandbox", PdfSandbox(),
         ):
             first_id, first_archive, first_warning = (
                 runtime.export_service.create_export(
@@ -1252,7 +648,7 @@ class TestPublishedRevisionExport(E2ETestBase):
         revision = runtime.problem_package_service.published_revision(problem_id)
         native_package = runtime.problem_package_service.ensure_native_package(
             revision,
-            self._verification_builder(
+            verification_builder(
                 problem_id,
                 verification_kind="package",
             ),
@@ -1283,15 +679,13 @@ class TestPublishedRevisionExport(E2ETestBase):
         revision = runtime.problem_package_service.published_revision(problem_id)
         native_package = runtime.problem_package_service.ensure_native_package(
             revision,
-            self._verification_builder(
+            verification_builder(
                 problem_id,
                 verification_kind="package",
             ),
         )
         with patch.object(
-            runtime.tex_compile_service,
-            "compile_pdf",
-            side_effect=self._compile_statement,
+            runtime.tex_compile_service, "sandbox", PdfSandbox(),
         ):
             export_id, _export_archive, _warning = (
                 runtime.export_service.create_export(
@@ -1302,7 +696,7 @@ class TestPublishedRevisionExport(E2ETestBase):
             )
         certified = runtime.problem_package_service.ensure_native_package(
             revision,
-            self._verification_builder(problem_id),
+            verification_builder(problem_id),
         )
 
         self.assertEqual(certified["id"], native_package["id"])
@@ -1325,7 +719,7 @@ class TestPublishedRevisionExport(E2ETestBase):
         revision = runtime.problem_package_service.published_revision(problem_id)
         native_package = runtime.problem_package_service.ensure_native_package(
             revision,
-            self._verification_builder(
+            verification_builder(
                 problem_id,
                 verification_kind="package",
             ),
@@ -1334,7 +728,7 @@ class TestPublishedRevisionExport(E2ETestBase):
         release_verification = threading.Event()
         completed: list[MaterializationRow] = []
         failures: list[BaseException] = []
-        full_builder = self._verification_builder(problem_id)
+        full_builder = verification_builder(problem_id)
 
         def blocking_builder(
             snapshot: Path,
@@ -1381,7 +775,7 @@ class TestPublishedRevisionExport(E2ETestBase):
             with self.assertRaises(NativePackageOperationBusy):
                 runtime.problem_package_service.ensure_native_package(
                     revision,
-                    self._verification_builder(problem_id),
+                    verification_builder(problem_id),
                 )
         finally:
             release_verification.set()
@@ -1444,7 +838,7 @@ class TestPublishedRevisionExport(E2ETestBase):
         revision = runtime.problem_package_service.published_revision(problem_id)
         standard_package = runtime.problem_package_service.ensure_native_package(
             revision,
-            self._verification_builder(
+            verification_builder(
                 problem_id,
                 verification_kind="package",
             ),
@@ -1457,7 +851,7 @@ class TestPublishedRevisionExport(E2ETestBase):
 
         full_package = runtime.problem_package_service.ensure_native_package(
             revision,
-            self._verification_builder(problem_id),
+            verification_builder(problem_id),
         )
         rebuilt_archive = runtime.storage_layout.resolve_artifact(
             full_package["archive_rel_path"]
@@ -1475,7 +869,7 @@ class TestPublishedRevisionExport(E2ETestBase):
         revision = runtime.problem_package_service.published_revision(problem_id)
         native_package = runtime.problem_package_service.ensure_native_package(
             revision,
-            self._verification_builder(
+            verification_builder(
                 problem_id,
                 verification_kind="package",
             ),
@@ -1487,7 +881,7 @@ class TestPublishedRevisionExport(E2ETestBase):
         ):
             runtime.problem_package_service.ensure_native_package(
                 revision,
-                self._verification_builder(problem_id, answer_bytes=b"changed\n"),
+                verification_builder(problem_id, answer_bytes=b"changed\n"),
             )
 
         current = runtime.problem_package_service.native_package(native_package["id"])
@@ -1506,7 +900,7 @@ class TestPublishedRevisionExport(E2ETestBase):
         revision = runtime.problem_package_service.published_revision(problem_id)
         native_package = runtime.problem_package_service.ensure_native_package(
             revision,
-            self._verification_builder(
+            verification_builder(
                 problem_id,
                 verification_kind="package",
             ),
@@ -1561,7 +955,7 @@ class TestPublishedRevisionExport(E2ETestBase):
         revision = runtime.problem_package_service.published_revision(problem_id)
         verified = runtime.problem_package_service.ensure_native_package(
             revision,
-            self._verification_builder(
+            verification_builder(
                 problem_id,
                 test_ids=("001", "021"),
                 solution_verdicts={
@@ -1602,7 +996,7 @@ class TestPublishedRevisionExport(E2ETestBase):
         revision = runtime.problem_package_service.published_revision(problem_id)
         verified = runtime.problem_package_service.ensure_native_package(
             revision,
-            self._verification_builder(
+            verification_builder(
                 problem_id,
                 answer_bytes=None,
                 test_ids=("101", "102"),
@@ -1638,106 +1032,32 @@ class TestPublishedRevisionExport(E2ETestBase):
                 ],
             )
 
-    def test_native_package_duplicate_input_requires_one_actual_owner(self) -> None:
-        source_tree = SimpleNamespace(tests=({"id": "001"}, {"id": "002"}))
-        result_json = execution_result_json(execution_result("OK"))
-        skipped_json = execution_result_json(execution_result("SK"))
-        failed_json = execution_result_json(execution_result("FL"))
+    def test_invalid_generator_evidence_does_not_publish_a_native_package(self) -> None:
+        _workspace, problem_id, _commit = self._publish_problem(test_ids=("001", "002"))
         service = runtime.problem_package_service
+        revision = service.published_revision(problem_id)
+        builder = verification_builder(problem_id, test_ids=("001", "002"))
+        for verdict, final_status, message in (
+            ("SK", "done", "owner is missing"),
+            ("OK", "done", "multiple owners"),
+            ("OK", "", "generated test result is incomplete"),
+            ("FL", "done", "generated test result is incomplete"),
+        ):
+            with self.subTest(verdict=verdict, final_status=final_status):
+                def corrupted_evidence(snapshot: Path, commit: str, revision_number: int, verification_id: str) -> str:
+                    builder(snapshot, commit, revision_number, verification_id)
+                    db_execute(
+                        "UPDATE verification_tasks SET result_json=?,final_status=? "
+                        "WHERE verification_id=? AND task_kind='generate-input'",
+                        [execution_result_json(execution_result(verdict)), final_status, verification_id],
+                    )
+                    return verification_id
 
-        cases = (
-            (
-                "owner is missing",
-                [
-                    {
-                        "source_id": "001",
-                        "test_name": "001.in",
-                        "ordinal": 1,
-                        "final_status": "done",
-                        "result_json": skipped_json,
-                        "input_ref": "blob://duplicate",
-                    },
-                    {
-                        "source_id": "002",
-                        "test_name": "002.in",
-                        "ordinal": 2,
-                        "final_status": "done",
-                        "result_json": skipped_json,
-                        "input_ref": "blob://duplicate",
-                    },
-                ],
-            ),
-            (
-                "multiple owners",
-                [
-                    {
-                        "source_id": "001",
-                        "test_name": "001.in",
-                        "ordinal": 1,
-                        "final_status": "done",
-                        "result_json": result_json,
-                        "input_ref": "blob://duplicate",
-                    },
-                    {
-                        "source_id": "002",
-                        "test_name": "002.in",
-                        "ordinal": 2,
-                        "final_status": "done",
-                        "result_json": result_json,
-                        "input_ref": "blob://duplicate",
-                    },
-                ],
-            ),
-            (
-                "generated test result is incomplete",
-                [
-                    {
-                        "source_id": "001",
-                        "test_name": "001.in",
-                        "ordinal": 1,
-                        "final_status": "running",
-                        "result_json": result_json,
-                        "input_ref": "blob://duplicate",
-                    },
-                    {
-                        "source_id": "002",
-                        "test_name": "002.in",
-                        "ordinal": 2,
-                        "final_status": "done",
-                        "result_json": skipped_json,
-                        "input_ref": "blob://duplicate",
-                    },
-                ],
-            ),
-            (
-                "generated test result is incomplete",
-                [
-                    {
-                        "source_id": "001",
-                        "test_name": "001.in",
-                        "ordinal": 1,
-                        "final_status": "done",
-                        "result_json": failed_json,
-                        "input_ref": "blob://duplicate",
-                    },
-                    {
-                        "source_id": "002",
-                        "test_name": "002.in",
-                        "ordinal": 2,
-                        "final_status": "done",
-                        "result_json": skipped_json,
-                        "input_ref": "blob://duplicate",
-                    },
-                ],
-            ),
-        )
-        for message, rows in cases:
-            with self.subTest(message=message), patch.object(
-                service.store,
-                "test_execution_rows",
-                return_value=rows,
-            ), self.assertRaisesRegex(ValueError, message):
-                service._verification_test_owners("ver-test", source_tree)
+                with self.assertRaisesRegex(ValueError, message):
+                    service.ensure_native_package(revision, corrupted_evidence)
+                self.assertIsNone(service.store.materialization_for_revision(problem_id, revision.source_commit))
+                build = db_fetch_one("SELECT status FROM problem_package_builds WHERE problem_id=?", [problem_id])
+                self.assertEqual(build["status"], "failed")
 
     def test_distinct_commits_with_the_same_tree_have_distinct_native_packages(
         self,
@@ -1746,7 +1066,7 @@ class TestPublishedRevisionExport(E2ETestBase):
         first_revision = runtime.problem_package_service.published_revision(problem_id)
         first = runtime.problem_package_service.ensure_native_package(
             first_revision,
-            self._verification_builder(problem_id),
+            verification_builder(problem_id),
         )
         commit = run_git(
             [
@@ -1767,7 +1087,7 @@ class TestPublishedRevisionExport(E2ETestBase):
         self.assertNotEqual(second_revision.source_commit, first_commit)
         second = runtime.problem_package_service.ensure_native_package(
             second_revision,
-            self._verification_builder(problem_id),
+            verification_builder(problem_id),
         )
         self.assertNotEqual(second["id"], first["id"])
         self.assertEqual(second["source_digest"], first["source_digest"])
@@ -1829,6 +1149,24 @@ class TestPublishedRevisionExport(E2ETestBase):
                 (
                     "revision_number is invalid",
                     {**original, "revision_number": True},
+                ),
+                (
+                    "test entry must be an object",
+                    {**original, "tests": ["001"]},
+                ),
+                (
+                    "solution entry has an unsupported shape",
+                    {**original, "solutions": ["solutions/accepted.cpp"]},
+                ),
+                (
+                    "payload size is invalid",
+                    {
+                        **original,
+                        "tests": [{
+                            **original["tests"][0],
+                            "input": {**original["tests"][0]["input"], "size": True},
+                        }],
+                    },
                 ),
                 (
                     "Native Package path",

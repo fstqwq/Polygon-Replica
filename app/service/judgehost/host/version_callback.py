@@ -4,6 +4,7 @@ from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
 from app.service.judgehost.callback.model import CallbackOutcome
 from app.service.judgehost.host.toolchain_versions import (
     ToolchainTelemetryHandler,
+    ToolchainVersionCommands,
     ToolchainVersionReport,
 )
 from app.service.judgehost.validation import normalize_judgehost_hostname
@@ -18,7 +19,7 @@ class JudgehostVersionCallback:
         self._batch_runtime = batch_runtime
         self._telemetry = telemetry
 
-    def commands(self, judgetask_id: int) -> dict[str, object]:
+    def commands(self, judgetask_id: int) -> ToolchainVersionCommands:
         return self._telemetry.version_commands(int(judgetask_id))
 
     def report(

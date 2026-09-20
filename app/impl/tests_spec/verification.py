@@ -13,7 +13,8 @@ from app.impl.workspace.context_job import start_verification_job
 from app.impl.workspace.context_ui import page_ctx
 from app.impl.workspace.context_job_helper import allocate_verification_id
 from app.impl.workspace.context_operation import run_solution_options_context, workspace_rel_file_exists
-from app.service.problem.solution_metadata import normalize_expected_behavior
+from app.service.problem.solution_metadata import ExpectedBehavior, normalize_expected_behavior
+from app.service.verification.types import VerificationTarget
 
 
 def verification_start(problem: str, user: Annotated[str, Depends(require_session_user)], page: str=Form('statement')):
@@ -35,7 +36,7 @@ def verification_start(problem: str, user: Annotated[str, Depends(require_sessio
             raise ValueError('main correct solution is required')
         if not workspace_rel_file_exists(workspace, accepted_source):
             raise ValueError('main correct solution source does not exist')
-        targets: list[dict[str, object]] = []
+        sources: list[tuple[str, ExpectedBehavior]] = []
         for row in solution_options:
             if not isinstance(source_path := row.get('path'), str):
                 continue
@@ -47,20 +48,25 @@ def verification_start(problem: str, user: Annotated[str, Depends(require_sessio
                 expected_behavior = 'accepted'
             if expected_behavior == 'unknown' and bool(row.get('is_accepted')):
                 expected_behavior = 'accepted'
-            targets.append({'path': source_path, 'expected_behavior': expected_behavior})
-        if not targets:
+            sources.append((source_path, expected_behavior))
+        if not sources:
             raise ValueError('at least one solution source is required')
-        if not any(item['expected_behavior'] == 'accepted' for item in targets):
+        if not any(expected == 'accepted' for _, expected in sources):
             raise ValueError('accepted solution source is required')
-        targets.sort(key=lambda item: (0 if item['expected_behavior'] == 'accepted' else 1, item['path']))
+        sources.sort(key=lambda item: (0 if item[1] == 'accepted' else 1, item[0]))
+        targets: list[VerificationTarget] = []
         solution_index = 0
-        for target in targets:
-            if target['path'] == accepted_source:
+        for source_path, expected_behavior in sources:
+            if source_path == accepted_source:
                 program_id = 'accepted'
             else:
                 program_id = f'solution-{solution_index}'
                 solution_index += 1
-            target['program_id'] = program_id
+            targets.append({
+                'path': source_path,
+                'expected_behavior': expected_behavior,
+                'program_id': program_id,
+            })
         started = start_verification_job(
             runtime(),
             problem,

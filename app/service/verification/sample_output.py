@@ -3,11 +3,12 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.service.execution.test_rows import ExecutionTestRow
 from app.service.judgehost.api import Judgehost
 from app.service.judgehost.ports.completion import CaseTerminalReport
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
-from app.service.verification.plan import VerificationTestPlan
+from app.service.verification.plan import VerificationPayloadBase, VerificationTestPlan
 from app.service.verification.payload import prepared_payload_for_uploaded_source
 
 
@@ -51,14 +52,9 @@ def _validation_source_bytes(sample_output_text: str) -> bytes:
     return source_text.encode("utf-8")
 
 
-def _first_test_result(case_result: CaseTerminalReport) -> dict[str, object] | None:
-    tests = case_result["summary"].get("tests")
-    if not isinstance(tests, list) or not tests:
-        return None
-    first = tests[0]
-    if not isinstance(first, dict):
-        return None
-    return first
+def _first_test_result(case_result: CaseTerminalReport) -> ExecutionTestRow | None:
+    tests = case_result["summary"].get("tests", [])
+    return tests[0] if tests else None
 
 
 def _result_verdict(case_result: CaseTerminalReport) -> tuple[str, str]:
@@ -79,13 +75,10 @@ def _result_output_ref(case_result: CaseTerminalReport) -> str:
     output_ref = str(first.get("output_ref") or "")
     if output_ref:
         return output_ref
-    passes = first.get("passes")
-    if not isinstance(passes, list) or not passes:
+    passes = first["passes"]
+    if not passes:
         return ""
-    final_pass = passes[-1]
-    if not isinstance(final_pass, dict):
-        return ""
-    return str(final_pass.get("output_ref") or "")
+    return passes[-1]["output_ref"]
 
 
 def _custom_input_expected_answer(
@@ -97,7 +90,7 @@ def _custom_input_expected_answer(
     accepted_source_label: str,
     accepted_source_name: str,
     accepted_source_file: PayloadFile | None,
-    run_verification_payload_base: dict[str, object],
+    run_verification_payload_base: VerificationPayloadBase,
     bypass_case_result_cache: bool,
     service_class: str,
     judgehost: Judgehost,
@@ -170,7 +163,7 @@ def validate_custom_sample_outputs(
     accepted_source_label: str = "",
     accepted_source_name: str = "",
     accepted_source_file: PayloadFile | None = None,
-    run_verification_payload_base: dict[str, object] | None = None,
+    run_verification_payload_base: VerificationPayloadBase | None = None,
     bypass_case_result_cache: bool = False,
     service_class: str = "background",
     judgehost: Judgehost,
@@ -331,7 +324,7 @@ class VerificationSampleOutputService:
         accepted_source_label: str = "",
         accepted_source_name: str = "",
         accepted_source_file: PayloadFile | None = None,
-        run_verification_payload_base: dict[str, object] | None = None,
+        run_verification_payload_base: VerificationPayloadBase | None = None,
         bypass_case_result_cache: bool = False,
         service_class: str = "background",
     ) -> SampleOutputValidationResult:

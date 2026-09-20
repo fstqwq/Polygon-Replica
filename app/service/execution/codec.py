@@ -1,7 +1,7 @@
 import json
 import math
 from collections.abc import Iterable
-from typing import cast
+from typing import TypedDict
 
 from app.service.execution.model import (
     CompileResult,
@@ -11,6 +11,7 @@ from app.service.execution.model import (
     ExecutionResult,
     ExecutionUsage,
     ExecutionWarning,
+    JsonValue,
     PassArtifacts,
 )
 from app.service.execution.policy import (
@@ -18,6 +19,58 @@ from app.service.execution.policy import (
     canonical_execution_result,
 )
 from app.service.platform.hashing import canonical_json
+
+
+class ExecutionUsagePayload(TypedDict):
+    runtime_sec: float | None
+    cpu_sec: float | None
+    wall_sec: float | None
+    memory_kb: int | None
+
+
+class ExecutionOutcomePayload(TypedDict):
+    verdict: str
+    score_text: str
+    answer_correct: bool
+    usage: ExecutionUsagePayload
+    error: str
+    feedback: str
+
+
+class CompileResultPayload(TypedDict):
+    log: str
+    diagnostics: list[dict[str, JsonValue]]
+
+
+class PassArtifactsPayload(TypedDict):
+    input_ref: str
+    output_ref: str
+    transcript_ref: str
+    stderr_ref: str
+    system_ref: str
+    judge_message_ref: str
+    team_message_ref: str
+    metadata_ref: str
+    compare_metadata_ref: str
+
+
+class ExecutionPassPayload(TypedDict):
+    number: int
+    capture_status: str
+    runresult: str
+    verdict: str
+    score_text: str
+    answer_correct: bool
+    usage: ExecutionUsagePayload
+    feedback: str
+    artifacts: PassArtifactsPayload
+
+
+class ExecutionResultPayload(TypedDict):
+    outcome: ExecutionOutcomePayload
+    compile: CompileResultPayload
+    passes: list[ExecutionPassPayload]
+    warnings: list[str]
 
 
 _RESULT_KEYS = frozenset(("outcome", "compile", "passes", "warnings"))
@@ -57,16 +110,15 @@ _ARTIFACT_KEYS = frozenset(
 def _object(value: object, *, label: str) -> dict[str, object]:
     if type(value) is not dict:
         raise ValueError(f"{label} must be an object")
-    raw = cast(dict[object, object], value)
-    if any(type(key) is not str for key in raw):
+    if any(type(key) is not str for key in value):
         raise ValueError(f"{label} keys must be strings")
-    return cast(dict[str, object], raw)
+    return value
 
 
 def _array(value: object, *, label: str) -> list[object]:
     if type(value) is not list:
         raise ValueError(f"{label} must be an array")
-    return cast(list[object], value)
+    return value
 
 
 def _exact_keys(raw: dict[str, object], expected: frozenset[str], *, label: str) -> None:
@@ -85,21 +137,21 @@ def _exact_keys(raw: dict[str, object], expected: frozenset[str], *, label: str)
 def _string(value: object, *, label: str) -> str:
     if type(value) is not str:
         raise ValueError(f"{label} must be a string")
-    return cast(str, value)
+    return value
 
 
 def _boolean(value: object, *, label: str) -> bool:
     if type(value) is not bool:
         raise ValueError(f"{label} must be boolean")
-    return cast(bool, value)
+    return value
 
 
 def _optional_float(value: object, *, label: str) -> float | None:
     if value is None:
         return None
-    if type(value) not in {int, float}:
+    if type(value) is not int and type(value) is not float:
         raise ValueError(f"{label} must be numeric or null")
-    result = float(cast(int | float, value))
+    result = float(value)
     if not math.isfinite(result) or result < 0:
         raise ValueError(f"{label} must be finite and non-negative")
     return result
@@ -108,9 +160,9 @@ def _optional_float(value: object, *, label: str) -> float | None:
 def _optional_int(value: object, *, label: str) -> int | None:
     if value is None:
         return None
-    if type(value) is not int or cast(int, value) < 0:
+    if type(value) is not int or value < 0:
         raise ValueError(f"{label} must be a non-negative integer or null")
-    return cast(int, value)
+    return value
 
 
 def _usage_from_object(value: object, *, label: str) -> ExecutionUsage:
@@ -124,7 +176,7 @@ def _usage_from_object(value: object, *, label: str) -> ExecutionUsage:
     )
 
 
-def _usage_dict(usage: ExecutionUsage) -> dict[str, object]:
+def _usage_dict(usage: ExecutionUsage) -> ExecutionUsagePayload:
     return {
         "runtime_sec": usage.runtime_sec,
         "cpu_sec": usage.cpu_sec,
@@ -133,17 +185,17 @@ def _usage_dict(usage: ExecutionUsage) -> dict[str, object]:
     }
 
 
-def _json_value(value: object, *, label: str) -> object:
-    if value is None or type(value) in {str, bool, int}:
+def _json_value(value: object, *, label: str) -> JsonValue:
+    if value is None or type(value) is str or type(value) is bool or type(value) is int:
         return value
     if type(value) is float:
-        if not math.isfinite(cast(float, value)):
+        if not math.isfinite(value):
             raise ValueError(f"{label} contains a non-finite number")
         return value
-    if type(value) in {list, tuple}:
+    if type(value) is list or type(value) is tuple:
         return [
             _json_value(item, label=f"{label}[{index}]")
-            for index, item in enumerate(cast(list[object] | tuple[object, ...], value))
+            for index, item in enumerate(value)
         ]
     if isinstance(value, CompileDiagnostic):
         return {
@@ -161,18 +213,18 @@ def _json_value(value: object, *, label: str) -> object:
 
 def compile_diagnostics_payload(
     diagnostics: Iterable[CompileDiagnostic],
-) -> list[dict[str, object]]:
+) -> list[dict[str, JsonValue]]:
     canonical = canonical_compile_diagnostics(diagnostics)
     return [
-        cast(
-            dict[str, object],
-            _json_value(item, label="execution compile diagnostic"),
-        )
+        {
+            key: _json_value(value, label=f"execution compile diagnostic.{key}")
+            for key, value in item.items()
+        }
         for item in canonical
     ]
 
 
-def execution_result_dict(result: ExecutionResult) -> dict[str, object]:
+def execution_result_dict(result: ExecutionResult) -> ExecutionResultPayload:
     canonical_execution_result(result)
     return {
         "outcome": {
@@ -200,8 +252,15 @@ def execution_result_dict(result: ExecutionResult) -> dict[str, object]:
                 "usage": _usage_dict(pass_result.usage),
                 "feedback": pass_result.feedback,
                 "artifacts": {
-                    name: getattr(pass_result.artifacts, name)
-                    for name in sorted(_ARTIFACT_KEYS)
+                    "input_ref": pass_result.artifacts.input_ref,
+                    "output_ref": pass_result.artifacts.output_ref,
+                    "transcript_ref": pass_result.artifacts.transcript_ref,
+                    "stderr_ref": pass_result.artifacts.stderr_ref,
+                    "system_ref": pass_result.artifacts.system_ref,
+                    "judge_message_ref": pass_result.artifacts.judge_message_ref,
+                    "team_message_ref": pass_result.artifacts.team_message_ref,
+                    "metadata_ref": pass_result.artifacts.metadata_ref,
+                    "compare_metadata_ref": pass_result.artifacts.compare_metadata_ref,
                 },
             }
             for pass_result in result.passes
@@ -219,12 +278,12 @@ def _pass_from_object(value: object, *, index: int) -> ExecutionPassResult:
     raw = _object(value, label=label)
     _exact_keys(raw, _PASS_KEYS, label=label)
     number = raw["number"]
-    if type(number) is not int or cast(int, number) <= 0:
+    if type(number) is not int or number <= 0:
         raise ValueError(f"{label}.number must be a positive integer")
     artifacts_raw = _object(raw["artifacts"], label=f"{label}.artifacts")
     _exact_keys(artifacts_raw, _ARTIFACT_KEYS, label=f"{label}.artifacts")
     return ExecutionPassResult(
-        number=cast(int, number),
+        number=number,
         capture_status=_string(raw["capture_status"], label=f"{label}.capture_status"),
         runresult=_string(raw["runresult"], label=f"{label}.runresult"),
         verdict=_string(raw["verdict"], label=f"{label}.verdict"),

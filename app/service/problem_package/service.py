@@ -970,10 +970,6 @@ class ProblemPackageService:
                 problem_limits=problem_config_limits(self.db.config_values),
             )
 
-    @staticmethod
-    def _write_archive(source_root: Path, target: Path) -> None:
-        create_zip_archive(source_root, target)
-
     def _build_native_package(
         self,
         *,
@@ -1049,7 +1045,7 @@ class ProblemPackageService:
                 tests_spec_max_bytes=tests_spec_max_bytes,
                 statement_sample_max_bytes=statement_sample_max_bytes,
             )
-            self._write_archive(package_root, archive_partial)
+            create_zip_archive(package_root, archive_partial)
             now = now_iso()
             staged_row: MaterializationRow = {
                 "id": materialization_id,

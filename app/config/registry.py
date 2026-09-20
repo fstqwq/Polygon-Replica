@@ -4,10 +4,10 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 from app.config.definitions import CONFIG_DEFINITIONS
-from app.config.model import ConfigDefinition, ConfigKind, ConfigValues
+from app.config.model import ConfigDefinition, ConfigKind, ConfigValue, ConfigValues
 
 
-def _canonical_int(values: Mapping[str, object], key: str) -> int:
+def _canonical_int(values: Mapping[str, ConfigValue], key: str) -> int:
     value = values[key]
     if not isinstance(value, int) or isinstance(value, bool):
         raise RuntimeError(f"normalized system config {key} is not an integer")
@@ -41,7 +41,7 @@ class ConfigRegistry:
 
         return {definition.key: definition for definition in self.definitions}
 
-    def defaults(self) -> dict[str, object]:
+    def defaults(self) -> dict[str, ConfigValue]:
         """Return the normalized default snapshot."""
 
         return {
@@ -49,7 +49,7 @@ class ConfigRegistry:
             for definition in self.definitions
         }
 
-    def normalize(self, key: str, raw_value: object) -> object:
+    def normalize(self, key: str, raw_value: object) -> ConfigValue:
         """Normalize one external value using its registered definition."""
 
         definition = self.by_key.get(key)
@@ -60,7 +60,7 @@ class ConfigRegistry:
     def normalize_snapshot(
         self,
         values: Mapping[str, object],
-    ) -> dict[str, object]:
+    ) -> dict[str, ConfigValue]:
         """Normalize and cross-validate one complete configuration snapshot."""
 
         expected = set(self.by_key)
@@ -102,7 +102,7 @@ class ConfigRegistry:
         self.normalize_snapshot(values)
 
     @staticmethod
-    def display_value(kind: ConfigKind, value: object) -> str:
+    def display_value(kind: ConfigKind, value: ConfigValue) -> str:
         """Render a canonical scalar for the admin configuration form."""
 
         if kind is ConfigKind.BOOL:

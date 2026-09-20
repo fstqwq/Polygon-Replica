@@ -1,8 +1,10 @@
 import heapq
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 
 from app.service.judgehost.batch.model import (
     CaseExecutionRow,
+    CaseDebugContext,
+    CaseOutputRow,
     CaseClaim,
     CaseCallbackReceipt,
     CaseClaimBusy,
@@ -14,8 +16,10 @@ from app.service.judgehost.batch.model import (
     PendingCaseDiagnostic,
     ProgramTerminalClaim,
     ProgramTerminalClaimOutcome,
+    TaskCaseRow,
 )
 from app.service.judgehost.batch.snapshot import case_snapshot
+from app.service.execution.model import JsonValue
 from app.service.judgehost.domjudge.case_result import build_case_result
 from app.service.judgehost.domjudge.result import verdict_from_runresult
 from app.service.platform.error_text import bounded_display_text
@@ -29,9 +33,21 @@ _PENDING_DIAGNOSTIC_KINDS = frozenset({"debug-info", "internal-error"})
 _PENDING_DIAGNOSTIC_MAX_ITEMS = 32
 
 
+class PendingDiagnosticItem(TypedDict):
+    kind: str
+    hostname: str
+    text: str
+    received_at: str
+    digest: str
+
+
+class PendingDiagnosticPayload(TypedDict):
+    items: list[PendingDiagnosticItem]
+
+
 def _pending_diagnostic_payload(
     diagnostics: list[PendingCaseDiagnostic],
-) -> dict[str, object]:
+) -> PendingDiagnosticPayload:
     return {
         "items": [
             {
@@ -130,13 +146,11 @@ class BatchCompletion:
         self,
         batch: ExecutionBatchRecord,
         *,
-        test_name: str,
         feedback_text: str,
         compile_log: str = "",
-        compile_diagnostics: tuple[dict[str, object], ...] = (),
+        compile_diagnostics: tuple[dict[str, JsonValue], ...] = (),
     ) -> CaseResult:
         return build_case_result(
-            test_name=test_name,
             runresult=batch.failure_runresult,
             verdict=verdict_from_runresult(batch.failure_runresult),
             runtime_sec=0.0,
@@ -152,7 +166,6 @@ class BatchCompletion:
             compare_metadata_ref="",
             team_message_ref="",
             feedback_text=feedback_text,
-            feedback_files=(),
             answer_correct=False,
             compile_log=compile_log,
             compile_diagnostics=compile_diagnostics,
@@ -163,14 +176,13 @@ class BatchCompletion:
         batch: ExecutionBatchRecord,
         *,
         compile_log: str = "",
-        compile_diagnostics: tuple[dict[str, object], ...] = (),
+        compile_diagnostics: tuple[dict[str, JsonValue], ...] = (),
         updated_at: str,
     ) -> None:
         if batch.program_failure_result is not None:
             return
         batch.program_failure_result = self._program_failure_case_result_locked(
             batch,
-            test_name="",
             feedback_text=batch.failure_text,
             compile_log=compile_log,
             compile_diagnostics=compile_diagnostics,
@@ -209,7 +221,6 @@ class BatchCompletion:
                     )
             result = self._program_failure_case_result_locked(
                 batch,
-                test_name=case.test_name,
                 feedback_text=case_feedback,
                 compile_log=compile_log,
                 compile_diagnostics=compile_diagnostics,
@@ -311,7 +322,7 @@ class BatchCompletion:
         compile_metadata_b64: str,
         failure_text: str,
         compile_log: str,
-        compile_diagnostics: tuple[dict[str, object], ...],
+        compile_diagnostics: tuple[dict[str, JsonValue], ...],
         updated_at: str,
     ) -> ProgramTerminalClaim:
         with self._state._lock:
@@ -675,7 +686,7 @@ class BatchCompletion:
 
     def case_output_for_task(
         self, task_id: str, test_name: str
-    ) -> dict[str, object] | None:
+    ) -> CaseOutputRow | None:
         with self._state._lock:
             case_id = self._state._latest_case_id_by_task_test.get((task_id, test_name))
             if case_id is None:
@@ -687,7 +698,7 @@ class BatchCompletion:
                 "output_run_ref": output_ref,
             }
 
-    def case_for_task(self, task_id: str, test_name: str) -> dict[str, object] | None:
+    def case_for_task(self, task_id: str, test_name: str) -> TaskCaseRow | None:
         with self._state._lock:
             case_id = self._state._latest_case_id_by_task_test.get((task_id, test_name))
             if case_id is None:
@@ -862,7 +873,7 @@ class BatchCompletion:
 
     def _finish_claim_locked(
         self,
-        case,
+        case: CaseRecord,
         *,
         result: CaseResult,
         updated_at: str,
@@ -1246,7 +1257,7 @@ class BatchCompletion:
                 return False
             return True
 
-    def case_debug_context(self, case_id: int) -> dict[str, object] | None:
+    def case_debug_context(self, case_id: int) -> CaseDebugContext | None:
         with self._state._lock:
             case = self._state._cases.get(int(case_id))
             if case is None:
@@ -1256,15 +1267,6 @@ class BatchCompletion:
                 "case_debug_text": case.debug_text,
                 "batch_debug_text": self._state._batches[case.batch_id].debug_text,
             }
-
-    def batch_debug_context(self, batch_id: int) -> dict[str, object] | None:
-        with self._state._lock:
-            batch = self._state._batches.get(int(batch_id))
-            return (
-                None
-                if batch is None
-                else {"batch_id": batch.batch_id, "debug_text": batch.debug_text}
-            )
 
     def append_debug_text(
         self,
@@ -1288,17 +1290,3 @@ class BatchCompletion:
     def _merge_debug_text(current: str, incoming: str) -> str:
         merged = incoming if not current else f"{current}\n{incoming}"
         return merged[-4000:]
-
-    def case_progress_for_runs(self, run_ids: list[str]) -> dict[str, dict[str, int]]:
-        with self._state._lock:
-            result: dict[str, dict[str, int]] = {}
-            for run_id in (run_id for run_id in run_ids if run_id):
-                counts = self._state._run_counts.get(run_id)
-                if counts is None or counts.total == 0:
-                    continue
-                result[run_id] = {
-                    "total": counts.total,
-                    "reported": counts.reported,
-                    "leased": counts.leased + counts.reporting,
-                }
-            return result

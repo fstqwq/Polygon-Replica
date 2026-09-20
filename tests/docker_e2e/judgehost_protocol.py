@@ -49,27 +49,6 @@ WORK_REQUIRED_FIELDS = (
     "compare_config",
 )
 
-COMPILE_REPORT_FIELDS = (
-    "compile_success",
-    "output_compile",
-    "compile_metadata",
-)
-
-FINAL_REPORT_FIELDS = (
-    "runresult",
-    "start_time",
-    "end_time",
-    "runtime",
-    "output_run",
-    "output_error",
-    "output_system",
-    "metadata",
-    "output_diff",
-    "hostname",
-    "testcasedir",
-    "compare_metadata",
-)
-
 
 def state_dir() -> Path:
     """Return the shared E2E state directory from the container environment."""

@@ -48,6 +48,7 @@ from app.impl.auth.password_envelope import (
 )
 from app.impl.runtime.dependency import runtime
 from app.main_util import form_text
+from app.service.auth.model import AuthUserRow, RateLimitHit
 from app.service.auth.password_hash import password_verifier_storage_hash
 
 _REGISTRATION_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -90,13 +91,10 @@ def _request_user_agent(request: Request | None) -> str:
     return str(request.headers.get("user-agent") or "").strip()[:512]
 
 
-def _is_system_admin_auth_row(row: dict[str, object] | None) -> bool:
+def _is_system_admin_auth_row(row: AuthUserRow | None) -> bool:
     if row is None:
         return False
-    user_id = row.get("id")
-    if not isinstance(user_id, int) or isinstance(user_id, bool):
-        return False
-    return runtime().access_query.is_system_admin(user_id)
+    return runtime().access_query.is_system_admin(row["id"])
 
 
 def _normalize_email_address(value: str) -> tuple[str, str]:
@@ -148,7 +146,7 @@ def _default_email_allow_regex() -> str:
     return default
 
 
-def _hit_auth_rate_limit(bucket_key: str, *, limit: int, window_sec: int) -> dict[str, object]:
+def _hit_auth_rate_limit(bucket_key: str, *, limit: int, window_sec: int) -> RateLimitHit:
     return runtime().auth_service.hit_rate_limit(
         bucket_key,
         limit=int(limit),
@@ -164,11 +162,9 @@ def _enforce_auth_rate_limit(
     message: str = "too many registration attempts",
 ) -> None:
     hit = _hit_auth_rate_limit(bucket_key, limit=limit, window_sec=window_sec)
-    if bool(hit["allowed"]):
+    if hit["allowed"]:
         return
     retry_after_sec = hit["retry_after_sec"]
-    if not isinstance(retry_after_sec, int) or isinstance(retry_after_sec, bool):
-        raise RuntimeError("auth rate-limit retry delay must be an integer")
     raise ValueError(f"{message}; retry in {retry_after_sec}s")
 
 

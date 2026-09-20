@@ -1,8 +1,14 @@
 import ast
+from typing import Literal
 
 
-def _tokenize_expr(expr: str) -> list[tuple[str, object]]:
-    tokens: list[tuple[str, object]] = []
+type ExpressionToken = tuple[
+    Literal["op", "string", "number", "builtin", "ident", "eof"], str | int | float
+]
+
+
+def _tokenize_expr(expr: str) -> list[ExpressionToken]:
+    tokens: list[ExpressionToken] = []
     text = str(expr or "")
     n = len(text)
     i = 0
@@ -91,4 +97,3 @@ def _tokenize_expr(expr: str) -> list[tuple[str, object]]:
             continue
         raise ValueError(f"unsupported token: {ch}")
     return tokens
-

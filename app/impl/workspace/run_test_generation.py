@@ -1,31 +1,10 @@
 from pathlib import Path
-from typing import TypedDict
 
 from app.impl.workspace.run_display import generation_status_text
+from app.impl.workspace.run_view_model import TestGenerationView
 from app.service.platform.error_text import bounded_display_text
-from app.service.verification.task_store import VerificationTaskRow
+from app.service.verification.types import VerificationTaskRow, VerificationTestMetadata
 from app.service.verification.types import VerificationTaskStatus
-
-
-class TestGenerationView(TypedDict):
-    source_kind: str
-    command: str
-    source_path: str
-    display_source: str
-    status: str
-    verdict: str
-    status_text: str
-    feedback_display: str
-    error_text: str
-    terminal: bool
-    tone: str
-    status_label: str
-    table_text: str
-    detail: str
-    alert_severity: str
-    alert_message: str
-    duplicate_of: str
-    skipped: bool
 
 
 def _owner_order(row: VerificationTaskRow) -> tuple[str, str]:
@@ -73,7 +52,7 @@ def _duplicate_owner_by_task_id(
 
 def _source_kind_and_command(
     row: VerificationTaskRow | None,
-    tests_meta: dict[str, object],
+    tests_meta: VerificationTestMetadata,
 ) -> tuple[str, str, str]:
     source_path = "" if row is None else str(row["source_path"])
     if not source_path:
@@ -104,7 +83,7 @@ def _status_presentation(status: str, verdict: str) -> tuple[str, str, str]:
 
 def build_test_generation_views(
     task_rows: list[VerificationTaskRow],
-    tests_meta_by_test_name: dict[str, dict[str, object]],
+    tests_meta_by_test_name: dict[str, VerificationTestMetadata],
     *,
     limit_bytes: int,
 ) -> dict[str, TestGenerationView]:

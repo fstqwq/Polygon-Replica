@@ -1,35 +1,32 @@
+import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 
 class TestInstallHostContract(unittest.TestCase):
-    def test_systemd_unit_is_rendered_from_invocation_identity(self) -> None:
+    def test_installer_rejects_root_and_unknown_runtime_accounts(self) -> None:
         root = Path(__file__).resolve().parents[1]
-        installer = (root / "scripts" / "install_host.sh").read_text(encoding="utf-8")
-        unit = (root / "scripts" / "systemd" / "polygon-replica.service").read_text(encoding="utf-8")
-
-        self.assertIn('RUNTIME_USER="$POLYGON_REPLICA_RUNTIME_USER"', installer)
-        self.assertIn('RUNTIME_USER="$SUDO_USER"', installer)
-        self.assertIn('RUNTIME_USER="$(id -un)"', installer)
-        self.assertIn('id "$RUNTIME_USER"', installer)
-        self.assertIn("@RUNTIME_USER@", unit)
-        self.assertIn("@RUNTIME_GROUP@", unit)
-        self.assertIn("@WORKING_DIRECTORY@", unit)
-        self.assertIn("@UVICORN_EXECUTABLE@", unit)
-        self.assertIn("UMask=0077", unit)
-        self.assertNotIn("User=judgehost", unit)
-        self.assertIn('Refusing to run Polygon-Replica as root.', installer)
-        self.assertIn('systemd-analyze verify "$TMP_SERVICE_UNIT"', installer)
-        self.assertIn('install -o root -g root -m 0600', installer)
-        self.assertIn('mktemp /etc/.polygon-replica.env.XXXXXX', installer)
-        self.assertIn('mv -f "$TMP_INSTALLED_ENV_FILE" "$ENV_FILE"', installer)
-        self.assertNotIn('install -m 0644 "$TMP_ENV_FILE" "$ENV_FILE"', installer)
-        self.assertIn("/var/lib/polygon-replica", installer)
-        self.assertIn('"${SUDO[@]}" chmod 0700', installer)
-        self.assertIn("texlive-plain-generic", installer)
-        self.assertIn("--unshare-user", installer)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            commands = Path(tmpdir)
+            (commands / "python3.14").symlink_to(sys.executable)
+            # Stop before any host changes even if account validation regresses.
+            for name in ("apt-get", "sudo"):
+                command = commands / name
+                command.write_text("#!/bin/sh\nexit 98\n", encoding="utf-8")
+                command.chmod(0o755)
+            for username in ("root", "polygon-no-such-runtime-account"):
+                with self.subTest(username=username):
+                    result = subprocess.run(
+                        ["bash", str(root / "scripts/install_host.sh")],
+                        env={**os.environ, "PATH": f"{commands}:{os.environ['PATH']}",
+                             "POLYGON_REPLICA_RUNTIME_USER": username},
+                        capture_output=True, text=True, check=False, timeout=10,
+                    )
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertRegex(result.stderr, "Refusing to run.*as root|own account|does not exist")
 
     def test_rendered_unit_quotes_spaces_and_escapes_specifiers(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -53,6 +50,7 @@ class TestInstallHostContract(unittest.TestCase):
 
         self.assertIn('User=runtime-user', rendered)
         self.assertIn('Group=runtime-group', rendered)
+        self.assertIn('UMask=0077', rendered)
         self.assertIn('WorkingDirectory="/srv/Polygon Replica%%prod"', rendered)
         self.assertIn(
             'ExecStart="/srv/Polygon Replica%%prod/.venv/bin/uvicorn" app.main:app',

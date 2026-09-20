@@ -1,5 +1,5 @@
 from dataclasses import replace
-from typing import cast
+from collections.abc import Mapping
 
 from app.service.execution.model import (
     CAPTURE_COMPLETE,
@@ -15,32 +15,31 @@ from app.service.execution.policy import (
     normalize_execution_result,
 )
 from app.service.execution.test_rows import (
+    ExecutionTestRow,
     build_execution_test_pass_row,
     build_execution_test_row,
 )
 from app.service.judgehost.ports.completion import CaseTerminalReport
+from app.service.judgehost.task.result_model import TaskSummary
 
 
 def execution_result_with_terminal_context(
     result: ExecutionResult,
     *,
-    summary: dict[str, object],
+    summary: TaskSummary,
     error_text: str,
 ) -> ExecutionResult:
     """Attach task-level compile/error context without rebuilding pass evidence."""
-    summary_diagnostics = cast(
-        list[dict[str, object]],
-        summary.get("compile_diagnostics") or [],
-    )
+    summary_diagnostics = summary.get("compile_diagnostics", [])
     diagnostics = (
         result.compile.diagnostics
         if result.compile.diagnostics
         else canonical_compile_diagnostics(summary_diagnostics)
     )
-    summary_error = str(summary.get("error") or "")
+    summary_error = summary.get("error", "")
     compile_log = result.compile.log
     if not compile_log and diagnostics:
-        compile_log = str(summary.get("compile_log") or summary_error or error_text)
+        compile_log = summary.get("compile_log") or summary_error or error_text
     resolved_error = result.outcome.error or error_text or summary_error
     return canonical_execution_result(
         replace(
@@ -53,23 +52,20 @@ def execution_result_with_terminal_context(
 
 def build_missing_case_result(
     *,
-    summary: dict[str, object],
+    summary: TaskSummary,
     error_text: str,
 ) -> ExecutionResult:
-    diagnostics = cast(
-        list[dict[str, object]],
-        summary.get("compile_diagnostics") or [],
-    )
+    diagnostics = summary.get("compile_diagnostics", [])
     return normalize_execution_result(
         verdict="CE" if diagnostics else "FL",
         error=error_text,
         compile_log=(
-            str(summary.get("compile_log") or summary.get("error") or error_text)
+            summary.get("compile_log") or summary.get("error") or error_text
             if diagnostics
             else ""
         ),
         compile_diagnostics=diagnostics,
-        warnings=cast(list[str], summary.get("warnings") or []),
+        warnings=summary.get("warnings", []),
     )
 
 
@@ -81,7 +77,7 @@ def build_case_terminal_report(
     status: str,
     task_status: str,
     error_text: str,
-    summary: dict[str, object],
+    summary: TaskSummary,
     missing_case_result: bool,
     execution_result: ExecutionResult,
 ) -> CaseTerminalReport:
@@ -101,7 +97,6 @@ def build_case_terminal_report(
 
 def build_case_result(
     *,
-    test_name: str,
     runresult: str,
     verdict: str,
     runtime_sec: float,
@@ -117,7 +112,6 @@ def build_case_result(
     compare_metadata_ref: str,
     team_message_ref: str,
     feedback_text: str,
-    feedback_files: list[str] | tuple[str, ...],
     answer_correct: bool,
     input_ref: str = "",
     interactive: bool = False,
@@ -126,7 +120,7 @@ def build_case_result(
     warnings: tuple[str, ...] = (),
     usage: ExecutionUsage | None = None,
     compile_log: str = "",
-    compile_diagnostics: tuple[dict[str, object], ...] = (),
+    compile_diagnostics: tuple[Mapping[str, object], ...] = (),
 ) -> ExecutionResult:
     resolved_usage = usage or ExecutionUsage(
         runtime_sec=max(0.0, float(runtime_sec)),
@@ -188,7 +182,7 @@ def build_case_result(
 
 def decode_case_test_row(
     result: ExecutionResult, *, test_name: str, include_passes: bool = True
-) -> dict[str, object]:
+) -> ExecutionTestRow:
     passes = [
         build_execution_test_pass_row(
             verdict=pass_result.verdict,

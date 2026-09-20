@@ -1,30 +1,13 @@
-import json
 from collections.abc import Mapping, Sequence
-from typing import TypedDict, cast
+from typing import TypedDict
 
 from app.service.platform.error_text import truncate_display_text
-
-
-class TruncatedText(TypedDict):
-    text: str
-    truncated: bool
-    total_bytes: int
 
 
 class CanonicalDiagnostics(TypedDict):
     rows: list[dict[str, object]]
     truncated: bool
     total: int
-
-
-def canonical_truncated_text(value: str, *, limit: int) -> TruncatedText:
-    raw_text = str(value or "")
-    text, truncated = truncate_display_text(raw_text, limit_bytes=max(1, int(limit)))
-    return {
-        "text": text,
-        "truncated": bool(truncated),
-        "total_bytes": len(raw_text.encode("utf-8")),
-    }
 
 
 def _normalize_diagnostics_for_db(
@@ -67,27 +50,7 @@ def canonical_diagnostics(
     selected = raw_rows[:cap]
     rows = _normalize_diagnostics_for_db(selected, max(1, int(message_limit)))
     return {
-        "rows": cast(list[dict[str, object]], rows),
+        "rows": rows,
         "truncated": total > len(rows),
         "total": total,
     }
-
-
-def diagnostics_json_text(rows: list[dict[str, object]]) -> str:
-    return json.dumps(rows, ensure_ascii=True, separators=(",", ":"))
-
-
-def normalize_diagnostics_json_text(raw_json: str, *, message_limit: int) -> str:
-    text = str(raw_json or "").strip()
-    if not text:
-        return "[]"
-    try:
-        payload = json.loads(text)
-    except Exception:
-        return "[]"
-    if not isinstance(payload, list):
-        return "[]"
-    if not payload:
-        return "[]"
-    rows = _normalize_diagnostics_for_db(payload, max(1, int(message_limit)))
-    return diagnostics_json_text(rows)

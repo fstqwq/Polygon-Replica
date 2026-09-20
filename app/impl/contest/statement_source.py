@@ -1,12 +1,12 @@
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, TypedDict
 from urllib.parse import urlencode
 
 from fastapi import Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
 
 from app.impl.auth.session import require_session_user
-from app.impl.contest.shared import _contest_ctx, _contest_redirect
+from app.impl.contest.shared import ContestPageContext, _contest_ctx, _contest_redirect
 from app.impl.runtime.dependency import runtime
 from app.main_util import enforce_textarea_max_bytes, read_upload_bytes_limited
 from app.service.contest.statement_source_contract import (
@@ -17,6 +17,43 @@ from app.service.contest.statement_source_contract import (
 )
 from app.service.statement.constant import DEFAULT_OLYMP_STY
 from app.service.statement.context import normalize_statement_language
+
+
+class ContestStoredStatementSource(TypedDict):
+    display_path: str
+    is_text: bool
+    size_bytes: int | None
+    created_at: str
+    source_display: str
+    source_tone: str
+    stored: bool
+
+
+class ContestStatementSourceRow(ContestStoredStatementSource):
+    download_href: str
+    edit_href: str
+    delete_message: str
+
+
+class ContestStatementUploadScope(TypedDict):
+    value: str
+    label: str
+    selected: bool
+
+
+class ContestStatementSourceContext(TypedDict):
+    contest_statement_language: str
+    contest_statement_language_options: list[str]
+    contest_statement_source_is_shared: bool
+    contest_statement_source_query: str
+    contest_statement_upload_scopes: list[ContestStatementUploadScope]
+    contest_statement_source_rows: list[ContestStatementSourceRow]
+    contest_statement_selected_path: str
+    contest_statement_selected_key: str
+    contest_statement_selected_is_text: bool
+    contest_statement_selected_exists: bool
+    contest_statement_selected_text: str
+    contest_statement_source_error: str
 
 
 def _contest_statement_sources_query(
@@ -127,9 +164,9 @@ def _contest_statement_source_rows(
     contest_id: int,
     contest_slug: str,
     language: str,
-) -> list[dict[str, object]]:
+) -> list[ContestStatementSourceRow]:
     prefix = f"statements/{language}/"
-    stored_rows: dict[str, dict[str, object]] = {}
+    stored_rows: dict[str, ContestStoredStatementSource] = {}
     for row in runtime().contest_service.statement_attachment_rows(contest_id):
         key = str(row.get("rel_path") or "").strip()
         if not key.startswith(prefix):
@@ -187,16 +224,17 @@ def _contest_statement_source_rows(
                 "stored": False,
             }
 
+    source_rows: list[ContestStatementSourceRow] = []
     for display_path, source_row in stored_rows.items():
-        source_row["download_href"] = (
+        download_href = (
             f"/contests/{contest_slug}/properties/statement/files?"
             f"{urlencode({'language': language, 'path': display_path})}"
         )
-        source_row["edit_href"] = (
+        edit_href = (
             f"/contests/{contest_slug}/properties?"
             f"{_contest_statement_sources_query(language=language, source_path=display_path)}"
         )
-        source_row["delete_message"] = (
+        delete_message = (
             f"Delete {display_path}?"
             + (
                 " The default template will be used instead."
@@ -204,13 +242,19 @@ def _contest_statement_source_rows(
                 else ""
             )
         )
+        source_rows.append(ContestStatementSourceRow(
+            **source_row,
+            download_href=download_href,
+            edit_href=edit_href,
+            delete_message=delete_message,
+        ))
 
     default_order = {
         display_path: index
         for index, display_path in enumerate(CONTEST_STATEMENT_LANGUAGE_DEFAULT_FILES)
     }
     return sorted(
-        stored_rows.values(),
+        source_rows,
         key=lambda item: (
             default_order.get(str(item["display_path"]), len(default_order)),
             str(item["display_path"]),
@@ -226,7 +270,7 @@ def contest_statement_source_context(
     source_path: str,
     scope: str = "",
     additional_languages: tuple[str, ...] = (),
-) -> dict[str, object]:
+) -> ContestStatementSourceContext:
     language_options = contest_statement_language_options(
         contest_id,
         language,
@@ -307,11 +351,11 @@ def contest_statement_source_context(
                 "selected": current_language == CONTEST_STATEMENT_SHARED_SCOPE,
             },
             *[
-                {
-                    "value": option,
-                    "label": option.title(),
-                    "selected": current_language == option,
-                }
+                ContestStatementUploadScope(
+                    value=option,
+                    label=option.title(),
+                    selected=current_language == option,
+                )
                 for option in language_options
             ],
         ],
@@ -329,21 +373,12 @@ def contest_statement_source_context(
     }
 
 
-def statement_review_languages(ctx: dict[str, object]) -> tuple[str, ...]:
-    groups = ctx.get("statement_review_link_groups")
-    if not isinstance(groups, list):
-        return ()
+def statement_review_languages(ctx: ContestPageContext) -> tuple[str, ...]:
+    groups = ctx["statement_review_link_groups"]
     languages: list[str] = []
     for group in groups:
-        if not isinstance(group, dict):
-            continue
-        links = group.get("links")
-        if not isinstance(links, list):
-            continue
-        for link in links:
-            if not isinstance(link, dict):
-                continue
-            language = normalize_statement_language(str(link.get("language") or ""))
+        for link in group["links"]:
+            language = normalize_statement_language(link["language"])
             if language and language not in languages:
                 languages.append(language)
     return tuple(languages)

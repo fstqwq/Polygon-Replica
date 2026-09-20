@@ -1,8 +1,9 @@
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import closing, contextmanager
 from pathlib import Path
-from typing import Callable
+
+from app.db import SQLValue
 
 from tests.common import db
 from app.main import runtime
@@ -15,6 +16,7 @@ from app.service.verification.lifecycle import (
     VerificationAdmission,
     VerificationProgram,
 )
+from app.service.verification.types import VerificationDetail
 
 
 @contextmanager
@@ -27,29 +29,21 @@ def _persisted_read() -> Iterator[sqlite3.Connection]:
         yield connection
 
 
-def db_fetch_one(sql: str, params: list[object] | tuple[object, ...] | None = None):
+def db_fetch_one(sql: str, params: Sequence[SQLValue] | None = None) -> sqlite3.Row | None:
     values = [] if params is None else list(params)
     with _persisted_read() as connection:
         return connection.execute(sql, values).fetchone()
 
 
-def db_fetch_all(sql: str, params: list[object] | tuple[object, ...] | None = None):
+def db_fetch_all(sql: str, params: Sequence[SQLValue] | None = None) -> list[sqlite3.Row]:
     values = [] if params is None else list(params)
     with _persisted_read() as connection:
         return connection.execute(sql, values).fetchall()
 
 
-def db_execute(sql: str, params: list[object] | tuple[object, ...] | None = None):
+def db_execute(sql: str, params: Sequence[SQLValue] | None = None) -> None:
     values = [] if params is None else list(params)
     return db.execute(sql, values)
-
-
-def db_write_transaction(func: Callable):
-    return db.write_transaction(func)
-
-
-def db_connection():
-    return db.conn()
 
 
 def admit_test_verification(
@@ -78,16 +72,12 @@ def activate_test_verification(
     *,
     programs: list[VerificationProgram] | tuple[VerificationProgram, ...],
     tasks: list[PlannedTask] | tuple[PlannedTask, ...],
-    detail: dict[str, object] | None = None,
+    detail: VerificationDetail | None = None,
 ) -> ActivationCommit:
     return runtime.verification_service.activate_verification(
         ActivationPlan.build(
             verification_id,
-            detail=(
-                {"verification_id": verification_id, "task_graph": True}
-                if detail is None
-                else detail
-            ),
+            detail={} if detail is None else detail,
             programs=programs,
             tasks=tasks,
         )
@@ -127,15 +117,3 @@ def verification_programs_for_tasks(
             )
         )
     return programs
-
-
-def judgehost_fetch_case(service, case_id: int):
-    return service.case_snapshot(int(case_id))
-
-
-def judgehost_fetch_batch(service, batch_id: int):
-    return service.batch_snapshot(int(batch_id))
-
-
-def judgehost_cases_for_run(service, run_id: str):
-    return service.run_case_snapshots(run_id)

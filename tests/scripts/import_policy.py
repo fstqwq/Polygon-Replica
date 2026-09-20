@@ -3,9 +3,10 @@ import ast
 import json
 import sys
 from collections import Counter, defaultdict
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TypedDict
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -17,6 +18,56 @@ _VARIADIC_APPLICATION_ADAPTERS = frozenset(
         ("app.service.repository.merge", "_git"),
     }
 )
+
+_PERSISTENCE_OWNERS = frozenset({
+    "app.runtime",
+    "app.service.auth.service",
+    "app.service.contest.service",
+    "app.service.export.service",
+    "app.service.mail.smtp_config",
+    "app.service.repository.workspace",
+    "app.service.runtime.state_service",
+    "app.service.verification.service",
+    "app.service.platform.system_config",
+})
+
+
+class ViolationPayload(TypedDict):
+    rule: str
+    file: str
+    line: int
+    importer: str
+    target: str
+    message: str
+
+
+class AuditSummary(TypedDict):
+    violations_total: int
+    cycles_total: int
+    rule_counts: dict[str, int]
+
+
+class AuditMetadata(TypedDict):
+    pythonFileCount: int
+    applicationModuleCount: int
+    summary: AuditSummary
+
+
+class AuditFileCounts(TypedDict):
+    pythonFileCount: int
+    applicationModuleCount: int
+
+
+class CyclePayload(TypedDict):
+    nodes: list[str]
+
+
+class AuditPayload(TypedDict):
+    generatedAt: str
+    summary: AuditSummary
+    meta: AuditFileCounts
+    violations: list[ViolationPayload]
+    cycles: list[CyclePayload]
 
 
 @dataclass(frozen=True)
@@ -373,7 +424,45 @@ def _layer_violation(importer: str, target: str) -> str | None:
     return f"layer `{layer}` cannot import `{target}`"
 
 
-def collect_audit() -> tuple[list[Violation], list[list[str]], dict[str, object]]:
+def _persistence_violations(
+    *, relative: str, importer_module: str, tree: ast.Module,
+) -> list[Violation]:
+    violations: list[Violation] = []
+    is_application = importer_module.startswith("app.")
+    is_impl = importer_module.startswith("app.impl.")
+    is_test_case = importer_module.startswith("tests.test_")
+    for node in ast.walk(tree):
+        targets: list[str] = []
+        if is_application:
+            if isinstance(node, ast.ImportFrom) and node.module:
+                targets = [node.module]
+            elif isinstance(node, ast.Import):
+                targets = [alias.name for alias in node.names]
+        for target in targets:
+            if target.startswith(("app.service.disk.", "app.service.memory.")) and importer_module not in _PERSISTENCE_OWNERS:
+                violations.append(Violation(
+                    "PERSISTENCE_IMPORT", relative, node.lineno, importer_module,
+                    target, "private persistence imports require an owning service",
+                ))
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr not in {"fetch_one", "fetch_all", "execute", "write_transaction"}:
+            continue
+        receiver = node.func.value
+        is_database = (
+            isinstance(receiver, ast.Name) and receiver.id == "db"
+        ) or (
+            isinstance(receiver, ast.Attribute) and receiver.attr == "db"
+        )
+        if is_impl or (is_test_case and is_database):
+            violations.append(Violation(
+                "PERSISTENCE_SQL", relative, node.lineno, importer_module,
+                ast.unparse(node.func), "SQL belongs in persistence owners and test database fixtures",
+            ))
+    return violations
+
+
+def collect_audit() -> tuple[list[Violation], list[list[str]], AuditMetadata]:
     """Inspect every repository Python file and the complete application graph."""
 
     violations: list[Violation] = []
@@ -389,6 +478,10 @@ def collect_audit() -> tuple[list[Violation], list[list[str]], dict[str, object]
         source = _read_text(path)
         module = module_by_path[path]
         tree = ast.parse(source, filename=relative)
+
+        violations.extend(_persistence_violations(
+            relative=relative, importer_module=module, tree=tree,
+        ))
 
         violations.extend(
             _all_reexport_violations(
@@ -498,7 +591,7 @@ def collect_audit() -> tuple[list[Violation], list[list[str]], dict[str, object]
         graph.setdefault(module, set())
     cycles = _cycle_signatures(graph)
     counts = Counter(violation.rule for violation in violations)
-    metadata: dict[str, object] = {
+    metadata: AuditMetadata = {
         "pythonFileCount": len(python_files),
         "applicationModuleCount": len(app_modules),
         "summary": {
@@ -517,36 +610,38 @@ def collect_audit() -> tuple[list[Violation], list[list[str]], dict[str, object]
 def _audit_payload(
     violations: list[Violation],
     cycles: list[list[str]],
-    metadata: dict[str, object],
-) -> dict[str, object]:
+    metadata: AuditMetadata,
+) -> AuditPayload:
     return {
         "generatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "summary": metadata["summary"],
-        "meta": {key: value for key, value in metadata.items() if key != "summary"},
-        "violations": [asdict(violation) for violation in violations],
+        "meta": {
+            "pythonFileCount": metadata["pythonFileCount"],
+            "applicationModuleCount": metadata["applicationModuleCount"],
+        },
+        "violations": [
+            {"rule": item.rule, "file": item.file, "line": item.line,
+             "importer": item.importer, "target": item.target, "message": item.message}
+            for item in violations
+        ],
         "cycles": [{"nodes": nodes} for nodes in cycles],
     }
 
 
-def _print_text_report(payload: dict[str, object], *, show_details: bool) -> None:
+def _print_text_report(payload: AuditPayload, *, show_details: bool) -> None:
     summary = payload["summary"]
-    assert isinstance(summary, dict)
     print(
         "Import policy audit: "
         f"violations={summary['violations_total']} cycles={summary['cycles_total']}"
     )
     rule_counts = summary["rule_counts"]
-    assert isinstance(rule_counts, dict)
     for rule, count in sorted(rule_counts.items()):
         print(f"  {rule}: {count}")
     violations = payload["violations"]
     cycles = payload["cycles"]
-    assert isinstance(violations, list)
-    assert isinstance(cycles, list)
     if show_details and violations:
         print("\nViolations:")
         for violation in violations:
-            assert isinstance(violation, dict)
             print(
                 f"  - {violation['file']}:{violation['line']} [{violation['rule']}] "
                 f"{violation['message']} "
@@ -555,9 +650,7 @@ def _print_text_report(payload: dict[str, object], *, show_details: bool) -> Non
     if show_details and cycles:
         print("\nCycles:")
         for cycle in cycles:
-            assert isinstance(cycle, dict)
             nodes = cycle["nodes"]
-            assert isinstance(nodes, list)
             print(f"  - {' -> '.join(nodes)}")
 
 

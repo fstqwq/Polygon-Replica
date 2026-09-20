@@ -29,6 +29,7 @@ from app.service.statement.latex_error import (
     latex_log_for_display,
 )
 from app.service.statement.tex_compile import TexCompileService
+from app.service.statement.preview_state import StatementPdfProblemResult, StatementPreviewSummary
 
 
 _EXTRACTBB_SUFFIXES = {".bmp", ".jpeg", ".jpg", ".pdf", ".png"}
@@ -109,7 +110,7 @@ class ContestStatementService:
         return DEFAULT_STATEMENT_TEMPLATE
 
     @staticmethod
-    def _latex_escape(value: object) -> str:
+    def _latex_escape(value: str) -> str:
         replacements = {
             "\\": r"\textbackslash{}",
             "&": r"\&",
@@ -124,7 +125,7 @@ class ContestStatementService:
         }
         return "".join(
             replacements.get(character, character)
-            for character in str(value)
+            for character in value
         )
 
     def _statements_template_context(
@@ -304,7 +305,7 @@ class ContestStatementService:
         compile_root: Path,
         statements_root: Path,
         language: str,
-        results: list[dict[str, object]],
+        results: list[StatementPdfProblemResult],
     ) -> None:
         tikz_libraries: list[str] = []
         color_definitions: list[str] = []
@@ -322,11 +323,8 @@ class ContestStatementService:
             for library in self._hoist_tikz_libraries(problem_tex):
                 if library not in tikz_libraries:
                     tikz_libraries.append(library)
-            preamble_lines = row.get("preamble_lines")
-            if not isinstance(preamble_lines, list):
-                preamble_lines = []
-            for raw_line in preamble_lines:
-                line = str(raw_line).strip()
+            for raw_line in row.get("preamble_lines", []):
+                line = raw_line.strip()
                 if line and line not in color_definitions:
                     color_definitions.append(line)
             for line in self._extract_color_definitions(problem_tex):
@@ -505,7 +503,7 @@ class ContestStatementService:
         problem_entries: Sequence[ContestProblem],
         render_roots: Mapping[int, Path],
         output_root: Path,
-    ) -> dict[str, object]:
+    ) -> StatementPreviewSummary:
         """Compile one complete Contest document into a Preview-owned root."""
 
         compile_root = (output_root / "contest-pdf-src").resolve()
@@ -532,12 +530,12 @@ class ContestStatementService:
             source_folder_map=source_folders,
         )
         self._ensure_cjk_support(statements_root / CONTEST_STATEMENT_OUTPUT_NAME)
-        results: list[dict[str, object]] = []
+        results: list[StatementPdfProblemResult] = []
         for entry in problem_entries:
             problem_id = int(entry["problem_id"])
             problem_slug = str(entry["problem_slug"])
             source_folder = problem_source_folder(entry, source_folders)
-            item: dict[str, object] = {
+            item: StatementPdfProblemResult = {
                 "idx": str(entry.get("idx") or ""),
                 "problem_id": problem_id,
                 "problem_slug": problem_slug,
@@ -568,7 +566,7 @@ class ContestStatementService:
                     item["error"] = str(exc)
             results.append(item)
         failed = [row for row in results if row["status"] != "success"]
-        summary: dict[str, object] = {
+        summary: StatementPreviewSummary = {
             "job_type": "preview-pdf",
             "contest_slug": contest_slug,
             "language": language,

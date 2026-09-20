@@ -167,3 +167,9 @@ class ProblemAclEntry(TypedDict):
     role: str
     created_at: str
     is_system_admin: int
+
+
+class WritableProblemRow(TypedDict):
+    problem_id: int
+    problem_slug: str
+    role: AccessRole

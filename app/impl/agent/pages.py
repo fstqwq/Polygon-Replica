@@ -4,13 +4,14 @@ from app.impl.agent.shared import current_web_user
 from app.impl.auth.shared import json_redirect_response, redirect_response, template_response
 from app.impl.runtime.dependency import runtime
 from app.service.auth.model import AuthSessionIdentity
+from app.service.repository.workspace import GlobalUserContext
 
 
 def _request_base_url(request: Request) -> str:
     return str(request.base_url).rstrip("/")
 
 
-def _template_user(user: AuthSessionIdentity) -> dict[str, object]:
+def _template_user(user: AuthSessionIdentity) -> GlobalUserContext:
     user_id = user["user_id"]
     return {
         "id": user_id,

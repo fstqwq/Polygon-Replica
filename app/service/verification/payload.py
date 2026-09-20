@@ -1,7 +1,16 @@
 from pathlib import Path
+from typing import TypedDict
 
-from app.service.platform.runtime_blob_store import PayloadFile
+from app.service.platform.runtime_blob_store import PayloadFile, PayloadFileDescriptor
 from app.service.judgehost.task.model import PreparedTest
+from app.service.verification.plan import VerificationPayloadBase
+
+
+class VerificationTestPayload(TypedDict):
+    name: str
+    input_file: PayloadFileDescriptor
+    answer_name: str
+    answer_file: PayloadFileDescriptor
 
 
 def answer_name(test_name: str) -> str:
@@ -13,7 +22,7 @@ def test_payload_entry(
     test_name: str,
     input_file: PayloadFile,
     answer_file: PayloadFile,
-) -> dict[str, object]:
+) -> VerificationTestPayload:
     return {
         "name": test_name,
         "input_file": input_file.to_payload(),
@@ -29,7 +38,7 @@ def prepared_payload_for_uploaded_source(
     test_name: str,
     input_file: PayloadFile,
     answer_file: PayloadFile,
-    verification_payload_base: dict[str, object],
+    verification_payload_base: VerificationPayloadBase,
     extra_source_files: dict[str, PayloadFile] | None = None,
     manual_validate_only: bool = False,
     prepared_test: PreparedTest | None = None,

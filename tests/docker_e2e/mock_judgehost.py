@@ -15,15 +15,13 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import NotRequired, TypedDict, overload
 
 import httpx
 
 from judgehost_protocol import (
-    COMPILE_REPORT_FIELDS,
     CONFIG_REQUIRED_FIELDS,
     ENDPOINTS,
-    FINAL_REPORT_FIELDS,
     MOCK_READY_FILENAME,
     MOCK_STATE_FILENAME,
     WORK_REQUIRED_FIELDS,
@@ -41,6 +39,47 @@ class MockOutcome:
     compile_success: bool = True
     active_internal_error: bool = False
     late_diagnostics: bool = False
+
+
+@dataclass(frozen=True)
+class MockExecutable:
+    script_id: str
+    content_hash: str
+
+
+@dataclass(frozen=True)
+class MockWork:
+    judgetaskid: int
+    submitid: int
+    testcase_id: int
+    executables: dict[str, MockExecutable]
+
+
+class MockEvent(TypedDict):
+    kind: str
+    returned_unfinished: NotRequired[int]
+    language_count: NotRequired[int]
+    judgetaskid: NotRequired[int]
+    source: NotRequired[str]
+    source_files: NotRequired[list[str]]
+    source_sha256s: NotRequired[dict[str, str]]
+    executable_files: NotRequired[dict[str, list[str]]]
+    internal_error_ack: NotRequired[int]
+    runresult: NotRequired[str]
+    testcase_files: NotRequired[list[str]]
+    testcase_sha256s: NotRequired[dict[str, str]]
+    output_sha256: NotRequired[str]
+    ack: NotRequired[int]
+    duplicate_ack: NotRequired[int]
+    late_debug: NotRequired[bool]
+    late_internal_error_ack: NotRequired[int | None]
+    duplicate_late_internal_error_ack: NotRequired[int | None]
+
+
+class MockState(TypedDict):
+    hostname: str
+    events: list[MockEvent]
+    error: str
 
 
 SOURCE_OUTCOMES = {
@@ -61,7 +100,7 @@ def _b64(payload: bytes) -> str:
     return base64.b64encode(payload).decode("ascii")
 
 
-def _atomic_json(path: Path, payload: dict[str, object]) -> None:
+def _atomic_json(path: Path, payload: MockState) -> None:
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
         temporary.write_text(
@@ -83,7 +122,7 @@ class JudgehostMock:
         )
         self.state_path = state_dir() / MOCK_STATE_FILENAME
         self.ready_path = state_dir() / MOCK_READY_FILENAME
-        self.state: dict[str, object] = {
+        self.state: MockState = {
             "hostname": HOSTNAME,
             "events": [],
             "error": "",
@@ -95,22 +134,44 @@ class JudgehostMock:
     def _persist(self) -> None:
         _atomic_json(self.state_path, self.state)
 
-    def _record(self, event: dict[str, object]) -> None:
-        events = self.state["events"]
-        if not isinstance(events, list):
-            raise RuntimeError("mock event state is invalid")
-        events.append(event)
+    def _record(self, event: MockEvent) -> None:
+        self.state["events"].append(event)
         self._persist()
 
-    def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        response = self.client.request(method, path, **kwargs)
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        data: dict[str, str] | None = None,
+        files: dict[str, tuple[None, str]] | None = None,
+        content: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        response = self.client.request(
+            method, path, data=data, files=files, content=content, headers=headers
+        )
         response.raise_for_status()
         return response
 
     @staticmethod
-    def _json(response: httpx.Response, expected: type) -> object:
+    @overload
+    def _json(
+        response: httpx.Response, expected: type[dict[str, object]]
+    ) -> dict[str, object]: ...
+
+    @staticmethod
+    @overload
+    def _json(response: httpx.Response, expected: type[list[object]]) -> list[object]: ...
+
+    @staticmethod
+    @overload
+    def _json(response: httpx.Response, expected: type[int]) -> int: ...
+
+    @staticmethod
+    def _json(response: httpx.Response, expected: type[object]) -> object:
         try:
-            payload = response.json()
+            payload: object = response.json()
         except ValueError as exc:
             raise RuntimeError(f"non-JSON response from {response.request.url}") from exc
         if not isinstance(payload, expected):
@@ -154,7 +215,7 @@ class JudgehostMock:
         self.ready_path.touch()
 
     @staticmethod
-    def _validate_work(raw: object) -> dict[str, object]:
+    def _validate_work(raw: object) -> MockWork:
         if not isinstance(raw, dict):
             raise RuntimeError("fetch-work item must be an object")
         row = dict(raw)
@@ -166,7 +227,9 @@ class JudgehostMock:
         for field in ("judgetaskid", "jobid", "submitid", "testcase_id"):
             if int(str(row[field])) <= 0:
                 raise RuntimeError(f"fetch-work field {field} must be a positive integer")
-        for field in ("compile_config", "run_config", "compare_config"):
+        executables: dict[str, MockExecutable] = {}
+        for file_type in ("compile", "run", "compare"):
+            field = f"{file_type}_config"
             try:
                 config = json.loads(str(row[field]))
             except json.JSONDecodeError as exc:
@@ -178,7 +241,16 @@ class JudgehostMock:
                 r"[0-9a-f]{32}", executable_hash
             ) is None:
                 raise RuntimeError(f"fetch-work field {field} lacks the executable hash")
-        return row
+            executables[file_type] = MockExecutable(
+                script_id=str(row[f"{file_type}_script_id"]),
+                content_hash=executable_hash,
+            )
+        return MockWork(
+            judgetaskid=int(str(row["judgetaskid"])),
+            submitid=int(str(row["submitid"])),
+            testcase_id=int(str(row["testcase_id"])),
+            executables=executables,
+        )
 
     def _download_files(
         self,
@@ -187,7 +259,7 @@ class JudgehostMock:
         executable: bool,
         expected_hash: str = "",
     ) -> dict[str, bytes]:
-        payload = cast(list[object], self._json(self._request("GET", path), list))
+        payload = self._json(self._request("GET", path), list)
         if not payload:
             raise RuntimeError(f"file-array endpoint returned no files: {path}")
         decoded: dict[str, bytes] = {}
@@ -232,10 +304,7 @@ class JudgehostMock:
 
     def _report_versions(self, judgetaskid: int) -> None:
         path = ENDPOINTS["version_commands"].format(judgetaskid=judgetaskid)
-        commands = cast(
-            dict[str, object],
-            self._json(self._request("GET", path), dict),
-        )
+        commands = self._json(self._request("GET", path), dict)
         # The real daemon executes these scripts.  A mock must not execute
         # server-supplied commands; it preserves the protocol's conditional
         # base64 fields and PUT sequence with deterministic telemetry instead.
@@ -260,8 +329,6 @@ class JudgehostMock:
                 b"exitcode: 0\n" if success else b"exitcode: 1\n"
             ),
         }
-        if tuple(report) != COMPILE_REPORT_FIELDS:
-            raise RuntimeError("mock compile report drifted from the declared shape")
         path = ENDPOINTS["update_judging"].format(
             hostname=HOSTNAME,
             judgetaskid=judgetaskid,
@@ -314,11 +381,11 @@ class JudgehostMock:
 
     def _final_report(
         self,
-        row: dict[str, object],
+        row: MockWork,
         output: bytes,
         runresult: str,
     ) -> int:
-        judgetaskid = int(str(row["judgetaskid"]))
+        judgetaskid = row.judgetaskid
         now = time.time()
         report = {
             "runresult": runresult,
@@ -342,13 +409,11 @@ class JudgehostMock:
                 else b"wrong answer from stability probe\n"
             ),
             "hostname": HOSTNAME,
-            "testcasedir": f"/mock/testcase{int(str(row['testcase_id'])):05d}",
+            "testcasedir": f"/mock/testcase{row.testcase_id:05d}",
             "compare_metadata": _b64(
                 b"exitcode: 42\n" if runresult == "correct" else b"exitcode: 43\n"
             ),
         }
-        if tuple(report) != FINAL_REPORT_FIELDS:
-            raise RuntimeError("mock final report drifted from the declared shape")
         multipart = {name: (None, value) for name, value in report.items()}
         path = ENDPOINTS["add_judging_run"].format(
             hostname=HOSTNAME,
@@ -360,15 +425,11 @@ class JudgehostMock:
             raise RuntimeError(f"final callback acknowledgement must be JSON integer 1, got {ack!r}")
         return ack
 
-    def process(self, row: dict[str, object]) -> None:
-        judgetaskid = int(str(row["judgetaskid"]))
+    def process(self, row: MockWork) -> None:
+        judgetaskid = row.judgetaskid
         self._report_versions(judgetaskid)
-        executable_hashes = {
-            file_type: str(json.loads(str(row[f"{file_type}_config"]))["hash"])
-            for file_type in ("compile", "run", "compare")
-        }
 
-        source_path = ENDPOINTS["source"].format(submitid=row["submitid"])
+        source_path = ENDPOINTS["source"].format(submitid=row.submitid)
         sources = self._download_files(source_path, executable=False)
         output_candidates = {
             filename: SOURCE_OUTCOMES[filename]
@@ -391,13 +452,13 @@ class JudgehostMock:
         executable_names: dict[str, list[str]] = {}
         compile_path = ENDPOINTS["executable"].format(
             file_type="compile",
-            script_id=row["compile_script_id"],
+            script_id=row.executables["compile"].script_id,
         )
         executable_names["compile"] = sorted(
             self._download_files(
                 compile_path,
                 executable=True,
-                expected_hash=executable_hashes["compile"],
+                expected_hash=row.executables["compile"].content_hash,
             )
         )
         self._compile_report(judgetaskid, success=outcome.compile_success)
@@ -429,7 +490,7 @@ class JudgehostMock:
             )
             return
 
-        testcase_path = ENDPOINTS["testcase"].format(testcase_id=row["testcase_id"])
+        testcase_path = ENDPOINTS["testcase"].format(testcase_id=row.testcase_id)
         testcase_files = self._download_files(testcase_path, executable=False)
         if not {"input", "output"}.issubset(testcase_files):
             raise RuntimeError("testcase download must contain input and output")
@@ -438,19 +499,16 @@ class JudgehostMock:
             for filename, content in sorted(testcase_files.items())
         }
 
-        for file_type, id_field in (
-            ("run", "run_script_id"),
-            ("compare", "compare_script_id"),
-        ):
+        for file_type in ("run", "compare"):
             path = ENDPOINTS["executable"].format(
                 file_type=file_type,
-                script_id=row[id_field],
+                script_id=row.executables[file_type].script_id,
             )
             executable_names[file_type] = sorted(
                 self._download_files(
                     path,
                     executable=True,
-                    expected_hash=executable_hashes[file_type],
+                    expected_hash=row.executables[file_type].content_hash,
                 )
             )
 
@@ -502,15 +560,12 @@ class JudgehostMock:
                 ENDPOINTS["fetch_work"],
                 files={"hostname": (None, HOSTNAME)},
             )
-            work = cast(list[object], self._json(response, list))
+            work = self._json(response, list)
             if not work:
                 if not self.waiting:
-                    hosts = cast(
-                        list[object],
-                        self._json(
-                            self._request("GET", ENDPOINTS["judgehosts"]),
-                            list,
-                        ),
+                    hosts = self._json(
+                        self._request("GET", ENDPOINTS["judgehosts"]),
+                        list,
                     )
                     registered = next(
                         (

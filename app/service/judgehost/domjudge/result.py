@@ -111,7 +111,7 @@ def _feedback_token_order(
     return feedback_tokens
 
 
-def feedback_text_and_files(
+def read_feedback_text(
     *,
     read_blob: Callable[[str], bytes | None],
     runresult: str,
@@ -119,7 +119,7 @@ def feedback_text_and_files(
     output_diff_ref: str,
     team_message_ref: str,
     limit_bytes: int,
-) -> tuple[str, list[str]]:
+) -> str:
     feedback_files = _feedback_token_order(
         runresult=runresult,
         output_error_ref=output_error_ref,
@@ -136,7 +136,7 @@ def feedback_text_and_files(
                 blob,
                 limit_bytes=limit_bytes,
             )
-    return feedback_text, feedback_files
+    return feedback_text
 
 
 def verdict_from_runresult(runresult: str) -> str:

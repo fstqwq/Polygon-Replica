@@ -3,7 +3,10 @@ import io
 import unittest
 from decimal import Decimal
 
-from app.service.judgehost.callback.runpipe_transcript import parse_runpipe_transcript
+from app.service.judgehost.callback.runpipe_transcript import (
+    RunpipeTranscript,
+    parse_runpipe_transcript,
+)
 
 
 def _frame(milliseconds: int, direction: bytes, payload: bytes) -> bytes:
@@ -18,11 +21,10 @@ def _eof(milliseconds: int, direction: bytes) -> bytes:
     return header + direction
 
 
-def _parse(raw: bytes, **kwargs: int):
+def _parse(raw: bytes) -> RunpipeTranscript:
     return parse_runpipe_transcript(
         io.BytesIO(raw),
         raw_size_bytes=len(raw),
-        **kwargs,
     )
 
 

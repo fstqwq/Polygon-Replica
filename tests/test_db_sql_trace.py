@@ -1,59 +1,41 @@
 import json
-from unittest.mock import patch
 
-from app.db import DB, now_iso, sqlite3
+from app.db import now_iso
 from tests.db_fixture import DBTestBase
-from tests.isolated_db_helpers import isolated_db_execute
+from tests.isolated_db_helpers import isolated_db_execute, isolated_db_fetch_one
 
 
 class TestDBSqlTrace(DBTestBase):
-    @staticmethod
-    def _fetch_one(db: DB, sql: str, params: tuple[object, ...] = ()) -> sqlite3.Row | None:
-        with db.conn() as conn:
-            cursor = conn.execute(sql, params)
-            row = cursor.fetchone()
-        return row
-
-    @staticmethod
-    def _execute(db: DB, sql: str, params: tuple[object, ...] = ()) -> None:
-        isolated_db_execute(db, sql, params)
-
-    @staticmethod
-    def _trace_sql_texts(info_mock) -> list[str]:
-        rows: list[str] = []
-        for call in info_mock.call_args_list:
-            if not call.args:
-                continue
-            if str(call.args[0] or "").strip() != "db.sql pid=%s tid=%s conn=%s sql=%s":
-                continue
-            if len(call.args) >= 5:
-                rows.append(str(call.args[4] or ""))
-        return rows
-
-    def test_db_trace_is_disabled_by_default(self) -> None:
-        with patch("app.db.logger.info") as info:
-            row = self._fetch_one(self.db, "SELECT 1 AS value")
+    def test_db_trace_follows_runtime_setting(self) -> None:
+        with self.assertNoLogs("uvicorn.error", level="INFO"):
+            row = isolated_db_fetch_one(self.db, "SELECT 1 AS value")
         self.assertIsNotNone(row)
-        self.assertEqual(int(row["value"] or 0), 1)
-        info.assert_not_called()
+        self.assertEqual(row["value"], 1)
 
-    def test_db_trace_can_be_enabled_at_runtime(self) -> None:
         values = dict(self.config_values.snapshot())
         values["DB_SQL_TRACE_ENABLED"] = True
         self.config_values.replace(values)
-        with patch("app.db.logger.info") as info:
-            row = self._fetch_one(self.db, "SELECT 1 AS value")
+        with self.assertLogs("uvicorn.error", level="INFO") as emitted:
+            row = isolated_db_fetch_one(self.db, "SELECT 2 AS value")
         self.assertIsNotNone(row)
-        sql_texts = self._trace_sql_texts(info)
-        self.assertTrue(any(text == "SELECT 1 AS value" for text in sql_texts), sql_texts)
+        self.assertEqual(row["value"], 2)
+        self.assertTrue(any("sql=SELECT 2 AS value" in line for line in emitted.output))
+
+        values["DB_SQL_TRACE_ENABLED"] = False
+        self.config_values.replace(values)
+        with self.assertNoLogs("uvicorn.error", level="INFO"):
+            row = isolated_db_fetch_one(self.db, "SELECT 3 AS value")
+        self.assertIsNotNone(row)
+        self.assertEqual(row["value"], 3)
 
     def test_db_trace_redacts_value_json_sql(self) -> None:
         values = dict(self.config_values.snapshot())
         values["DB_SQL_TRACE_ENABLED"] = True
         self.config_values.replace(values)
-        payload = {"kind": "verification.start", "blob": "Y" * 1024}
-        with patch("app.db.logger.info") as info:
-            self._execute(
+        secret = "private-verification-payload"
+        payload = {"kind": "verification.start", "blob": secret}
+        with self.assertLogs("uvicorn.error", level="INFO") as emitted:
+            isolated_db_execute(
                 self.db,
                 """
                 INSERT INTO system_config(key,value_json,updated_at,updated_by_user_id)
@@ -61,20 +43,9 @@ class TestDBSqlTrace(DBTestBase):
                 """,
                 ["DB_SQL_TRACE_ENABLED", json.dumps(payload), now_iso(), None],
             )
-        sql_texts = self._trace_sql_texts(info)
-        value_text = next((text for text in sql_texts if "json_fields=value_json" in text), "")
-        self.assertTrue(value_text, sql_texts)
-        self.assertNotIn('"blob": "', value_text)
-
-    def test_db_trace_can_be_disabled_after_a_traced_request(self) -> None:
-        values = dict(self.config_values.snapshot())
-        values["DB_SQL_TRACE_ENABLED"] = True
-        self.config_values.replace(values)
-        self._fetch_one(self.db, "SELECT 1")
-        values["DB_SQL_TRACE_ENABLED"] = False
-        self.config_values.replace(values)
-        with patch("app.db.logger.info") as info:
-            row = self._fetch_one(self.db, "SELECT 2 AS value")
-        assert row is not None
-        self.assertEqual(row["value"], 2)
-        info.assert_not_called()
+        output = "\n".join(emitted.output)
+        self.assertIn("json_fields=value_json", output)
+        self.assertNotIn(secret, output)
+        row = isolated_db_fetch_one(self.db, "SELECT value_json FROM system_config WHERE key=?", ["DB_SQL_TRACE_ENABLED"])
+        self.assertIsNotNone(row)
+        self.assertEqual(json.loads(row["value_json"]), payload)

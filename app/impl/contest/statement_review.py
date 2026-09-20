@@ -10,14 +10,21 @@ from fastapi.responses import FileResponse, PlainTextResponse
 
 from app.impl.auth.session import require_session_user
 from app.impl.auth.shared import redirect_response, template_response
-from app.impl.contest.shared import _contest_ctx
+from app.impl.contest.shared import ContestPageContext, _contest_ctx
 from app.impl.runtime.dependency import runtime
 from app.service.statement.html_render import (
     RESOURCE_PLACEHOLDER,
     number_statement_fragment,
 )
 from app.service.statement.latex_error import latex_failure_text
-from app.service.statement.preview_state import StatementPreviewSource
+from app.service.statement.preview_state import (
+    ContestStatementPreviewItem, StatementPreviewRow, StatementPreviewSource,
+)
+
+
+class ContestStatementReviewItem(ContestStatementPreviewItem):
+    fragment: str
+    pandoc_log: str
 
 
 def _source(value: str) -> StatementPreviewSource:
@@ -36,11 +43,9 @@ def _language(contest_id: int, value: str) -> str:
     return language
 
 
-def _require_roster_problem_read(ctx: dict[str, object]) -> None:
+def _require_roster_problem_read(ctx: ContestPageContext) -> None:
     contest = ctx["contest"]
     user = ctx["user"]
-    if not isinstance(contest, dict) or not isinstance(user, dict):
-        raise RuntimeError("invalid Contest page context")
     rows = runtime().contest_service.contest_problems(int(contest["id"]))
     access = runtime().access_query.problem_contexts(
         [int(row["problem_id"]) for row in rows],
@@ -62,13 +67,13 @@ def _review_items(
     contest_id: int,
     contest_slug: str,
     actor_user_id: int,
-    preview,
-) -> list[dict[str, object]]:
+    preview: StatementPreviewRow,
+) -> list[ContestStatementReviewItem]:
     roster = {
         row["problem_id"]: row
         for row in runtime().contest_service.contest_problems(contest_id)
     }
-    items: list[dict[str, object]] = []
+    items: list[ContestStatementReviewItem] = []
     for item in runtime().contest_statement_preview_service.items(preview):
         roster_item = roster.get(item["problem_id"])
         if roster_item is None:

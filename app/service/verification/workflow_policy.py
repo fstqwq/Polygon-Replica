@@ -1,9 +1,11 @@
 from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from app.service.execution.codec import compile_diagnostics_payload
+from app.service.execution.model import JsonValue
 from app.service.execution.policy import normalize_execution_result
-from app.service.execution.test_rows import build_execution_test_row
+from app.service.execution.test_rows import ExecutionTestRow, build_execution_test_row
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.problem.solution_metadata import normalize_expected_behavior
 from app.service.verification.lifecycle import (
@@ -19,7 +21,7 @@ from app.service.verification.lifecycle import (
 from app.service.verification.plan import VerificationTestPlan
 from app.service.verification.result_match import run_actual_failed_codes
 from app.service.verification.sanity import SANITY_PENDING, SANITY_SKIPPED, planned_sanity_checks
-from app.service.verification.task_store import VerificationTaskRow
+from app.service.verification.types import VerificationProgramSummary, VerificationRuntimeColumn, VerificationTaskRow
 from app.service.verification.types import Kind, VerificationStatus, VerificationTaskStatus
 
 _COMPILE_DIAGNOSTICS_LIMIT = 64
@@ -47,7 +49,7 @@ def build_graph(
     accepted_source_path: str,
     source_file_by_path: dict[str, PayloadFile],
     test_plan_by_name: dict[str, VerificationTestPlan],
-    targets: list[dict[str, object]],
+    targets: Sequence[Mapping[str, object]],
     test_names: list[str],
 ) -> VerificationGraph:
     accepted_source_file = source_file_by_path.get(accepted_source_path)
@@ -114,7 +116,7 @@ def build_graph(
         str,
         tuple[str, str, tuple[tuple[str, str], ...], bool],
     ] = {}
-    generator_owner_by_invocation: dict[tuple[object, ...], str] = {}
+    generator_owner_by_invocation: dict[tuple[VerificationCompileSpec, str, bool], str] = {}
     generator_test_name_by_id: dict[str, str] = {}
     for test_name in test_names:
         test_plan = test_plan_by_name.get(test_name)
@@ -172,7 +174,7 @@ def build_graph(
             generator_program_id,
             test_name,
         )
-        invocation_key: tuple[object, ...] = (
+        invocation_key = (
             generator_compile_spec,
             test_plan.execution_input_file.identity,
             test_plan.source_kind == "manual",
@@ -257,7 +259,7 @@ def _runtime_programs(
     return [program for program in programs if program.kind != TASK_GENERATE_INPUT]
 
 
-def _task_row_to_test_row(row: VerificationTaskRow) -> dict[str, object]:
+def _task_row_to_test_row(row: VerificationTaskRow) -> ExecutionTestRow:
     runtime_ms = 0 if row["runtime_sec"] is None else max(0, int(round(float(row["runtime_sec"]) * 1000.0)))
     cpu_ms = runtime_ms if row["cpu_sec"] is None else max(0, int(round(float(row["cpu_sec"]) * 1000.0)))
     wall_ms = cpu_ms if row["wall_sec"] is None else max(0, int(round(float(row["wall_sec"]) * 1000.0)))
@@ -286,11 +288,11 @@ def _program_summary(
     pass_limit: int,
     artifact_verification_id: str,
     fail_flag: bool,
-) -> tuple[dict[str, object], str]:
+) -> tuple[VerificationProgramSummary, str]:
     ordered_rows = sorted(rows, key=lambda item: (str(item["test_name"]), str(item["id"])))
-    tests: list[dict[str, object]] = []
+    tests: list[ExecutionTestRow] = []
     compile_log = ""
-    compile_diagnostics: list[dict[str, object]] = []
+    compile_diagnostics: list[dict[str, JsonValue]] = []
     error_text = ""
     max_time_ms = 0
     max_memory_kb = 0
@@ -354,7 +356,7 @@ def _program_summary(
         run_status = VerificationStatus.RUNNING.value
     else:
         run_status = "pending"
-    summary = {
+    summary: VerificationProgramSummary = {
         "artifact_verification_id": artifact_verification_id,
         "mode": mode,
         "pass_limit": pass_limit,
@@ -388,8 +390,8 @@ def runtime_threshold_columns_from_tasks(
     rows: list[VerificationTaskRow],
     test_names: list[str],
     fail_flag: bool,
-) -> list[dict[str, object]]:
-    columns: list[dict[str, object]] = []
+) -> list[VerificationRuntimeColumn]:
+    columns: list[VerificationRuntimeColumn] = []
     for program in _runtime_programs(programs):
         grouped_rows = [row for row in rows if str(row["program_id"] or "") == program.program_id]
         run_summary, run_status = _program_summary(

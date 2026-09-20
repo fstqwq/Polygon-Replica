@@ -2,24 +2,69 @@
 
 import json
 import threading
+from collections.abc import Mapping
 from typing import TypedDict
 
-from app.config.model import ConfigDefinition
+from app.config.model import ConfigDefinition, ConfigValue
 from app.config.registry import CONFIG_REGISTRY, ConfigRegistry
 from app.db import DB, now_iso
 from app.service.disk.system_config_store import SystemConfigStore
 
 
-SystemConfigPatchPreview = TypedDict(
-    "SystemConfigPatchPreview",
-    {
-        "normalized": dict[str, object],
-        "diff": list[dict[str, object]],
-        "changed": int,
-        "before": dict[str, object],
-        "after": dict[str, object],
-    },
-)
+class SystemConfigRow(TypedDict):
+    key: str
+    type: str
+    category: str
+    description: str
+    min: int | float | None
+    max: int | float | None
+    restart_required: bool
+    impact: str
+    choices: list[str]
+    default_value: ConfigValue
+    current_value: ConfigValue
+    effective_value: ConfigValue
+    default_display: str
+    current_display: str
+    effective_display: str
+    changed: bool
+    pending_restart: bool
+    input_name: str
+
+
+class SystemConfigSection(TypedDict):
+    category: str
+    slug: str
+    rows: list[SystemConfigRow]
+    count: int
+    changed_count: int
+
+
+class SystemConfigDiff(TypedDict):
+    key: str
+    category: str
+    type: str
+    restart_required: bool
+    impact: str
+    before: ConfigValue
+    after: ConfigValue
+    before_display: str
+    after_display: str
+
+
+class SystemConfigPatchPreview(TypedDict):
+    normalized: dict[str, ConfigValue]
+    diff: list[SystemConfigDiff]
+    changed: int
+    before: dict[str, ConfigValue]
+    after: dict[str, ConfigValue]
+
+
+class SystemConfigPatchResult(TypedDict):
+    changed: int
+    diff: list[SystemConfigDiff]
+    effective: dict[str, ConfigValue]
+    persisted: dict[str, ConfigValue]
 
 
 class SystemConfigService:
@@ -47,7 +92,7 @@ class SystemConfigService:
         self._effective_values = dict(self._defaults)
         self._persisted_values = dict(self._defaults)
 
-    def refresh(self, *, include_restart_required: bool = False) -> dict[str, object]:
+    def refresh(self, *, include_restart_required: bool = False) -> dict[str, ConfigValue]:
         with self._lock:
             persisted = self._load_persisted_values_locked()
             effective = persisted if include_restart_required else dict(self._effective_values)
@@ -59,24 +104,24 @@ class SystemConfigService:
             self._effective_values = effective
             return dict(effective)
 
-    def get(self, key: str, default: object | None = None) -> object:
+    def get(self, key: str, default: ConfigValue | None = None) -> ConfigValue | None:
         with self._lock:
             return self._effective_values.get(key, default)
 
-    def snapshot(self) -> dict[str, object]:
+    def snapshot(self) -> dict[str, ConfigValue]:
         with self._lock:
             return dict(self._effective_values)
 
-    def ui_sections(self) -> list[dict[str, object]]:
+    def ui_sections(self) -> list[SystemConfigSection]:
         with self._lock:
             effective = dict(self._effective_values)
             persisted = dict(self._persisted_values)
-        buckets: dict[str, list[dict[str, object]]] = {}
+        buckets: dict[str, list[SystemConfigRow]] = {}
         for definition in self._registry.definitions:
             buckets.setdefault(definition.category, []).append(
                 self._config_row(definition, persisted, effective)
             )
-        sections: list[dict[str, object]] = []
+        sections: list[SystemConfigSection] = []
         for category, rows in sorted(
             buckets.items(),
             key=lambda item: (self._category_index(item[0]), item[0].lower()),
@@ -93,7 +138,7 @@ class SystemConfigService:
             )
         return sections
 
-    def section_by_slug(self, slug: str) -> dict[str, object] | None:
+    def section_by_slug(self, slug: str) -> SystemConfigSection | None:
         safe_slug = self.category_slug(slug)
         return next(
             (section for section in self.ui_sections() if section["slug"] == safe_slug),
@@ -116,16 +161,13 @@ class SystemConfigService:
         return "-".join(parts) or "misc"
 
     @staticmethod
-    def _config_row_key(row: dict[str, object]) -> str:
-        key = row["key"]
-        if not isinstance(key, str):
-            raise RuntimeError("system configuration row key is not text")
-        return key
+    def _config_row_key(row: SystemConfigRow) -> str:
+        return row["key"]
 
-    def validate_patch(self, payload: dict[str, object]) -> SystemConfigPatchPreview:
+    def validate_patch(self, payload: Mapping[str, object]) -> SystemConfigPatchPreview:
         with self._lock:
             before = dict(self._persisted_values)
-        normalized: dict[str, object] = {}
+        normalized: dict[str, ConfigValue] = {}
         for payload_key, raw_value in payload.items():
             key = payload_key.strip()
             normalized[key] = self._registry.normalize(key, raw_value)
@@ -141,7 +183,7 @@ class SystemConfigService:
             "after": after,
         }
 
-    def apply_patch(self, payload: dict[str, object], actor_user_id: int) -> dict[str, object]:
+    def apply_patch(self, payload: Mapping[str, object], actor_user_id: int) -> SystemConfigPatchResult:
         with self._lock:
             preview = self.validate_patch(payload)
             after = dict(preview["after"])
@@ -156,7 +198,7 @@ class SystemConfigService:
             "persisted": persisted,
         }
 
-    def reset(self) -> dict[str, object]:
+    def reset(self) -> dict[str, ConfigValue]:
         with self._lock:
             self._store.clear_overrides()
             return self.refresh()
@@ -169,9 +211,9 @@ class SystemConfigService:
     def _config_row(
         self,
         definition: ConfigDefinition,
-        persisted: dict[str, object],
-        effective: dict[str, object],
-    ) -> dict[str, object]:
+        persisted: Mapping[str, ConfigValue],
+        effective: Mapping[str, ConfigValue],
+    ) -> SystemConfigRow:
         key = definition.key
         default_value = self._defaults[key]
         current_value = persisted[key]
@@ -202,10 +244,10 @@ class SystemConfigService:
 
     def _diff_rows(
         self,
-        before: dict[str, object],
-        after: dict[str, object],
-    ) -> list[dict[str, object]]:
-        rows: list[dict[str, object]] = []
+        before: Mapping[str, ConfigValue],
+        after: Mapping[str, ConfigValue],
+    ) -> list[SystemConfigDiff]:
+        rows: list[SystemConfigDiff] = []
         display = self._registry.display_value
         for definition in self._registry.definitions:
             key = definition.key
@@ -228,7 +270,7 @@ class SystemConfigService:
             )
         return rows
 
-    def _persist_overrides(self, values: dict[str, object], actor_user_id: int) -> None:
+    def _persist_overrides(self, values: Mapping[str, ConfigValue], actor_user_id: int) -> None:
         self._store.replace_overrides(
             keys=list(self._definitions),
             values=values,
@@ -237,14 +279,14 @@ class SystemConfigService:
             updated_at=now_iso(),
         )
 
-    def _load_persisted_values_locked(self) -> dict[str, object]:
+    def _load_persisted_values_locked(self) -> dict[str, ConfigValue]:
         rows = self._store.override_rows()
         stale_keys = [row["key"] for row in rows if row["key"] not in self._definitions]
         if stale_keys:
             raise ValueError(
                 "unknown persisted system config: " + ", ".join(sorted(stale_keys))
             )
-        overrides: dict[str, object] = {}
+        overrides: dict[str, ConfigValue] = {}
         for row in rows:
             key = row["key"]
             if key not in self._definitions:

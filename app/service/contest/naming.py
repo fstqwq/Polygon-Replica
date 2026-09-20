@@ -1,5 +1,6 @@
 import re
-from collections.abc import Mapping
+
+from app.service.contest.service import ContestProblem
 
 
 def problem_slug_file_token(problem_slug: str) -> str:
@@ -8,13 +9,10 @@ def problem_slug_file_token(problem_slug: str) -> str:
 
 
 def problem_source_folder(
-    entry: Mapping[str, object],
+    entry: ContestProblem,
     source_folder_map: dict[int, str],
 ) -> str:
-    raw_problem_id = entry["problem_id"]
-    if not isinstance(raw_problem_id, int) or isinstance(raw_problem_id, bool):
-        raise ValueError("contest problem id must be an integer")
-    problem_id = raw_problem_id
+    problem_id = entry["problem_id"]
     mapped = source_folder_map.get(problem_id, "").strip()
     if mapped:
         return mapped

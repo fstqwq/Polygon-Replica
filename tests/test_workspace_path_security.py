@@ -24,10 +24,7 @@ class TestWorkspacePathSecurity(unittest.TestCase):
                 self.assertEqual(str(denied.exception.detail), "hidden path is not allowed")
 
     def test_generator_command_metacharacters_remain_plain_tokens(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="generator-command-") as temp_dir:
-            marker = Path(temp_dir) / "compile-escape.txt"
-            tokens = parse_gen_command_tokens(f"gen.cpp 7 && touch {marker.as_posix()}")
-            self.assertEqual(tokens[:2], ["gen.cpp", "7"])
-            self.assertIn("&&", tokens)
-            self.assertIn(marker.as_posix(), tokens)
-            self.assertFalse(marker.exists())
+        self.assertEqual(
+            parse_gen_command_tokens('gen.cpp 7 && touch "file with spaces"'),
+            ["gen.cpp", "7", "&&", "touch", "file with spaces"],
+        )

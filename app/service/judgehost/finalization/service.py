@@ -1,6 +1,8 @@
 import logging
 from typing import Protocol
 
+from app.service.execution.test_rows import ExecutionTestRow
+from app.service.execution.model import JsonValue
 from app.service.judgehost.configuration import JudgehostConfiguration
 from app.db import now_iso
 from app.service.judgehost.batch.model import (
@@ -19,6 +21,7 @@ from app.service.judgehost.domjudge import task_plan
 from app.service.judgehost.finalization.terminalization import JudgehostTaskTerminalization
 from app.service.judgehost.task.registry import JudgehostTaskRegistry
 from app.service.judgehost.task.summary import load_run_summary
+from app.service.judgehost.task.result_model import TaskFinalizationPayload
 from app.service.platform.error_text import aux_display_text_limit_bytes
 
 logger = logging.getLogger(__name__)
@@ -59,10 +62,6 @@ class JudgehostBatchFinalizer:
     def _display_text_limit_bytes(self) -> int:
         return aux_display_text_limit_bytes(self._configuration.snapshot().values)
 
-    def _task_payload(self, task_id: str) -> dict[str, object]:
-        row = self._tasks.get(task_id)
-        return {} if row is None else row["payload"].copy()
-
     def finalize_host_lease_release(self, release: HostLeaseRelease) -> None:
         display_limit = self._display_text_limit_bytes()
         for task_id in release.terminal_task_ids:
@@ -83,16 +82,16 @@ class JudgehostBatchFinalizer:
         batch_row: ExecutionBatchRow,
         case_results: list[tuple[JudgehostCaseRow, CaseResult | None]],
         display_limit_bytes: int,
-    ) -> dict[str, object]:
+    ) -> TaskFinalizationPayload:
         task_row = self._tasks.get(task_id)
         if task_row is None:
             raise RuntimeError("judgehost task not found")
-        task_payload = self._task_payload(task_id)
+        task_payload = task_row["payload"]
         task_kind = task_plan.task_kind(task_payload)
         compile_only = task_kind == self._TASK_KIND_COMPILE_ONLY
         compile_success_raw = batch_row["compile_success"]
         compile_success = None if compile_success_raw is None else int(compile_success_raw)
-        tests: list[dict[str, object]] = []
+        tests: list[ExecutionTestRow] = []
         internal_failure_error = ""
         cancelled_cases = 0
         usage_time_user = 0
@@ -153,7 +152,7 @@ class JudgehostBatchFinalizer:
             internal_failure_error = "judgehost task cancelled"
 
         compile_log = ""
-        compile_diagnostics: list[dict[str, object]] = []
+        compile_diagnostics: list[dict[str, JsonValue]] = []
         compile_text = decode_base64(batch_row["compile_output_b64"]).decode(
             "utf-8", errors="replace"
         )
@@ -211,7 +210,7 @@ class JudgehostBatchFinalizer:
             summary["error"] = compile_error_summary
         elif internal_failure_error:
             summary["error"] = internal_failure_error
-        result_payload: dict[str, object] = {
+        result_payload: TaskFinalizationPayload = {
             "run_status": run_status,
             "summary": summary,
         }

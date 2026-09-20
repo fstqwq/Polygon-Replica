@@ -1,4 +1,4 @@
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping, Sequence
 
 from app.service.judgehost.batch.admission import BatchAdmission
 from app.service.judgehost.batch.completion import BatchCompletion
@@ -7,6 +7,8 @@ from app.service.judgehost.batch.finalization import BatchFinalization
 from app.service.judgehost.batch.maintenance import BatchMaintenance
 from app.service.judgehost.batch.model import (
     CaseExecutionRow,
+    CaseDebugContext,
+    CaseOutputRow,
     CaseCallbackReceipt,
     CaseClaim,
     CaseReportTelemetry,
@@ -22,10 +24,13 @@ from app.service.judgehost.batch.model import (
     JudgehostCaseRow,
     PendingCaseDiagnostic,
     ProgramTerminalClaim,
+    TaskCaseRow,
+    TestcaseReferences,
     VerificationCancellationSlice,
 )
 from app.service.judgehost.batch.policy import SchedulingPolicy
 from app.service.judgehost.batch.state import BatchState
+from app.service.execution.model import JsonValue
 
 
 class JudgehostBatchRuntime:
@@ -211,7 +216,7 @@ class JudgehostBatchRuntime:
     ) -> CompileSubmission | None:
         return self._state.source_submission(submit_id, contest_id=contest_id)
 
-    def testcase_refs(self, testcase_id: int) -> tuple[dict[str, object] | None, str]:
+    def testcase_refs(self, testcase_id: int) -> tuple[TestcaseReferences | None, str]:
         return self._state.testcase_refs(testcase_id)
 
     def active_script_hashes(self, kind: str, script_id: int) -> set[str]:
@@ -253,7 +258,7 @@ class JudgehostBatchRuntime:
         service_class: str,
         batch_spec: ExecutionBatchSpec,
         created_at: str,
-        case_rows: list[dict[str, object]],
+        case_rows: Sequence[Mapping[str, object]],
     ) -> int:
         return self._admission.create_batch_with_cases(
             task_id=task_id,
@@ -326,13 +331,6 @@ class JudgehostBatchRuntime:
         self, batch_id: int, *, now_text: str
     ) -> FinalizationClaim | None:
         return self._finalization.claim_batch_finalization(batch_id, now_text=now_text)
-
-    def schedule_batch_finalization_retry(
-        self, batch_id: int, *, delay_sec: float = 0.25
-    ) -> bool:
-        return self._finalization.schedule_batch_finalization_retry(
-            batch_id, delay_sec=delay_sec
-        )
 
     def abort_batch_finalization(
         self, claim: FinalizationClaim, *, now_text: str, delay_sec: float = 0.25
@@ -409,7 +407,7 @@ class JudgehostBatchRuntime:
         compile_metadata_b64: str,
         failure_text: str,
         compile_log: str,
-        compile_diagnostics: tuple[dict[str, object], ...],
+        compile_diagnostics: tuple[dict[str, JsonValue], ...],
         updated_at: str,
     ) -> ProgramTerminalClaim:
         return self._completion.claim_compile_failure(
@@ -457,10 +455,10 @@ class JudgehostBatchRuntime:
 
     def case_output_for_task(
         self, task_id: str, test_name: str
-    ) -> dict[str, object] | None:
+    ) -> CaseOutputRow | None:
         return self._completion.case_output_for_task(task_id, test_name)
 
-    def case_for_task(self, task_id: str, test_name: str) -> dict[str, object] | None:
+    def case_for_task(self, task_id: str, test_name: str) -> TaskCaseRow | None:
         return self._completion.case_for_task(task_id, test_name)
 
     def case_result_for_task(self, task_id: str, test_name: str) -> CaseResult | None:
@@ -590,11 +588,8 @@ class JudgehostBatchRuntime:
     ) -> bool:
         return self._completion.acknowledge_case_diagnostic(case_id, diagnostic)
 
-    def case_debug_context(self, case_id: int) -> dict[str, object] | None:
+    def case_debug_context(self, case_id: int) -> CaseDebugContext | None:
         return self._completion.case_debug_context(case_id)
-
-    def batch_debug_context(self, batch_id: int) -> dict[str, object] | None:
-        return self._completion.batch_debug_context(batch_id)
 
     def append_debug_text(
         self,
@@ -607,9 +602,6 @@ class JudgehostBatchRuntime:
         self._completion.append_debug_text(
             case_id=case_id, batch_id=batch_id, debug_text=debug_text, now_text=now_text
         )
-
-    def case_progress_for_runs(self, run_ids: list[str]) -> dict[str, dict[str, int]]:
-        return self._completion.case_progress_for_runs(run_ids)
 
     def release_host_leases(
         self, hostname: str, *, now_text: str, verification_id: str = ""

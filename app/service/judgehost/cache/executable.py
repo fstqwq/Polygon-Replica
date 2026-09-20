@@ -1,5 +1,6 @@
 import re
 from dataclasses import dataclass
+from typing import TypedDict
 
 from app.service.judgehost.domjudge.codec import decode_basename, decode_text
 from app.service.platform.hashing import sha256_hex_text
@@ -11,6 +12,11 @@ from app.service.platform.runtime_cache_index import RuntimeCacheIndex
 class ExecutableCacheFile:
     filename: str
     payload: PayloadFile
+    is_executable: bool
+
+
+class ExecutableFileManifest(TypedDict):
+    filename: str
     is_executable: bool
 
 
@@ -45,7 +51,7 @@ class ExecutableCache:
         safe_kind, safe_hash = self._identity(kind, executable_hash)
         cache_key = self._key_hash(safe_kind, safe_hash)
         file_payloads: dict[str, bytes] = {}
-        manifest: list[dict[str, object]] = []
+        manifest: list[ExecutableFileManifest] = []
         for name, content, is_executable in sorted(files, key=lambda item: item[0]):
             safe_name = decode_basename(raw=name)
             if not safe_name or safe_name in file_payloads:

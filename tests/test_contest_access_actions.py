@@ -10,6 +10,7 @@ from app.impl.contest.statement_review import (
     contest_statement_review_page,
 )
 from app.impl.contest.package import contest_packages_download
+from app.service.sandbox.base import ExecResult, ExecSpec
 from tests.contest_support import ContestActionBase
 from tests.db_helpers import db_fetch_one
 from tests.ui_support import (
@@ -367,71 +368,52 @@ class TestContestAccessActions(ContestActionBase):
         reader = "carol"
         workspace_service.ensure_user(reader)
         runtime.contest_service.grant_member_role(contest_id, reader, "read")
+        workspace = self._seed_workspace(problem_slug, reader)
         workspace_service.grant_repo_access(problem_slug, reader, "read")
-        workspace_service.ensure_workspace(problem_slug, reader, refresh_status=False)
+        (workspace / "statement-sections/english/legend.tex").write_text(
+            "Contest reader statement.\n", encoding="utf-8"
+        )
         reader_row = workspace_service.user_row(reader)
         access = runtime.access_query.contest_context(contest_id, int(reader_row["id"]))
         self.assertTrue(access["can_read"])
         self.assertFalse(access["can_build"])
-
-        preview = {
-            "id": "sp-contest-reader",
-            "status": "ok",
-            "summary": {"items": []},
-            "language": "english",
-        }
-        pdf_path = Path(runtime.settings.cache_root) / "contest-reader.pdf"
-        pdf_path.write_bytes(b"%PDF-reader")
-        self.addCleanup(pdf_path.unlink, missing_ok=True)
         request = _request(f"/contests/{contest_slug}/statements/review")
 
-        with (
-            patch.object(
-                runtime.contest_statement_service,
-                "resolve_language",
-                return_value="english",
-            ),
-            patch.object(
-                runtime.contest_statement_preview_service,
-                "build_html",
-                return_value=preview,
-            ),
-            patch.object(
-                runtime.contest_statement_preview_service,
-                "build_pdf",
-                return_value=preview,
-            ),
-            patch.object(
-                runtime.statement_preview_service,
-                "pdf",
-                return_value=pdf_path,
-            ),
-        ):
-            review_page = contest_statement_review_page(
-                request,
-                contest_slug,
-                reader,
-                source="workspace",
-                language="english",
-            )
-            review_build = contest_statement_review_build(
-                request,
-                contest_slug,
-                reader,
-                source="workspace",
-                language="english",
-            )
+        review_page = contest_statement_review_page(
+            request, contest_slug, reader, source="workspace", language="english"
+        )
+        review_build = contest_statement_review_build(
+            request, contest_slug, reader, source="workspace", language="english"
+        )
+
+        def compile_pdf(spec: ExecSpec) -> ExecResult:
+            assert spec.cwd is not None
+            (spec.cwd / spec.command[-1]).with_suffix(".pdf").write_bytes(b"%PDF-reader")
+            return ExecResult(backend="fixture", status="ok", returncode=0, elapsed_ms=1)
+
+        with patch.object(runtime.tex_sandbox_backend, "run", side_effect=compile_pdf):
             pdf_page = contest_statement_pdf_page(
-                request,
-                contest_slug,
-                reader,
-                source="workspace",
-                language="english",
+                request, contest_slug, reader, source="workspace", language="english"
             )
         self.assertEqual(review_page.status_code, 200)
+        self.assertIn("Contest reader statement.", review_page.body.decode("utf-8"))
         self.assertEqual(review_build.status_code, 303)
         self.assertEqual(pdf_page.status_code, 200)
         self.assertEqual(Path(pdf_page.path).read_bytes(), b"%PDF-reader")
+        preview = db_fetch_one(
+            "SELECT id,status FROM statement_previews WHERE contest_id=? AND actor_user_id=? AND output_kind='html'",
+            [contest_id, reader_row["id"]],
+        )
+        self.assertIsNotNone(preview)
+        assert preview is not None
+        self.assertEqual(preview["status"], "ok")
+        row = runtime.statement_preview_service.row(preview["id"], actor_user_id=reader_row["id"])
+        items = runtime.contest_statement_preview_service.items(row)
+        self.assertEqual([item["problem_id"] for item in items], [_problem_id])
+        self.assertIn(
+            "Contest reader statement.",
+            runtime.statement_preview_service.html_fragment(items[0]["preview_id"], actor_user_id=reader_row["id"]),
+        )
 
     def test_contest_reader_needs_direct_problem_read_for_review_and_download(self) -> None:
         contest_slug, contest_id, actor_user_id = self.create_contest(

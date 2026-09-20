@@ -1,6 +1,6 @@
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
 
 
 SUMMARY_RUNTIME_THRESHOLD_CHECK = "summary_runtime_threshold"
@@ -34,7 +34,7 @@ def time_limit_ms_from_run_config_json(raw_json: str, *, default_ms: int = 0) ->
 
 def evaluate_summary_runtime_threshold(
     *,
-    summary: dict[str, object],
+    summary: Mapping[str, object],
     source: str,
     time_limit_ms: int,
 ) -> RuntimeThresholdReport:
@@ -77,22 +77,26 @@ def runtime_threshold_reason(hit: RuntimeThresholdHit, *, summary_has_tl: bool) 
     return f"{source_label}: accepted solution is close to the time limit."
 
 
-def _summary_tests(summary: dict[str, object]) -> list[dict[str, object]]:
+def _summary_tests(summary: Mapping[str, object]) -> list[Mapping[str, object]]:
     raw_tests = summary.get("tests") or []
     if not isinstance(raw_tests, list):
         return []
-    return [dict(item) for item in raw_tests if isinstance(item, dict)]
+    return [item for item in raw_tests if isinstance(item, dict)]
 
 
-def _positive_int(value: Any, *, default: int = 0) -> int:
+def _positive_int(value: object, *, default: int = 0) -> int:
+    # Values come from persisted JSON or display rows; containers and null do
+    # not represent a duration. Narrow before numeric conversion.
+    if not isinstance(value, (str, int, float)):
+        return max(0, default)
     try:
         parsed = int(value)
-    except Exception:
-        parsed = int(default)
+    except (ValueError, OverflowError):
+        parsed = default
     return max(0, parsed)
 
 
-def _test_time_user_ms(item: dict[str, object]) -> int:
+def _test_time_user_ms(item: Mapping[str, object]) -> int:
     time_user_ms = _positive_int(item.get("time_user_ms"))
     if time_user_ms > 0:
         return time_user_ms

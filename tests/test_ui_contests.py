@@ -372,7 +372,6 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         contest_id = int(db_fetch_one("SELECT id FROM contests WHERE slug=?", [contest_slug])["id"])
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        workspace_service.clear_identity_caches()
 
         admin_access = runtime.access_query.contest_context(contest_id, workspace_service.known_user_id("alice"))
         self.assertEqual(admin_access["role"], "admin")
@@ -543,7 +542,6 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         workspace_service.ensure_problem(foreign_problem)
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        workspace_service.clear_identity_caches()
 
         add_resp = contest_problems_add(
             contest=contest_slug,
@@ -578,7 +576,6 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             303,
         )
         db_execute("UPDATE users SET is_system_admin=0 WHERE username=?", ["bob"])
-        workspace_service.clear_identity_caches()
 
         grant = contest_access_grant(
             contest=contest_slug,

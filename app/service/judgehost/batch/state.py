@@ -27,6 +27,7 @@ from app.service.judgehost.batch.model import (
     ExecutionBatchRecord,
     StatusCounts,
     TaskCaseCounts,
+    TestcaseReferences,
     HostTelemetryState,
 )
 from app.service.judgehost.batch.policy import (
@@ -56,7 +57,11 @@ class BatchState:
     @staticmethod
     def _compile_submission_identity(
         submission: CompileSubmission,
-    ) -> tuple[object, ...]:
+    ) -> tuple[
+        str, int, str, str, int,
+        tuple[tuple[str, str, int], ...],
+        tuple[tuple[str, bytes, bool], ...],
+    ]:
         return (
             submission.compile_key,
             submission.submit_id,
@@ -108,7 +113,6 @@ class BatchState:
         self._leased_case_ids_by_host: dict[str, set[int]] = defaultdict(set)
         self._empty_batch_ids: set[int] = set()
         self._batch_counts: dict[int, StatusCounts] = {}
-        self._run_counts: dict[str, StatusCounts] = defaultdict(StatusCounts)
         self._task_case_counts: dict[str, TaskCaseCounts] = defaultdict(TaskCaseCounts)
         self._sequence = itertools.count()
         self._scope_sequence_by_verification: dict[str, int] = {}
@@ -193,7 +197,6 @@ class BatchState:
             self._leased_case_ids_by_host.clear()
             self._empty_batch_ids.clear()
             self._batch_counts.clear()
-            self._run_counts.clear()
             self._task_case_counts.clear()
             self._scope_sequence_by_verification.clear()
             self._batch_specs.clear()
@@ -455,8 +458,6 @@ class BatchState:
         batch = self._batches[case.batch_id]
         self._adjust_counts(self._batch_counts[case.batch_id], old_status, -1)
         self._adjust_counts(self._batch_counts[case.batch_id], status, 1)
-        self._adjust_counts(self._run_counts[case.run_id], old_status, -1)
-        self._adjust_counts(self._run_counts[case.run_id], status, 1)
         task_counts = self._task_case_counts[case.task_id]
         if (
             old_status not in self._TERMINAL_CASE_STATUSES
@@ -581,7 +582,6 @@ class BatchState:
         self._batch_id_by_task[source.task_id] = batch_id
         self._batch_ids_by_run[source.run_id].add(batch_id)
         self._adjust_counts(self._batch_counts[batch_id], case.status, 1)
-        self._adjust_counts(self._run_counts[source.run_id], case.status, 1)
         task_counts = self._task_case_counts[source.task_id]
         task_counts.total += 1
         if case.status not in self._TERMINAL_CASE_STATUSES:
@@ -792,7 +792,7 @@ class BatchState:
     def testcase_refs(
         self,
         testcase_id: int,
-    ) -> tuple[dict[str, object] | None, str]:
+    ) -> tuple[TestcaseReferences | None, str]:
         token = int(testcase_id)
         with self._lock:
             candidates = [
@@ -869,7 +869,6 @@ class BatchState:
                 if not leased_ids:
                     self._leased_case_ids_by_host.pop(case.lease_owner, None)
             self._adjust_counts(self._batch_counts[case.batch_id], case.status, -1)
-            self._adjust_counts(self._run_counts[case.run_id], case.status, -1)
             task_counts = self._task_case_counts[case.task_id]
             task_counts.total -= 1
             if case.status not in self._TERMINAL_CASE_STATUSES:
@@ -913,7 +912,6 @@ class BatchState:
             else:
                 self._case_ids_by_run.pop(run_id, None)
                 self._batch_ids_by_run.pop(run_id, None)
-                self._run_counts.pop(run_id, None)
 
         for pair in affected_pairs:
             self._latest_case_id_by_task_test.pop(pair, None)

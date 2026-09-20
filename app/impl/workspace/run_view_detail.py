@@ -1,5 +1,6 @@
 from pathlib import Path
-from typing import cast
+from collections.abc import Sequence
+from typing import TypedDict
 from fastapi import HTTPException
 from app.impl.runtime.dependency import runtime
 from app.service.repository.workspace import WorkspaceContext
@@ -7,10 +8,6 @@ from app.impl.workspace.artifact import verification_artifact_file, verification
 from app.impl.workspace.context import count_label
 from app.impl.workspace.context_operation import workspace_rel_file_exists
 from app.impl.workspace.context_run_detail import (
-    DiagnosticEntry,
-    RunDetailPreview,
-    _cap_run_test_feedback_files,
-    _cap_summary_list,
     _decorate_compile_diagnostics,
     _normalize_diagnostics,
     _run_detail_preview_from_bytes,
@@ -19,7 +16,6 @@ from app.impl.workspace.context_run_detail import (
     _run_detail_preview_unavailable,
     _verification_status_summary,
     _run_rejudge_context_for_entries,
-    _run_source_from_summary,
 )
 from app.impl.workspace.context_verification import normalize_program_id_token
 from app.service.judgehost.callback.runpipe_transcript import parse_runpipe_transcript
@@ -29,22 +25,31 @@ from app.service.platform.workspace_path import (
     normalize_workspace_rel_path,
 )
 from app.service.problem.solution_metadata import expected_behavior_label
-from app.service.verification.task_store import VerificationTaskRow
+from app.service.verification.types import VerificationDetail, VerificationTaskRow
 from app.service.verification.detail_read_model import (
     VerificationProgramDetailRow,
     verification_case_test_row,
 )
 from app.service.verification.lifecycle import VerificationSnapshotRecord
 from app.service.execution.codec import compile_diagnostics_payload
-from app.service.verification.read_model import TaskCounts
 from app.service.verification.types import VerificationTaskStatus
 from app.service.platform.process import is_canonical_artifact_id
 from app.impl.workspace.run_view_lifecycle_card import _verification_tests_meta_stats
 from app.impl.workspace.run_test_generation import (
-    TestGenerationView,
     build_test_generation_views,
     generation_warning_message,
 )
+from app.impl.workspace.run_view_model import (
+    DiagnosticEntry, RunCaseCell, RunCellDetail, RunCellView, RunColumn,
+    RunColumnBase, RunDetailContext, RunDetailPreview, RunPassView, RunSanityTask,
+    RunSanityView, RunTestDetailContext, RunTestNameCell, RunTestRow,
+    RunTranscriptView, RunVerificationLogs, TestGenerationView,
+)
+from app.service.verification.types import (
+    VerificationCaseTestRow, VerificationSanityCheckRow,
+    VerificationSanityMessageRow, VerificationTestMetadata,
+)
+import app.service.verification.read_model
 from app.service.verification.result_match import (
     expected_status_rule,
     run_actual_short,
@@ -75,17 +80,9 @@ from app.service.verification.runtime_threshold import (
     time_limit_ms_from_run_config_json,
 )
 
-_TASK_KIND_GENERATE_INPUT = "generate-input"
 _TASK_KIND_MAIN_CORRECT = "main-correct"
 _TASK_KIND_SOLUTION_RUN = "solution-run"
 _SANITY_STATUS_TOKENS = {"ok", "passed", "pending", "running", "warning", "failed", "skipped"}
-_SANITY_CHECK_ORDER = (
-    "empty_output_stability",
-    "unicode_output_stability",
-    "custom_sample_output",
-    SUMMARY_RUNTIME_THRESHOLD_CHECK,
-    "boundary_coverage",
-)
 _SANITY_CHECK_LABELS = {
     "empty_output_stability": "Empty output stability",
     "unicode_output_stability": "Unicode output stability",
@@ -93,6 +90,19 @@ _SANITY_CHECK_LABELS = {
     SUMMARY_RUNTIME_THRESHOLD_CHECK: "Summary runtime threshold",
     "boundary_coverage": "Boundary coverage",
 }
+
+
+class SanityPayload(TypedDict):
+    sanity_status: str
+    sanity_checked_count: int
+    sanity_checks: list[str]
+    sanity_check_results: list[VerificationSanityCheckRow]
+    validation_status: str
+    validated_count: int
+    failed_step: str
+    failed_check: str
+    failed_test: str
+    error: str
 
 
 def _canonical_int(value: object, *, field: str) -> int:
@@ -115,38 +125,6 @@ def _detail_text(value: object, *, field: str, default: str = "") -> str:
     return value
 
 
-def _detail_bool(value: object, *, field: str, default: bool = False) -> bool:
-    if value is None:
-        return default
-    if not isinstance(value, bool):
-        raise RuntimeError(f"verification detail {field} must be boolean")
-    return value
-
-
-def _detail_dict(value: object, *, field: str) -> dict[str, object]:
-    if value is None:
-        return {}
-    if not isinstance(value, dict):
-        raise RuntimeError(f"verification detail {field} must be an object")
-    result: dict[str, object] = {}
-    for key, item in value.items():
-        if not isinstance(key, str):
-            raise RuntimeError(f"verification detail {field} keys must be text")
-        result[key] = item
-    return result
-
-
-def _detail_dict_rows(value: object, *, field: str) -> list[dict[str, object]]:
-    if value is None:
-        return []
-    if not isinstance(value, list):
-        raise RuntimeError(f"verification detail {field} must be a list")
-    rows: list[dict[str, object]] = []
-    for index, item in enumerate(value):
-        rows.append(_detail_dict(item, field=f"{field}[{index}]"))
-    return rows
-
-
 def _detail_string_list(value: object, *, field: str) -> list[str]:
     if value is None:
         return []
@@ -156,83 +134,6 @@ def _detail_string_list(value: object, *, field: str) -> list[str]:
     for index, item in enumerate(value):
         values.append(_detail_text(item, field=f"{field}[{index}]"))
     return values
-
-
-def _detail_preview(value: object, *, field: str) -> RunDetailPreview:
-    raw = _detail_dict(value, field=field)
-    return {
-        "available": _detail_bool(raw.get("available"), field=f"{field}.available"),
-        "text": _detail_text(raw.get("text"), field=f"{field}.text"),
-        "truncated": _detail_bool(
-            raw.get("truncated"),
-            field=f"{field}.truncated",
-        ),
-        "limit": _detail_int(raw.get("limit"), field=f"{field}.limit"),
-        "download_verification_id": _detail_text(
-            raw.get("download_verification_id"),
-            field=f"{field}.download_verification_id",
-        ),
-        "download_rel_path": _detail_text(
-            raw.get("download_rel_path"),
-            field=f"{field}.download_rel_path",
-        ),
-        "message": _detail_text(raw.get("message"), field=f"{field}.message"),
-    }
-
-
-def _legacy_task_counts(value: object) -> TaskCounts:
-    raw = _detail_dict(value, field="task_counts")
-    by_kind_raw = _detail_dict(raw.get("by_kind"), field="task_counts.by_kind")
-    by_kind: dict[str, dict[str, int]] = {}
-    for task_kind, counts_value in by_kind_raw.items():
-        counts_raw = _detail_dict(
-            counts_value,
-            field=f"task_counts.by_kind.{task_kind}",
-        )
-        by_kind[task_kind] = {
-            status: _detail_int(
-                counts_raw.get(status),
-                field=f"task_counts.by_kind.{task_kind}.{status}",
-            )
-            for status in (
-                "pending",
-                "queued",
-                "running",
-                "done",
-                "failed",
-                "cancelled",
-            )
-        }
-    return {
-        "total": _detail_int(raw.get("total"), field="task_counts.total"),
-        "pending": _detail_int(raw.get("pending"), field="task_counts.pending"),
-        "queued": _detail_int(raw.get("queued"), field="task_counts.queued"),
-        "running": _detail_int(raw.get("running"), field="task_counts.running"),
-        "done": _detail_int(raw.get("done"), field="task_counts.done"),
-        "failed": _detail_int(raw.get("failed"), field="task_counts.failed"),
-        "cancelled": _detail_int(
-            raw.get("cancelled"),
-            field="task_counts.cancelled",
-        ),
-        "by_kind": by_kind,
-    }
-
-
-def _legacy_running_tasks(value: object) -> list[dict[str, str]]:
-    rows = _detail_dict_rows(value, field="running_tasks")
-    result: list[dict[str, str]] = []
-    for index, row in enumerate(rows):
-        result.append(
-            {
-                key: _detail_text(item, field=f"running_tasks[{index}].{key}")
-                for key, item in row.items()
-            }
-        )
-    return result
-
-
-def _run_cell_text_tone(verdict: str, expected_behavior: str) -> str:
-    return ""
 
 
 def _run_result_kind(
@@ -265,14 +166,7 @@ def _sanity_check_label(check_name: str) -> str:
     return _SANITY_CHECK_LABELS.get(token, token.replace("_", " ") or "Sanity check")
 
 
-def _ordered_sanity_checks(checks: list[str]) -> list[str]:
-    check_set = set(checks)
-    ordered = [check for check in _SANITY_CHECK_ORDER if check in check_set]
-    ordered.extend([check for check in checks if check not in set(ordered)])
-    return ordered
-
-
-def _build_sanity_payload(verification_details: dict[str, object]) -> dict[str, object]:
+def _build_sanity_payload(verification_details: VerificationDetail) -> SanityPayload:
     sanity_status = str(verification_details.get("sanity_status") or "").strip().lower()
     if sanity_status not in _SANITY_STATUS_TOKENS:
         sanity_status = "unknown"
@@ -286,11 +180,7 @@ def _build_sanity_payload(verification_details: dict[str, object]) -> dict[str, 
             field="sanity_checked_count",
         ),
         "sanity_checks": _sanity_checks_list(verification_details.get("sanity_checks")),
-        "sanity_check_results": [
-            dict(item)
-            for item in cast(list[object], verification_details.get("sanity_check_results") or [])
-            if isinstance(item, dict)
-        ],
+        "sanity_check_results": verification_details.get("sanity_check_results", []),
         "validation_status": validation_status,
         "validated_count": _canonical_int(
             verification_details.get("validated_count", 0),
@@ -313,7 +203,7 @@ def _sanity_status_tone(status: str) -> str:
     return "muted"
 
 
-def _sanity_reason(payload: dict[str, object]) -> str:
+def _sanity_reason(payload: SanityPayload) -> str:
     error = bounded_display_text(
         str(payload.get("error") or ""),
         limit_bytes=runtime().config_values.integer("AUX_DISPLAY_TEXT_LIMIT_BYTES"),
@@ -329,11 +219,9 @@ def _sanity_reason(payload: dict[str, object]) -> str:
     return ""
 
 
-def _sanity_messages(raw_messages: object) -> list[dict[str, object]]:
-    messages: list[dict[str, object]] = []
-    for raw in cast(list[object], raw_messages or []):
-        if not isinstance(raw, dict):
-            continue
+def _sanity_messages(raw_messages: list[VerificationSanityMessageRow]) -> list[VerificationSanityMessageRow]:
+    messages: list[VerificationSanityMessageRow] = []
+    for raw in raw_messages:
         message = bounded_display_text(
             str(raw.get("message") or ""),
             limit_bytes=runtime().config_values.integer("AUX_DISPLAY_TEXT_LIMIT_BYTES"),
@@ -350,13 +238,9 @@ def _sanity_messages(raw_messages: object) -> list[dict[str, object]]:
     return messages
 
 
-def _sanity_task_rows_from_results(payload: dict[str, object]) -> list[dict[str, object]]:
+def _sanity_task_rows_from_results(payload: SanityPayload) -> list[RunSanityTask]:
     status = str(payload.get("sanity_status") or "")
-    results = [
-        dict(item)
-        for item in cast(list[object], payload.get("sanity_check_results") or [])
-        if isinstance(item, dict)
-    ]
+    results = payload["sanity_check_results"]
     if not results:
         failed_check = str(payload.get("failed_check") or "")
         if failed_check and status in {"warning", "failed"}:
@@ -364,7 +248,7 @@ def _sanity_task_rows_from_results(payload: dict[str, object]) -> list[dict[str,
                 str(payload.get("error") or _sanity_reason(payload)),
                 limit_bytes=runtime().config_values.integer("AUX_DISPLAY_TEXT_LIMIT_BYTES"),
             )
-            messages = (
+            messages: list[VerificationSanityMessageRow] = (
                 [
                     {
                         "severity": status,
@@ -393,16 +277,16 @@ def _sanity_task_rows_from_results(payload: dict[str, object]) -> list[dict[str,
                 }
             ]
         return []
-    rows: list[dict[str, object]] = []
+    rows: list[RunSanityTask] = []
     for item in results:
-        check_name = str(item.get("name") or item.get("check_name") or "")
+        check_name = item["name"]
         if not check_name:
             continue
         row_status = str(item.get("status") or "")
         if not row_status:
             row_status = status if status in {"pending", "running", "skipped"} else "passed"
-        row_messages: list[dict[str, object]] = _sanity_messages(
-            item.get("messages")
+        row_messages = _sanity_messages(
+            item["messages"]
         )
         detail = ""
         if not row_messages:
@@ -432,14 +316,10 @@ def _sanity_task_rows_from_results(payload: dict[str, object]) -> list[dict[str,
     return rows
 
 
-def _sanity_task_rows(payload: dict[str, object]) -> list[dict[str, object]]:
-    return _sanity_task_rows_from_results(payload)
-
-
 def _detail_sanity_context(
     verification_id: str,
-    verification_details: dict[str, object],
-) -> dict[str, object]:
+    verification_details: VerificationDetail,
+) -> RunSanityView:
     if not verification_id:
         return {
             "available": False,
@@ -452,7 +332,7 @@ def _detail_sanity_context(
             "checked_count": 0,
         }
     payload = _build_sanity_payload(verification_details)
-    tasks = _sanity_task_rows(payload)
+    tasks = _sanity_task_rows_from_results(payload)
     attention_tasks = [
         task
         for task in tasks
@@ -475,7 +355,7 @@ def _detail_sanity_context(
     }
 
 
-def _missing_solution_cell(task_status: str) -> dict[str, object]:
+def _missing_solution_cell(task_status: str) -> RunCellView:
     if task_status == VerificationTaskStatus.LEASED:
         return {
             "text": "..",
@@ -520,7 +400,7 @@ def _test_name_cell(
     is_placeholder: bool,
     note: dict[str, str],
     has_detail: bool,
-) -> dict[str, object]:
+) -> RunTestNameCell:
     tone = str(note.get("tone") or "")
     note_text = str(note.get("text") or "")
     note_detail = str(note.get("detail") or "")
@@ -581,11 +461,11 @@ def _test_name_cell(
 
 
 def _case_cell(
-    item: dict[str, object], *, idx: int, test_name: str, expected_behavior: str,
-    verification_details: dict[str, object], include_row_details: bool,
-    detail_compile_error: str, detail_compile_diagnostics: list[dict[str, object]],
+    item: VerificationCaseTestRow, *, idx: int, test_name: str, expected_behavior: str,
+    verification_details: VerificationDetail, include_row_details: bool,
+    detail_compile_error: str, detail_compile_diagnostics: list[DiagnosticEntry],
     display_limit: int, time_tone: str,
-) -> dict:
+) -> RunCaseCell:
     verdict = _detail_text(
         item.get("verdict"),
         field=f"program.tests[{idx - 1}].verdict",
@@ -610,12 +490,9 @@ def _case_cell(
         field=f"program.tests[{idx - 1}].memory_kb",
     )
     memory_mb_text = run_memory_mb_text(memory_kb)
-    detail_payload: dict[str, object] | None = None
+    detail_payload: RunCellDetail | None = None
     if include_row_details:
-        passes = _detail_dict_rows(
-            item.get("passes"),
-            field=f"program.tests[{idx - 1}].passes",
-        )
+        passes = item["passes"]
         late_diagnostic_text = bounded_display_text(
             _detail_text(
                 item.get("late_diagnostic_text"),
@@ -626,33 +503,21 @@ def _case_cell(
         feedback_display = "-"
         inline_feedback = bounded_display_text(
             _detail_text(
-                item.get("message") or item.get("error"),
+                item["message"],
                 field=f"program.tests[{idx - 1}].feedback",
             ),
             limit_bytes=runtime().config_values.integer(
                 "AUX_DISPLAY_TEXT_LIMIT_BYTES"
             ),
         )
-        feedback_items = _detail_string_list(
-            item.get("feedback_files"),
-            field=f"program.tests[{idx - 1}].feedback_files",
-        )
+        feedback_total = len(item["feedback_files"])
+        feedback_items = item["feedback_files"][:max(1, runtime().config_values.integer("RUN_TEST_FEEDBACK_FILE_LIST_LIMIT"))]
         test_stem = Path(str(test_name)).stem
         checker_log_rel = f"feedback_dir/{test_stem}/checker.log" if test_stem else ""
         feedback_rel = feedback_items[0] if feedback_items else ""
         if inline_feedback:
             feedback_display = inline_feedback
-        feedback_total = len(feedback_items)
-        feedback_total = max(
-            feedback_total,
-            _detail_int(
-                item.get("feedback_files_total"),
-                field=f"program.tests[{idx - 1}].feedback_files_total",
-            ),
-        )
-        feedback_truncated = bool(item.get("feedback_files_truncated"))
-        if feedback_total > len(feedback_items):
-            feedback_truncated = True
+        feedback_truncated = feedback_total > len(feedback_items)
         if feedback_truncated:
             hidden_count = max(0, feedback_total - len(feedback_items))
             if hidden_count > 0 and feedback_display != "-":
@@ -661,7 +526,7 @@ def _case_cell(
                     if feedback_display != "-"
                     else f'+{count_label(hidden_count, "file")}'
                 )
-        pass_rows: list[dict[str, object]] = []
+        pass_rows: list[RunPassView] = []
         if passes:
             for pass_index, pass_item in enumerate(passes):
                 pass_field = f"program.tests[{idx - 1}].passes[{pass_index}]"
@@ -713,14 +578,14 @@ def _case_cell(
                         "pass_label": f"Pass {pass_number}",
                         "capture_status": str(pass_item.get("capture_status") or ""),
                         "verdict_short": pass_verdict_short,
-                        "text_tone": _run_cell_text_tone(pass_verdict, expected_behavior),
+                        "text_tone": "",
                         "kind": _run_cell_kind(pass_verdict, expected_behavior),
                         "time_display": pass_time_display,
                         "time_tone": time_tone,
                         "memory_display": pass_memory_display,
                         "status_display": f"{pass_verdict_short} \u00b7 {pass_time_display} \u00b7 {pass_memory_display}",
                         "feedback_display": row_feedback_display,
-                        "output_task_id": str(item.get("task_id") or ""),
+                        "output_task_id": "",
                         "input_ref": str(pass_item.get("input_ref") or ""),
                         "output_rel": str(output_rel),
                         "transcript_rel": str(pass_item.get("transcript_ref") or ""),
@@ -734,7 +599,7 @@ def _case_cell(
                 item.get("output_ref"),
                 field=f"program.tests[{idx - 1}].output_ref",
             )
-            output_task_id = str(item.get("task_id") or "")
+            output_task_id = ""
             time_display = run_cpu_wall_ms_text(time_user_ms, time_wall_ms)
             pass_rows.append(
                 {
@@ -742,7 +607,7 @@ def _case_cell(
                     "pass_label": "Pass 1",
                     "capture_status": "",
                     "verdict_short": verdict_short,
-                    "text_tone": _run_cell_text_tone(verdict, expected_behavior),
+                    "text_tone": "",
                     "kind": _run_cell_kind(verdict, expected_behavior),
                     "time_display": time_display,
                     "time_tone": time_tone,
@@ -779,7 +644,7 @@ def _case_cell(
                     ),
                     limit_bytes=display_limit,
                 )
-        final_row = dict(pass_rows[final_index]) if pass_rows else {}
+        final_row = pass_rows[final_index].copy()
         detail_payload = {
             "verdict": verdict,
             "verdict_short": verdict_short,
@@ -801,9 +666,7 @@ def _case_cell(
             ),
             "compile_error_display": detail_compile_error,
             "compile_diagnostics": detail_compile_diagnostics,
-            "late_diagnostics": list(
-                cast(list[object], item.get("late_diagnostics") or [])
-            ),
+            "late_diagnostics": list(item["late_diagnostics"]),
         }
     return {
         "verdict": verdict,
@@ -816,19 +679,19 @@ def _case_cell(
         "time_tone": time_tone,
         "memory_display": memory_mb_text,
         "kind": _run_cell_kind(verdict, expected_behavior),
-        "text_tone": _run_cell_text_tone(verdict, expected_behavior),
+        "text_tone": "",
         "detail": detail_payload,
         "detail_available": True,
     }
 
 
 def _test_detail_rows(
-    *, target_tests: list[str], row_index_by_test: dict[str, int], columns: list[dict],
+    *, target_tests: list[str], row_index_by_test: dict[str, int], columns: Sequence[RunColumnBase],
     test_generation_views: dict[str, TestGenerationView], row_generate_notes: dict[str, dict[str, str]],
     source_verification_id: str, problem_slug: str, username: str,
     detail_is_main_correct_run: bool = False,
-) -> list[dict]:
-    detail_rows: list[dict] = []
+) -> list[RunTestRow]:
+    detail_rows: list[RunTestRow] = []
     def _verification_artifact_preview(
         verification_id: str, rel_path: str
     ) -> RunDetailPreview:
@@ -900,10 +763,10 @@ def _test_detail_rows(
         rel_path: str,
         *,
         unavailable_message: str,
-    ) -> dict[str, object]:
+    ) -> RunTranscriptView:
         safe_verification_id = verification_id or ""
         safe_rel_path = (rel_path or "").lstrip("/")
-        unavailable = {
+        unavailable: RunTranscriptView = {
             "available": False,
             "state": "unavailable",
             "events": [],
@@ -976,7 +839,7 @@ def _test_detail_rows(
                 if answer_rel
                 else _run_detail_preview_unavailable("missing")
             )
-        detail_cells: list[dict] = []
+        detail_cells: list[RunCellView] = []
         for col in columns:
             cell = col["tests_map"].get(test_name)
             if cell is None:
@@ -993,19 +856,16 @@ def _test_detail_rows(
                 continue
             detail_raw = cell.get("detail")
             detail_payload = (
-                _detail_dict(detail_raw, field="cell.detail")
+                detail_raw.copy()
                 if detail_raw is not None
                 else None
             )
             if detail_payload is not None:
                 interactive_mode = (col.get("mode") or "") == "interactive"
-                pass_rows_payload: list[dict[str, object]] = []
-                pass_rows_raw = _detail_dict_rows(
-                    detail_payload.get("pass_rows"),
-                    field="cell.detail.pass_rows",
-                )
+                pass_rows_payload: list[RunPassView] = []
+                pass_rows_raw = detail_payload["pass_rows"]
                 for pass_item in pass_rows_raw:
-                    row_payload = dict(pass_item)
+                    row_payload = pass_item.copy()
                     output_rel = _detail_text(
                         row_payload.get("output_rel"),
                         field="cell.detail.pass.output_rel",
@@ -1094,17 +954,13 @@ def _test_detail_rows(
                 detail_payload["pass_rows"] = pass_rows_payload
                 detail_payload["is_interactive"] = interactive_mode
                 detail_payload["mode_malformed"] = (col.get("mode") or "") == "malformed"
-                final_row_raw = detail_payload.get("final_row")
-                final_row_payload = _detail_dict(
-                    final_row_raw,
-                    field="cell.detail.final_row",
-                )
+                final_row_payload = detail_payload["final_row"].copy()
                 if pass_rows_payload:
-                    final_row_payload = dict(pass_rows_payload[-1])
+                    final_row_payload = pass_rows_payload[-1].copy()
                     for candidate in reversed(pass_rows_payload):
                         verdict_token = candidate.get("verdict_short") or ""
                         if verdict_token and verdict_token not in {"--", "-"}:
-                            final_row_payload = dict(candidate)
+                            final_row_payload = candidate.copy()
                             break
                 detail_payload["final_row"] = final_row_payload
             detail_cells.append(
@@ -1121,21 +977,13 @@ def _test_detail_rows(
                 }
             )
         if detail_is_main_correct_run:
-            for cell in detail_cells:
-                main_detail_payload = _detail_dict(
-                    cell.get("detail"),
-                    field="main_correct.detail",
-                )
-                final_row_payload = _detail_dict(
-                    main_detail_payload.get("final_row"),
-                    field="main_correct.detail.final_row",
-                )
-                output_preview = _detail_preview(
-                    final_row_payload.get("output_preview"),
-                    field="main_correct.detail.final_row.output_preview",
-                )
-                if bool(output_preview.get("available")):
-                    answer_preview = output_preview
+            for detail_cell in detail_cells:
+                main_detail_payload = detail_cell["detail"]
+                if main_detail_payload is None:
+                    continue
+                final_output_preview = main_detail_payload["final_row"].get("output_preview")
+                if final_output_preview is not None and final_output_preview["available"]:
+                    answer_preview = final_output_preview
                     break
         generate_note = dict(row_generate_notes.get(test_name) or {})
         test_cell = _test_name_cell(
@@ -1185,7 +1033,7 @@ def _test_detail_rows(
 
 def build_run_test_detail_context(
     ctx: WorkspaceContext, *, verification_id: str, test_name: str, program_id: str = "",
-) -> dict:
+) -> RunTestDetailContext:
     """Project one authorized historical testcase without authoring side effects."""
     def authorize(record: VerificationSnapshotRecord) -> None:
         access = runtime().access_query.verification_context(
@@ -1203,10 +1051,7 @@ def build_run_test_detail_context(
         raise HTTPException(status_code=404, detail="run detail not found")
     details = model["details"]
     display_limit = runtime().config_values.integer("AUX_DISPLAY_TEXT_LIMIT_BYTES")
-    metadata = {
-        str(item.get("test_name") or ""): item
-        for item in _detail_dict_rows(details.get("tests_meta_rows"), field="tests_meta_rows")
-    }
+    metadata = {item.get("test_name", ""): item for item in details.get("tests_meta_rows", [])}
     selected_metadata = {test_name: metadata[test_name]} if test_name in metadata else {}
     generation = build_test_generation_views(model["tasks"], selected_metadata, limit_bytes=display_limit)
     notes = {
@@ -1214,13 +1059,12 @@ def build_run_test_detail_context(
                "text": view["table_text"], "detail": view["alert_message"] or view["detail"]}
         for name, view in generation.items()
     }
-    columns: list[dict] = []
+    columns: list[RunColumnBase] = []
     for task in model["cases"]:
-        tests_map: dict[str, dict] = {}
+        tests_map: dict[str, RunCaseCell] = {}
         if task["status"] in {VerificationTaskStatus.DONE, VerificationTaskStatus.FAILED} and task["verdict"] != "SK":
             item = verification_case_test_row(task, display_limit=display_limit)
-            feedback: dict[str, object] = {"tests": [item]}
-            _cap_run_test_feedback_files(feedback, runtime().config_values.integer("RUN_TEST_FEEDBACK_FILE_LIST_LIMIT"))
+            feedback = {"tests": [item]}
             diagnostics = _decorate_compile_diagnostics(_normalize_diagnostics(
                 compile_diagnostics_payload(task["result"].compile.diagnostics)[
                     :runtime().config_values.integer("RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT")
@@ -1241,7 +1085,7 @@ def build_run_test_detail_context(
                 item, idx=1, test_name=test_name, expected_behavior=task["expected_behavior"],
                 verification_details=details, include_row_details=True,
                 detail_compile_error=error,
-                detail_compile_diagnostics=cast(list[dict[str, object]], diagnostics),
+                detail_compile_diagnostics=diagnostics,
                 display_limit=display_limit, time_tone="warn" if test_name in threshold.highlighted_tests else "",
             )
         columns.append({
@@ -1261,13 +1105,12 @@ def build_run_test_detail_context(
 
 def build_run_detail_context(
     ctx: WorkspaceContext,
-    execute_mode: str,
     *,
     requested_verification_id: str = "",
     include_row_details: bool = False,
     detail_test_name: str = "",
     detail_program_id: str = "",
-) -> dict:
+) -> RunDetailContext:
     display_limit = runtime().config_values.integer("AUX_DISPLAY_TEXT_LIMIT_BYTES")
 
     workspace = Path(ctx["workspace"]["path"])
@@ -1278,7 +1121,7 @@ def build_run_detail_context(
     selected_program_ids: list[str] = []
     verification_program_rows: dict[str, VerificationProgramDetailRow] = {}
     verification_id_hint = normalize_run_id_token(requested_verification_id)
-    verification_details: dict[str, object] = {}
+    verification_details: VerificationDetail = {}
     task_rows: list[VerificationTaskRow] = []
     has_task_graph = False
     source_verification_id = (
@@ -1311,66 +1154,9 @@ def build_run_detail_context(
         )
         if not is_canonical_artifact_id(source_verification_id):
             source_verification_id = ""
-        verification_mode = verification_read_model["mode"]
         if has_task_graph:
             verification_program_rows = verification_read_model["program_rows"]
             selected_program_ids = verification_read_model["program_ids"]
-        else:
-            raw_programs_value = verification_details.get("programs")
-            raw_programs = (
-                cast(dict[str, object], raw_programs_value)
-                if isinstance(raw_programs_value, dict)
-                else {}
-            )
-            raw_program_order_value = verification_details.get("program_order")
-            raw_program_order = (
-                cast(list[object], raw_program_order_value)
-                if isinstance(raw_program_order_value, list)
-                else []
-            )
-            selected_program_ids = [
-                str(item or "").strip() for item in raw_program_order if str(item or "").strip()
-            ]
-            if not selected_program_ids:
-                selected_program_ids = [
-                    str(key or "").strip() for key in raw_programs.keys() if str(key or "").strip()
-                ]
-            for program_id in selected_program_ids:
-                program_payload = raw_programs.get(program_id)
-                if not isinstance(program_payload, dict):
-                    continue
-                program_summary = dict(program_payload.get("summary") or {})
-                verification_program_rows[program_id] = {
-                    "id": program_id,
-                    "status": str(
-                        program_payload.get("status")
-                        or verification_details.get("status")
-                        or "running"
-                    ),
-                    "mode": verification_mode,
-                    "created_at": str(
-                        verification_details.get("created_at") or verification_record["created_at"]
-                        if verification_record is not None
-                        else ""
-                    ),
-                    "finished_at": str(
-                        verification_details.get("finished_at")
-                        or verification_record["finished_at"]
-                        if verification_record is not None
-                        else ""
-                    ),
-                    "artifact_verification_id": str(
-                        verification_details.get("artifact_verification_id")
-                        or verification_id_hint
-                        or ""
-                    ),
-                    "summary": program_summary,
-                    "source_label": str(
-                        program_payload.get("source_label")
-                        or program_summary.get("source")
-                        or program_id
-                    ),
-                }
     runtime_threshold_time_limit_ms = time_limit_ms_from_run_config_json(
         str(verification_details.get("run_config_json") or ""),
         default_ms=0,
@@ -1394,15 +1180,13 @@ def build_run_detail_context(
         )
         return bool(safe_source)
 
-    columns: list[dict] = []
+    columns: list[RunColumn] = []
     all_tests: set[str] = set()
-    tests_meta_by_test_name: dict[str, dict[str, object]] = {}
-    for item in cast(list[object], verification_details.get("tests_meta_rows") or []):
-        if not isinstance(item, dict):
-            continue
-        test_name = normalize_run_test_name_token(str(item.get("test_name") or ""))
+    tests_meta_by_test_name: dict[str, VerificationTestMetadata] = {}
+    for test_metadata in verification_details.get("tests_meta_rows", []):
+        test_name = normalize_run_test_name_token(str(test_metadata.get("test_name") or ""))
         if test_name and test_name not in tests_meta_by_test_name:
-            tests_meta_by_test_name[test_name] = dict(item)
+            tests_meta_by_test_name[test_name] = test_metadata
     test_generation_views = build_test_generation_views(
         task_rows,
         tests_meta_by_test_name,
@@ -1431,65 +1215,28 @@ def build_run_detail_context(
     selected_test_name_hint = (
         normalize_run_test_name_token(detail_test_name) if include_row_details else ""
     )
-    domjudge_case_cells_by_program: dict[str, dict[str, dict[str, object]]] = {}
+
     for program_id in selected_program_ids:
         program_row = verification_program_rows.get(program_id)
-        status = "running"
-        mode = (
-            str(verification_details.get("mode") or "malformed")
-            if verification_record is not None
-            else execute_mode
-        )
-        created_at = verification_created_at
-        finished_at = ""
-        artifact_verification_id = ""
-        summary: dict[str, object] = {}
-        source_label = ""
-        if program_row is not None:
-            status = program_row["status"]
-            mode = program_row["mode"]
-            created_at = program_row["created_at"]
-            finished_at = program_row["finished_at"]
-            artifact_verification_id = program_row["artifact_verification_id"]
-            summary = dict(program_row["summary"])
-            source_label = program_row["source_label"]
+        if program_row is None:
+            continue
+        status = program_row["status"]
+        mode = program_row["mode"]
+        created_at = program_row["created_at"]
+        finished_at = program_row["finished_at"]
+        artifact_verification_id = program_row["artifact_verification_id"]
+        summary = program_row["summary"].copy()
+        source_label = program_row["source_label"]
         if mode not in {"pass-fail", "interactive"}:
             mode = "malformed"
-        _cap_summary_list(
-            summary,
-            "tests",
-            runtime().config_values.integer("RUN_DETAIL_TEST_LIST_LIMIT"),
-            "tests_truncated",
-            "tests_total",
-            "tests_limit",
-        )
-        raw_compile_diags = _detail_dict_rows(
-            summary.get("compile_diagnostics"),
-            field="program.compile_diagnostics",
-        )
-        if raw_compile_diags:
-            summary["compile_diagnostics"] = raw_compile_diags[
-                : runtime().config_values.integer("RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT")
-            ]
-        if include_row_details:
-            _cap_run_test_feedback_files(
-                summary,
-                runtime().config_values.integer("RUN_TEST_FEEDBACK_FILE_LIST_LIMIT"),
-            )
-        compile_diags = _detail_dict_rows(
-            summary.get("compile_diagnostics"),
-            field="program.compile_diagnostics",
-        )
-        if compile_diags:
-            normalized_diags = _normalize_diagnostics(
-                compile_diags,
-                runtime().config_values.integer("DIAGNOSTIC_MESSAGE_CHAR_LIMIT"),
-            )
-            summary["compile_diagnostics"] = _decorate_compile_diagnostics(normalized_diags)
-        detail_compile_diagnostics = _detail_dict_rows(
-            summary.get("compile_diagnostics"),
-            field="program.compile_diagnostics",
-        )
+        test_limit = max(1, runtime().config_values.integer("RUN_DETAIL_TEST_LIST_LIMIT"))
+        tests_total = max(len(summary["tests"]), summary["tests_total"])
+        tests_truncated = tests_total > test_limit
+        summary["tests"] = summary["tests"][:test_limit]
+        detail_compile_diagnostics = _decorate_compile_diagnostics(_normalize_diagnostics(
+            summary["compile_diagnostics"][:runtime().config_values.integer("RUN_DETAIL_DIAGNOSTIC_LIST_LIMIT")],
+            runtime().config_values.integer("DIAGNOSTIC_MESSAGE_CHAR_LIMIT"),
+        ))
         detail_compile_error = bounded_display_text(
             _detail_text(summary.get("error"), field="program.error"),
             limit_bytes=runtime().config_values.integer("AUX_DISPLAY_TEXT_LIMIT_BYTES"),
@@ -1502,7 +1249,7 @@ def build_run_detail_context(
                 detail_compile_error = f"{diag_location}: {diag_message}"
             elif diag_message:
                 detail_compile_error = diag_message
-        source = _run_source_from_summary(summary)
+        source = summary["source"]
         task_kind = _run_task_kind_from_summary(summary)
         is_main_correct_run = _is_main_correct_task_kind(task_kind)
         source_for_display = source or source_label
@@ -1543,21 +1290,18 @@ def build_run_detail_context(
             observed_pass=observed_pass,
             got_short=got_short,
         )
-        result_text_tone = _run_cell_text_tone(got_short, expected_behavior)
+        result_text_tone = ""
         result_tone_class = f"tone-{result_kind}"
         expected_mismatch = bool(expected_behavior != "unknown" and completed and (not matched))
         execution_skipped_from_summary = bool(summary.get("execution_skipped"))
         if not execution_skipped_from_summary and (summary.get("failure_stage") or "") == "build":
             execution_skipped_from_summary = True
-        tests_map: dict[str, dict] = {}
+        tests_map: dict[str, RunCaseCell] = {}
         max_time_ms = 0
         max_time_tone = ""
         max_memory_kb = 0
         has_test_metrics = False
-        tests_raw = _detail_dict_rows(
-            summary.get("tests"),
-            field="program.tests",
-        )
+        tests_raw = summary["tests"]
         runtime_threshold_report = evaluate_summary_runtime_threshold(
             summary=summary,
             source=source_for_display,
@@ -1597,108 +1341,6 @@ def build_run_detail_context(
             ),
             limit_bytes=runtime().config_values.integer("AUX_DISPLAY_TEXT_LIMIT_BYTES"),
         )
-        if (not has_task_graph) and (not execution_skipped):
-            case_cells = domjudge_case_cells_by_program.get(program_id) or {}
-            for test_name, case_cell in case_cells.items():
-                if selected_test_name_hint and test_name != selected_test_name_hint:
-                    continue
-                all_tests.add(test_name)
-                current_cell = tests_map.get(test_name)
-                current_short = (
-                    (current_cell.get("short") or "").upper() if current_cell is not None else ""
-                )
-                current_has_verdict = bool(current_short and current_short not in {"--", ".."})
-                if current_has_verdict:
-                    continue
-                verdict = _detail_text(
-                    case_cell.get("verdict"),
-                    field="case.verdict",
-                ).upper()
-                short = _detail_text(
-                    case_cell.get("short"),
-                    field="case.short",
-                    default="..",
-                ).upper() or ".."
-                time_ms = max(
-                    0,
-                    _detail_int(case_cell.get("time_ms"), field="case.time_ms"),
-                )
-                memory_kb = max(
-                    0,
-                    _detail_int(case_cell.get("memory_kb"), field="case.memory_kb"),
-                )
-                metrics = _detail_text(
-                    case_cell.get("metrics"),
-                    field="case.metrics",
-                    default="-",
-                ) or "-"
-                detail_payload = None
-                detail_available = False
-                if bool(case_cell.get("reported")):
-                    test_stem = Path(test_name).stem
-                    output_rel = f"{test_stem}.out" if test_stem else ""
-                    checker_log_rel = f"feedback_dir/{test_stem}/checker.log" if test_stem else ""
-                    case_cpu_ms = max(
-                        0,
-                        _detail_int(
-                            case_cell.get("cpu_ms"),
-                            field="case.cpu_ms",
-                            default=time_ms,
-                        ),
-                    )
-                    case_wall_ms = max(
-                        case_cpu_ms,
-                        _detail_int(
-                            case_cell.get("wall_ms"),
-                            field="case.wall_ms",
-                            default=case_cpu_ms,
-                        ),
-                    )
-                    pass_row = {
-                        "pass_label": "-",
-                        "verdict_short": short if short else "--",
-                        "text_tone": _run_cell_text_tone(verdict, expected_behavior),
-                        "kind": _run_cell_kind(verdict, expected_behavior),
-                        "time_display": run_cpu_wall_ms_text(case_cpu_ms, case_wall_ms),
-                        "memory_display": run_memory_mb_text(memory_kb),
-                        "status_display": f'{short if short else "--"} \u00b7 {run_cpu_wall_ms_text(case_cpu_ms, case_wall_ms)} \u00b7 {run_memory_mb_text(memory_kb)}',
-                        "feedback_display": "-",
-                        "output_rel": output_rel,
-                        "output_task_id": "",
-                        "checker_log_rel": checker_log_rel,
-                        "feedback_rel": "",
-                    }
-                    detail_payload = {
-                        "verdict": verdict or "-",
-                        "verdict_short": short if short else "--",
-                        "time_display": f"{time_ms}ms",
-                        "memory_display": run_memory_mb_text(memory_kb),
-                        "status_display": f'{short if short else "--"} \u00b7 {run_cpu_wall_ms_text(case_cpu_ms, case_wall_ms)} \u00b7 {run_memory_mb_text(memory_kb)}',
-                        "feedback_display": "-",
-                        "pass_rows": [pass_row],
-                        "final_row": dict(pass_row),
-                        "compile_error_display": detail_compile_error,
-                        "compile_diagnostics": detail_compile_diagnostics,
-                    }
-                    detail_available = True
-                tests_map[test_name] = {
-                    "verdict": verdict,
-                    "time_ms": time_ms,
-                    "memory_kb": memory_kb,
-                    "text": short,
-                    "short": short,
-                    "metrics": metrics,
-                    "kind": _run_cell_kind(verdict, expected_behavior) if verdict else "neutral",
-                    "text_tone": _run_cell_text_tone(verdict, expected_behavior) if verdict else "",
-                    "detail": detail_payload,
-                    "detail_available": bool(detail_available),
-                }
-                if bool(case_cell.get("reported")):
-                    has_test_metrics = True
-                    if time_ms > max_time_ms:
-                        max_time_ms = time_ms
-                    if memory_kb > max_memory_kb:
-                        max_memory_kb = memory_kb
         max_time_display = f"{max_time_ms}ms" if has_test_metrics else "-"
         max_memory_display = run_memory_mb_text(max_memory_kb) if has_test_metrics else "-"
         failure_display = (
@@ -1713,7 +1355,7 @@ def build_run_detail_context(
             if (match_reason or summary.get("error"))
             else ""
         )
-        column_payload = {
+        column_payload: RunColumn = {
             "id": program_id,
             "artifact_verification_id": artifact_verification_id,
             "title": title,
@@ -1726,21 +1368,16 @@ def build_run_detail_context(
             "mode": mode,
             "created_at": created_at,
             "finished_at": finished_at,
-            "summary": summary,
             "has_run_row": bool(program_row is not None),
             "tests_map": tests_map,
             "compile_log": summary.get("compile_log") or "",
-            "compile_diagnostics": summary.get("compile_diagnostics") or [],
+            "compile_diagnostics": detail_compile_diagnostics,
             "error": _detail_text(summary.get("error"), field="program.error"),
             "error_display": run_error_display(
                 _detail_text(summary.get("error"), field="program.error")
             ),
-            "tests_total": _detail_int(
-                summary.get("tests_total"),
-                field="program.tests_total",
-                default=len(tests_map),
-            ),
-            "tests_truncated": bool(summary.get("tests_truncated")),
+            "tests_total": tests_total,
+            "tests_truncated": tests_truncated,
             "expected_behavior": expected_behavior,
             "expected_behavior_label": expected_behavior_label(expected_behavior),
             "expected_display": expected_display,
@@ -1762,26 +1399,14 @@ def build_run_detail_context(
             "max_time_tone": max_time_tone,
             "max_memory_kb": int(max_memory_kb),
             "max_memory_display": max_memory_display,
+            "failure_display": failure_display,
         }
-        column_payload["failure_display"] = failure_display
         if not _is_solution_column_source(source_for_display) and task_kind not in {
             _TASK_KIND_SOLUTION_RUN,
             _TASK_KIND_MAIN_CORRECT,
         }:
             continue
         columns.append(column_payload)
-    if (not has_task_graph) and columns:
-        deduped_columns_by_source: dict[tuple[str, str], dict] = {}
-        deduped_order: list[tuple[str, str]] = []
-        for col in columns:
-            source_key = (
-                str(col.get("source") or ""),
-                str(col.get("expected_behavior") or ""),
-            )
-            if source_key not in deduped_columns_by_source:
-                deduped_order.append(source_key)
-            deduped_columns_by_source[source_key] = col
-        columns = [deduped_columns_by_source[key] for key in deduped_order]
     selected_detail_program_id = (
         normalize_program_id_token(detail_program_id) if include_row_details else ""
     )
@@ -1881,7 +1506,7 @@ def build_run_detail_context(
         max(known_tests_by_index.keys(), default=0), tests_meta_total, column_tests_total
     )
     row_index_by_test = {name: idx for idx, name in enumerate(ordered_tests, start=1)}
-    detail_rows: list[dict] = []
+    detail_rows: list[RunTestRow] = []
     if not include_row_details:
         row_entries: list[tuple[int, str, str, bool]] = []
         if bool(status_summary["has_running"]) and display_test_total > 0:
@@ -1895,7 +1520,7 @@ def build_run_detail_context(
                 for idx, test_name in enumerate(ordered_tests, start=1)
             ]
         for idx, actual_test_name, display_name, is_placeholder in row_entries:
-            cells: list[dict] = []
+            cells: list[RunCellView] = []
             has_detail = False
             generation_view = (
                 test_generation_views.get(actual_test_name) if actual_test_name else None
@@ -2025,10 +1650,8 @@ def build_run_detail_context(
         task_counts = verification_read_model["task_counts"]
         running_tasks = verification_read_model["running_tasks"]
     else:
-        task_counts = _legacy_task_counts(verification_details.get("task_counts"))
-        running_tasks = _legacy_running_tasks(
-            verification_details.get("running_tasks")
-        )
+        task_counts = app.service.verification.read_model.task_counts([])
+        running_tasks = []
     detail_fail_reason = str(
         (verification_record.get("fail_reason") if verification_record is not None else "") or ""
     )
@@ -2052,11 +1675,7 @@ def build_run_detail_context(
         if detail_status == "ok" and detail_sanity_status in {"warning", "failed"}
         else detail_status
     )
-    stage_results = _detail_dict(
-        verification_details.get("stage_results"),
-        field="stage_results",
-    )
-    verification_logs: dict[str, object] = {
+    verification_logs: RunVerificationLogs = {
         "available": False,
         "title": "Verification",
         "verification_id": "",
@@ -2076,40 +1695,12 @@ def build_run_detail_context(
         log_rows: list[dict[str, str]] = []
         diagnostics_rows: list[DiagnosticEntry] = []
         for col in columns:
-            raw_diags = _detail_dict_rows(
-                col.get("compile_diagnostics"),
-                field="column.compile_diagnostics",
-            )
+            raw_diags = col["compile_diagnostics"]
             if not raw_diags:
                 continue
-            normalized_diags = _normalize_diagnostics(
-                raw_diags,
-                runtime().config_values.integer("DIAGNOSTIC_MESSAGE_CHAR_LIMIT"),
-            )
-            diagnostics_rows = _decorate_compile_diagnostics(normalized_diags)
+            diagnostics_rows = raw_diags
             diagnostics_title = str(col.get("title") or "Verification")
             break
-        if not diagnostics_rows:
-            verification_diags = _detail_dict_rows(
-                verification_details.get("compile_diagnostics"),
-                field="compile_diagnostics",
-            )
-            stage_generate = _detail_dict(
-                stage_results.get("generate_input"),
-                field="stage_results.generate_input",
-            )
-            if not verification_diags:
-                verification_diags = _detail_dict_rows(
-                    stage_generate.get("compile_diagnostics"),
-                    field="stage_results.generate_input.compile_diagnostics",
-                )
-            if verification_diags:
-                normalized_diags = _normalize_diagnostics(
-                    verification_diags,
-                    runtime().config_values.integer("DIAGNOSTIC_MESSAGE_CHAR_LIMIT"),
-                )
-                diagnostics_rows = _decorate_compile_diagnostics(normalized_diags)
-                diagnostics_title = "Verification"
         if diagnostics_rows and (
             (not artifact_verification_error)
             or ("/opt/domjudge/judgehost/judgings/" in artifact_verification_error)

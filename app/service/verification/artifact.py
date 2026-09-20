@@ -30,6 +30,9 @@ class VerificationArtifact:
     filename: str
 
 
+TaskArtifactRow = tuple[str, str, str, int, str, str, str]
+
+
 def artifact_virtual_path(artifact_ref: str) -> str:
     """Encode an opaque runtime ref for the existing artifact route."""
 
@@ -55,7 +58,7 @@ def _pass_filename(test_name: str, pass_number: int, kind: str) -> str:
 def insert_task_artifact_rows(
     connection: sqlite3.Connection,
     *,
-    rows: list[tuple[object, ...]],
+    rows: list[TaskArtifactRow],
 ) -> None:
     """Insert ownership rows atomically with the task's first terminal decision."""
 
@@ -78,10 +81,10 @@ def task_artifact_rows(
     result: ExecutionResult,
     generated_input_ref: str,
     accepted_answer_ref: str,
-) -> list[tuple[object, ...]]:
+) -> list[TaskArtifactRow]:
     """Return the canonical ownership rows for one completed task."""
 
-    rows: list[tuple[object, ...]] = []
+    rows: list[TaskArtifactRow] = []
     if generated_input_ref:
         rows.append(
             (

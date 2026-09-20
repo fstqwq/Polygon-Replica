@@ -1,7 +1,6 @@
 """Shared request/file normalization helpers."""
 
 import re
-import sqlite3
 from pathlib import Path
 from typing import BinaryIO
 
@@ -20,21 +19,6 @@ _DOMJUDGE_INTERNAL_BUILD_PREFIX_RE = re.compile(
     r"/opt/domjudge/judgehost/judgings/[^:\s]+/endpoint-[^:\s]+/executable/[^:\s]+/[^:\s]+/build/"
 )
 SQL_TRACE_JSON_FIELDS = ("details_json", "value_json")
-
-
-def coerce_bool(value: object, default: bool = False) -> bool:
-    """Parse a permissive external boolean value into a canonical bool."""
-
-    if value is True:
-        return True
-    if value is False:
-        return False
-    text = str(value or "").strip().lower()
-    if text in {"1", "true", "yes", "on", "y"}:
-        return True
-    if text in {"0", "false", "no", "off", "n"}:
-        return False
-    return bool(default)
 
 
 def trace_sql_verb(text: str) -> str:
@@ -99,14 +83,6 @@ def summarize_traced_sql(statement: str, *, text_limit: int) -> str:
         f"{prefix} <redacted-json>"
     )
 
-
-def is_sqlite_locked_error(exc: sqlite3.OperationalError) -> bool:
-    """Return whether a sqlite operational error is a lock contention error."""
-
-    msg = str(exc or "").strip().lower()
-    if not msg:
-        return False
-    return "database is locked" in msg or "database table is locked" in msg
 
 def normalize_component_source_path(raw: str | None, folder: str, default_filename: str) -> str:
     """Normalize a required component source path under its component folder."""

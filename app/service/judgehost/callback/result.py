@@ -1,5 +1,4 @@
 import base64
-import json
 import logging
 import re
 import time
@@ -7,7 +6,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypeVar, cast
+from typing import TypeVar
 
 from app.service.judgehost.configuration import (
     JudgehostConfiguration,
@@ -45,14 +44,17 @@ from app.service.judgehost.domjudge.result import (
     parse_int,
 )
 from app.service.judgehost.domjudge.codec import (
+    decode_config_json,
     decode_text,
 )
 from app.service.judgehost.domjudge.scripts import DomjudgeScriptCatalog
 from app.service.judgehost.domjudge.task_plan import task_kind
 from app.service.judgehost.task.registry import JudgehostTaskRegistry
+from app.service.judgehost.task.model import TaskPayload
 from app.service.platform.error_text import aux_display_text_limit_bytes
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
+from app.service.execution.model import JsonValue
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +169,7 @@ class JudgehostCallbackIngestion:
             host_contacts=host_contacts,
         )
 
-    def _task_payload(self, task_id: str) -> dict[str, object]:
+    def _task_payload(self, task_id: str) -> TaskPayload:
         row = self._tasks.get(task_id)
         return {} if row is None else row["payload"].copy()
 
@@ -190,40 +192,22 @@ class JudgehostCallbackIngestion:
         }
 
     @staticmethod
-    def _verification_source(task_payload: dict[str, object]) -> str | None:
+    def _verification_source(task_payload: TaskPayload) -> str | None:
         value = task_payload.get("verification_source")
         if value is None or isinstance(value, str):
             return value
         raise RuntimeError("judgehost task verification_source must be a string")
 
-    def _complete_terminal_callback_case(
-        self,
-        case_id: int,
-        batch_id: int,
-        *,
-        reason: str = "",
-    ) -> bool:
-        """Acknowledge one retry without splitting a program-failure commit."""
-
+    def _case_is_terminal(self, case_id: int) -> bool:
         case = self._batch_runtime.fetch_case(int(case_id))
-        if case is None:
-            return True
-        if case["status"] not in {"reported", "cancelled"}:
-            return False
-        if bool(case["completion_acknowledged"]):
-            return True
-        batch = self._batch_runtime.fetch_batch(int(batch_id))
-        if batch is not None and batch["failure_runresult"]:
-            return True
-        del reason
-        return True
+        return case is None or case["status"] in {"reported", "cancelled"}
 
     def _case_report_telemetry(
         self,
         *,
         hostname: str,
         test_name: str,
-        task_payload: dict[str, object],
+        task_payload: TaskPayload,
         task_kind: str,
         reported_at: str,
         reported_monotonic: float,
@@ -329,8 +313,6 @@ class JudgehostCallbackIngestion:
         expected_hostname = lease_owner or case_row["last_callback_hostname"]
         if not expected_hostname or expected_hostname != safe_host:
             raise RuntimeError("judgehost does not own judging run")
-        batch_id = int(case_row["batch_id"])
-
         def _payload_blob(value: object) -> bytes:
             raw = decode_callback_blob(value)
             return truncate_stored_log_bytes(raw, settings.values) if raw else b""
@@ -359,10 +341,6 @@ class JudgehostCallbackIngestion:
             )
             return None
         if case_status in {"reported", "cancelled"}:
-            self._complete_terminal_callback_case(
-                case_id,
-                batch_id,
-            )
             return None
         if case_status not in {"leased", "reporting"}:
             raise RuntimeError("judgehost case does not accept this update")
@@ -389,7 +367,7 @@ class JudgehostCallbackIngestion:
                     )
                     or "compilation failed"
                 )
-                compile_diagnostics = (
+                compile_diagnostics: tuple[dict[str, JsonValue], ...] = (
                     {
                         "level": "error",
                         "message": compile_log or failure_text,
@@ -415,16 +393,12 @@ class JudgehostCallbackIngestion:
                         "judgehost case lease changed before compile failure claim"
                     )
                 if claim.outcome in {"late", "idempotent"}:
-                    self._complete_terminal_callback_case(
-                        case_id,
-                        claim.batch_id,
-                    )
                     return host_contact
                 if claim.outcome == "cancelled":
                     return host_contact
                 return host_contact
             if not compile_success_recorded:
-                if self._complete_terminal_callback_case(case_id, batch_id):
+                if self._case_is_terminal(case_id):
                     return host_contact
                 raise RuntimeError(
                     "judgehost batch closed before compile success update"
@@ -481,10 +455,6 @@ class JudgehostCallbackIngestion:
         if not expected_hostname or expected_hostname != safe_host:
             raise RuntimeError("judgehost does not own judging run")
         if case_status in {"reported", "cancelled"}:
-            self._complete_terminal_callback_case(
-                int(judgetask_id),
-                int(case_row["batch_id"]),
-            )
             logger.info(
                 "ignoring stale add_judging_run result for case id: %s",
                 int(judgetask_id),
@@ -585,7 +555,7 @@ class JudgehostCallbackIngestion:
             raise RuntimeError("judgehost does not own judging run")
         batch_id = int(row["batch_id"])
         safe_task_id = row["task_id"]
-        task_payload = self._task_payload(safe_task_id) if safe_task_id else {}
+        task_payload: TaskPayload = self._task_payload(safe_task_id) if safe_task_id else {}
         verification_id = decode_text(raw=task_payload.get("verification_id"))
         verification_source = self._verification_source(task_payload)
         canonical_task_kind = task_kind(
@@ -593,17 +563,8 @@ class JudgehostCallbackIngestion:
         )
         compile_only = canonical_task_kind == self._TASK_KIND_COMPILE_ONLY
 
-        def _load_json_object(raw: object) -> dict[str, object]:
-            text = decode_text(raw=raw)
-            if not text:
-                return {}
-            try:
-                return cast(dict[str, object], json.loads(text))
-            except Exception:
-                return {}
-
         interactive = row["mode"] == "interactive"
-        run_cfg_for_capture = _load_json_object(row["run_config_json"])
+        run_cfg_for_capture = decode_config_json(row["run_config_json"])
         pass_limit = max(1, parse_int(run_cfg_for_capture.get("pass_limit"), 1))
         bundle_limit_bytes = min(
             8 * 1024 * 1024,
@@ -646,9 +607,9 @@ class JudgehostCallbackIngestion:
         compile_hash = row["compile_hash"]
         run_hash = row["run_hash"]
         compare_hash = row["compare_hash"]
-        compile_cfg = _load_json_object(row["compile_config_json"])
+        compile_cfg = decode_config_json(row["compile_config_json"])
         run_cfg = run_cfg_for_capture
-        compare_cfg = _load_json_object(row["compare_config_json"])
+        compare_cfg = decode_config_json(row["compare_config_json"])
         compile_config_hash = RuntimeCacheIndex.signature(compile_cfg)
         run_config_hash = RuntimeCacheIndex.signature(run_cfg)
         compare_config_hash = RuntimeCacheIndex.signature(compare_cfg)
@@ -681,7 +642,6 @@ class JudgehostCallbackIngestion:
                 debug_text = decode_text(raw=debug_context["batch_debug_text"])
         normalized = normalize_captured_case(
             CapturedJudgehostCase(
-                test_name=row["test_name"],
                 input_ref=row["input_ref"],
                 interactive=interactive,
                 raw_runresult=decode_text(
@@ -736,7 +696,7 @@ class JudgehostCallbackIngestion:
         if outcome == "cancelled":
             return 1
         if outcome != "reported":
-            if self._complete_terminal_callback_case(case_id, batch_id):
+            if self._case_is_terminal(case_id):
                 logger.info(
                     "ignoring stale add_judging_run result for case id: %s", case_id
                 )
@@ -798,13 +758,6 @@ class JudgehostCallbackIngestion:
             case_id,
             runresult,
         )
-        current_batch = self._batch_runtime.fetch_batch(batch_id)
-        if current_batch is not None and current_batch["failure_runresult"]:
-            # A compile/internal batch failure owns every still-open Case.
-            # Do not publish the Case that happened to leave `reporting`
-            # first: finalization waits for the whole batch and sends one
-            # reported_many transaction for all affected verification tasks.
-            return 1
         return 1
 
     def domjudge_internal_error(
@@ -873,27 +826,6 @@ class JudgehostCallbackIngestion:
                     ),
                 )
             )
-            if claim.outcome in {"late", "idempotent"}:
-                # A reporting Case owns its canonical decision. The pending
-                # diagnostic is flushed by that completion; a terminal Case
-                # can flush it immediately.
-                self._complete_terminal_callback_case(
-                    case_id,
-                    claim.batch_id,
-                )
-                return self._outcome(
-                    case_id,
-                    (receipt.batch_id,),
-                    verification_ids=(receipt.verification_id,),
-                    host_contacts=host_contacts,
-                )
-            if claim.outcome == "cancelled":
-                return self._outcome(
-                    case_id,
-                    (receipt.batch_id,),
-                    verification_ids=(receipt.verification_id,),
-                    host_contacts=host_contacts,
-                )
             return self._outcome(
                 case_id,
                 (receipt.batch_id,),
@@ -951,14 +883,6 @@ class JudgehostCallbackIngestion:
                 if disposition == "rejected":
                     raise RuntimeError(
                         "judgehost case lease changed before diagnostic claim"
-                    )
-                if disposition == "pending":
-                    # See internal-error above: the immutable receipt protects
-                    # cleanup, while current Case state decides whether this
-                    # callback must perform the post-completion flush itself.
-                    self._complete_terminal_callback_case(
-                        case_id,
-                        receipt.batch_id,
                     )
             host_contact = HostContact(
                 hostname=safe_host,

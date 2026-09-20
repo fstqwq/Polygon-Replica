@@ -1,5 +1,6 @@
 """SQLite persistence for Native Package archives and their builds."""
 
+from sqlite3 import Connection, Row
 from typing import TypedDict
 
 from app.db import DB, now_iso
@@ -60,7 +61,7 @@ class NativePackageTestExecutionRow(TypedDict):
     input_ref: str
 
 
-def _materialization(row) -> MaterializationRow:
+def _materialization(row: Row) -> MaterializationRow:
     return {
         "id": str(row["id"]),
         "problem_id": int(row["problem_id"]),
@@ -295,7 +296,7 @@ class ProblemPackageStore:
     ) -> BuildRow:
         now = now_iso()
 
-        def transaction(connection) -> BuildRow:
+        def transaction(connection: Connection) -> BuildRow:
             row = connection.execute(
                 """SELECT * FROM problem_package_builds
                    WHERE problem_id=? AND source_commit=?""",
@@ -332,7 +333,7 @@ class ProblemPackageStore:
         return self.db.write_transaction(transaction)
 
     def mark_build_running(self, build_id: str, *, phase: str) -> None:
-        def transaction(connection) -> None:
+        def transaction(connection: Connection) -> None:
             cursor = connection.execute(
                 """UPDATE problem_package_builds
                    SET status='running',phase=?,started_at=?
@@ -356,7 +357,7 @@ class ProblemPackageStore:
 
     @staticmethod
     def _delete_materialization_exports(
-        connection,
+        connection: Connection,
         materialization_id: str,
     ) -> list[MaterializationExportRow]:
         rows = connection.execute(
@@ -383,7 +384,7 @@ class ProblemPackageStore:
         build_id: str,
         invalidate_exports: bool = False,
     ) -> list[MaterializationExportRow]:
-        def transaction(connection) -> list[MaterializationExportRow]:
+        def transaction(connection: Connection) -> list[MaterializationExportRow]:
             invalidated_exports: list[MaterializationExportRow] = []
             if invalidate_exports:
                 invalidated_exports = self._delete_materialization_exports(
@@ -424,7 +425,7 @@ class ProblemPackageStore:
         materialization_id: str,
         reason: str,
     ) -> list[MaterializationExportRow]:
-        def transaction(connection) -> list[MaterializationExportRow]:
+        def transaction(connection: Connection) -> list[MaterializationExportRow]:
             invalidated_exports = self._delete_materialization_exports(
                 connection,
                 materialization_id,
@@ -445,7 +446,7 @@ class ProblemPackageStore:
         expected_verification_id: str,
         verification_id: str,
     ) -> bool:
-        def transaction(connection) -> bool:
+        def transaction(connection: Connection) -> bool:
             cursor = connection.execute(
                 """
                 UPDATE problem_package_materializations
@@ -531,7 +532,7 @@ class ProblemPackageStore:
         ]
 
     def fail_interrupted_builds(self) -> int:
-        def transaction(connection) -> int:
+        def transaction(connection: Connection) -> int:
             cursor = connection.execute(
                 """UPDATE problem_package_builds SET status='failed',phase='interrupted',
                    error='interrupted by application restart',finished_at=? WHERE status IN ('queued','running')""",

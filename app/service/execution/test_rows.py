@@ -1,8 +1,46 @@
-ExecutionTestPassRow = dict[str, object]
-ExecutionTestRow = dict[str, object]
+from typing import Literal, NotRequired, TypedDict
 
 
-def _required_int(row: ExecutionTestPassRow, key: str) -> int:
+ExecutionTestPassRow = TypedDict(
+    "ExecutionTestPassRow",
+    {
+        "pass": int,
+        "verdict": str,
+        "time_ms": int,
+        "time_user_ms": int,
+        "time_wall_ms": int,
+        "memory_kb": int,
+        "feedback": str,
+        "capture_status": str,
+        "input_ref": str,
+        "output_ref": str,
+        "transcript_ref": str,
+        "judge_message_ref": str,
+        "answer_correct": bool,
+        "runresult": NotRequired[str],
+    },
+)
+
+
+class ExecutionTestRow(TypedDict):
+    test: str
+    verdict: str
+    time_ms: int
+    time_user_ms: int
+    time_wall_ms: int
+    memory_kb: int
+    message: str
+    output_ref: str
+    feedback_files: list[str]
+    passes: list[ExecutionTestPassRow]
+    answer_correct: bool
+    runresult: NotRequired[str]
+
+
+def _required_int(
+    row: ExecutionTestPassRow,
+    key: Literal["time_ms", "time_user_ms", "time_wall_ms", "memory_kb"],
+) -> int:
     value = row[key]
     if not isinstance(value, int) or isinstance(value, bool):
         raise ValueError(f"execution pass {key} must be an integer")
@@ -86,8 +124,8 @@ def build_execution_test_row(
                 answer_correct=answer_correct,
             )
         ]
-    final_pass = canonical_passes[-1] if canonical_passes else {}
-    resolved_verdict = verdict or str(final_pass.get("verdict") or "")
+    final_pass = canonical_passes[-1] if canonical_passes else None
+    resolved_verdict = verdict or (final_pass["verdict"] if final_pass else "")
     resolved_time_ms = max(
         0,
         _required_int(final_pass, "time_ms") if time_ms is None and final_pass else time_ms or 0,
@@ -104,8 +142,8 @@ def build_execution_test_row(
         0,
         _required_int(final_pass, "memory_kb") if memory_kb is None and final_pass else memory_kb or 0,
     )
-    resolved_message = message or str(final_pass.get("feedback") or "")
-    resolved_output_ref = output_ref or str(final_pass.get("output_ref") or "")
+    resolved_message = message or (final_pass["feedback"] if final_pass else "")
+    resolved_output_ref = output_ref or (final_pass["output_ref"] if final_pass else "")
     row: ExecutionTestRow = {
         "test": test_name,
         "verdict": resolved_verdict,
@@ -117,7 +155,7 @@ def build_execution_test_row(
         "output_ref": resolved_output_ref,
         "feedback_files": list(feedback_files or []),
         "passes": canonical_passes,
-        "answer_correct": bool(answer_correct or final_pass.get("answer_correct")),
+        "answer_correct": answer_correct or bool(final_pass and final_pass["answer_correct"]),
     }
     if runresult:
         row["runresult"] = runresult

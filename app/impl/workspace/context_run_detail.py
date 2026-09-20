@@ -3,7 +3,7 @@ import app.main_constant as _K
 import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import TypedDict
 
 from fastapi import Request
 
@@ -14,39 +14,7 @@ from app.main_util import (
 )
 
 from app.impl.workspace.context_operation import dedupe_preserve_order, workspace_rel_file_exists
-
-
-RunDetailPreview = TypedDict(
-    "RunDetailPreview",
-    {
-        "available": bool,
-        "text": str,
-        "truncated": bool,
-        "limit": int,
-        "download_verification_id": str,
-        "download_rel_path": str,
-        "message": str,
-    },
-)
-
-DiagnosticEntry = TypedDict(
-    "DiagnosticEntry",
-    {
-        "message": str,
-        "message_truncated": bool,
-        "message_limit": int,
-        "level": str,
-        "file": str,
-        "line": int,
-        "column": int,
-        "can_link": bool,
-        "file_display": str,
-        "location_display": str,
-        "location_title": str,
-        "level_upper": str,
-    },
-    total=False,
-)
+from app.impl.workspace.run_view_model import DiagnosticEntry, RunColumn, RunDetailPreview
 
 
 def _run_detail_preview_unavailable(message: str = 'missing') -> RunDetailPreview:
@@ -116,52 +84,6 @@ def _positive_int_or_none(raw: object) -> int | None:
         return None
     return value if value > 0 else None
 
-
-def _cap_summary_list(summary: dict[str, object], field: str, limit: int, truncated_key: str, total_key: str, limit_key: str) -> None:
-    values = summary.get(field)
-    if values is None:
-        return
-    rows = cast(list[object], values)
-    cap = max(1, int(limit))
-    existing_total = _nonnegative_int_or_none(summary.get(total_key))
-    existing_truncated = cast(bool | None, summary.get(truncated_key))
-    total = len(rows)
-    if existing_total is not None:
-        total = max(total, existing_total)
-    if len(rows) > cap:
-        shown = rows[:cap]
-        summary[field] = shown
-    summary[limit_key] = cap
-    summary[total_key] = total
-    if existing_truncated is not None:
-        summary[truncated_key] = existing_truncated or total > cap or len(rows) > cap
-        return
-    summary[truncated_key] = total > cap
-
-def _cap_run_test_feedback_files(summary: dict[str, object], limit: int) -> None:
-    tests = summary.get('tests')
-    if tests is None:
-        return
-    test_rows = cast(list[dict[str, object]], tests)
-    cap = max(1, int(limit))
-    for row in test_rows:
-        files = row.get('feedback_files')
-        if files is None:
-            continue
-        feedback_files = cast(list[object], files)
-        existing_total = _nonnegative_int_or_none(row.get('feedback_files_total'))
-        existing_truncated = cast(bool | None, row.get('feedback_files_truncated'))
-        total = len(feedback_files)
-        if existing_total is not None:
-            total = max(total, existing_total)
-        if len(feedback_files) > cap:
-            row['feedback_files'] = feedback_files[:cap]
-        row['feedback_files_limit'] = cap
-        row['feedback_files_total'] = total
-        if existing_truncated is not None:
-            row['feedback_files_truncated'] = existing_truncated or total > cap or len(feedback_files) > cap
-            continue
-        row['feedback_files_truncated'] = total > cap
 
 def _truncate_inline_text(value: str, max_chars: int) -> tuple[str, bool]:
     cap = max(1, int(max_chars))
@@ -306,14 +228,6 @@ def parse_verification_detail_id(request: Request) -> str:
     return ''
 
 
-def _run_source_from_summary(summary: dict[str, object] | None) -> str:
-    if summary is None:
-        return ''
-    source = cast(str | None, summary.get("source"))
-    if source is None:
-        return ""
-    return source
-
 def _run_rejudge_source_context(source: str, workspace: Path) -> tuple[str, str]:
     source_text = source.strip()
     if not source_text:
@@ -334,14 +248,19 @@ def _summarize_rejudge_unavailable_reason(reasons: list[str]) -> str:
     hidden = len(unique_reasons) - 2
     return f'{unique_reasons[0]}; {unique_reasons[1]}; +{hidden} more'
 
+class RejudgeContext(TypedDict):
+    paths: list[str]
+    unavailable_reason: str
+
+
 def _run_rejudge_context_for_entries(
-    entries: Sequence[Mapping[str, object]],
+    entries: Sequence[RunColumn],
     workspace: Path,
-) -> dict[str, str | list[str]]:
+) -> RejudgeContext:
     if not entries:
         return {'paths': [], 'unavailable_reason': 'no reusable solutions source'}
     statuses = [
-        cast(str | None, item.get("status")) if item.get("status") is not None else ""
+        item["status"]
         for item in entries
     ]
     if any((status == 'running' for status in statuses)):
@@ -379,10 +298,10 @@ class VerificationStatusSummary(TypedDict):
 
 
 def _verification_status_summary(
-    entries: Sequence[Mapping[str, object]],
+    entries: Sequence[RunColumn],
 ) -> VerificationStatusSummary:
     statuses = [
-        cast(str | None, item.get("status")) if item.get("status") is not None else ""
+        item["status"]
         for item in entries
     ]
     has_running = any((status in {'running', 'queued', 'pending'} for status in statuses))

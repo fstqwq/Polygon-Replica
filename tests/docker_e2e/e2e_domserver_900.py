@@ -10,7 +10,7 @@ import zipfile
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import cast
+from typing import BinaryIO
 
 import httpx
 
@@ -249,8 +249,18 @@ def _domserver() -> httpx.Client:
     )
 
 
-def _api(client: httpx.Client, method: str, path: str, **kwargs: object) -> httpx.Response:
-    response = client.request(method, "/api/v4" + path, **kwargs)
+def _api(
+    client: httpx.Client,
+    method: str,
+    path: str,
+    *,
+    files: dict[str, tuple[str, str | BinaryIO, str]] | None = None,
+    params: dict[str, str] | None = None,
+    timeout: float = 30.0,
+) -> httpx.Response:
+    response = client.request(
+        method, "/api/v4" + path, files=files, params=params, timeout=timeout
+    )
     if response.status_code >= 400:
         raise RuntimeError(
             f"DOMjudge {method} {path} returned {response.status_code}: "
@@ -619,7 +629,7 @@ def _judgement_result(row: dict[str, object]) -> str:
     return str(row.get("judgement_type_id") or row.get("result") or "").upper()
 
 
-def _wait_jury_results(client: httpx.Client, expected_count: int) -> list[dict[str, object]]:
+def _wait_jury_results(client: httpx.Client, expected_count: int) -> list[str]:
     deadline = time.monotonic() + JURY_TIMEOUT_SEC
     last_submissions: object = None
     last_judgements: object = None
@@ -632,9 +642,9 @@ def _wait_jury_results(client: httpx.Client, expected_count: int) -> list[dict[s
         ).json()
         if isinstance(last_submissions, list) and isinstance(last_judgements, list):
             complete = [
-                cast(dict[str, object], row)
+                result
                 for row in last_judgements
-                if isinstance(row, dict) and _judgement_result(row)
+                if isinstance(row, dict) and (result := _judgement_result(row))
             ]
             if len(last_submissions) == expected_count and len(complete) >= expected_count:
                 return complete
@@ -700,7 +710,7 @@ def run() -> None:
         archives.append(converted_archive)
         _import_problem(domserver, converted_archive)
         judgements = _wait_jury_results(domserver, expected_count=11)
-        results = Counter(_judgement_result(row) for row in judgements)
+        results = Counter(judgements)
         expected = Counter({"AC": 6, "CE": 1, "RTE": 2, "TLE": 1, "WA": 1})
         if results != expected:
             raise RuntimeError(f"DOMjudge jury results differ: {results!r} != {expected!r}")

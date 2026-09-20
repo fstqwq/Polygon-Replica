@@ -1,6 +1,7 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, NotRequired, TypedDict
 
 from app.service.platform.hashing import quick_fp_digest, sha256_file
 from app.service.platform.runtime_blob_store import PayloadFile
@@ -36,12 +37,22 @@ class VerificationManifest:
         return payload
 
 
+class _VerificationSourceEntry(TypedDict):
+    kind: Literal["file", "dir", "dir-file"]
+    target: str
+    state: Literal["ok", "missing", "invalid", "unreadable"]
+    path: NotRequired[str]
+    size: NotRequired[int]
+    mtime_ns: NotRequired[int]
+    identity: NotRequired[str]
+
+
 def _stat_mtime_ns(stat_obj: os.stat_result) -> int:
     return int(getattr(stat_obj, "st_mtime_ns", int(float(stat_obj.st_mtime) * 1_000_000_000)))
 
 
-def _verification_source_entries(workspace: Path) -> list[dict[str, object]]:
-    entries: list[dict[str, object]] = []
+def _verification_source_entries(workspace: Path) -> list[_VerificationSourceEntry]:
+    entries: list[_VerificationSourceEntry] = []
     try:
         workspace_resolved = workspace.resolve()
     except OSError:
@@ -62,9 +73,12 @@ def _verification_source_entries(workspace: Path) -> list[dict[str, object]]:
             return None
         return target
 
-    def _file_entry(kind: str, stat_obj: os.stat_result) -> dict[str, object]:
+    def _file_entry(
+        kind: Literal["file", "dir-file"], target: str, stat_obj: os.stat_result,
+    ) -> _VerificationSourceEntry:
         return {
             "kind": kind,
+            "target": target,
             "state": "ok",
             "size": int(stat_obj.st_size),
             "mtime_ns": _stat_mtime_ns(stat_obj),
@@ -77,8 +91,7 @@ def _verification_source_entries(workspace: Path) -> list[dict[str, object]]:
             return
         try:
             stat_obj = target.stat()
-            entry = _file_entry("file", stat_obj)
-            entry["target"] = rel_path
+            entry = _file_entry("file", rel_path, stat_obj)
             entries.append(entry)
         except OSError:
             entries.append({"kind": "file", "target": rel_path, "state": "unreadable"})
@@ -138,8 +151,7 @@ def _verification_source_entries(workspace: Path) -> list[dict[str, object]]:
         for rel, path in files:
             try:
                 stat_obj = path.stat()
-                entry = _file_entry("dir-file", stat_obj)
-                entry["target"] = rel_dir
+                entry = _file_entry("dir-file", rel_dir, stat_obj)
                 entry["path"] = rel
                 entries.append(entry)
             except OSError:
@@ -154,10 +166,10 @@ def _verification_source_entries(workspace: Path) -> list[dict[str, object]]:
 
 def verification_manifest(snapshot: Path) -> VerificationManifest:
     raw_entries = _verification_source_entries(snapshot)
-    manifest_entries: list[dict[str, object]] = []
+    manifest_entries: list[_VerificationSourceEntry] = []
     files: dict[str, PayloadFile] = {}
     for raw in raw_entries:
-        entry = dict(raw)
+        entry = raw.copy()
         entry.pop("mtime_ns", None)
         relative_path = ""
         if entry.get("state") == "ok" and entry.get("kind") == "file":
@@ -167,12 +179,9 @@ def verification_manifest(snapshot: Path) -> VerificationManifest:
         if relative_path:
             path = (snapshot / relative_path).resolve()
             identity = sha256_file(path, chunk_size=16 * 1024 * 1024)
-            size = entry["size"]
-            if isinstance(size, bool) or not isinstance(size, int):
-                raise RuntimeError("verification manifest file size is not an integer")
             payload = PayloadFile(
                 path=path,
-                size=size,
+                size=entry["size"],
                 identity=identity,
             )
             files[relative_path] = payload

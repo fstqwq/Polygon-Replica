@@ -153,9 +153,10 @@ class StatementHtmlRenderer:
             raw_html = html_path.read_text(encoding="utf-8")
         except OSError as exc:
             raise RuntimeError("Pandoc did not create statement HTML") from exc
-        fragment = self._sanitize(raw_html)
+        fragment = sanitize_statement_html(raw_html)
         if not fragment.strip():
             raise RuntimeError("statement HTML is empty after sanitization")
+        html_path.write_text(fragment, encoding="utf-8")
         log_text = "\n".join(
             part for part in (parse_result.stderr.strip(), html_result.stderr.strip()) if part
         )
@@ -356,11 +357,6 @@ class StatementHtmlRenderer:
 
         visit(document)
         return warnings
-
-    @staticmethod
-    def _sanitize(fragment: str) -> str:
-        return sanitize_statement_html(fragment)
-
 
     @staticmethod
     def _safe_relative_resource(value: str) -> PurePosixPath:

@@ -4,6 +4,8 @@ import unittest
 from pathlib import Path
 
 from app.service.export.adapters.nowcoder import NowcoderPackageAdapter
+from app.service.problem.build_config import BuildConfig
+from app.service.problem.runtime_config import ProblemMode
 from app.service.problem_package.manifest import (
     NativePackageManifest,
     NativePackageTestEntry,
@@ -109,14 +111,14 @@ class TestNowcoderExportPackage(unittest.TestCase):
     def _reader(
         self,
         *,
-        mode: str,
+        mode: ProblemMode,
         pass_limit: int,
         checker_source: str | None,
         directory_name: str = "verified",
     ) -> NativePackageReader:
         package_root = self.root / directory_name
         (package_root / "config").mkdir(parents=True)
-        build_config: dict[str, object] = {"generator_sources": []}
+        build_config: BuildConfig = {"generator_sources": []}
         if checker_source is not None:
             checker = package_root / "checkers" / "selected.cpp"
             checker.parent.mkdir()

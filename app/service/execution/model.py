@@ -7,6 +7,12 @@ CAPTURE_METADATA_ONLY = "metadata-only"
 CAPTURE_STATUSES = frozenset((CAPTURE_COMPLETE, CAPTURE_METADATA_ONLY))
 
 
+type JsonValue = None | bool | int | float | str | list[JsonValue] | dict[str, JsonValue]
+type FrozenDiagnosticValue = (
+    None | bool | int | float | str | tuple[FrozenDiagnosticValue, ...] | CompileDiagnostic
+)
+
+
 @dataclass(frozen=True)
 class ExecutionUsage:
     runtime_sec: float | None = None
@@ -69,10 +75,10 @@ class ExecutionOutcome:
 
 
 @dataclass(frozen=True)
-class CompileDiagnostic(Mapping[str, object]):
-    fields: tuple[tuple[str, object], ...]
+class CompileDiagnostic(Mapping[str, FrozenDiagnosticValue]):
+    fields: tuple[tuple[str, FrozenDiagnosticValue], ...]
 
-    def __getitem__(self, key: str) -> object:
+    def __getitem__(self, key: str) -> FrozenDiagnosticValue:
         for name, value in self.fields:
             if name == key:
                 return value

@@ -3,11 +3,9 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from types import SimpleNamespace
 from typing import cast
-from unittest import mock
 
-from app.config import ConfigValues
+from app.config import ConfigValues, build_config_values
 from app.service.export.adapters.polygon import PolygonLinuxPackageAdapter
 from app.service.problem_package.manifest import (
     NativePackageManifest,
@@ -15,6 +13,10 @@ from app.service.problem_package.manifest import (
 )
 from app.service.problem_package.service import NativePackageReader
 from app.service.problem_package.store import MaterializationRow
+
+
+from app.service.statement.tex_compile import TexCompileService
+from tests.package_builders import PdfSandbox
 
 
 class TestPolygonExportPackage(unittest.TestCase):
@@ -35,18 +37,9 @@ class TestPolygonExportPackage(unittest.TestCase):
             },
             normalizer=lambda raw: raw,
         )
-        self.tex_compile = mock.Mock()
-
-        def compile_pdf(entrypoint: Path) -> SimpleNamespace:
-            pdf = entrypoint.with_suffix(".pdf")
-            pdf.write_bytes(b"%PDF-1.4\npolygon\n")
-            return SimpleNamespace(
-                proc=SimpleNamespace(returncode=0, stderr="", stdout=""),
-                pdf_path=pdf,
-                log_text="",
-            )
-
-        self.tex_compile.compile_pdf.side_effect = compile_pdf
+        self.tex_compile = TexCompileService(
+            config_values=build_config_values(), sandbox_backend=PdfSandbox(),
+        )
 
     def tearDown(self) -> None:
         self._temporary_directory.cleanup()

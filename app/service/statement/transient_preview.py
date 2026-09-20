@@ -40,6 +40,7 @@ from app.service.statement.preview_state import (
     StatementPreviewRepository,
     StatementPreviewRow,
     StatementPreviewSource,
+    StatementPreviewSummary,
 )
 from app.service.statement.render import (
     render_statement_offline_tree,
@@ -484,7 +485,7 @@ class StatementPreviewService:
     ) -> StatementPreviewRow:
         preview_root = self._preview_root(preview_id)
         preview_root.mkdir(parents=True, exist_ok=True)
-        summary: dict[str, object] = {}
+        summary: StatementPreviewSummary = {}
         if sample_count is not None:
             summary["sample_count"] = sample_count
         if output_kind == "html":
@@ -735,7 +736,6 @@ class StatementPreviewService:
             output_kind=output_kind,
             language=language,
             input_identity=identity,
-            options={},
         )
         return preview_id
 

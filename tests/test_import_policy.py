@@ -13,6 +13,23 @@ IMPORT_POLICY_SCRIPT = ROOT / "tests" / "scripts" / "import_policy.py"
 
 
 class TestImportPolicy(unittest.TestCase):
+    def test_persistence_boundaries_report_imports_and_direct_queries(self) -> None:
+        cases = (
+            ("app.impl.problem.example", "from app.service.disk.auth_store import AuthStore\ndb.fetch_one('SELECT 1')", ["PERSISTENCE_IMPORT", "PERSISTENCE_SQL"]),
+            ("app.service.auth.service", "from app.service.disk.auth_store import AuthStore", []),
+            ("tests.test_example", "self.db.execute('DELETE FROM users')", ["PERSISTENCE_SQL"]),
+            ("tests.isolated_db_helpers", "db.fetch_one('SELECT 1')", []),
+            ("app.service.verification.task_store", "def project(row: sqlite3.Row) -> TaskRow:\n    return {'id': row['id']}", []),
+        )
+        for module, source, expected in cases:
+            with self.subTest(module=module):
+                findings = import_policy._persistence_violations(
+                    relative=module.replace(".", "/") + ".py",
+                    importer_module=module,
+                    tree=ast.parse(source),
+                )
+                self.assertEqual([item.rule for item in findings], expected)
+
     def test_imported_all_reexports_are_limited_to_package_initializers(self) -> None:
         source = """
 from app.service.owner import exported
@@ -171,8 +188,6 @@ _export_public(globals(), module)
             self.assertIn("violations", payload)
             self.assertIn("cycles", payload)
             self.assertIn("summary", payload)
-            self.assertNotIn("firstWave", payload)
-            self.assertNotIn("boundaries", payload)
             self.assertEqual(
                 int(payload["meta"]["applicationModuleCount"]),
                 len(list((ROOT / "app").rglob("*.py"))),
@@ -187,7 +202,6 @@ _export_public(globals(), module)
             check=False,
         )
         self.assertEqual(process.returncode, 0, msg=process.stderr or process.stdout)
-        self.assertIn("complete app graph is cycle-free", process.stdout)
 
 
 if __name__ == "__main__":

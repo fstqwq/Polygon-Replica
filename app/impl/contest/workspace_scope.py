@@ -207,10 +207,16 @@ def problem_href_builder(request: Request, problem_slug: str) -> ProblemHrefBuil
     )
 
 
+class ProblemTemplateNavigation(TypedDict):
+    problem_href: ProblemHrefBuilder
+    problem_section: ProblemSection
+    problem_page_target: str
+
+
 def problem_template_navigation(
     request: Request,
     problem_slug: str,
-) -> dict[str, object]:
+) -> ProblemTemplateNavigation:
     route = request.scope.get("route")
     route_path = str(getattr(route, "path", ""))
     if not route_path.startswith(_PROBLEM_ROUTE_PREFIX):

@@ -6,6 +6,7 @@ from typing import TypedDict
 from app.config import ConfigValues
 from app.db import DB, now_iso
 from app.service.access.policy import access_role, contest_role
+from app.service.access.model import AccessRole, WritableProblemRow
 from app.service.access.query import AccessQuery
 from app.service.contest.model import AgentContestRoster
 from app.service.contest.problem_index import normalize_contest_problem_idx
@@ -50,11 +51,8 @@ class ContestProblem(TypedDict):
     created_at: str
 
 
-class ContestAvailableProblem(TypedDict):
-    problem_id: int
-    problem_slug: str
+class ContestAvailableProblem(WritableProblemRow):
     slug_leaf: str
-    role: str
 
 
 class ContestProblemEntry(TypedDict):
@@ -79,13 +77,17 @@ class ContestProblemLookup(TypedDict):
     slug: str
 
 
-def _required_row_int(
-    row: Mapping[str, object], key: str, *, context: str
-) -> int:
-    value = row.get(key)
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise RuntimeError(f"{context} {key} must be an integer")
-    return value
+class ContestOverview(TypedDict):
+    id: int
+    slug: str
+    title: str
+    owner_user_id: int
+    created_at: str
+    last_updated_at: str
+    role: AccessRole
+    problem_count: int
+    dirty_problem_count: int
+    has_dirty: bool
 
 
 class ContestStatementSourceFile(TypedDict):
@@ -326,8 +328,8 @@ class ContestService:
         root.mkdir(parents=True, exist_ok=True)
         return root
 
-    def user_contests_overview(self, user_id: int, *, limit: int) -> list[dict[str, object]]:
-        items: list[dict[str, object]] = []
+    def user_contests_overview(self, user_id: int, *, limit: int) -> list[ContestOverview]:
+        items: list[ContestOverview] = []
         if self.access_query.is_system_admin(user_id):
             rows = self._store.all_contest_rows(int(user_id), limit=max(1, int(limit)))
         else:
@@ -665,9 +667,7 @@ class ContestService:
                 continue
             result.append(
                 {
-                    "problem_id": _required_row_int(
-                        row, "problem_id", context="available problem"
-                    ),
+                    "problem_id": row["problem_id"],
                     "problem_slug": slug,
                     "slug_leaf": slug_leaf,
                     "role": access_role(str(row["role"])),

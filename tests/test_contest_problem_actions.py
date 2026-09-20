@@ -1,9 +1,8 @@
-from unittest.mock import patch
-
 from fastapi import HTTPException
 
 from tests.contest_support import ContestActionBase
 from tests.db_helpers import db_fetch_all
+from tests.package_support import blocked_export_queue
 from tests.ui_support import (
     contest_build_all_packages,
     contest_problems_add,
@@ -24,50 +23,27 @@ class TestContestProblemActions(ContestActionBase):
         self.assertIsNotNone(problem_id)
         return int(problem_id), problem_slug
 
-    def test_build_all_packages_queues_each_non_current_problem(self) -> None:
+    def test_build_all_packages_persists_jobs_for_each_published_problem(self) -> None:
         contest_slug, contest_id, actor_user_id = self.create_contest("build-all")
-        _first_id, first_problem_id, _ = self.add_owned_problem(
-            contest_id, actor_user_id, "A", "build-all-first"
-        )
-        _second_id, second_problem_id, _ = self.add_owned_problem(
-            contest_id, actor_user_id, "B", "build-all-second"
-        )
-        readiness = {
-            problem_id: {
-                "problem_id": problem_id,
-                "published_commit": "a" * 40,
-                "published_revision_number": 1,
-                "native_package_revision_number": None,
-                "native_package_id": "",
-                "status": "none",
-                "verified": False,
-                "missing_reason": "No Native Package",
-            }
-            for problem_id in (first_problem_id, second_problem_id)
-        }
-
-        with (
-            patch.object(
-                runtime.problem_package_service,
-                "published_readiness_many",
-                return_value=readiness,
-            ),
-            patch(
-                "app.impl.contest.overview.start_export_job",
-                return_value=True,
-            ) as start,
-        ):
-            response = contest_build_all_packages(
-                contest=contest_slug,
-                user="alice",
+        heads: dict[int, str] = {}
+        for index, label in enumerate(("A", "B")):
+            _row_id, problem_id, slug = self.add_owned_problem(
+                contest_id, actor_user_id, label, f"build-all-{index}",
             )
+            workspace = workspace_service.ensure_workspace(slug, "alice")
+            heads[problem_id] = runtime.git_service.commit(
+                workspace, "Published source", "alice", "alice@example.com",
+            )
+            runtime.git_service.push(workspace, "main")
 
-        self.assertEqual(response.status_code, 303)
-        self.assertEqual(start.call_count, 2)
-        self.assertEqual(
-            {call.kwargs["problem_id"] for call in start.call_args_list},
-            {first_problem_id, second_problem_id},
-        )
+        with blocked_export_queue():
+            response = contest_build_all_packages(contest=contest_slug, user="alice")
+            self.assertEqual(response.status_code, 303)
+            jobs = db_fetch_all("SELECT problem_id,source_commit,status FROM export_jobs")
+            self.assertEqual(
+                {(row["problem_id"], row["source_commit"], row["status"]) for row in jobs},
+                {(problem_id, head, "queued") for problem_id, head in heads.items()},
+            )
 
     def test_contest_writer_adds_only_directly_writable_problems(self) -> None:
         target_slug, target_id, _target_actor_user_id = self.create_contest(

@@ -11,6 +11,19 @@ terminal decisions, and late diagnostics. Durable publication crosses the
 injected judgehost execution port; this package does not import verification
 services or query verification tables.
 
+The DOMjudge wire projector returns fixed typed records for work packets,
+registration work directories, configuration, languages, and hosts. Configuration
+fields inside work packets remain JSON strings required by the protocol; internal
+host status and toolchain records keep their typed values through projection.
+
+Task payloads, summaries, terminal receipts, case snapshots and prepared execution
+configurations use fixed typed records across admission, runtime queries and
+finalization. Template signatures consume their canonical configurations and
+policy directly. Raw callback fields, verification overrides and admission
+descriptors are validated at their boundaries before being stored as canonical
+results. Compile diagnostics retain their extensible JSON fields inside immutable
+result values.
+
 The lifecycle is:
 
 ```text

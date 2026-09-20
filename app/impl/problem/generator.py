@@ -18,6 +18,7 @@ from app.impl.workspace.context_operation import (
 )
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
+from app.impl.workspace.context_model import GeneratorSourceContext
 from app.main_util import enforce_textarea_max_bytes
 from app.service.platform.workspace_path import (
     normalize_component_source_path,
@@ -44,12 +45,8 @@ def generators_page(request: Request, problem: str, user: Annotated[str, Depends
     )
     workspace = Path(ctx['workspace']['path'])
     generator_status = ctx['shell']['components']['generators']
-    source_rows: list[dict[str, object]] = [
-        {
-            'path': row['path'],
-            'configured': row['configured'],
-            'reference_count': row['reference_count'],
-        }
+    source_rows: list[GeneratorSourceContext] = [
+        row
         for row in generator_status['source_rows']
         if row['exists']
     ]
@@ -69,7 +66,7 @@ def generators_page(request: Request, problem: str, user: Annotated[str, Depends
     selected_source = new_source or requested_source or repo_source or 'generators/generator.cpp'
     selected_exists = workspace_rel_file_exists(workspace, selected_source)
     if selected_source and selected_exists and all((row.get('path') != selected_source for row in source_rows)):
-        source_rows.insert(0, {'path': selected_source, 'reference_count': 0})
+        source_rows.insert(0, {'path': selected_source, 'exists': True, 'configured': False, 'reference_count': 0})
     repo_content = ''
     repo_content_truncated = False
     try:

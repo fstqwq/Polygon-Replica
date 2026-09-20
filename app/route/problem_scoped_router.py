@@ -1,4 +1,4 @@
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Coroutine, Sequence
 from typing import Any
 
 from fastapi import APIRouter, Depends, params
@@ -17,7 +17,7 @@ _PROBLEM_ROUTE_PREFIX = "/problems/{problem:path}/"
 
 
 class ProblemScopedRoute(APIRoute):
-    def get_route_handler(self) -> Callable[[Request], Any]:
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
         original_handler = super().get_route_handler()
 
         async def scoped_handler(request: Request) -> Response:

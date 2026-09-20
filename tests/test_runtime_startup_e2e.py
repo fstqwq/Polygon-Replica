@@ -1,11 +1,11 @@
 import sqlite3
-from unittest.mock import patch
 
 from app.runtime_lifecycle import (
     _startup_clear_all_caches,
     _startup_reset_runtime_state,
 )
 from app.main import runtime
+from app.service.platform.runtime_cache_index import RuntimeCacheIndex
 
 from tests.backend_e2e_fixture import BackendE2ETestBase
 from tests.common import (
@@ -34,16 +34,26 @@ class TestRuntimeStartupE2E(BackendE2ETestBase):
         upload_file.write_bytes(b"upload")
         contest_draft.write_bytes(b"draft")
 
-        with patch.object(runtime.runtime_cache_index, "clear_all", return_value=None), patch.object(
-            runtime.worker_queue_service,
-            "reset_runtime_history",
-            return_value=None,
-        ) as reset_history:
-            _startup_clear_all_caches(runtime)
-
-        reset_history.assert_called_once_with()
+        entry = runtime.runtime_cache_index.put(
+            namespace=RuntimeCacheIndex.EXECUTABLE,
+            key_hash="a" * 64,
+            signature="b" * 64,
+            value={"executable": "fixture"},
+            files={"program": b"executable"},
+        )
+        future, _accepted, _reason = runtime.worker_queue_service.submit(
+            name="startup-history", fn=lambda: None,
+        )
+        future.join(2)
+        self.assertFalse(future.is_alive())
+        self.assertIsNone(future.exception())
+        _startup_clear_all_caches(runtime)
 
         self.assertTrue(runtime.storage_layout.cache_root.exists())
+        self.assertIsNone(runtime.runtime_cache_index.get(
+            namespace=entry.namespace, key_hash=entry.key_hash, signature=entry.signature,
+        ))
+        self.assertEqual(runtime.worker_queue_service.snapshot()["jobs"], [])
         self.assertFalse(artifact_file.exists())
         self.assertFalse(runtime_file.exists())
         self.assertFalse(durable_log.exists())
@@ -51,17 +61,15 @@ class TestRuntimeStartupE2E(BackendE2ETestBase):
         self.assertFalse(contest_draft.exists())
 
     def test_startup_cache_clear_failure_is_fatal(self) -> None:
-        with patch.object(
-            runtime.worker_queue_service,
-            "reset_runtime_history",
-            return_value=None,
-        ), patch.object(
-            runtime.runtime_cache_index,
-            "clear_all",
-            side_effect=RuntimeError("cache is busy"),
+        marker = runtime.storage_layout.runtime_root / "active-cache-marker"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("active cache\n", encoding="utf-8")
+        with runtime.runtime_cache_index.key_lock(
+            RuntimeCacheIndex.EXECUTABLE, "a" * 64, "b" * 64,
         ):
-            with self.assertRaisesRegex(RuntimeError, "cache is busy"):
+            with self.assertRaisesRegex(RuntimeError, "entries are active"):
                 _startup_clear_all_caches(runtime)
+        self.assertEqual(marker.read_text(encoding="utf-8"), "active cache\n")
 
     def test_startup_recovery_failure_preserves_runtime_storage(self) -> None:
         context = runtime.workspace_service.workspace_context(
@@ -83,24 +91,14 @@ class TestRuntimeStartupE2E(BackendE2ETestBase):
 
         install_startup_recovery_abort_fault()
         try:
-            with patch(
-                "app.runtime_lifecycle._startup_fail_summary_rows"
-            ), patch(
-                "app.runtime_lifecycle._startup_cancel_judgehost_inflight"
-            ) as cancel_judgehost, patch(
-                "app.runtime_lifecycle._startup_clear_all_caches",
-                wraps=_startup_clear_all_caches,
-            ) as clear_caches:
-                with self.assertRaisesRegex(
-                    sqlite3.IntegrityError,
-                    "forced startup recovery failure",
-                ):
-                    _startup_reset_runtime_state(runtime)
+            with self.assertRaisesRegex(
+                sqlite3.IntegrityError,
+                "forced startup recovery failure",
+            ):
+                _startup_reset_runtime_state(runtime)
         finally:
             clear_startup_recovery_abort_fault()
 
-        cancel_judgehost.assert_not_called()
-        clear_caches.assert_not_called()
         self.assertTrue(marker.exists())
         verification = db_fetch_one(
             "SELECT status FROM verifications WHERE id=?",

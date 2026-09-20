@@ -1,6 +1,7 @@
 import json
 import unittest
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -119,7 +120,7 @@ class TestJudgehostRuntimeService(DBTestBase):
     def test_compile_only_derives_pass_fail_without_problem_mode_or_workspace(
         self,
     ) -> None:
-        payload = self.service.prepare_enqueue_payload(
+        payload = self.service._payload_preparation.prepare_enqueue_payload(
             problem="missing/problem",
             username="missing-user",
             artifact_verification_id="",
@@ -150,7 +151,7 @@ class TestJudgehostRuntimeService(DBTestBase):
         input_path.write_bytes(b"input\n")
         answer_path.write_bytes(b"answer\n")
 
-        payload = self.service.prepare_enqueue_payload(
+        payload = self.service._payload_preparation.prepare_enqueue_payload(
             problem=self.problem,
             username=self.user,
             artifact_verification_id="",
@@ -226,7 +227,7 @@ class TestJudgehostRuntimeService(DBTestBase):
             RuntimeError,
             "submission source payload is unavailable: lost.cpp",
         ):
-            self.service.prepare_enqueue_payload(
+            self.service._payload_preparation.prepare_enqueue_payload(
                 problem=self.problem,
                 username=self.user,
                 artifact_verification_id="",
@@ -264,7 +265,7 @@ class TestJudgehostRuntimeService(DBTestBase):
                 },
             )
 
-    def test_set_host_enabled_preserves_status_shape(self) -> None:
+    def test_disabling_host_preserves_its_contact_and_telemetry(self) -> None:
         self.service.domjudge_register_host("judgehost-shape-check")
         before_host = next(
             item
@@ -274,10 +275,7 @@ class TestJudgehostRuntimeService(DBTestBase):
         self.assertEqual(before_host["judged_case_count"], 0)
         self.assertIsNone(before_host["last_judging_at"])
         self.assertIsNone(before_host["recent_avg_per_case_sec"])
-        self.assertNotIn("load_5m", before_host)
-
-        release = self.service.set_host_enabled("judgehost-shape-check", False)
-        self.assertIsInstance(release, dict)
+        self.service.set_host_enabled("judgehost-shape-check", False)
         after_host = next(
             item
             for item in self.service.status()["hosts"]
@@ -285,6 +283,9 @@ class TestJudgehostRuntimeService(DBTestBase):
         )
         self.assertFalse(after_host["enabled"])
         self.assertEqual(after_host["last_seen_at"], before_host["last_seen_at"])
+        self.assertEqual(after_host["judged_case_count"], 0)
+        self.assertIsNone(after_host["last_judging_at"])
+        self.assertIsNone(after_host["recent_avg_per_case_sec"])
 
     def test_host_status_keeps_latest_peer_ip(self) -> None:
         host = "judgehost-peer-display"
@@ -307,34 +308,71 @@ class TestJudgehostRuntimeService(DBTestBase):
         self.service.reset_runtime_state()
         self.assertEqual(self.service.status()["hosts"], [])
 
-    def test_expired_lease_reconcile_reads_online_window_from_policy(self) -> None:
+    def test_shortening_online_window_releases_stale_host_lease(self) -> None:
+        self._seed_workspace()
         host = "judgehost-stale-policy"
+        verification_id = "ver-51"
+        run_id = f"r-stale-policy-{uuid.uuid4().hex[:8]}"
         self.config_values.replace(
             {
                 **self.config_values.snapshot(),
-                "JUDGEHOST_ONLINE_WINDOW_SEC": 5,
+                "JUDGEHOST_ONLINE_WINDOW_SEC": 60,
             }
         )
+        task_id = self.service.enqueue_compile_only_task(
+            problem=self.problem,
+            username=self.user,
+            artifact_verification_id="",
+            upload_content=b"int main(){return 0;}\n",
+            upload_filename="solution.cpp",
+            run_id=run_id,
+            verification_id=verification_id,
+            verification_program_id=_PROGRAM_ID,
+        )
+        self.service.domjudge_register_host(host)
+        work = self.service.domjudge_fetch_work(host)
+        self.assertEqual(len(work), 1)
+        observed_at = datetime.now(timezone.utc)
         with patch(
             "app.service.judgehost.host.registry.now_iso",
-            return_value="2000-01-01T00:00:00+00:00",
+            return_value=(observed_at - timedelta(seconds=10)).isoformat(),
         ):
-            self.service.domjudge_register_host(host)
+            self.service.record_host_peer_addr(host, "203.0.113.10")
 
         with patch(
-            "app.service.judgehost.batch.runtime.JudgehostBatchRuntime.cases_for_host",
-            return_value=[],
-        ) as cases_for_host:
-            released = self.service.reconcile_expired_verification_leases(
-                "ver-policy-window"
+            "app.service.judgehost.maintenance.service.datetime",
+            wraps=datetime,
+        ) as clock:
+            clock.now.return_value = observed_at
+            self.assertEqual(
+                self.service.reconcile_expired_verification_leases(verification_id),
+                [],
+            )
+            leased = self.service.task_snapshot_for_run(run_id)
+            assert leased is not None
+            self.assertEqual(leased["status"], "leased")
+            self.assertEqual(self.service.status()["hosts"][0]["active_leases"], 1)
+
+            self.config_values.replace(
+                {**self.config_values.snapshot(), "JUDGEHOST_ONLINE_WINDOW_SEC": 5}
+            )
+            self.assertEqual(
+                self.service.reconcile_expired_verification_leases(verification_id),
+                [task_id],
             )
 
-        self.assertEqual(released, [])
-        cases_for_host.assert_called_once_with(host)
+        self.assertEqual(self.service.status()["hosts"][0]["active_leases"], 0)
+        replacement_host = "judgehost-policy-replacement"
+        self.service.domjudge_register_host(replacement_host)
+        reassigned = self.service.domjudge_fetch_work(replacement_host)
+        self.assertEqual(
+            [row["judgetaskid"] for row in reassigned],
+            [row["judgetaskid"] for row in work],
+        )
 
     def test_prepare_java_payload_uses_detected_entry_point(self) -> None:
         self._seed_workspace()
-        payload = self.service.prepare_enqueue_payload(
+        payload = self.service._payload_preparation.prepare_enqueue_payload(
             problem=self.problem,
             username=self.user,
             artifact_verification_id="",
@@ -362,7 +400,7 @@ class TestJudgehostRuntimeService(DBTestBase):
     def test_prepare_java_payload_rejects_missing_main_class(self) -> None:
         self._seed_workspace()
         with self.assertRaisesRegex(RuntimeError, "no runnable main class found"):
-            self.service.prepare_enqueue_payload(
+            self.service._payload_preparation.prepare_enqueue_payload(
                 problem=self.problem,
                 username=self.user,
                 artifact_verification_id="",

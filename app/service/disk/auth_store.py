@@ -6,7 +6,7 @@ from typing import TypedDict
 from app.db import DB, now_iso
 from app.config import ConfigValues
 from app.main_constant import SESSION_TOKEN_RE, USER_IDENT_RE
-from app.service.auth.model import AuthSessionIdentity, SudoSessionIdentity
+from app.service.auth.model import AuthSessionIdentity, AuthUserRow, RateLimitHit, SudoSessionIdentity
 from app.service.platform.hashing import sha256_hex_text
 
 
@@ -15,20 +15,6 @@ def _required_lastrowid(cursor: sqlite3.Cursor) -> int:
     if row_id is None:
         raise RuntimeError("SQLite insert did not return a row id")
     return row_id
-
-
-class AuthUserRow(TypedDict):
-    id: int
-    username: str
-    email: str
-    email_normalized: str
-    email_verified_at: str
-    password_hash: str
-    password_salt: str
-    password_iters: int
-    is_system_admin: int
-    is_banned: int
-    banned_at: str
 
 
 class AuthAdminUserListRow(TypedDict):
@@ -51,13 +37,6 @@ class PendingRegistrationRow(TypedDict):
     password_iters: int
     expires_at: str
     used_at: str
-
-
-class RateLimitHit(TypedDict):
-    allowed: bool
-    count: int
-    limit: int
-    retry_after_sec: int
 
 
 class AuthStore:
@@ -170,7 +149,7 @@ class AuthStore:
     def admin_user_rows(self, *, query: str, limit: int) -> list[AuthAdminUserListRow]:
         safe_query = str(query or "").strip().lower()
         safe_limit = max(1, min(int(limit), 200))
-        params: list[object] = []
+        params: list[str] = []
         where_sql = ""
         if safe_query:
             like_pattern = f"%{safe_query}%"

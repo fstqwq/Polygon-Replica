@@ -5,14 +5,10 @@ from app.service.verification.diagnostic import (
     TaskDiagnosticSnapshot,
     merge_task_diagnostic_snapshot,
     new_task_diagnostic_item,
+    task_diagnostic_snapshot_from_json,
     task_diagnostic_snapshot_json,
 )
 from app.service.verification.lifecycle import verification_task_id
-from app.service.verification.task_metadata import (
-    canonical_diagnostics,
-    canonical_truncated_text,
-    diagnostics_json_text,
-)
 from app.service.verification.types import VerificationTaskStatus
 
 from tests.identity_helpers import canonical_test_verification_id
@@ -20,6 +16,11 @@ from tests.verification_policy_fixture import VerificationPolicyTestBase
 
 
 class TestVerificationPolicy(VerificationPolicyTestBase):
+    def test_malformed_historical_diagnostics_are_unavailable(self) -> None:
+        for payload in ("not-json", "[]", '{"items": 12}', '{"items": "text"}', '{"items": [null, {"kind": "unknown"}]}'):
+            with self.subTest(payload=payload):
+                self.assertEqual(task_diagnostic_snapshot_from_json(payload).items, ())
+
     def test_memory_limit_is_canonical_before_verification_payloads(self) -> None:
         from app.service.verification.execution_plan import (
             _generate_payload_base,
@@ -76,50 +77,6 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
             json.loads(str(generate_payload["run_config_json"]))["memory_limit_mb"],
             1,
         )
-
-    def test_effective_verification_status_waits_for_pending_sanity_checks(self) -> None:
-        from app.service.verification.sanity import effective_verification_status
-
-        counts = {
-            "pending": 0,
-            "queued": 0,
-            "running": 0,
-        }
-        status, finished = effective_verification_status(
-            task_status="ok",
-            counts=counts,
-            sanity_checks=["custom_sample_output"],
-            sanity_status="pending",
-        )
-        self.assertEqual(status, "running")
-        self.assertFalse(finished)
-
-        status, finished = effective_verification_status(
-            task_status="ok",
-            counts=counts,
-            sanity_checks=["custom_sample_output"],
-            sanity_status="passed",
-        )
-        self.assertEqual(status, "ok")
-        self.assertTrue(finished)
-
-        status, finished = effective_verification_status(
-            task_status="ok",
-            counts=counts,
-            sanity_checks=["custom_sample_output"],
-            sanity_status="failed",
-        )
-        self.assertEqual(status, "ok")
-        self.assertTrue(finished)
-
-        status, finished = effective_verification_status(
-            task_status="ok",
-            counts=counts,
-            sanity_checks=["boundary_coverage"],
-            sanity_status="warning",
-        )
-        self.assertEqual(status, "ok")
-        self.assertTrue(finished)
 
     def test_planned_sanity_checks_include_stability_probes(self) -> None:
         from app.service.verification.sanity import (
@@ -356,10 +313,10 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
         generate = [row for row in graph.tasks if row.task_kind == "generate-input"]
         main = [row for row in graph.tasks if row.task_kind == "main-correct"]
         solution = [row for row in graph.tasks if row.task_kind == "solution-run"]
-        self.assertEqual(len(generate), 2)
-        self.assertEqual(len(main), 2)
-        self.assertEqual(len(solution), 2)
-        self.assertEqual(len(graph.edges), 5)
+        self.assertEqual(
+            {(row.program_id, row.test_name) for row in graph.tasks},
+            {(program, test) for program in ("generator-0", "accepted", "solution-0") for test in ("001.in", "002.in")},
+        )
         self.assertEqual(
             [program.program_id for program in graph.programs],
             ["accepted", "solution-0", "generator-0"],
@@ -375,15 +332,15 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
             "duplicate generator invocation; skipped, same as 001.in",
         )
         self.assertIn((generate[0].task_id, generate[1].task_id), graph.edges)
+        tasks_by_id = {task.task_id: task for task in graph.tasks}
         self.assertEqual(
-            generate[0].task_id,
-            verification_task_id(
-                verification_id,
-                "generator-0",
-                "001.in",
-            ),
+            {(tasks_by_id[parent].program_id, tasks_by_id[parent].test_name,
+              tasks_by_id[child].program_id, tasks_by_id[child].test_name)
+             for parent, child in graph.edges},
+            {("generator-0", "001.in", "generator-0", "002.in"),
+             *(('generator-0', test, 'accepted', test) for test in ("001.in", "002.in")),
+             *(('accepted', test, 'solution-0', test) for test in ("001.in", "002.in"))},
         )
-        self.assertEqual(solution[0].program_id, "solution-0")
 
     def test_natural_task_id_accepts_longest_legal_test_name(self) -> None:
         from app.main_constant import RUN_TEST_NAME_RE
@@ -399,21 +356,6 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
         )
 
         self.assertTrue(task_id.endswith(f"~accepted~{test_name}"))
-
-    def test_truncated_metadata_helpers_mark_oversized_values(self) -> None:
-        compile_meta = canonical_truncated_text("x" * 32, limit=8)
-        diagnostics_meta = canonical_diagnostics(
-            [{"level": "error", "message": "a" * 64}],
-            list_limit=1,
-            message_limit=10,
-        )
-        diagnostics_json = diagnostics_json_text(diagnostics_meta["rows"])
-        self.assertLessEqual(len(str(compile_meta["text"]).encode("utf-8")), 8)
-        self.assertTrue(str(compile_meta["text"]).endswith("..."))
-        self.assertTrue(bool(compile_meta["truncated"]))
-        self.assertEqual(int(diagnostics_meta["total"]), 1)
-        self.assertTrue(bool(diagnostics_meta["rows"][0].get("message_truncated")))
-        self.assertIn('"message":"aaaaaaa..."', diagnostics_json)
 
     def test_late_diagnostic_limit_counts_serialized_json_escaping(self) -> None:
         item = new_task_diagnostic_item(

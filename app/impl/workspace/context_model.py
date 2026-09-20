@@ -23,6 +23,7 @@ from app.service.problem.context import (
 from app.service.problem.readiness import ProblemReadiness
 from app.service.problem.query import SolutionSourceRow
 from app.service.repository.git import StatusChangeSummary
+from app.service.repository.merge import MergeUndoContext
 from app.service.repository.workspace import WorkspaceContext
 
 if TYPE_CHECKING:
@@ -155,7 +156,7 @@ class ProblemPageContext(WorkspaceContext):
     branches_truncated: bool
     branch_limit: int
     workspace_auto_update_message: str
-    workspace_merge_result: dict[str, object]
+    workspace_merge_result: MergeUndoContext | None
     workspace_has_merge_undo: bool
     system_limit_info: SystemLimitInfo
     shell: ProblemShellContext

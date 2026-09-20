@@ -7,7 +7,7 @@ from typing import Literal, TypedDict
 from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.execution.model import ExecutionResult
 from app.service.execution.policy import normalize_execution_result
-from app.service.verification.types import VerificationStatus
+from app.service.verification.types import VerificationDetail, VerificationStatus, VerificationTaskRow
 
 
 AdmissionOutcome = Literal["admitted", "already-exists"]
@@ -123,7 +123,7 @@ class PlannedTask:
 @dataclass(frozen=True)
 class ActivationPlan:
     verification_id: str
-    detail: dict[str, object]
+    detail: VerificationDetail
     programs: tuple[VerificationProgram, ...]
     tasks: tuple[PlannedTask, ...]
 
@@ -132,7 +132,7 @@ class ActivationPlan:
         cls,
         verification_id: str,
         *,
-        detail: dict[str, object],
+        detail: VerificationDetail,
         programs: tuple[VerificationProgram, ...] | list[VerificationProgram],
         tasks: tuple[PlannedTask, ...] | list[PlannedTask],
     ) -> "ActivationPlan":
@@ -292,14 +292,14 @@ class VerificationTransitionCommit:
 @dataclass(frozen=True)
 class SanityFinish:
     verification_id: str
-    detail: dict[str, object]
+    detail: VerificationDetail
 
     @classmethod
     def build(
         cls,
         verification_id: str,
         *,
-        detail: dict[str, object],
+        detail: VerificationDetail,
     ) -> "SanityFinish":
         return cls(
             verification_id=verification_id,
@@ -328,8 +328,8 @@ class VerificationSnapshotRecord(TypedDict):
 
 class VerificationSnapshot(TypedDict):
     record: VerificationSnapshotRecord
-    detail: dict[str, object]
-    tasks: list[dict[str, object]]
+    detail: VerificationDetail
+    tasks: list[VerificationTaskRow]
 
 
 def cancelled_task_result(reason: str) -> ExecutionResult:

@@ -1,4 +1,3 @@
-from collections.abc import Mapping
 import json
 import logging
 from pathlib import Path
@@ -37,37 +36,20 @@ from app.impl.workspace.context_verification import (
     normalize_run_id_token,
 )
 from app.impl.workspace.run_view_detail import build_run_detail_context, build_run_test_detail_context
+from app.impl.workspace.run_view_model import RunColumnBase, RunDetailPreview, RunTestRow, RunTranscriptView
 from app.impl.workspace.context_model import ProblemPageContext
 from app.impl.workspace.run_view_list import run_list_rows
 from app.main_util import normalize_optional_component_source_path, normalize_optional_component_source_path_safe, read_fileobj_bytes_limited
 from app.service.problem.solution_metadata import normalize_expected_behavior
-from app.service.problem.sample_json import SampleJsonEvent, normalize_sample_json
+from app.service.problem.sample_json import SampleJsonEvent, SampleJsonPass, normalize_sample_json
 from app.service.problem.test_spec import read_statement_sample_text
 from app.service.statement.sample_transcript import statement_sample_events_from_transcript
 from app.impl.run_export.query import (
     _rerun_solution_paths_from_verification,
-    _run_detail_use_compact_layout,
 )
-from app.service.verification.types import ACTIVE
+from app.service.verification.types import ACTIVE, VerificationTarget
 
 logger = logging.getLogger(__name__)
-
-
-def _context_section(
-    context: Mapping[str, object],
-    key: str,
-) -> dict[str, object]:
-    value = context.get(key)
-    if not isinstance(value, dict):
-        raise RuntimeError(f"problem page context {key} is missing")
-    return value
-
-
-def _context_int(section: dict[str, object], key: str) -> int:
-    value = section.get(key)
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise RuntimeError(f"problem page context {key} must be an integer")
-    return value
 
 
 def _upload_filename_token(raw: str) -> str:
@@ -85,6 +67,32 @@ def _truthy_form_token(value: str) -> bool:
     return value.lower() in {'1', 'true', 'yes', 'on'}
 
 
+def _render_run_details(
+    request: Request,
+    ctx: ProblemPageContext,
+    requested_verification_id: str,
+) -> Response:
+    detail_ctx = build_run_detail_context(
+        ctx,
+        requested_verification_id=requested_verification_id,
+    )
+    cancel_verification_id = requested_verification_id or detail_ctx["verification_id"]
+    compact = len(detail_ctx["detail_columns"]) >= 11
+    return template_response(
+        request,
+        'run_details.html',
+        {
+            **detail_ctx,
+            'ctx': {**ctx, 'page_wide_content': compact, 'topbar_max_1400': compact},
+            'detail_table_compact': compact,
+            'cancel_verification_id': cancel_verification_id,
+            'cancel_available': bool(
+                detail_ctx["can_cancel"] and cancel_verification_id and detail_ctx["detail_running"]
+            ),
+        },
+    )
+
+
 def run_page(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = page_ctx(
         problem,
@@ -96,28 +104,10 @@ def run_page(request: Request, problem: str, user: Annotated[str, Depends(requir
         contest_workspace=contest_workspace_context_from_request(request),
     )
     workspace = Path(ctx['workspace']['path'])
-    execute_mode = ctx['shell']['metadata']['mode']
     workspace_id = int(ctx['workspace']['id'])
     requested_verification_id = parse_verification_detail_id(request)
     if requested_verification_id:
-        detail_ctx = build_run_detail_context(
-            ctx,
-            execute_mode,
-            requested_verification_id=requested_verification_id,
-        )
-        cancel_verification_id = requested_verification_id or detail_ctx["verification_id"]
-        detail_ctx["cancel_verification_id"] = cancel_verification_id
-        detail_ctx["cancel_available"] = bool(
-            detail_ctx["can_cancel"]
-            and cancel_verification_id
-            and detail_ctx["detail_running"]
-        )
-        detail_table_compact = _run_detail_use_compact_layout(detail_ctx)
-        detail_ctx["detail_table_compact"] = detail_table_compact
-        detail_page_ctx = dict(ctx)
-        detail_page_ctx['page_wide_content'] = detail_table_compact
-        detail_page_ctx['topbar_max_1400'] = detail_table_compact
-        return template_response(request, 'run_details.html', {'ctx': detail_page_ctx, **detail_ctx})
+        return _render_run_details(request, ctx, requested_verification_id)
     runs = run_list_rows(int(ctx['problem']['id']), workspace_id, workspace, limit=10, actor_user_id=int(ctx['user']['id']))
     return template_response(request, 'run.html', {'ctx': ctx, 'runs': runs})
 
@@ -179,32 +169,13 @@ def run_details_page(request: Request, problem: str, user: Annotated[str, Depend
         include_workspace_changes=True,
         contest_workspace=contest_workspace_context_from_request(request),
     )
-    execute_mode = ctx['shell']['metadata']['mode']
-    requested_verification_id = parse_verification_detail_id(request)
-    detail_ctx = build_run_detail_context(
-        ctx,
-        execute_mode,
-        requested_verification_id=requested_verification_id,
-    )
-    cancel_verification_id = requested_verification_id or detail_ctx["verification_id"]
-    detail_ctx["cancel_verification_id"] = cancel_verification_id
-    detail_ctx["cancel_available"] = bool(
-        detail_ctx["can_cancel"]
-        and cancel_verification_id
-        and detail_ctx["detail_running"]
-    )
-    detail_table_compact = _run_detail_use_compact_layout(detail_ctx)
-    detail_ctx["detail_table_compact"] = detail_table_compact
-    detail_page_ctx = dict(ctx)
-    detail_page_ctx['page_wide_content'] = detail_table_compact
-    detail_page_ctx['topbar_max_1400'] = detail_table_compact
-    return template_response(request, 'run_details.html', {'ctx': detail_page_ctx, **detail_ctx})
+    return _render_run_details(request, ctx, parse_verification_detail_id(request))
 
 def _selected_run_test_detail(
     request: Request,
     problem: str,
     user: str,
-) -> tuple[WorkspaceContext, str, list[dict[str, object]], dict[str, object]]:
+) -> tuple[WorkspaceContext, str, list[RunColumnBase], RunTestRow]:
     try:
         problem_id, user_id = runtime().workspace_service.page_identity(problem, user)
         access = workspace_access_context(problem_id, user_id)
@@ -231,13 +202,13 @@ def _selected_run_test_detail(
     detail_columns = detail_ctx['detail_columns']
     if program_id and (
         len(detail_columns) != 1
-        or str(detail_columns[0].get('id') or '') != program_id
+        or detail_columns[0]['id'] != program_id
     ):
         raise HTTPException(status_code=404, detail='run detail not found')
     detail_rows = detail_ctx['detail_rows']
     if not detail_rows:
         raise HTTPException(status_code=404, detail='test detail not found')
-    return ctx, str(detail_ctx['verification_id']), detail_columns, detail_rows[0]
+    return ctx, detail_ctx['verification_id'], detail_columns, detail_rows[0]
 
 
 def run_details_test_fragment(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
@@ -261,23 +232,16 @@ def run_details_test_fragment(request: Request, problem: str, user: Annotated[st
     return response
 
 
-def _detail_mapping(value: object, *, label: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise HTTPException(status_code=409, detail=f"{label} is unavailable")
-    return value
-
-
 def _sample_artifact_text(
-    preview_value: object,
+    preview: RunDetailPreview | None,
     *,
     label: str,
     max_bytes: int,
 ) -> str:
-    preview = _detail_mapping(preview_value, label=label)
-    verification_id = preview.get("download_verification_id")
-    rel_path = preview.get("download_rel_path")
-    if not isinstance(verification_id, str) or not isinstance(rel_path, str):
-        raise HTTPException(status_code=409, detail=f"{label} was not captured")
+    if preview is None:
+        raise HTTPException(status_code=409, detail=f"{label} is unavailable")
+    verification_id = preview["download_verification_id"]
+    rel_path = preview["download_rel_path"]
     artifact = verification_artifact_file(verification_id, rel_path)
     if artifact is None:
         raise HTTPException(status_code=409, detail=f"{label} is unavailable")
@@ -289,16 +253,15 @@ def _sample_artifact_text(
 
 
 def _sample_transcript_events(
-    transcript_value: object,
+    transcript: RunTranscriptView | None,
     *,
     label: str,
     max_bytes: int,
 ) -> list[SampleJsonEvent]:
-    transcript_projection = _detail_mapping(transcript_value, label=label)
-    verification_id = transcript_projection.get("download_verification_id")
-    rel_path = transcript_projection.get("download_rel_path")
-    if not isinstance(verification_id, str) or not isinstance(rel_path, str):
-        raise HTTPException(status_code=409, detail=f"{label} was not captured")
+    if transcript is None:
+        raise HTTPException(status_code=409, detail=f"{label} is unavailable")
+    verification_id = transcript["download_verification_id"]
+    rel_path = transcript["download_rel_path"]
     artifact = verification_artifact_file(verification_id, rel_path)
     if artifact is None:
         raise HTTPException(status_code=409, detail=f"{label} is unavailable")
@@ -328,25 +291,23 @@ def run_details_sample_json(
     )
     if len(detail_columns) != 1:
         raise HTTPException(status_code=400, detail="program_id is required")
-    cells = row.get("cells")
-    if not isinstance(cells, list) or len(cells) != 1:
+    cells = row["cells"]
+    if len(cells) != 1:
         raise HTTPException(status_code=404, detail="run detail not found")
-    cell = _detail_mapping(cells[0], label="solution detail")
-    detail = _detail_mapping(cell.get("detail"), label="solution detail")
+    detail = cells[0]["detail"]
+    if detail is None:
+        raise HTTPException(status_code=409, detail="solution detail is unavailable")
     if bool(detail.get("mode_malformed")):
         raise HTTPException(status_code=409, detail="verification mode is unavailable")
-    pass_values = detail.get("pass_rows")
-    if not isinstance(pass_values, list) or not pass_values:
+    pass_values = detail["pass_rows"]
+    if not pass_values:
         raise HTTPException(status_code=409, detail="pass evidence is unavailable")
 
     max_bytes = runtime().config_values.integer("STATEMENT_SAMPLE_MAX_BYTES")
     is_interactive = bool(detail.get("is_interactive"))
-    passes: list[dict[str, object]] = []
-    for index, pass_value in enumerate(pass_values, start=1):
-        pass_row = _detail_mapping(pass_value, label=f"pass {index}")
-        pass_number = pass_row.get("pass_number")
-        if isinstance(pass_number, bool) or not isinstance(pass_number, int):
-            raise HTTPException(status_code=409, detail=f"pass {index} number is invalid")
+    passes: list[SampleJsonPass] = []
+    for pass_row in pass_values:
+        pass_number = pass_row["pass_number"]
         if is_interactive:
             passes.append(
                 {
@@ -465,15 +426,15 @@ def _build_dag_targets(
     uploaded: bool,
     upload_filename: str,
     upload_content: bytes,
-) -> tuple[list[str], list[dict[str, object]]]:
+) -> tuple[list[str], list[VerificationTarget]]:
     if not accepted_solution_path:
         raise ValueError("main correct solution is required")
     solution_expected_map = {
-        str(row["path"]): str(row["expected_behavior"])
+        row["path"]: row["expected_behavior"]
         for row in solution_options
     }
     solution_program_ids: list[str] = []
-    dag_targets: list[dict[str, object]] = []
+    dag_targets: list[VerificationTarget] = []
     target_paths = [
         accepted_solution_path,
         *(
@@ -544,19 +505,16 @@ def _start_run_verification(
         upload_filename=upload_filename,
         upload_content=upload_content,
     )
-    workspace_context = _context_section(ctx, "workspace")
-    problem_context = _context_section(ctx, "problem")
-    workspace_head = str(workspace_context.get("head_commit") or "")
-    workspace_dirty = bool(workspace_context.get("dirty"))
+    workspace_context = ctx["workspace"]
     try:
         started = start_verification_job(
             runtime(),
             problem,
             user,
-            problem_id=_context_int(problem_context, "id"),
-            workspace_id=_context_int(workspace_context, "id"),
-            workspace_head=workspace_head,
-            workspace_dirty=workspace_dirty,
+            problem_id=ctx["problem"]["id"],
+            workspace_id=workspace_context["id"],
+            workspace_head=workspace_context["head_commit"],
+            workspace_dirty=bool(workspace_context["dirty"]),
             targets=dag_targets,
             verification_id=verification_id,
             allow_package_certification=bool(ctx["access"]["can_create_packages"]),
@@ -615,9 +573,6 @@ def run_rejudge(
         return redirect_response(details_url, status_code=303, message="rejudge unavailable: verification still running")
     workspace = Path(ctx['workspace']['path'])
     selected_solution_paths = _rerun_solution_paths_from_verification(
-        problem_id=problem_id,
-        workspace_id=workspace_id,
-        actor_user_id=int(ctx["user"]["id"]),
         workspace=workspace,
         verification_id=safe_verification_id,
     )

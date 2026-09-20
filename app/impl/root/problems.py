@@ -13,10 +13,15 @@ from app.impl.run_export.import_source import (
 )
 from app.impl.runtime.dependency import runtime
 from app.impl.workspace.context import global_user_ctx
-from app.impl.workspace.context_operation import user_participating_problems
+from app.impl.workspace.context_operation import ParticipatingProblemView, user_participating_problems
 from app.impl.root.shared import _active_root_user, _count_label
 from app.service.importing.upload import spool_fileobj
 from app.service.importing.archive import ArchiveView, problem_import_policy
+
+
+class ProblemListEntry(ParticipatingProblemView):
+    slug_owner: str
+    slug_leaf: str
 
 
 
@@ -28,15 +33,11 @@ def problems_root_page(request: Request, user: str = ""):
         int(gctx['user']['id']),
         limit=entries_limit,
     )
-    entries: list[dict[str, object]] = []
+    entries: list[ProblemListEntry] = []
     owner_prefix_chars = 0
     for row in raw_entries:
-        item = dict(row)
-        slug = str(item["slug"])
-        owner, leaf = slug.split("/", 1)
-        item["slug_owner"] = owner
-        item["slug_leaf"] = leaf
-        entries.append(item)
+        owner, leaf = row["slug"].split("/", 1)
+        entries.append({**row, "slug_owner": owner, "slug_leaf": leaf})
         owner_prefix_chars = max(owner_prefix_chars, len(owner) + 1)
     return template_response(
         request,

@@ -7,6 +7,7 @@ from app.service.judgehost.domjudge.case_result import decode_case_test_row
 from app.service.judgehost.domjudge.case_result import execution_result_with_terminal_context
 from app.service.judgehost.ports.completion import CaseTerminalReport
 from app.service.judgehost.task.registry import JudgehostTaskRegistry
+from app.service.judgehost.task.result_model import TaskSummary
 from app.service.judgehost.task.summary import summary_compile_diagnostics
 from app.service.judgehost.task.summary import summary_text
 from app.service.judgehost.task.summary import task_summary_for_row
@@ -51,7 +52,7 @@ def project_task_case_result(
             and result.verdict != "OK"
         ):
             summary_error = recovered_error
-        terminal_summary: dict[str, object] = {
+        terminal_summary: TaskSummary = {
             "source": summary_text(summary, "source"),
             "compile_log": summary_text(summary, "compile_log"),
             "compile_diagnostics": summary_compile_diagnostics(summary),
@@ -95,7 +96,7 @@ def project_task_case_result(
     detail = summary_text(summary, "error") or row["error_text"]
     if not detail:
         detail = f"judgehost case result missing for {test_name}"
-    missing_summary: dict[str, object] = {
+    missing_summary: TaskSummary = {
         "source": summary_text(summary, "source"),
         "compile_log": summary_text(summary, "compile_log"),
         "compile_diagnostics": summary_compile_diagnostics(summary),

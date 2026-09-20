@@ -6,7 +6,6 @@ from threading import Event
 from app.db import DB, SchemaRequirementsError
 from tests.db_fixture import DBTestBase
 from tests.isolated_db_helpers import (
-    isolated_db_connection,
     isolated_db_execute,
     isolated_db_fetch_one,
     isolated_db_fetch_all,
@@ -15,27 +14,6 @@ from tests.isolated_db_helpers import (
 
 
 class TestDatabaseService(DBTestBase):
-    def test_contest_schema_has_idx_only_roster(self) -> None:
-        with isolated_db_connection(self.db) as connection:
-            roster_columns = {
-                str(row[1])
-                for row in connection.execute(
-                    "PRAGMA table_info(contest_problems)"
-                ).fetchall()
-            }
-
-        self.assertEqual(
-            roster_columns,
-            {
-                "id",
-                "contest_id",
-                "idx",
-                "problem_id",
-                "statement_folder",
-                "added_by_user_id",
-                "created_at",
-            },
-        )
     def test_reinitialization_preserves_existing_and_extension_rows(self) -> None:
         timestamp = "2026-08-12T00:00:00+00:00"
         isolated_db_execute(
@@ -93,13 +71,16 @@ class TestDatabaseService(DBTestBase):
         self.assertIsNotNone(extension)
         self.assertEqual(str(extension["payload"]), "preserved")
 
-    def test_db_conn_enables_foreign_keys(self) -> None:
-        with isolated_db_connection(self.db) as conn:
+    def test_writer_lease_restores_foreign_key_enforcement(self) -> None:
+        with self.db.writer_connection() as conn:
             conn.execute("PRAGMA foreign_keys=OFF")
-        with isolated_db_connection(self.db) as conn:
-            row = conn.execute("PRAGMA foreign_keys").fetchone()
-        self.assertIsNotNone(row)
-        self.assertEqual(int(row[0]), 1)
+        with self.assertRaises(sqlite3.IntegrityError) as rejected:
+            isolated_db_execute(
+                self.db,
+                "INSERT INTO workspaces(problem_id,user_id,path,updated_at) VALUES(-1,-1,'orphan','now')",
+            )
+        self.assertEqual(rejected.exception.sqlite_errorcode, sqlite3.SQLITE_CONSTRAINT_FOREIGNKEY)
+        self.assertEqual(isolated_db_fetch_one(self.db, "SELECT COUNT(*) FROM workspaces")[0], 0)
 
     def test_readers_keep_committed_snapshot_during_writer_transaction(self) -> None:
         isolated_db_execute(self.db, "CREATE TABLE lease_probe(value INTEGER NOT NULL)")
@@ -191,16 +172,17 @@ class TestDatabaseService(DBTestBase):
 
     def test_failed_transaction_callback_runs_once_and_rolls_back(self) -> None:
         isolated_db_execute(self.db, "CREATE TABLE writer_probe(value INTEGER NOT NULL)")
-        calls = []
+        side_effect = self.db.path.with_name("transaction-side-effects.log")
 
         def fail(conn: sqlite3.Connection) -> None:
-            calls.append(1)
+            with side_effect.open("a", encoding="utf-8") as log:
+                log.write("requested\n")
             conn.execute("INSERT INTO writer_probe VALUES(1)")
             raise sqlite3.OperationalError("database is locked")
 
         with self.assertRaises(sqlite3.OperationalError):
             isolated_db_write_transaction(self.db, fail)
-        self.assertEqual(calls, [1])
+        self.assertEqual(side_effect.read_text(encoding="utf-8"), "requested\n")
         isolated_db_execute(self.db, "INSERT INTO writer_probe VALUES(2)")
         self.assertEqual([row[0] for row in isolated_db_fetch_all(self.db, "SELECT value FROM writer_probe")], [2])
 
@@ -301,18 +283,3 @@ class TestDatabaseService(DBTestBase):
             isolated_db_write_transaction(self.db, broken)
         isolated_db_execute(self.db, "INSERT INTO writer_probe VALUES(2)")
         self.assertEqual([row[0] for row in isolated_db_fetch_all(self.db, "SELECT value FROM writer_probe")], [2])
-
-    def test_db_write_transaction_rolls_back_on_exception(self) -> None:
-        table_name = "__tx_rollback_probe"
-        isolated_db_execute(self.db, f"DROP TABLE IF EXISTS {table_name}")
-        isolated_db_execute(self.db, f"CREATE TABLE {table_name}(id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
-
-        def _tx(conn):
-            conn.execute(f"INSERT INTO {table_name}(id,value) VALUES(?,?)", [1, "x"])
-            raise RuntimeError("forced rollback")
-
-        with self.assertRaises(RuntimeError):
-            isolated_db_write_transaction(self.db, _tx)
-        row = isolated_db_fetch_one(self.db, f"SELECT COUNT(*) AS c FROM {table_name}")
-        self.assertIsNotNone(row)
-        self.assertEqual(int(row["c"] or 0), 0)

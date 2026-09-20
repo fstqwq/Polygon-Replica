@@ -1,5 +1,5 @@
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
@@ -124,7 +124,7 @@ class BatchAdmission:
         service_class: str,
         batch_spec: ExecutionBatchSpec,
         created_at: str,
-        case_rows: list[dict[str, object]],
+        case_rows: Sequence[Mapping[str, object]],
     ) -> int:
         cases = self._normalize_case_rows(case_rows, default_task_id=task_id, default_run_id=run_id)
         if service_class not in {"foreground", "background"}:
@@ -321,7 +321,7 @@ class BatchAdmission:
     @classmethod
     def _normalize_case_rows(
         cls,
-        case_rows: list[dict[str, object]],
+        case_rows: Sequence[Mapping[str, object]],
         *,
         default_task_id: str = "",
         default_run_id: str = "",
@@ -398,7 +398,9 @@ class BatchAdmission:
         return cases
 
     @staticmethod
-    def _case_identity(case: CaseSpec) -> tuple[object, ...]:
+    def _case_identity(
+        case: CaseSpec,
+    ) -> tuple[str, str, str, int, int, int | None, str, str, str, str, str]:
         return (
             case.verification_task_id,
             case.run_id,
@@ -414,7 +416,9 @@ class BatchAdmission:
         )
 
     @staticmethod
-    def _stored_case_identity(row: JudgehostCaseRow) -> tuple[object, ...]:
+    def _stored_case_identity(
+        row: JudgehostCaseRow,
+    ) -> tuple[str, str, str, int, int, int | None, str, str, str, str, str]:
         return (
             row["verification_task_id"],
             row["run_id"],

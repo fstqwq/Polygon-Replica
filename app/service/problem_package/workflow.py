@@ -13,7 +13,7 @@ from app.service.problem_package.service import (
 )
 from app.service.verification.lifecycle import VerificationAdmission
 from app.service.verification.service import VerificationService
-from app.service.verification.types import Kind, VerificationStatus
+from app.service.verification.types import Kind, VerificationStatus, VerificationTarget
 from app.service.verification.workflow import VerificationWorkflow
 from app.service.verification.workspace_fingerprint import (
     verification_sources_signature,
@@ -22,7 +22,7 @@ from app.service.verification.workspace_fingerprint import (
 
 def build_full_verification_targets(
     snapshot: Path,
-) -> tuple[list[dict[str, object]], str]:
+) -> tuple[list[VerificationTarget], str]:
     """Build the canonical full-verification target set from committed sources."""
 
     build = load_build_config(snapshot)
@@ -45,7 +45,7 @@ def build_full_verification_targets(
     if accepted_source not in sources:
         raise ValueError("main correct solution source does not exist")
 
-    targets: list[dict[str, object]] = []
+    targets: list[VerificationTarget] = []
     for source_path in sources:
         descriptor = load_solution_desc(snapshot, source_path)
         expected_behavior = descriptor["expected_behavior"]
@@ -55,6 +55,7 @@ def build_full_verification_targets(
             {
                 "path": source_path,
                 "expected_behavior": expected_behavior,
+                "program_id": "",
             }
         )
     if not targets:
@@ -64,7 +65,7 @@ def build_full_verification_targets(
     targets.sort(
         key=lambda item: (
             0 if item["expected_behavior"] == "accepted" else 1,
-            str(item["path"]),
+            item["path"],
         )
     )
     solution_index = 0
@@ -79,7 +80,7 @@ def build_full_verification_targets(
 
 def build_standard_solution_verification_targets(
     snapshot: Path,
-) -> tuple[list[dict[str, object]], str]:
+) -> tuple[list[VerificationTarget], str]:
     """Build a package-only target set containing the main correct solution."""
 
     build = load_build_config(snapshot)

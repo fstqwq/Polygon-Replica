@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Iterable
 
@@ -24,7 +25,7 @@ def sha256_hex_text(text: str, *, errors: str = "strict") -> str:
 def sha256_hex_json(payload: object, *, ensure_ascii: bool = False) -> str:
     return sha256_hex_bytes(canonical_json_bytes(payload, ensure_ascii=ensure_ascii))
 
-def quick_fp_digest(entries: list[dict[str, object]], *, schema: str = "quick-fp") -> str:
+def quick_fp_digest(entries: Sequence[Mapping[str, object]], *, schema: str = "quick-fp") -> str:
     payload = {"schema": str(schema or "quick-fp"), "entries": list(entries or [])}
     return sha256_hex_json(payload, ensure_ascii=False)
 
@@ -64,4 +65,3 @@ def sha256_file(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
                 break
             hasher.update(chunk)
     return hasher.hexdigest()
-

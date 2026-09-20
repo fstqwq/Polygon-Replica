@@ -21,10 +21,32 @@ from app.impl.workspace.access import require_system_admin
 from app.impl.workspace.context import GlobalUserPageContext, global_user_ctx
 from app.main_util import form_text
 from app.service.judgehost.languages import JUDGEHOST_LANGUAGE_BY_ID
+from app.service.judgehost.batch.model import LastJudgingRow
+from app.service.judgehost.host.model import HostToolchainStatus, JudgehostQueueStatus
 from app.service.platform.source_backup import SOURCE_BACKUP_DOWNLOAD_NAME
-from app.service.verification.runtime import coerce_int
+from app.service.platform.system_config import SystemConfigRow, SystemConfigSection
 
 
+
+
+class AdminConfigSection(SystemConfigSection):
+    href: str
+
+
+class AdminNavEntry(TypedDict):
+    key: str
+    label: str
+    href: str
+    active: bool
+
+
+class JudgehostStatusView(TypedDict):
+    enabled: bool
+    auth_configured: bool
+    hosts_total: int
+    hosts_online: int
+    hosts: list[JudgehostView]
+    queue: JudgehostQueueStatus
 
 
 class JudgehostToolchainView(TypedDict):
@@ -53,7 +75,7 @@ class JudgehostView(TypedDict):
     active_leases: int
     judged_case_count: int
     last_judging_at: str
-    last_judging: dict[str, object] | None
+    last_judging: LastJudgingRow | None
     last_judging_href: str
     recent_avg_per_case_sec: float | None
 
@@ -71,40 +93,22 @@ def _as_bool_form_value(raw: str) -> bool:
     return form_text(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _system_config_row_by_key(
-    sections: list[dict[str, object]],
-) -> dict[str, dict[str, object]]:
-    rows: dict[str, dict[str, object]] = {}
-    for section in sections:
-        section_rows = section.get("rows")
-        if not isinstance(section_rows, list):
-            continue
-        for row in section_rows:
-            if not isinstance(row, dict):
-                continue
-            key = row.get("key")
-            if isinstance(key, str) and key:
-                rows[key] = row
-    return rows
-
-
 def _admin_user_context(user: str) -> tuple[GlobalUserPageContext, int]:
     ctx = global_user_ctx(user)
     require_system_admin(ctx)
     return ctx, int(ctx["user"]["id"])
 
 
-def _config_sections() -> list[dict[str, object]]:
+def _config_sections() -> list[AdminConfigSection]:
     runtime().system_config_service.refresh()
     sections = runtime().system_config_service.ui_sections()
-    for section in sections:
-        slug = section.get("slug")
-        if isinstance(slug, str):
-            section["href"] = f"/admin/config/{quote_plus(slug)}"
-    return sections
+    return [
+        {**section, "href": f"/admin/config/{quote_plus(section['slug'])}"}
+        for section in sections
+    ]
 
 
-def _admin_nav(active: str, *, config_href: str = "/admin/config") -> list[dict[str, object]]:
+def _admin_nav(active: str, *, config_href: str = "/admin/config") -> list[AdminNavEntry]:
     entries = (
         ("overview", "Overview", "/admin"),
         ("judgehosts", "Judgehosts", "/admin/judgehosts"),
@@ -122,16 +126,14 @@ def _admin_page_context(
     user: str,
     active: str,
     *,
-    config_sections: list[dict[str, object]] | None = None,
+    config_sections: list[AdminConfigSection] | None = None,
 ) -> tuple[dict[str, object], int]:
     ctx, actor_user_id = _admin_user_context(user)
     user_row = dict(ctx["user"])
     sections = config_sections if config_sections is not None else []
     config_href = "/admin/config"
     if sections:
-        first_href = sections[0].get("href")
-        if isinstance(first_href, str) and first_href:
-            config_href = first_href
+        config_href = sections[0]["href"]
     return (
         {
             "user": user_row,
@@ -144,31 +146,15 @@ def _admin_page_context(
 
 
 def _runtime_controls(
-    sections: list[dict[str, object]],
-) -> dict[str, dict[str, object]]:
-    rows_by_key = _system_config_row_by_key(sections)
-    controls: dict[str, dict[str, object]] = {}
-    for key in ("JUDGEHOST_ENABLE", "JUDGEHOST_API_TOKEN", "JUDGEHOST_API_USERNAME"):
-        row = rows_by_key.get(key, {})
-        current_value = row.get("current_value")
-        current_display = row.get("current_display")
-        choices_value = row.get("choices")
-        controls[key] = {
-            "key": key,
-            "description": row.get("description"),
-            "choices": list(choices_value) if isinstance(choices_value, list) else [],
-            "current_value": current_value,
-            "current_display": (
-                current_display
-                if isinstance(current_display, str)
-                else current_value
-                if isinstance(current_value, str)
-                else None
-            ),
-            "changed": bool(row.get("changed")),
-            "impact": row.get("impact"),
-        }
-    return controls
+    sections: list[AdminConfigSection],
+) -> dict[str, SystemConfigRow]:
+    keys = {"JUDGEHOST_ENABLE", "JUDGEHOST_API_TOKEN", "JUDGEHOST_API_USERNAME"}
+    return {
+        row["key"]: row
+        for section in sections
+        for row in section["rows"]
+        if row["key"] in keys
+    }
 
 
 def _storage_size_label(num_bytes: int) -> str:
@@ -203,8 +189,8 @@ def _source_backup_view() -> dict[str, object]:
     }
 
 
-def _duration_label(age_sec: object) -> str:
-    if not isinstance(age_sec, int) or age_sec < 0:
+def _duration_label(age_sec: int | None) -> str:
+    if age_sec is None or age_sec < 0:
         return "unknown"
     if age_sec < 60:
         return f"{age_sec}s ago"
@@ -228,19 +214,15 @@ def _version_summary(output: str) -> str:
     return "not reported"
 
 
-def _toolchain_views(raw_toolchains: object) -> list[JudgehostToolchainView]:
-    if not isinstance(raw_toolchains, list):
-        return []
+def _toolchain_views(raw_toolchains: list[HostToolchainStatus]) -> list[JudgehostToolchainView]:
     out: list[JudgehostToolchainView] = []
     for raw in raw_toolchains:
-        if not isinstance(raw, dict):
-            continue
-        language_id = str(raw.get("language_id") or "")
+        language_id = raw["language_id"]
         language = JUDGEHOST_LANGUAGE_BY_ID.get(language_id)
         if language is None:
             continue
-        compiler = str(raw.get("compiler") or "")
-        runner = str(raw.get("runner") or "")
+        compiler = raw["compiler"]
+        runner = raw["runner"]
         out.append(
             {
                 "language_id": language_id,
@@ -249,18 +231,18 @@ def _toolchain_views(raw_toolchains: object) -> list[JudgehostToolchainView]:
                 "compiler_summary": _version_summary(compiler),
                 "runner": runner,
                 "runner_summary": _version_summary(runner),
-                "observed_at": str(raw.get("observed_at") or ""),
-                "judgetask_id": int(raw.get("judgetask_id") or 0),
+                "observed_at": raw["observed_at"],
+                "judgetask_id": raw["judgetask_id"],
             }
         )
     return out
 
 
-def _last_judging_href(last_judging: dict[str, object] | None) -> str:
+def _last_judging_href(last_judging: LastJudgingRow | None) -> str:
     if last_judging is None:
         return ""
-    problem_slug = str(last_judging.get("problem_slug") or "")
-    verification_id = str(last_judging.get("verification_id") or "")
+    problem_slug = last_judging["problem_slug"]
+    verification_id = last_judging["verification_id"]
     if not problem_slug or not verification_id:
         return ""
     problem_path = quote(problem_slug, safe="/")
@@ -268,59 +250,43 @@ def _last_judging_href(last_judging: dict[str, object] | None) -> str:
     return f"/problems/{problem_path}/run/details?{query}"
 
 
-def _judgehost_status_view() -> dict[str, object]:
+def _judgehost_status_view() -> JudgehostStatusView:
     raw_status = runtime().judgehost_task_service.status()
-    raw_hosts = raw_status.get("hosts")
     hosts: list[JudgehostView] = []
-    if isinstance(raw_hosts, list):
-        for raw in raw_hosts:
-            if not isinstance(raw, dict):
-                continue
-            enabled = bool(raw.get("enabled"))
-            online = bool(raw.get("online"))
-            state = "disabled" if not enabled else "online" if online else "offline"
-            raw_last_judging = raw.get("last_judging")
-            last_judging = dict(raw_last_judging) if isinstance(raw_last_judging, dict) else None
-            recent_avg_raw = raw.get("recent_avg_per_case_sec")
-            recent_avg = float(recent_avg_raw) if isinstance(recent_avg_raw, (int, float)) else None
-            active_leases = max(0, int(raw.get("active_leases") or 0))
-            hosts.append(
-                {
-                    "hostname": str(raw.get("hostname") or ""),
-                    "peer_addr": str(raw.get("peer_addr") or ""),
-                    "enabled": enabled,
-                    "online": online,
-                    "state": state,
-                    "state_class": "muted" if state == "disabled" else "ok" if state == "online" else "danger",
-                    "activity": "busy" if state == "online" and active_leases > 0 else "idle",
-                    "age_label": _duration_label(raw.get("age_sec")),
-                    "last_seen_at": str(raw.get("last_seen_at") or ""),
-                    "first_seen_at": str(raw.get("first_seen_at") or ""),
-                    "toolchains": _toolchain_views(raw.get("toolchains")),
-                    "active_leases": active_leases,
-                    "judged_case_count": int(raw.get("judged_case_count") or 0),
-                    "last_judging_at": str(raw.get("last_judging_at") or ""),
-                    "last_judging": last_judging,
-                    "last_judging_href": _last_judging_href(last_judging),
-                    "recent_avg_per_case_sec": recent_avg,
-                }
-            )
-    raw_queue = raw_status.get("queue")
-    queue = dict(raw_queue) if isinstance(raw_queue, dict) else {}
+    for raw in raw_status["hosts"]:
+        enabled = raw["enabled"]
+        online = raw["online"]
+        state = "disabled" if not enabled else "online" if online else "offline"
+        last_judging = raw["last_judging"]
+        hosts.append(
+            {
+                "hostname": raw["hostname"],
+                "peer_addr": raw["peer_addr"],
+                "enabled": enabled,
+                "online": online,
+                "state": state,
+                "state_class": "muted" if state == "disabled" else "ok" if state == "online" else "danger",
+                "activity": "busy" if state == "online" and raw["active_leases"] > 0 else "idle",
+                "age_label": _duration_label(raw["age_sec"]),
+                "last_seen_at": raw["last_seen_at"],
+                "first_seen_at": raw["first_seen_at"],
+                "toolchains": _toolchain_views(raw["toolchains"]),
+                "active_leases": raw["active_leases"],
+                "judged_case_count": raw["judged_case_count"],
+                "last_judging_at": raw["last_judging_at"] or "",
+                "last_judging": last_judging,
+                "last_judging_href": _last_judging_href(last_judging),
+                "recent_avg_per_case_sec": raw["recent_avg_per_case_sec"],
+            }
+        )
     return {
-        "enabled": bool(raw_status.get("enabled")),
-        "auth_configured": bool(raw_status.get("auth_configured")),
-        "hosts_total": coerce_int(raw_status.get("hosts_total"), 0, 0, 10**9),
-        "hosts_online": coerce_int(raw_status.get("hosts_online"), 0, 0, 10**9),
+        "enabled": raw_status["enabled"],
+        "auth_configured": raw_status["auth_configured"],
+        "hosts_total": raw_status["hosts_total"],
+        "hosts_online": raw_status["hosts_online"],
         "hosts": hosts,
-        "queue": {
-            "queued": int(queue.get("queued") or 0),
-            "leased": int(queue.get("leased") or 0),
-            "completed": int(queue.get("completed") or 0),
-            "failed": int(queue.get("failed") or 0),
-        },
+        "queue": raw_status["queue"],
     }
-
 
 def admin_overview_page(
     request: Request,
@@ -419,27 +385,21 @@ def admin_config_category_page(
         (
             section
             for section in sections
-            if isinstance(section.get("slug"), str) and section["slug"] == requested_slug
+            if section["slug"] == requested_slug
         ),
         None,
     )
     if selected_section is None:
         raise HTTPException(status_code=404, detail="config category not found")
-    selected_rows = selected_section.get("rows")
-    if not isinstance(selected_rows, list):
-        selected_rows = []
+    selected_rows = selected_section["rows"]
     page.update(
         {
             "config_sections": sections,
             "selected_section": selected_section,
             "selected_rows": selected_rows,
             "selected_slug": requested_slug,
-            "selected_changed_count": coerce_int(
-                selected_section.get("changed_count"), 0, 0, 10**9
-            ),
-            "selected_count": coerce_int(
-                selected_section.get("count"), 0, 0, 10**9
-            ),
+            "selected_changed_count": selected_section["changed_count"],
+            "selected_count": selected_section["count"],
             "admin_config_changed_total": sum(
                 int(changed_count)
                 for section in sections
@@ -641,10 +601,9 @@ def admin_worker_queue_snapshot(
     limit: int = 200,
 ):
     _admin_user_context(user)
-    cap = coerce_int(limit, 200, 1, 2000)
+    cap = max(1, min(limit, 2000))
     payload = runtime().worker_queue_service.snapshot(limit=cap)
-    payload["limit"] = cap
-    return JSONResponse(payload)
+    return JSONResponse({**payload, "limit": cap})
 
 
 def admin_judgehost_snapshot(user: Annotated[str, Depends(require_session_user)]):

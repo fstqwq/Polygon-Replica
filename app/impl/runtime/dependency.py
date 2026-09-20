@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from typing import Iterator, cast
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 
 from app.runtime import ApplicationRuntime
 
@@ -12,12 +12,6 @@ _application: ContextVar[FastAPI | None] = ContextVar(
     "polygon_replica_application",
     default=None,
 )
-
-
-def runtime_from_request(request: Request) -> ApplicationRuntime:
-    """Return the exact runtime installed on the request's application."""
-
-    return cast(ApplicationRuntime, request.app.state.runtime)
 
 
 def runtime() -> ApplicationRuntime:

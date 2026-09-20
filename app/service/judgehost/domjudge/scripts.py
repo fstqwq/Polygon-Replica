@@ -4,7 +4,7 @@ from pathlib import Path
 
 from app.service.judgehost.configuration import JudgehostSettings
 from app.service.judgehost.domjudge.codec import decode_basename, decode_text
-from app.service.judgehost.domjudge.compile_spec import compile_spec
+from app.service.judgehost.domjudge.compile_spec import CompileSpecStatus, compile_spec
 from app.service.judgehost.languages import (
     JUDGEHOST_LANGUAGES,
     judgehost_language_for_source,
@@ -39,7 +39,7 @@ class DomjudgeScriptCatalog:
 
     def public_compile_specs(
         self, settings: JudgehostSettings
-    ) -> list[dict[str, object]]:
+    ) -> list[CompileSpecStatus]:
         specs = (
             compile_spec(settings.values, language.language_id)
             for language in JUDGEHOST_LANGUAGES

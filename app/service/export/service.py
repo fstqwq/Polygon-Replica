@@ -13,6 +13,7 @@ from app.db import DB
 from app.service.disk.export_store import (
     ExportArchiveRow,
     ExportJobRow,
+    ExportProblemRow,
     ExportStore,
     MaterializationPackageRow,
 )
@@ -172,7 +173,7 @@ class ExportService:
     def export_job(self, problem_id: int, job_id: str) -> ExportJobRow | None:
         return self._store.export_job(int(problem_id), job_id)
 
-    def export_problem(self, export_id: str) -> dict[str, object] | None:
+    def export_problem(self, export_id: str) -> ExportProblemRow | None:
         return self._store.export_problem(export_id)
 
     def create_export_job(

@@ -1,7 +1,6 @@
 import unittest
 
 from app.impl.workspace.run_display import (
-    generation_status_text,
     rewrite_failure_reason_with_source,
 )
 
@@ -54,22 +53,3 @@ class TestRunDisplay(unittest.TestCase):
         )
 
         self.assertEqual(reason, "")
-
-    def test_generation_status_uses_generation_specific_labels(self) -> None:
-        expectations = {
-            ("done", "AC"): "OK",
-            ("done", "OK"): "OK",
-            ("failed", "WA"): "validation failed",
-            ("failed", "TL"): "generator TL",
-            ("failed", "TLX"): "generator TL",
-            ("failed", "RE"): "generator RE",
-            ("failed", "CE"): "generator CE",
-            ("failed", "FL"): "validator failed",
-            ("pending", "WA"): "pending",
-            ("leased", "WA"): "running",
-            ("cancelled", "WA"): "cancelled",
-        }
-
-        for (status, verdict), expected in expectations.items():
-            with self.subTest(status=status, verdict=verdict):
-                self.assertEqual(generation_status_text(status, verdict), expected)

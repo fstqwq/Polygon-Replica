@@ -4,7 +4,10 @@ import json
 import os
 import re
 import sqlite3
+import subprocess
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import httpx
@@ -30,7 +33,8 @@ def _load_object(path: Path) -> dict[str, object]:
     return dict(raw)
 
 
-def _connect() -> sqlite3.Connection:
+@contextmanager
+def _connect() -> Iterator[sqlite3.Connection]:
     database = Path(os.environ["POLYGON_REPLICA_E2E_DB"]).resolve()
     connection = sqlite3.connect(
         f"file:{database.as_posix()}?mode=ro",
@@ -38,7 +42,10 @@ def _connect() -> sqlite3.Connection:
         timeout=1.0,
     )
     connection.row_factory = sqlite3.Row
-    return connection
+    try:
+        yield connection
+    finally:
+        connection.close()
 
 
 def _latest_verification(
@@ -293,20 +300,20 @@ def _assert_preview_sample_materialization(
     preview_pdf = preview_root / "pdf" / "statement.pdf"
     if not preview_pdf.is_file() or not preview_pdf.read_bytes().startswith(b"%PDF-"):
         raise RuntimeError(f"preview PDF is unavailable or invalid: {preview_pdf}")
-    latex_log = preview_root / "logs" / "latex.log"
-    log_text = latex_log.read_text(encoding="utf-8", errors="replace")
-    missing_samples = {
-        filename
-        for filename in (
-            "examples/sample-1/pass-1.in",
-            "examples/sample-1/pass-1.ans",
-        )
-        if filename not in log_text
-    }
-    if missing_samples:
+    rendered = subprocess.run(
+        ["pdftotext", str(preview_pdf), "-"],
+        capture_output=True,
+        check=True,
+        timeout=30,
+    ).stdout.decode("utf-8")
+    sample_tokens = set(expected_input.decode("utf-8").split()) | set(
+        expected_answer.decode("utf-8").split()
+    )
+    missing_tokens = sample_tokens - set(rendered.split())
+    if missing_tokens:
         raise RuntimeError(
-            "preview TeX compile did not read the materialized sample files: "
-            f"{sorted(missing_samples)!r}"
+            "preview PDF omitted materialized sample values: "
+            f"{sorted(missing_tokens)!r}; rendered={rendered!r}"
         )
     try:
         summary = json.loads(str(preview["summary_json"]))

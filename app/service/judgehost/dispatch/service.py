@@ -10,6 +10,7 @@ from app.service.judgehost.ports.case_binding import CaseBinding
 from app.service.judgehost.domjudge.identity import submit_id
 from app.service.judgehost.domjudge.codec import decode_text
 from app.service.judgehost.domjudge.scripts import DomjudgeScriptCatalog
+from app.service.judgehost.domjudge.wire_model import DomjudgeWork, DomjudgeWorkdir
 from app.service.platform.maintenance.admission import MaintenanceAdmissionGate
 
 from app.service.judgehost.validation import normalize_judgehost_hostname
@@ -75,7 +76,7 @@ class JudgehostDispatch:
         )
         return HostRegistrationOutcome(
             workdirs=tuple(
-                {"jobid": job_id, "submitid": str(submit_id)}
+                DomjudgeWorkdir(jobid=job_id, submitid=str(submit_id))
                 for job_id, submit_id in release.workdirs
             ),
             terminal_batch_ids=release.terminal_batch_ids,
@@ -262,7 +263,7 @@ class JudgehostDispatch:
         max_batchsize: int,
         *,
         admission_gate: MaintenanceAdmissionGate | None,
-    ) -> list[dict[str, object]]:
+    ) -> list[DomjudgeWork]:
         now_text = now_iso()
         batch_row = self._batch_runtime.fetch_batch(int(batch_id))
         if batch_row is None:
@@ -349,7 +350,7 @@ class JudgehostDispatch:
         self,
         batch_row: ExecutionBatchRow,
         claim: LeaseClaim,
-    ) -> list[dict[str, object]]:
+    ) -> list[DomjudgeWork]:
         compile_id = script_id(batch_row["compile_hash"])
         run_id_num = script_id(batch_row["run_hash"])
         compare_id = script_id(batch_row["compare_hash"])
@@ -358,7 +359,7 @@ class JudgehostDispatch:
         )
         if submission is None:
             raise RuntimeError("compile submission disappeared")
-        out: list[dict[str, object]] = []
+        out: list[DomjudgeWork] = []
         for row in claim.cases:
             testcase_id = row["testcase_id"]
             if testcase_id is None:
@@ -495,7 +496,7 @@ class JudgehostDispatch:
 
     @staticmethod
     def _outcome(
-        work: tuple[dict[str, object], ...],
+        work: tuple[DomjudgeWork, ...],
         batch_ids: dict[int, None],
     ) -> DispatchOutcome:
         return DispatchOutcome(

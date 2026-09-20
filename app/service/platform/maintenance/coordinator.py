@@ -6,10 +6,11 @@ import threading
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Callable, Iterator, Literal, Protocol
+from typing import Callable, Iterator, Literal, Protocol, TypedDict
 
 from app.db import now_iso
-from app.service.platform.maintenance.admission import MaintenanceAdmissionGate
+from app.service.platform.maintenance.admission import AdmissionState, MaintenanceAdmissionGate
+from app.service.platform.maintenance.plan import MaintenanceFailureDetails, MaintenanceResult
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ class MaintenanceOperationPort(Protocol):
         operation_id: str,
         started_at: str,
         set_stage: Callable[[str], None],
-    ) -> dict[str, object]: ...
+    ) -> MaintenanceResult: ...
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,24 @@ class MaintenanceStart:
     accepted: bool
     reason: str
     busy: dict[str, int]
+
+
+class MaintenanceSnapshotRecord(TypedDict):
+    status: MaintenanceStatus
+    operation: MaintenanceOperation
+    stage: str
+    operation_id: str
+    started_at: str
+    finished_at: str
+    actor_user_id: int | None
+    result: MaintenanceResult
+    error: str
+
+
+class MaintenanceSnapshotView(MaintenanceSnapshotRecord):
+    admission_state: AdmissionState
+    busy: dict[str, int]
+    active_requests: int
 
 
 @dataclass
@@ -56,10 +75,10 @@ class MaintenanceSnapshot:
     started_at: str = ""
     finished_at: str = ""
     actor_user_id: int | None = None
-    result: dict[str, object] = field(default_factory=dict)
+    result: MaintenanceResult = field(default_factory=lambda: MaintenanceResult())
     error: str = ""
 
-    def as_dict(self) -> dict[str, object]:
+    def as_dict(self) -> MaintenanceSnapshotRecord:
         return {
             "status": self.status,
             "operation": self.operation,
@@ -68,7 +87,7 @@ class MaintenanceSnapshot:
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "actor_user_id": self.actor_user_id,
-            "result": dict(self.result),
+            "result": self.result.copy(),
             "error": self.error,
         }
 
@@ -112,16 +131,17 @@ class MaintenanceCoordinator:
                 raise ValueError("cannot delete problem while runtime jobs are active")
             yield
 
-    def snapshot(self, *, exclude_current_request: bool = False) -> dict[str, object]:
+    def snapshot(self, *, exclude_current_request: bool = False) -> MaintenanceSnapshotView:
         with self._gate.locked():
-            payload = self._snapshot.as_dict()
-            payload["admission_state"] = self._gate.state_locked()
             busy = self._busy_snapshot_locked()
             if exclude_current_request and busy["inflight_requests"] > 0:
                 busy["inflight_requests"] -= 1
-            payload["busy"] = busy
-            payload["active_requests"] = busy["inflight_requests"]
-            return payload
+            return {
+                **self._snapshot.as_dict(),
+                "admission_state": self._gate.state_locked(),
+                "busy": busy,
+                "active_requests": busy["inflight_requests"],
+            }
 
     def begin_drain(self) -> MaintenanceStart:
         """Reject new business work while admitted jobs finish normally."""
@@ -314,7 +334,7 @@ class MaintenanceCoordinator:
         if thread_error is None:
             return MaintenanceStart(True, "started", {})
 
-        details: dict[str, object] = {
+        details: MaintenanceResult = {
             "operation_id": operation_id,
             "started_at": started_at,
             "finished_at": now_iso(),
@@ -348,13 +368,15 @@ class MaintenanceCoordinator:
                 set_stage=set_stage,
             )
         except Exception as exc:
-            failure_result = getattr(exc, "maintenance_result", {})
             with self._gate.locked():
                 self._snapshot.status = "failed"
                 self._snapshot.finished_at = now_iso()
                 self._snapshot.error = str(exc)
                 self._snapshot.result = (
-                    dict(failure_result) if isinstance(failure_result, dict) else {}
+                    exc.maintenance_result.copy()
+                    if isinstance(exc, MaintenanceFailureDetails)
+                    and isinstance(exc.maintenance_result, dict)
+                    else {}
                 )
                 self._gate.open_locked()
             return

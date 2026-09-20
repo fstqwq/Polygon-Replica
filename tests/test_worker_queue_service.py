@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from app.service.platform.maintenance.admission import MaintenanceAdmissionGate
-from app.service.platform.worker_queue import WorkerQueueService
+from app.service.platform.worker_queue import WorkerFuture, WorkerQueueService
 
 
 class TestWorkerQueueService(unittest.TestCase):
@@ -37,7 +37,7 @@ class TestWorkerQueueService(unittest.TestCase):
         gate = MaintenanceAdmissionGate()
         service.set_admission_gate(gate)
         submitted = threading.Event()
-        result: list[tuple[object, bool, str]] = []
+        result: list[tuple[WorkerFuture, bool, str]] = []
 
         def _submit() -> None:
             result.append(

@@ -15,4 +15,8 @@ The domain caller discards this lookup when the operation returns.
 
 Worker state, cache indexes, locks, and admission state are process-local. Runtime blobs are content-addressed files below the cache root. Startup resets both. Source backup and generated-data cleanup run under the exclusive maintenance gate.
 
+Maintenance operations expose typed progress and outcome records, including partial
+failure reports attached to the original exception. Source-backup downloads verify
+both the archive digest and its manifest before returning a file.
+
 The [storage protocol](../../../../protocol/storage.md) defines roots, cleanup, backup contents, and recovery boundaries.

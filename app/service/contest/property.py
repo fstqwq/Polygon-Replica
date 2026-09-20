@@ -45,7 +45,7 @@ def localized_contest_property_key(base_key: str, language: str) -> str:
     return f"{safe_base_key}.{safe_language}"
 
 
-def _normalize_property_name(value: object) -> str:
+def _normalize_property_name(value: str) -> str:
     safe_name = str(value or "").strip()
     if not _PROPERTY_NAME_RE.fullmatch(safe_name):
         raise ValueError(f"invalid contest property name: {safe_name or '(empty)'}")
@@ -106,10 +106,10 @@ def localized_contest_properties(
 
 def contest_template_properties(
     properties: Mapping[str, str],
-) -> dict[str, object]:
+) -> dict[str, str | bool]:
     """Project effective property strings into their FTL runtime values."""
 
-    result: dict[str, object] = dict(CONTEST_TEMPLATE_PROPERTY_DEFAULTS)
+    result: dict[str, str | bool] = dict(CONTEST_TEMPLATE_PROPERTY_DEFAULTS)
     result.update(properties)
     result[INSERT_BLANK_PAGE_PROPERTY] = (
         result[INSERT_BLANK_PAGE_PROPERTY] == "true"

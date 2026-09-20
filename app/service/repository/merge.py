@@ -8,6 +8,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import TypedDict
 
 from app.service.platform.fs.op import extract_git_archive
 from app.service.platform.git_process import run_git
@@ -20,6 +21,11 @@ from app.service.repository.merge_diff import (
 )
 from app.service.repository.workspace import WorkspaceService, atomic_swap_workspace
 from app.service.platform.fs.layout import StorageLayout
+
+
+class MergeUndoContext(TypedDict):
+    mode: str
+    affected_count: int
 
 
 @dataclass(frozen=True)
@@ -689,7 +695,7 @@ class WorkspaceMergeService:
             raise RuntimeError("merge undo metadata is invalid")
         return rows
 
-    def undo_context(self, workspace: Path) -> dict[str, object] | None:
+    def undo_context(self, workspace: Path) -> MergeUndoContext | None:
         try:
             metadata = self._undo_metadata(workspace)
         except (OSError, RuntimeError, ValueError):

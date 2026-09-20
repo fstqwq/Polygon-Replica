@@ -149,8 +149,3 @@ def workspace_context_for_identity(
     workspace_row["head_commit"] = str(status.get("head_commit") or "")
     workspace_row["dirty"] = 1 if bool(status.get("dirty")) else 0
     return ctx
-
-
-def workspace_path_for_identity(identity: AgentProblemIdentity) -> Path:
-    ctx = workspace_context_for_identity(identity)
-    return Path(str(ctx["workspace"]["path"])).resolve()

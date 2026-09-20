@@ -3,6 +3,7 @@ import stat
 import uuid
 import zipfile
 from pathlib import Path
+from typing import NotRequired, TypedDict
 
 from app.service.importing.archive import ArchiveView
 from app.service.platform.workspace_path import (
@@ -15,6 +16,17 @@ from app.service.problem.source_tree import load_problem_source_tree
 
 
 POLYGON_REPLICA_PACKAGE_ANCHOR = "config/problem.json"
+
+
+class NativeImportResult(TypedDict):
+    commit: NotRequired[str]
+    warnings: NotRequired[list[str]]
+    package_name: str
+    title: str
+    statement: dict[str, str]
+    tests: dict[str, int]
+    solutions: dict[str, str]
+    components: dict[str, str]
 
 
 def _validated_source_entries(
@@ -79,7 +91,7 @@ class PolygonReplicaPackageImportService:
         text_limit_bytes: int,
         statement_sample_max_bytes: int,
         problem_config_limits: ProblemConfigLimits,
-    ) -> dict[str, object]:
+    ) -> NativeImportResult:
         del normalize_test_data_newlines
         rooted = package.rooted_at(POLYGON_REPLICA_PACKAGE_ANCHOR)
         rooted_entries = rooted.entries

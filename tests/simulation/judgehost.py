@@ -5,13 +5,20 @@ import statistics
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable, Mapping
+from functools import partial
+from typing import Callable, Unpack
 
-from app.service.judgehost.batch.model import CompileSubmission, ExecutionBatchSpec
+from app.service.judgehost.batch.model import (
+    CaseInput, CompileSubmission, ExecutionBatchSpec, JudgehostCaseRow,
+)
+from app.service.execution.model import ExecutionResult
 from app.service.judgehost.domjudge.case_result import build_case_result
 from app.service.judgehost.domjudge.identity import submit_id
 from app.service.platform.runtime_blob_store import PayloadFile
-from tests.simulation.report import evaluate_assertions
+from tests.simulation.report import (
+    ForegroundReport, HostReport, SimulationReport, TraceEvent, TraceFields,
+    VerificationReport, evaluate_assertions,
+)
 from tests.simulation.strategy import (
     create_scheduler,
     observe_simulated_case,
@@ -88,7 +95,7 @@ class _Host:
     last_compile_key: tuple[str, str] | None = None
     program_switch_count: int = 0
     current_batch_id: int | None = None
-    current_rows: list[dict[str, object]] = field(default_factory=list)
+    current_rows: list[JudgehostCaseRow] = field(default_factory=list)
     current_index: int = 0
     last_background_batch_id: int | None = None
 
@@ -108,8 +115,8 @@ class JudgehostSimulation:
         self.scheduler = create_scheduler(strategy, id_base=1_000_000)
         self._rng = random.Random(workload.seed)
         self._trace_enabled = bool(trace)
-        self._trace: list[dict[str, object]] = []
-        self._events: list[tuple[float, int, str, tuple[object, ...]]] = []
+        self._trace: list[TraceEvent] = []
+        self._events: list[tuple[float, int, Callable[[], None]]] = []
         self._event_sequence = 0
         self._now = 0.0
         self._nodes: dict[str, _Node] = {}
@@ -141,33 +148,29 @@ class JudgehostSimulation:
         self._build_graph()
         self._remaining_node_count = len(self._nodes)
 
-    def run(self) -> dict[str, object]:
+    def run(self) -> SimulationReport:
         for verification in self._verifications.values():
             self._schedule(
                 verification.arrival_sec,
-                "verification_arrival",
+                self._verification_arrival,
                 verification.verification_id,
             )
         for event in self.workload.host_disconnect_events:
             host = self._hosts[event.host_index]
-            self._schedule(event.at_sec, "host_disconnect", host.hostname)
+            self._schedule(event.at_sec, self._host_disconnect, host.hostname)
             self._schedule(
-                event.at_sec + event.duration_sec, "host_reconnect", host.hostname
+                event.at_sec + event.duration_sec, self._host_reconnect, host.hostname
             )
         for host in self._hosts:
-            self._schedule(0.0, "host_fetch", host.hostname, host.epoch)
+            self._schedule(0.0, self._host_fetch, host.hostname, host.epoch)
 
         max_events = max(100_000, len(self._nodes) * 100 + len(self._hosts) * 10_000)
         handled = 0
         while self._events and handled < max_events:
-            at_sec, _sequence, kind, payload = heapq.heappop(self._events)
+            at_sec, _sequence, callback = heapq.heappop(self._events)
             self._now = at_sec
             handled += 1
-            handler = self._event_handlers().get(kind)
-            if handler is None:
-                self._violate(f"unknown event kind: {kind}")
-                continue
-            handler(*payload)
+            callback()
             if self._all_complete() and not self._active_case_ids:
                 break
         if handled >= max_events:
@@ -188,16 +191,6 @@ class JudgehostSimulation:
             raise AssertionError(f"case {case_id} has no callback identity")
         self.scheduler.release_case_callback_receipt(receipt.receipt_id)
         return receipt.claim_generation
-
-    def _event_handlers(self) -> Mapping[str, Callable[..., None]]:
-        return {
-            "verification_arrival": self._verification_arrival,
-            "host_fetch": self._host_fetch,
-            "compile_finish": self._compile_finish,
-            "case_finish": self._case_finish,
-            "host_disconnect": self._host_disconnect,
-            "host_reconnect": self._host_reconnect,
-        }
 
     def _build_graph(self) -> None:
         for verification_index in range(self.workload.verification_count):
@@ -356,7 +349,7 @@ class JudgehostSimulation:
             )
         return max(totals.values(), default=0.0)
 
-    def _verification_arrival(self, verification_id: object) -> None:
+    def _verification_arrival(self, verification_id: str) -> None:
         verification = self._verifications[str(verification_id)]
         self._trace_event(
             "foreground_arrival" if verification.foreground else "verification_arrival",
@@ -456,7 +449,7 @@ class JudgehostSimulation:
                 return
             self._wake_waiting_hosts()
 
-    def _host_fetch(self, hostname: object, epoch: object) -> None:
+    def _host_fetch(self, hostname: str, epoch: int) -> None:
         host = self._host(str(hostname))
         if not host.enabled or host.epoch != int(epoch) or host.state != "idle":
             return
@@ -471,7 +464,7 @@ class JudgehostSimulation:
                     self._poll_backoff_sec += self.workload.fetch_idle_backoff_sec
                     self._schedule(
                         self._now + self.workload.fetch_idle_backoff_sec,
-                        "host_fetch",
+                        self._host_fetch,
                         host.hostname,
                         host.epoch,
                     )
@@ -512,12 +505,12 @@ class JudgehostSimulation:
         if lease is not None and not self.scheduler.commit_lease(lease):
             rows = []
         if not rows:
-            self._schedule(self._now, "host_fetch", host.hostname, host.epoch)
+            self._schedule(self._now, self._host_fetch, host.hostname, host.epoch)
             return
         if self._foreground_waiting() and not batch_is_foreground:
             self._background_leases_while_foreground_waited += len(rows)
         host.current_batch_id = batch_id
-        host.current_rows = [dict(row) for row in rows]
+        host.current_rows = rows
         host.current_index = 0
         self._batch_hosts[batch_id].add(host.hostname)
         compile_key = (str(batch["verification_id"]), str(batch["compile_key"]))
@@ -572,7 +565,7 @@ class JudgehostSimulation:
         self._trace_event("compile_start", host=host.hostname, batch_id=batch_id)
         self._schedule(
             self._now + node.compile_duration_sec,
-            "compile_finish",
+            self._compile_finish,
             host.hostname,
             host.epoch,
             batch_id,
@@ -581,10 +574,10 @@ class JudgehostSimulation:
 
     def _compile_finish(
         self,
-        hostname: object,
-        epoch: object,
-        batch_id: object,
-        compile_key: object,
+        hostname: str,
+        epoch: int,
+        batch_id: int,
+        compile_key: tuple[str, str],
     ) -> None:
         host = self._host(str(hostname))
         if (
@@ -593,11 +586,7 @@ class JudgehostSimulation:
             or host.current_batch_id != int(batch_id)
         ):
             return
-        key = tuple(compile_key) if isinstance(compile_key, tuple) else None
-        if key is None or len(key) != 2:
-            self._violate(f"invalid compile key event for {host.hostname}")
-            return
-        host.local_compile_cache.add((str(key[0]), str(key[1])))
+        host.local_compile_cache.add(compile_key)
         observe_simulated_compile(
             self.scheduler,
             batch_id=int(batch_id),
@@ -630,13 +619,13 @@ class JudgehostSimulation:
         node = self._nodes[self._case_node_ids[int(row["id"])]]
         self._schedule(
             self._now + node.case_duration_sec,
-            "case_finish",
+            self._case_finish,
             host.hostname,
             host.epoch,
             int(row["id"]),
         )
 
-    def _case_finish(self, hostname: object, epoch: object, case_id: object) -> None:
+    def _case_finish(self, hostname: str, epoch: int, case_id: int) -> None:
         host = self._host(str(hostname))
         numeric_case_id = int(case_id)
         if (
@@ -701,7 +690,7 @@ class JudgehostSimulation:
         host.current_batch_id = None
         self._transition_host(host, "idle")
         if not self._all_complete():
-            self._schedule(self._now, "host_fetch", host.hostname, host.epoch)
+            self._schedule(self._now, self._host_fetch, host.hostname, host.epoch)
 
     def _complete_node(self, node: _Node) -> None:
         if node.state == "completed":
@@ -798,7 +787,7 @@ class JudgehostSimulation:
         ):
             self._violate(f"failed to finalize Batch {batch_id}")
 
-    def _host_disconnect(self, hostname: object) -> None:
+    def _host_disconnect(self, hostname: str) -> None:
         host = self._host(str(hostname))
         if not host.enabled:
             return
@@ -816,7 +805,7 @@ class JudgehostSimulation:
         self._trace_event("host_disconnected", host=host.hostname)
         self._wake_waiting_hosts()
 
-    def _host_reconnect(self, hostname: object) -> None:
+    def _host_reconnect(self, hostname: str) -> None:
         host = self._host(str(hostname))
         if host.enabled:
             return
@@ -824,14 +813,14 @@ class JudgehostSimulation:
         host.epoch += 1
         self._transition_host(host, "idle")
         if not self._all_complete():
-            self._schedule(self._now, "host_fetch", host.hostname, host.epoch)
+            self._schedule(self._now, self._host_fetch, host.hostname, host.epoch)
 
     def _wake_waiting_hosts(self) -> None:
         for hostname in sorted(self._waiting_hosts):
             host = self._host(hostname)
             if host.enabled and host.state == "idle":
                 self._long_poll_wake_count += 1
-                self._schedule(self._now, "host_fetch", host.hostname, host.epoch)
+                self._schedule(self._now, self._host_fetch, host.hostname, host.epoch)
         self._waiting_hosts.clear()
 
     def _compile_submission(self, node: _Node) -> CompileSubmission:
@@ -848,10 +837,11 @@ class JudgehostSimulation:
             compile_files=(),
         )
 
-    def _case_row(self, node: _Node) -> dict[str, object]:
+    def _case_row(self, node: _Node) -> CaseInput:
         identity = _sha256(f"testcase:{node.node_id}")
         testcase_id = int(identity, 16) % (1 << 63)
         return {
+            "verification_task_id": "",
             "task_id": node.task_id,
             "run_id": node.run_id,
             "test_name": f"{node.test_index:03}.in",
@@ -867,9 +857,8 @@ class JudgehostSimulation:
         }
 
     @staticmethod
-    def _case_result(node: _Node):
+    def _case_result(node: _Node) -> ExecutionResult:
         return build_case_result(
-            test_name=f"{node.test_index:03}.in",
             runresult="correct",
             verdict="OK",
             runtime_sec=node.case_duration_sec,
@@ -885,11 +874,10 @@ class JudgehostSimulation:
             compare_metadata_ref="",
             team_message_ref="",
             feedback_text="",
-            feedback_files=(),
             answer_correct=False,
         )
 
-    def _report(self, makespan: float) -> dict[str, object]:
+    def _report(self, makespan: float) -> SimulationReport:
         unfinished = sorted(
             node.node_id for node in self._nodes.values() if node.state != "completed"
         )
@@ -908,7 +896,7 @@ class JudgehostSimulation:
             for node in self._nodes.values()
             if not node.cache_hit and node.state == "completed"
         }
-        host_rows = []
+        host_rows: list[HostReport] = []
         for host in self._hosts:
             busy = host.state_times["compile"] + host.state_times["execute"]
             utilization = 0.0 if makespan <= 0.0 else busy / makespan
@@ -924,7 +912,7 @@ class JudgehostSimulation:
                     "program_switch_count": host.program_switch_count,
                 }
             )
-        verification_rows = []
+        verification_rows: list[VerificationReport] = []
         for verification in self._verifications.values():
             if verification.foreground:
                 continue
@@ -952,7 +940,7 @@ class JudgehostSimulation:
                     "slowdown": _optional_round(slowdown),
                 }
             )
-        foreground_rows = []
+        foreground_rows: list[ForegroundReport] = []
         for node in self._nodes.values():
             if node.timing_kind != "foreground":
                 continue
@@ -1077,7 +1065,7 @@ class JudgehostSimulation:
             ),
             "invariant_violation_count": len(self._invariant_violations),
         }
-        report: dict[str, object] = {
+        report: SimulationReport = {
             "schema_version": 2,
             "workload": self.workload.name,
             "seed": self.workload.seed,
@@ -1093,6 +1081,7 @@ class JudgehostSimulation:
             "unfinished_cases": unfinished,
             "dangling_batches": dangling_batches,
             "invariant_violations": list(self._invariant_violations),
+            "assertion_failures": [],
         }
         report["assertion_failures"] = evaluate_assertions(
             report, self.workload.assertions
@@ -1106,13 +1095,15 @@ class JudgehostSimulation:
             return duration_range.minimum_sec
         return self._rng.uniform(duration_range.minimum_sec, duration_range.maximum_sec)
 
-    def _schedule(self, at_sec: float, kind: str, *payload: object) -> None:
+    def _schedule[**P](
+        self, at_sec: float, callback: Callable[P, None], *args: P.args, **kwargs: P.kwargs
+    ) -> None:
         self._event_sequence += 1
         heapq.heappush(
-            self._events, (float(at_sec), self._event_sequence, kind, payload)
+            self._events, (at_sec, self._event_sequence, partial(callback, *args, **kwargs))
         )
 
-    def _trace_event(self, kind: str, **fields: object) -> None:
+    def _trace_event(self, kind: str, **fields: Unpack[TraceFields]) -> None:
         if self._trace_enabled:
             self._trace.append({"at_sec": _round(self._now), "event": kind, **fields})
 
@@ -1148,15 +1139,6 @@ class JudgehostSimulation:
     def _violate(self, message: str) -> None:
         if message not in self._invariant_violations:
             self._invariant_violations.append(message)
-
-
-def run_simulation(
-    workload: Workload,
-    *,
-    trace: bool = False,
-    strategy: str = "production",
-) -> dict[str, object]:
-    return JudgehostSimulation(workload, trace=trace, strategy=strategy).run()
 
 
 def _sha256(text: str) -> str:

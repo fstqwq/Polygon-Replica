@@ -10,9 +10,13 @@ from app.service.problem.runtime_config import ProblemConfig, ProblemMode, probl
 from app.service.problem.source_tree import load_problem_source_tree
 from app.service.problem.test_spec import TestSpecEntry
 from app.service.problem.test_spec import parse_gen_command_tokens
-from app.service.verification.plan import VerificationExecutionPlan, VerificationTestPlan
+from app.service.verification.plan import (
+    VerificationExecutionPlan, VerificationPayloadBase, VerificationProblemLimits,
+    VerificationTestPlan,
+)
 from app.service.verification.signature import VerificationManifest, verification_manifest
 from app.service.verification.source import select_source
+from app.service.verification.types import VerificationTestMetadata
 from app.service.verification.test_spec import (
     prepare_tests_spec_runtime,
 )
@@ -29,7 +33,7 @@ class SharedSourcePayloads(TypedDict):
     testlib_header: Path | None
 
 
-def _problem_limits(runtime_cfg: ProblemConfig) -> dict[str, int]:
+def _problem_limits(runtime_cfg: ProblemConfig) -> VerificationProblemLimits:
     return {
         "time_limit_ms": runtime_cfg["time_limit_ms"],
         "memory_limit_mb": runtime_cfg["memory_limit_mb"],
@@ -40,9 +44,9 @@ def _problem_limits(runtime_cfg: ProblemConfig) -> dict[str, int]:
 def _run_payload_base(
     *,
     problem_mode: ProblemMode,
-    problem_limits: dict[str, int],
+    problem_limits: VerificationProblemLimits,
     source_files: dict[str, PayloadFile],
-) -> dict[str, object]:
+) -> VerificationPayloadBase:
     return {
         "problem_mode": problem_mode,
         "run_config_json": json.dumps(
@@ -55,7 +59,7 @@ def _run_payload_base(
             ensure_ascii=False,
             separators=(",", ":"),
         ),
-        "problem_limits": dict(problem_limits),
+        "problem_limits": problem_limits.copy(),
         "source_files": {name: payload.to_payload() for name, payload in source_files.items()},
     }
 
@@ -63,9 +67,9 @@ def _run_payload_base(
 def _generate_payload_base(
     *,
     problem_mode: ProblemMode,
-    problem_limits: dict[str, int],
+    problem_limits: VerificationProblemLimits,
     source_files: dict[str, PayloadFile],
-) -> dict[str, object]:
+) -> VerificationPayloadBase:
     return {
         "problem_mode": problem_mode,
         "run_config_json": json.dumps(
@@ -173,7 +177,7 @@ def _manual_plan(
     test_name: str,
     input_bytes: bytes | None = None,
     input_file: PayloadFile | None = None,
-    tests_meta: dict[str, object],
+    tests_meta: VerificationTestMetadata,
     sample: bool = False,
     sample_input_custom: bool = False,
     sample_input_text: str = "",
@@ -213,7 +217,7 @@ def _generated_plan(
     display_source_path: str,
     generator_source: Path,
     command_payload: str,
-    tests_meta: dict[str, object],
+    tests_meta: VerificationTestMetadata,
     testlib_header: Path | None,
     sample: bool = False,
     sample_input_custom: bool = False,
@@ -257,7 +261,7 @@ def _tests_from_spec(
     generator_sources: list[str],
     entries: tuple[TestSpecEntry, ...],
     runtime_blob_store: RuntimeBlobStore,
-) -> tuple[list[VerificationTestPlan], list[dict[str, object]]]:
+) -> tuple[list[VerificationTestPlan], list[VerificationTestMetadata]]:
     runtime_rows, generator_targets = prepare_tests_spec_runtime(
         snapshot,
         list(entries),
@@ -270,7 +274,7 @@ def _tests_from_spec(
         if source_path is not None
     }
     plans: list[VerificationTestPlan] = []
-    tests_meta_rows: list[dict[str, object]] = []
+    tests_meta_rows: list[VerificationTestMetadata] = []
     counter = 1
     for row in runtime_rows:
         test_id = str(row["id"])
@@ -280,6 +284,7 @@ def _tests_from_spec(
         sample_output_validate = bool(row["sample_output_validate"])
         use_custom_sample_input = sample_only and sample and bool(sample_input)
         test_name = f"{counter:03d}.in"
+        tests_meta: VerificationTestMetadata
         if str(row["kind"]) == "manual" or use_custom_sample_input:
             tests_meta = {
                 "index": counter,
@@ -343,7 +348,7 @@ def _tests_from_spec(
                 runtime_blob_store=runtime_blob_store,
             )
         plans.append(plan)
-        tests_meta_rows.append(dict(plan.tests_meta))
+        tests_meta_rows.append(plan.tests_meta.copy())
         counter += 1
     return (plans, tests_meta_rows)
 

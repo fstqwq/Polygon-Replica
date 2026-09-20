@@ -10,6 +10,7 @@ without changing SQLite, Git repositories, or workspaces.
 import argparse
 import json
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 from app.config import build_config_values
@@ -33,7 +34,7 @@ def _read_database(
     path: Path,
 ) -> tuple[list[PublishedProblemSource], dict[str, object]]:
     uri = f"file:{path.resolve().as_posix()}?mode=ro"
-    with sqlite3.connect(uri, uri=True) as connection:
+    with closing(sqlite3.connect(uri, uri=True)) as connection:
         connection.row_factory = sqlite3.Row
         problems = [
             PublishedProblemSource(

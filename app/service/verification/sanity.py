@@ -1,12 +1,12 @@
 import base64
 import hashlib
+from collections.abc import Mapping, Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.service.judgehost.api import Judgehost
 from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
-from app.service.verification.types import VerificationStatus
 
 from app.service.verification.boundary_coverage import (
     BOUNDARY_COVERAGE_CHECK,
@@ -22,7 +22,7 @@ from app.service.verification.runtime_threshold import (
     evaluate_summary_runtime_threshold,
     runtime_threshold_reason,
 )
-from app.service.verification.plan import VerificationTestPlan
+from app.service.verification.plan import VerificationPayloadBase, VerificationTestPlan
 
 SANITY_PENDING = "pending"
 SANITY_RUNNING = "running"
@@ -92,37 +92,6 @@ def planned_sanity_checks(test_plans: list[VerificationTestPlan]) -> list[str]:
             checks.append(CUSTOM_SAMPLE_OUTPUT_CHECK)
             break
     return checks
-
-
-def effective_verification_status(
-    *,
-    task_status: str,
-    counts: dict[str, int],
-    sanity_checks: list[str],
-    sanity_status: str,
-) -> tuple[str, bool]:
-    has_pending_or_running = bool(
-        counts["pending"] or counts["queued"] or counts["running"]
-    )
-    if has_pending_or_running:
-        return (task_status, False)
-    if task_status != VerificationStatus.OK.value:
-        return (
-            task_status,
-            task_status
-            in {
-                VerificationStatus.OK.value,
-                VerificationStatus.FAILED.value,
-                VerificationStatus.CANCELLED.value,
-            },
-        )
-    if not sanity_checks:
-        return (VerificationStatus.OK.value, True)
-    if sanity_status in {SANITY_PENDING, SANITY_RUNNING}:
-        return (VerificationStatus.RUNNING.value, False)
-    if sanity_status in {SANITY_FAILED, SANITY_WARNING}:
-        return (VerificationStatus.OK.value, True)
-    return (VerificationStatus.OK.value, True)
 
 
 def _stability_run_id(*, verification_id: str, test_name: str, check_name: str) -> str:
@@ -329,10 +298,10 @@ def run_verification_sanity_checks(
     accepted_source_label: str = "",
     accepted_source_name: str = "",
     accepted_source_file: PayloadFile | None = None,
-    run_verification_payload_base: dict[str, object] | None = None,
+    run_verification_payload_base: VerificationPayloadBase | None = None,
     generate_feedback_by_test: dict[str, str] | None = None,
     validator_configured: bool = True,
-    runtime_columns: list[dict[str, object]] | None = None,
+    runtime_columns: Sequence[Mapping[str, object]] | None = None,
     time_limit_ms: int = 0,
     bypass_case_result_cache: bool = False,
     service_class: str = "background",
@@ -514,10 +483,10 @@ class VerificationSanityService:
         accepted_source_label: str = "",
         accepted_source_name: str = "",
         accepted_source_file: PayloadFile | None = None,
-        run_verification_payload_base: dict[str, object] | None = None,
+        run_verification_payload_base: VerificationPayloadBase | None = None,
         generate_feedback_by_test: dict[str, str] | None = None,
         validator_configured: bool = True,
-        runtime_columns: list[dict[str, object]] | None = None,
+        runtime_columns: Sequence[Mapping[str, object]] | None = None,
         time_limit_ms: int = 0,
         bypass_case_result_cache: bool = False,
         service_class: str = "background",
@@ -553,7 +522,7 @@ class VerificationSanityService:
         accepted_source_label: str = "",
         accepted_source_name: str = "",
         accepted_source_file: PayloadFile | None = None,
-        run_verification_payload_base: dict[str, object] | None = None,
+        run_verification_payload_base: VerificationPayloadBase | None = None,
         bypass_case_result_cache: bool = False,
         service_class: str = "background",
     ) -> SampleOutputValidationResult:

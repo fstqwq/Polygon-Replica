@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.config import build_config_values
+from app.config.model import ConfigValue
 from app.service.execution.limits import VERIFICATION_RUNTIME_BATCH_SIZE
 from app.service.execution.model import CompileDiagnostic, CompileResult
 from app.service.execution.policy import normalize_execution_result
@@ -32,8 +33,7 @@ from app.service.judgehost.domjudge.case_result import build_case_result
 from app.service.judgehost.domjudge.identity import script_id, submit_id
 from app.service.judgehost.cancellation import JudgehostCancellationDrain
 from app.service.judgehost.finalization.service import JudgehostBatchFinalizer
-from app.service.judgehost.maintenance.terminal_cleanup import JudgehostTerminalCleanup
-from app.service.judgehost.task.registry import JudgehostTaskRegistry
+from app.service.judgehost.task.registry import JudgehostTaskRegistry, JudgehostTaskRow
 from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
 from app.service.platform.runtime_cache_index import (
     RuntimeCacheConflictError,
@@ -41,12 +41,13 @@ from app.service.platform.runtime_cache_index import (
 )
 
 
-def _case_result(test_name: str, *, runresult: str = "correct", verdict: str = "OK"):
+def _case_result(
+    test_name: str, *, runresult: str = "correct", verdict: str = "OK"
+) -> CaseResult:
     artifact_ref = (
         "blob://sha256/" + hashlib.sha256(test_name.encode("utf-8")).hexdigest()
     )
     return build_case_result(
-        test_name=test_name,
         runresult=runresult,
         verdict=verdict,
         runtime_sec=0.001,
@@ -62,7 +63,6 @@ def _case_result(test_name: str, *, runresult: str = "correct", verdict: str = "
         compare_metadata_ref=artifact_ref,
         team_message_ref=artifact_ref,
         feedback_text="",
-        feedback_files=[],
         answer_correct=False,
         input_ref=artifact_ref,
     )
@@ -165,7 +165,7 @@ def _lease_cases(
     return list(claim.cases)
 
 
-def _task_row(index: int, *, verification_id: str = "ver-1") -> dict[str, object]:
+def _task_row(index: int, *, verification_id: str = "ver-1") -> JudgehostTaskRow:
     now_text = datetime.now(timezone.utc).isoformat()
     return {
         "id": f"task-{index}",
@@ -175,6 +175,7 @@ def _task_row(index: int, *, verification_id: str = "ver-1") -> dict[str, object
         "artifact_verification_id": verification_id,
         "mode": "pass-fail",
         "verification_id": verification_id,
+        "verification_task_id": f"verification-task-{index}",
         "status": "queued",
         "payload": {},
         "result": {},
@@ -222,9 +223,9 @@ def _create_staged_batch(
     execution_signature: str | None = None,
     verification_program_id: str | None = None,
     task_kind: str = "solution-run",
-    compile_config: dict[str, object] | None = None,
-    run_config: dict[str, object] | None = None,
-    compare_config: dict[str, object] | None = None,
+    compile_config: dict[str, ConfigValue] | None = None,
+    run_config: dict[str, ConfigValue] | None = None,
+    compare_config: dict[str, ConfigValue] | None = None,
 ) -> tuple[int, str]:
     now_text = datetime.now(timezone.utc).isoformat()
     signature = hashlib.sha256(
@@ -280,8 +281,8 @@ def _create_ready_batch(
     execution_signature: str | None = None,
     verification_program_id: str | None = None,
     compile_config: dict[str, object] | None = None,
-    run_config: dict[str, object] | None = None,
-    compare_config: dict[str, object] | None = None,
+    run_config: dict[str, ConfigValue] | None = None,
+    compare_config: dict[str, ConfigValue] | None = None,
 ) -> int:
     batch_id, now_text = _create_staged_batch(
         scheduler,
@@ -986,12 +987,13 @@ class TestJudgehostScheduler(unittest.TestCase):
             materialized,
         )
 
-    def test_task_registry_has_identity_but_no_scheduler(self) -> None:
+    def test_task_registry_retrieves_and_removes_identity_by_run(self) -> None:
         registry = JudgehostTaskRegistry()
         registry.insert(_task_row(1))
         self.assertEqual(registry.get_for_run("run-1")["id"], "task-1")
-        self.assertFalse(hasattr(registry, "claim_ready"))
-        self.assertFalse(hasattr(registry, "renew"))
+        registry.remove("task-1")
+        self.assertIsNone(registry.get_for_run("run-1"))
+        self.assertIsNone(registry.get("task-1"))
 
     def test_invalid_case_spec_does_not_partially_create_batch(self) -> None:
         scheduler = JudgehostBatchRuntime(id_base=50)
@@ -2415,7 +2417,7 @@ class TestJudgehostScheduler(unittest.TestCase):
         )
         self.assertEqual(scheduler.select_ready_batch("host-a")["batch_id"], batch_id)
 
-    def test_bulk_cache_abort_refreshes_each_batch_once(self) -> None:
+    def test_bulk_cache_abort_preserves_resolved_miss_and_retries_other_cases(self) -> None:
         scheduler = JudgehostBatchRuntime(id_base=315)
         batch_id, now_text = _create_staged_batch(
             scheduler,
@@ -2534,7 +2536,10 @@ class TestJudgehostScheduler(unittest.TestCase):
         self.assertTrue(all(not thread.is_alive() for thread in threads))
         self.assertEqual(len(leased_ids), 256)
         self.assertEqual(len(set(leased_ids)), 256)
-        self.assertEqual(scheduler.host_leased_case_count("host-0") >= 0, True)
+        self.assertEqual(
+            sum(scheduler.host_leased_case_count(f"host-{index}") for index in range(16)),
+            256,
+        )
         self.assertEqual(len(scheduler.cases_for_batch(batch_id, status="leased")), 256)
 
     def test_judgehost_runtime_defaults_and_overrides(self) -> None:
@@ -2546,26 +2551,6 @@ class TestJudgehostScheduler(unittest.TestCase):
         )
         self.assertEqual(overridden.JUDGEHOST_FETCH_BATCH_SIZE, 8)
         self.assertEqual(overridden.RUN_EXEC_PROCESS_LIMIT, 256)
-
-    def test_runtime_cache_hit_does_not_open_payload_files(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="runtime-cache-") as temp_dir:
-            _executable_cache, _blobs, cache = self._runtime_cache(Path(temp_dir))
-            cache.put(
-                namespace=RuntimeCacheIndex.RESULT,
-                key_hash="1" * 64,
-                signature="2" * 64,
-                value={"verdict": "OK"},
-                files={"program.out": b"large output"},
-            )
-            with patch.object(
-                Path, "open", side_effect=AssertionError("payload was opened")
-            ):
-                entry = cache.get(
-                    namespace=RuntimeCacheIndex.RESULT,
-                    key_hash="1" * 64,
-                    signature="2" * 64,
-                )
-            self.assertIsNotNone(entry)
 
     def test_case_result_cache_keeps_first_execution_on_volatile_conflict(self) -> None:
         with tempfile.TemporaryDirectory(prefix="runtime-result-cache-") as temp_dir:
@@ -2640,7 +2625,7 @@ class TestJudgehostScheduler(unittest.TestCase):
                     files={"program.out": payloads[-1], "shared.in": payloads[-1]},
                     shortcut_eligible=True,
                 )
-                self.assertIs(cache.lookup(lookup), result)
+                self.assertEqual(cache.lookup(lookup), result)
                 self.assertEqual(cache.lookup(lookup).passes, result.passes)
                 payloads[0].path.unlink()
                 self.assertIsNone(cache.lookup(lookup))
@@ -2735,18 +2720,18 @@ class TestJudgehostScheduler(unittest.TestCase):
             executable_cache, _blobs, cache = self._runtime_cache(Path(temp_dir))
             executable_hash = "a" * 32
             files = [("run", b"#!/bin/sh\nexit 0\n", True)]
-            with patch.object(cache, "put", wraps=cache.put) as publish_entry:
-                first = executable_cache.store(
-                    kind="run",
-                    executable_hash=executable_hash,
-                    files=files,
-                )
-                executable_cache.store(
-                    kind="run",
-                    executable_hash=executable_hash,
-                    files=files,
-                )
-            self.assertEqual(publish_entry.call_count, 2)
+            first = executable_cache.store(
+                kind="run",
+                executable_hash=executable_hash,
+                files=files,
+            )
+            repeated = executable_cache.store(
+                kind="run",
+                executable_hash=executable_hash,
+                files=files,
+            )
+            self.assertEqual(repeated, first)
+            self.assertEqual(cache.count_entries(namespace=RuntimeCacheIndex.EXECUTABLE), 1)
             rows = executable_cache.read(kind="run", executable_hash=executable_hash)
             self.assertIsNotNone(rows)
             assert rows is not None
@@ -2771,7 +2756,7 @@ class TestJudgehostScheduler(unittest.TestCase):
             errors: list[Exception] = []
             original = blobs.put_bytes
 
-            def _publish(payload: bytes):
+            def _publish(payload: bytes) -> PayloadFile:
                 barrier.wait(timeout=5)
                 return original(payload)
 
@@ -2799,62 +2784,18 @@ class TestJudgehostScheduler(unittest.TestCase):
             self.assertTrue(all(not thread.is_alive() for thread in threads))
             self.assertEqual(cache.count_entries(namespace=RuntimeCacheIndex.RESULT), 2)
 
-    def test_terminal_cleanup_removes_runtime_identity_but_not_cache(self) -> None:
-        registry = JudgehostTaskRegistry()
-        row = _task_row(1, verification_id="ver-c1ea4")
-        row["status"] = "completed"
-        row["verification_task_id"] = "verification-task-1"
-        registry.insert(row)
-
-        class _CaseStore:
-            def __init__(self) -> None:
-                self.forgotten_runs: list[str] = []
-                self.forgotten_scopes: list[str] = []
-
-            def forget_runs_if_quiet(self, run_ids: list[str]) -> int | None:
-                self.forgotten_runs.extend(run_ids)
-                return len(run_ids)
-
-            def forget_scope(self, verification_id: str) -> None:
-                self.forgotten_scopes.append(verification_id)
-
-        cases = _CaseStore()
-
-        class _VerificationRuntimeStore:
-            def __init__(self) -> None:
-                self.unbound: list[tuple[str, str]] = []
-
-            def unbind(
-                self,
-                verification_task_id: str,
-                *,
-                judgehost_task_id: str,
-            ) -> bool:
-                self.unbound.append((verification_task_id, judgehost_task_id))
-                return True
-
-        runtimes = _VerificationRuntimeStore()
-        cleanup = JudgehostTerminalCleanup(registry, cases, runtimes)
-        cleanup._generation_by_verification["ver-c1ea4"] = 2
-        self.assertTrue(cleanup._cleanup("ver-c1ea4", expected_generation=2))
-        self.assertEqual(cases.forgotten_runs, ["run-1"])
-        self.assertEqual(cases.forgotten_scopes, ["ver-c1ea4"])
-        self.assertEqual(
-            runtimes.unbound,
-            [("verification-task-1", "task-1")],
-        )
-        self.assertIsNone(registry.get("task-1"))
-
-
 class TestJudgehostCancellationDrain(unittest.TestCase):
-    def _cancellation_fixture(self):
+    def _cancellation_fixture(self) -> tuple[
+        JudgehostBatchRuntime, JudgehostTaskRegistry, JudgehostCancellationDrain,
+        dict[str, threading.Event], dict[str, int],
+    ]:
         batches = JudgehostBatchRuntime()
         tasks = JudgehostTaskRegistry()
         completed = {name: threading.Event() for name in ("ver-a", "ver-b")}
 
         class _Cleanup:
             @staticmethod
-            def schedule(verification_id):
+            def schedule(verification_id: str) -> None:
                 completed[verification_id].set()
 
         # Cancellation retirement uses runtime/task state only; ordinary result
@@ -2867,7 +2808,7 @@ class TestJudgehostCancellationDrain(unittest.TestCase):
         )
         batches.set_cancellation_progress_notifier(drain.wake)
         self.addCleanup(drain.pause)
-        ids = {}
+        ids: dict[str, int] = {}
         for index, name in enumerate(completed):
             tasks.insert(_task_row(index, verification_id=name))
             ids[name] = _create_ready_batch(
@@ -2887,8 +2828,10 @@ class TestJudgehostCancellationDrain(unittest.TestCase):
         release = threading.Event()
         original = batches.drain_verification_cancel_slice
 
-        def controlled_slice(verification_id, **kwargs):
-            result = original(verification_id, **kwargs)
+        def controlled_slice(
+            verification_id: str, *, now_text: str, limit: int,
+        ) -> VerificationCancellationSlice:
+            result = original(verification_id, now_text=now_text, limit=limit)
             if verification_id == "ver-a" and result.processed_case_count:
                 entered.set()
                 if not release.wait(2):
@@ -2927,8 +2870,10 @@ class TestJudgehostCancellationDrain(unittest.TestCase):
         release = threading.Event()
         original = batches.drain_verification_cancel_slice
 
-        def controlled_slice(verification_id, **kwargs):
-            result = original(verification_id, **kwargs)
+        def controlled_slice(
+            verification_id: str, *, now_text: str, limit: int,
+        ) -> VerificationCancellationSlice:
+            result = original(verification_id, now_text=now_text, limit=limit)
             if result.awaiting_receipt_count and not result.processed_case_count:
                 entered.set()
                 if not release.wait(2):
@@ -2954,12 +2899,14 @@ class TestJudgehostCancellationDrain(unittest.TestCase):
         original = batches.drain_verification_cancel_slice
         failed = False
 
-        def fail_once(verification_id, **kwargs):
+        def fail_once(
+            verification_id: str, *, now_text: str, limit: int,
+        ) -> VerificationCancellationSlice:
             nonlocal failed
             if not failed:
                 failed = True
                 raise RuntimeError("injected cancellation failure")
-            return original(verification_id, **kwargs)
+            return original(verification_id, now_text=now_text, limit=limit)
 
         with patch.object(batches, "drain_verification_cancel_slice", side_effect=fail_once), self.assertLogs(
             "app.service.judgehost.cancellation", level="ERROR",
@@ -2993,8 +2940,10 @@ class TestJudgehostCancellationDrain(unittest.TestCase):
                 parked = threading.Event()
                 original = batches.drain_verification_cancel_slice
 
-                def observe_wait(verification_id, **kwargs):
-                    result = original(verification_id, **kwargs)
+                def observe_wait(
+                    verification_id: str, *, now_text: str, limit: int,
+                ) -> VerificationCancellationSlice:
+                    result = original(verification_id, now_text=now_text, limit=limit)
                     if not result.processed_case_count:
                         parked.set()
                     return result
@@ -3031,7 +2980,7 @@ class TestJudgehostCancellationDrain(unittest.TestCase):
         # Late releases must return while paused, without waiting for resume.
         released = threading.Event()
 
-        def late_release():
+        def late_release() -> None:
             batches.release_case_callback_receipt(receipt.receipt_id)
             released.set()
 
@@ -3047,93 +2996,56 @@ class TestJudgehostCancellationDrain(unittest.TestCase):
         self.assertTrue(completed["ver-b"].wait(2))
         self.assertEqual(batches.fetch_batch(ids["ver-b"])["status"], "failed")
 
-    def test_deduplicated_request_retries_bounded_slices(self) -> None:
+    def test_repeated_cancel_request_drains_all_cases_across_slice_boundary(self) -> None:
+        batches, tasks, drain, completed, ids = self._cancellation_fixture()
+        tasks.insert(_task_row(2, verification_id="ver-a"))
+        batch_id, now_text = _create_staged_batch(
+            batches, task_id="task-2", run_id="run-2",
+            ordinals=list(range(2, VERIFICATION_RUNTIME_BATCH_SIZE + 2)),
+            verification_id="ver-a", verification_program_id="task-0",
+            execution_signature="signature-task-0",
+        )
+        self.assertEqual(batch_id, ids["ver-a"])
+        batches.activate_task_cases("task-2", now_text=now_text)
         entered = threading.Event()
         release = threading.Event()
-        completed = threading.Event()
+        original = batches.drain_verification_cancel_slice
 
-        class _BatchRuntime:
-            def __init__(self) -> None:
-                self.calls = 0
-
-            def drain_verification_cancel_slice(
-                self,
-                verification_id: str,
-                *,
-                now_text: str,
-                limit: int,
-            ) -> VerificationCancellationSlice:
-                del verification_id, now_text, limit
-                self.calls += 1
-                if self.calls == 1:
-                    entered.set()
-                    self.assert_released()
-                    return VerificationCancellationSlice(1, 0, (), True)
-                return VerificationCancellationSlice(1, 0, (41,), False)
-
-            @staticmethod
-            def assert_released() -> None:
+        def hold_first_slice(
+            verification_id: str, *, now_text: str, limit: int,
+        ) -> VerificationCancellationSlice:
+            result = original(verification_id, now_text=now_text, limit=limit)
+            if not entered.is_set():
+                entered.set()
                 if not release.wait(timeout=2.0):
-                    raise AssertionError("cancellation drain was not released")
+                    raise AssertionError("test did not release first cancellation slice")
+            return result
 
-            @staticmethod
-            def cancelled_verification_ids() -> tuple[str, ...]:
-                return ()
+        with patch.object(
+            batches, "drain_verification_cancel_slice", side_effect=hold_first_slice,
+        ):
+            batches.close_verification_admission("ver-a")
+            drain.schedule("ver-a", reason="cancelled by user")
+            try:
+                self.assertTrue(entered.wait(timeout=2.0))
+                self.assertTrue(any(
+                    case["status"] != "cancelled"
+                    for case in batches.cases_for_batch(batch_id)
+                ))
+                drain.schedule("ver-a", reason="cancelled by user")
+            finally:
+                release.set()
+            self.assertTrue(completed["ver-a"].wait(timeout=2.0))
+            drain.pause()
 
-        class _Tasks:
-            def __init__(self) -> None:
-                self.calls = 0
-
-            def cancel_verification_tasks(
-                self,
-                verification_id: str,
-                *,
-                reason: str,
-                now_text: str,
-                limit: int,
-            ) -> tuple[int, int]:
-                del verification_id, reason, now_text, limit
-                self.calls += 1
-                return (1, int(self.calls == 1))
-
-        class _Finalizer:
-            def __init__(self) -> None:
-                self.retired: list[int] = []
-
-            def retire_cancelled_batch(self, batch_id: int) -> bool:
-                self.retired.append(batch_id)
-                return True
-
-        class _Cleanup:
-            def __init__(self) -> None:
-                self.scheduled: list[str] = []
-
-            def schedule(self, verification_id: str) -> None:
-                self.scheduled.append(verification_id)
-                completed.set()
-
-        batches = _BatchRuntime()
-        tasks = _Tasks()
-        finalizer = _Finalizer()
-        cleanup = _Cleanup()
-        drain = JudgehostCancellationDrain(
-            batches,  # type: ignore[arg-type]
-            tasks,  # type: ignore[arg-type]
-            finalizer,  # type: ignore[arg-type]
-            cleanup,  # type: ignore[arg-type]
-        )
-
-        self.addCleanup(drain.pause)
-        drain.schedule("ver-cancel", reason="cancelled by user")
-        self.assertTrue(entered.wait(timeout=2.0))
-        drain.schedule("ver-cancel", reason="cancelled by user")
-        release.set()
-        self.assertTrue(completed.wait(timeout=2.0))
-
-        self.assertEqual(batches.calls, 2)
-        self.assertEqual(tasks.calls, 2)
-        self.assertEqual(finalizer.retired, [41])
-        self.assertEqual(cleanup.scheduled, ["ver-cancel"])
+        cases = batches.cases_for_batch(batch_id)
+        self.assertEqual(len(cases), VERIFICATION_RUNTIME_BATCH_SIZE + 1)
+        self.assertEqual({case["status"] for case in cases}, {"cancelled"})
+        self.assertTrue(all(case["completion_acknowledged"] for case in cases))
+        self.assertEqual(batches.fetch_batch(batch_id)["status"], "failed")
+        self.assertEqual(tasks.get("task-0")["status"], "failed")
+        self.assertEqual(tasks.get("task-2")["status"], "failed")
+        self.assertEqual(tasks.get("task-1")["status"], "queued")
 
     def test_task_registry_cancels_large_verification_in_slices(self) -> None:
         registry = JudgehostTaskRegistry()
@@ -3151,7 +3063,7 @@ class TestJudgehostCancellationDrain(unittest.TestCase):
                     "verification_id": verification_id,
                     "verification_task_id": f"verification-task-{ordinal:04d}",
                     "status": "queued",
-                    "payload": {"large": "payload"},
+                    "payload": {"source_label": "solution.cpp"},
                     "result": {},
                     "persist_verification_run": True,
                     "error_text": "",

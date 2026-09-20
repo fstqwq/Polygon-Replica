@@ -1,6 +1,6 @@
 """Contest membership and direct Problem ACL management."""
 
-from typing import Annotated, cast
+from typing import Annotated, TypedDict, cast
 from urllib.parse import urlencode
 
 from fastapi import Depends, Form, HTTPException, Request
@@ -12,6 +12,29 @@ from app.impl.runtime.dependency import runtime
 from app.service.access.errors import AccessConflictError
 from app.service.access.model import DirectProblemRole, ProblemAccessChange
 from app.service.access.policy import transferable_contest_role
+from app.service.contest.service import ContestMemberEntry, ContestProblem
+
+
+class ContestProblemAccessCell(TypedDict):
+    target_user_id: int
+    role: str
+    display_role: str
+    can_edit: bool
+    fixed: bool
+    fixed_reason: str
+    focused: bool
+
+
+class ContestProblemAccessRow(ContestProblem):
+    cells: list[ContestProblemAccessCell]
+    can_bulk_edit: bool
+    focused: bool
+
+
+class ContestAccessMember(ContestMemberEntry):
+    can_bulk_edit: bool
+    can_exit: bool
+    focused: bool
 
 
 def _positive_query_ids(request: Request, key: str) -> list[int]:
@@ -33,7 +56,7 @@ def _contest_problem_access_matrix(
     can_manage_contest: bool,
     focus_problem_ids: list[int],
     focus_user_ids: list[int],
-) -> tuple[list[dict[str, object]], list[dict[str, object]], list[int], int]:
+) -> tuple[list[ContestProblemAccessRow], list[ContestAccessMember], list[int], int]:
     problems = runtime().contest_service.contest_problems(contest_id)
     members = runtime().contest_service.member_entries(contest_id)
     problem_ids = [int(row["problem_id"]) for row in problems]
@@ -52,7 +75,7 @@ def _contest_problem_access_matrix(
         for row in problems
     }.intersection(focus_problem_ids)
     valid_user_focus = set(user_ids).intersection(focus_user_ids)
-    matrix_rows: list[dict[str, object]] = []
+    matrix_rows: list[ContestProblemAccessRow] = []
     editable_by_user: dict[int, list[bool]] = {user_id: [] for user_id in user_ids}
     for problem in problems:
         problem_id = int(problem["problem_id"])
@@ -60,7 +83,7 @@ def _contest_problem_access_matrix(
             can_manage_contest
             and actor_access[problem_id]["can_manage_access"]
         )
-        cells: list[dict[str, object]] = []
+        cells: list[ContestProblemAccessCell] = []
         for member in members:
             target_user_id = int(member["user_id"])
             role = roles.get((problem_id, target_user_id), "none")
@@ -104,7 +127,7 @@ def _contest_problem_access_matrix(
             }
         )
 
-    matrix_members: list[dict[str, object]] = []
+    matrix_members: list[ContestAccessMember] = []
     for member in members:
         target_user_id = int(member["user_id"])
         editable = editable_by_user[target_user_id]

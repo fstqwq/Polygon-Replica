@@ -1,6 +1,6 @@
-from typing import Literal, Mapping, Protocol, TypedDict
+from typing import Literal, Mapping, Protocol
 
-from app.db import DB, now_iso
+from app.db import DB, SQLValue, now_iso
 from app.service.verification.lifecycle import AdmissionCommit, VerificationAdmission
 
 
@@ -8,25 +8,11 @@ class _DatabaseRow(Protocol):
     def __getitem__(self, key: str, /) -> object: ...
 from app.service.verification.types import (
     Kind,
+    VerificationRecordRow,
     VerificationStatus,
     WorkspaceVerificationKey,
     WorkspaceVerificationRow,
 )
-
-
-class VerificationRecordRow(TypedDict):
-    id: str
-    problem_id: int
-    workspace_id: int | None
-    signature: str
-    source_commit: str
-    kind: str
-    status: VerificationStatus
-    fail_reason: str
-    error: str
-    sanity_status: str
-    created_at: str
-    finished_at: str
 
 
 class VerificationStore:
@@ -59,17 +45,6 @@ class VerificationStore:
             "created_at": str(row["created_at"] or ""),
             "finished_at": str(row["finished_at"] or ""),
         }
-
-    def exists_for_problem(self, problem_id: int, verification_id: str) -> bool:
-        row = self.db.fetch_one(
-            """
-            SELECT 1
-            FROM verifications
-            WHERE id=? AND problem_id=?
-            """,
-            [verification_id, problem_id],
-        )
-        return row is not None
 
     def record_row(self, verification_id: str) -> VerificationRecordRow | None:
         row = self.db.fetch_one(
@@ -205,7 +180,7 @@ class VerificationStore:
             FROM verifications
             WHERE problem_id=? AND workspace_id=? AND kind IN ({placeholders})
         """
-        params: list[object] = [problem_id, workspace_id, *kind_tokens]
+        params: list[SQLValue] = [problem_id, workspace_id, *kind_tokens]
         if ok_only:
             sql += " AND status='ok'"
         sql += " ORDER BY created_at DESC LIMIT ?"
@@ -371,7 +346,7 @@ class VerificationStore:
             WHERE problem_id=? AND workspace_id=? AND source_commit=?
               AND kind IN ({placeholders})
         """
-        params: list[object] = [problem_id, workspace_id, source_commit, *kind_tokens]
+        params: list[SQLValue] = [problem_id, workspace_id, source_commit, *kind_tokens]
         if ok_only:
             sql += " AND status='ok'"
         sql += " ORDER BY created_at DESC LIMIT 1"
@@ -390,38 +365,6 @@ class VerificationStore:
             "created_at": str(row["created_at"] or ""),
             "finished_at": str(row["finished_at"] or ""),
         }
-
-    def workspace_verification_row(
-        self,
-        problem_id: int,
-        workspace_id: int,
-        verification_id: str,
-    ) -> WorkspaceVerificationRow | None:
-        row = self.db.fetch_one(
-            """
-            SELECT id,status,signature,source_commit,kind,fail_reason,error,sanity_status,created_at,finished_at
-            FROM verifications
-            WHERE id=? AND problem_id=? AND workspace_id=?
-            """,
-            [verification_id, problem_id, workspace_id],
-        )
-        if row is None:
-            return None
-        return self._workspace_row(row)
-
-    def workspace_verification_exists(self, problem_id: int, workspace_id: int, verification_id: str) -> bool:
-        row = self.db.fetch_one(
-            "SELECT id FROM verifications WHERE id=? AND problem_id=? AND workspace_id=?",
-            [verification_id, problem_id, workspace_id],
-        )
-        return row is not None
-
-    def workspace_artifact_exists(self, problem_id: int, workspace_id: int, artifact_id: str) -> bool:
-        row = self.db.fetch_one(
-            "SELECT id FROM verifications WHERE id=? AND problem_id=? AND workspace_id=?",
-            [artifact_id, problem_id, workspace_id],
-        )
-        return row is not None
 
     def latest_problem_verification_id_for_signature(self, problem_id: int, signature: str) -> str:
         row = self.db.fetch_one(
@@ -451,7 +394,7 @@ class VerificationStore:
             FROM verifications
             WHERE problem_id=? AND workspace_id=? AND signature=?
         """
-        params: list[object] = [int(problem_id), int(workspace_id), signature]
+        params: list[SQLValue] = [int(problem_id), int(workspace_id), signature]
         if ok_only:
             sql += " AND status='ok'"
         sql += " ORDER BY created_at DESC LIMIT 1"

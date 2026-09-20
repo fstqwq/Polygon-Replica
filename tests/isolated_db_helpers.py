@@ -1,10 +1,11 @@
 """Persistence boundary for tests that own a private SQLite database."""
 
 import sqlite3
+from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from typing import Callable, TypeVar
 
-from app.db import DB
+from app.db import DB, SQLValue
 
 
 _Result = TypeVar("_Result")
@@ -13,7 +14,7 @@ _Result = TypeVar("_Result")
 def isolated_db_fetch_one(
     database: DB,
     sql: str,
-    params: list[object] | tuple[object, ...] | None = None,
+    params: Sequence[SQLValue] | None = None,
 ) -> sqlite3.Row | None:
     values = [] if params is None else list(params)
     return database.fetch_one(sql, values)
@@ -22,7 +23,7 @@ def isolated_db_fetch_one(
 def isolated_db_fetch_all(
     database: DB,
     sql: str,
-    params: list[object] | tuple[object, ...] | None = None,
+    params: Sequence[SQLValue] | None = None,
 ) -> list[sqlite3.Row]:
     values = [] if params is None else list(params)
     return database.fetch_all(sql, values)
@@ -31,7 +32,7 @@ def isolated_db_fetch_all(
 def isolated_db_execute(
     database: DB,
     sql: str,
-    params: list[object] | tuple[object, ...] | None = None,
+    params: Sequence[SQLValue] | None = None,
 ) -> None:
     values = [] if params is None else list(params)
     database.execute(sql, values)

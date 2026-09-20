@@ -4,12 +4,15 @@ import json
 import re
 from collections.abc import Mapping
 from pathlib import Path
+
+from app.config.model import ConfigValue
 from app.service.judgehost.domjudge.limits import (
     compile_output_kb,
     config_int,
     upload_max_bytes,
 )
 from app.service.judgehost.languages import JUDGEHOST_LANGUAGES
+from app.service.judgehost.domjudge.wire_model import DomjudgeConfiguration, DomjudgeLanguage
 
 _CONTEST_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
@@ -27,6 +30,14 @@ def decode_json_object(raw: object) -> dict[str, object]:
             raise RuntimeError("DOMjudge JSON object keys must be strings")
         result[key] = value
     return result
+
+
+def decode_config_json(text: str) -> dict[str, object]:
+    """Preserve the stored-config parse fallback while rejecting non-objects."""
+    try:
+        return decode_json_object(text)
+    except ValueError:
+        return {}
 
 
 def decode_text(
@@ -76,7 +87,7 @@ def decode_base64(text: str | bytes | bytearray | memoryview | None) -> bytes:
         raise RuntimeError("DOMjudge payload is not valid base64") from exc
 
 
-def config_payload(values: Mapping[str, object]) -> dict[str, object]:
+def config_payload(values: Mapping[str, ConfigValue]) -> DomjudgeConfiguration:
     compile_timeout = config_int(values, "TOOLCHAIN_COMPILE_TIMEOUT_SEC")
     compile_mem_mb = config_int(values, "TOOLCHAIN_COMPILE_MEMORY_MB")
     return {
@@ -92,7 +103,7 @@ def config_payload(values: Mapping[str, object]) -> dict[str, object]:
     }
 
 
-def languages_payload() -> list[dict[str, object]]:
+def languages_payload() -> list[DomjudgeLanguage]:
     return [
         {
             "id": language.language_id,

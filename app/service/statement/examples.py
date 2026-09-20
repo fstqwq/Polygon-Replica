@@ -1,9 +1,10 @@
 """Project canonical verification evidence into statement example resources."""
 
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict, cast
+from typing import Literal, NotRequired, Protocol, TypedDict
 
 from app.service.execution.model import CAPTURE_COMPLETE, ExecutionPassResult
+from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.problem.runtime_config import ProblemConfigLimits, load_problem_config
 from app.service.problem.sample_json import SampleJson
 from app.service.problem.test_spec import (
@@ -14,12 +15,17 @@ from app.service.problem.test_spec import (
     read_statement_sample_text,
 )
 from app.service.statement.sample_transcript import statement_sample_events_from_transcript
-from app.service.verification.task_store import VerificationTaskRow
+from app.service.verification.types import VerificationTaskRow
 from app.service.verification.types import VerificationStatus, VerificationTaskStatus
+from app.service.verification.detail_read_model import VerificationDetailReadModel
 
-if TYPE_CHECKING:
-    from app.service.verification.detail_read_model import VerificationDetailReadModel
-    from app.service.verification.service import VerificationService
+
+class StatementExamplesVerification(Protocol):
+    def verification_detail_read_model(
+        self, verification_id: str
+    ) -> VerificationDetailReadModel | None: ...
+
+    def artifact_descriptor(self, artifact_ref: str) -> PayloadFile | None: ...
 
 
 class StatementExampleResource(TypedDict):
@@ -170,7 +176,7 @@ class _SampleResources:
 
 
 def _descriptor_text(
-    verification_service: "VerificationService",
+    verification_service: StatementExamplesVerification,
     artifact_ref: str,
     *,
     label: str,
@@ -188,10 +194,10 @@ def _descriptor_text(
 
 
 def _verification_evidence(
-    verification_service: "VerificationService",
+    verification_service: StatementExamplesVerification,
     verification_id: str,
 ) -> tuple[
-    "VerificationDetailReadModel",
+    VerificationDetailReadModel,
     dict[str, tuple[int, str]],
     dict[str, VerificationTaskRow],
 ]:
@@ -210,10 +216,10 @@ def _verification_evidence(
     observed_ordinals: set[int] = set()
     observed_test_names: set[str] = set()
     for raw in tests_meta:
-        if not isinstance(raw, dict) or not bool(raw.get("sample")):
+        if not raw.get("sample"):
             continue
-        source_id = str(raw.get("id") or "")
-        test_name = str(raw.get("test_name") or "")
+        source_id = raw.get("id", "")
+        test_name = raw.get("test_name", "")
         ordinal = raw.get("index")
         if (
             not source_id
@@ -272,7 +278,7 @@ def _pair_override(
     sample_number: int,
     mode: str,
     passes: tuple[ExecutionPassResult, ...],
-    verification_service: "VerificationService | None",
+    verification_service: StatementExamplesVerification | None,
     max_bytes: int,
 ) -> tuple[StatementExampleSample, list[StatementExampleResource]]:
     resources = _SampleResources(sample_id=row["id"], max_bytes=max_bytes)
@@ -433,7 +439,7 @@ def _pass_fail_sample(
     *,
     sample_number: int,
     passes: tuple[ExecutionPassResult, ...],
-    verification_service: "VerificationService",
+    verification_service: StatementExamplesVerification,
     max_bytes: int,
 ) -> tuple[StatementExampleSample, list[StatementExampleResource]]:
     resources = _SampleResources(sample_id=row["id"], max_bytes=max_bytes)
@@ -478,7 +484,7 @@ def _interactive_sample(
     *,
     sample_number: int,
     passes: tuple[ExecutionPassResult, ...],
-    verification_service: "VerificationService",
+    verification_service: StatementExamplesVerification,
     max_bytes: int,
 ) -> tuple[StatementExampleSample, list[StatementExampleResource]]:
     resources = _SampleResources(sample_id=row["id"], max_bytes=max_bytes)
@@ -511,7 +517,7 @@ def _interactive_sample(
             )
             events.append(
                 {
-                    "source": cast(Literal["interactor", "solution"], event["source"]),
+                    "source": event["source"],
                     "textFile": event_path,
                 }
             )
@@ -529,7 +535,7 @@ def _interactive_sample(
 class StatementExamplesProducer:
     """Build one statement render-context bundle from canonical verification evidence."""
 
-    def __init__(self, verification_service: "VerificationService") -> None:
+    def __init__(self, verification_service: StatementExamplesVerification) -> None:
         self._verification_service = verification_service
 
     def produce(
@@ -556,11 +562,12 @@ class StatementExamplesProducer:
                 self._verification_service, verification_id
             )
             read_model_mode = read_model["mode"]
-            if read_model_mode not in {"pass-fail", "interactive"}:
+            if read_model_mode == "pass-fail":
+                verification_mode = "pass-fail"
+            elif read_model_mode == "interactive":
+                verification_mode = "interactive"
+            else:
                 raise RuntimeError("statement examples verification mode is malformed")
-            verification_mode = cast(
-                Literal["pass-fail", "interactive"], read_model_mode
-            )
             if {row["id"] for _ordinal, row in sample_rows} != set(test_by_id):
                 raise RuntimeError(
                     "statement samples do not match verification test metadata"

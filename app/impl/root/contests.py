@@ -4,6 +4,7 @@ from pathlib import Path
 from urllib.parse import quote_plus
 
 from fastapi import File, Form, Request, UploadFile
+from starlette.responses import Response
 
 from app.impl.auth.shared import (
     enforce_same_origin_state_change,
@@ -75,7 +76,7 @@ def _render_contest_import_review_page(
     contest_title_input: str,
     problem_slug_overrides: dict[int, str],
     top_error: str = "",
-) -> object:
+) -> Response:
     package_name_obj = draft.get("package_name")
     package_name = package_name_obj.strip() if isinstance(package_name_obj, str) else ""
     draft_rows_raw = draft.get("problem_rows")
@@ -198,7 +199,7 @@ def contests_root_import(
                 raise ValueError(
                     f"contest package has more than the configured maximum of {max_problems} problems"
                 )
-            draft_rows = _build_contest_import_problem_draft_rows(actor_username, [dict(item) for item in rows if isinstance(item, dict)])
+            draft_rows = _build_contest_import_problem_draft_rows(actor_username, rows)
             if not draft_rows:
                 raise ValueError("contest package has no importable problem rows")
             parsed_title_obj = parsed.get("title")
@@ -420,7 +421,7 @@ async def contests_root_import_confirm(request: Request, user: str = ""):
             actor_user_id=actor_user_id,
             files=staged_statement_files,
         )
-        imported_properties: dict[str, object] = dict(localized_properties)
+        imported_properties: dict[str, str] = dict(localized_properties)
         if inferred_location:
             imported_properties["location"] = inferred_location
         if inferred_date:

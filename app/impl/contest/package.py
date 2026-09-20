@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
 from app.impl.auth.session import require_session_user
-from app.impl.contest.shared import _contest_ctx
+from app.impl.contest.shared import ContestPageContext, _contest_ctx
 from app.impl.runtime.dependency import runtime
 from app.impl.workspace.context_job import start_ready_external_export_job
 from app.service.contest.package import ContestPackageSnapshot
@@ -16,7 +16,7 @@ from app.service.platform.error_text import bounded_display_text
 from app.service.platform.worker_queue import WorkerFuture
 
 
-def _bounded_error_detail(error: object) -> str:
+def _bounded_error_detail(error: str | Exception) -> str:
     return bounded_display_text(
         str(error) or type(error).__name__,
         limit_bytes=runtime().config_values.integer(
@@ -28,7 +28,7 @@ def _bounded_error_detail(error: object) -> str:
 def _require_download_access(
     contest: str,
     user: str,
-) -> dict:
+) -> ContestPageContext:
     ctx = _contest_ctx(contest, user, "overview")
     if not ctx["access"]["can_download_packages"]:
         raise HTTPException(

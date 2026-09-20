@@ -20,6 +20,7 @@ from app.impl.contest.workspace_scope import (
     problem_template_navigation,
 )
 from app.impl.runtime.dependency import runtime
+from app.service.auth.model import AuthUserRow
 from app.service.judgehost.host.public_status import PublicJudgehostStatus
 from app.service.platform.hashing import hmac_sha256_hex, sha256_hex_bytes
 
@@ -429,7 +430,7 @@ def password_meta_for_username(username: str) -> tuple[str, int]:
     )
 
 
-def lookup_user_auth(username: str):
+def lookup_user_auth(username: str) -> AuthUserRow | None:
     safe = str(username or "").strip()
     if len(safe) < _K.USERNAME_MIN_LEN or len(safe) > _K.USERNAME_MAX_LEN or not _K.USER_IDENT_RE.fullmatch(safe):
         return None

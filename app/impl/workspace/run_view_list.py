@@ -1,6 +1,7 @@
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TypedDict
 
 from app.impl.auth.shared import parse_iso_utc
 from app.impl.runtime.dependency import runtime
@@ -8,6 +9,7 @@ from app.service.access.model import VerificationAccessContext
 from app.service.repository.revision import verification_source_display
 from app.service.platform.error_text import bounded_display_text, normalize_display_text
 from app.service.problem.solution_metadata import normalize_expected_behavior
+from app.service.verification.types import VerificationProgramSummaryFields, VerificationRecordRow
 from app.service.verification.result_match import (
     run_verdict_short,
     verification_verdict_match,
@@ -17,6 +19,29 @@ _TASK_KIND_MAIN_CORRECT = "main-correct"
 _TEST_NAME_NUM_RE = re.compile(r"^(\d+)\.in$")
 _RUN_LIST_REASON_LIMIT_BYTES = 180
 _SANITY_STATUS_TOKENS = {"ok", "passed", "pending", "running", "warning", "failed", "skipped"}
+
+
+class VerificationListRow(TypedDict):
+    index: int
+    id: str
+    verification_id: str
+    kind: str
+    created_at: str
+    finished_at: str
+    duration_display: str
+    status: str
+    status_display: str
+    status_tone: str
+    sanity_status: str
+    fail_reason: str
+    fail_reason_display: str
+    fail_reason_title: str
+    has_running: bool
+    is_failed: bool
+    is_cancelled: bool
+    can_rejudge: bool
+    can_cancel: bool
+    source_display: str
 
 
 def _latest_iso_timestamp(values: list[str] | tuple[str, ...]) -> str:
@@ -51,7 +76,7 @@ def _run_test_answer_name(test_name: str) -> str:
     return token + ".ans" if token else ""
 
 
-def _run_expected_behavior_from_summary(summary: dict | None) -> str:
+def _run_expected_behavior_from_summary(summary: VerificationProgramSummaryFields | None) -> str:
     if summary is not None:
         raw = summary.get("expected_behavior")
         if isinstance(raw, str):
@@ -81,7 +106,7 @@ def _run_cell_kind(verdict: str, expected_behavior: str) -> str:
     return "neutral" if short == "AC" else "expected-nonac"
 
 
-def _run_task_kind_from_summary(summary: dict | None) -> str:
+def _run_task_kind_from_summary(summary: VerificationProgramSummaryFields | None) -> str:
     if summary is None:
         return ""
     task_kind = summary.get("task_kind")
@@ -103,8 +128,8 @@ def _normalized_verification_status(status: str) -> str:
     return token
 
 
-def _list_reason_display(raw: object) -> tuple[str, str]:
-    full_text = normalize_display_text(str(raw or ""))
+def _list_reason_display(raw: str) -> tuple[str, str]:
+    full_text = normalize_display_text(raw)
     if not full_text:
         return ("", "")
     compact_text = " ".join(part.strip() for part in full_text.splitlines() if part.strip())
@@ -128,21 +153,21 @@ def _list_duration_display(created_at: str, finished_at: str, *, running: bool) 
 
 
 def _verification_row_to_list_item(
-    row: dict[str, object],
+    row: VerificationRecordRow,
     *,
     access: VerificationAccessContext,
-) -> dict[str, object] | None:
-    verification_id = str(row.get("id") or "")
+) -> VerificationListRow | None:
+    verification_id = row["id"]
     if not verification_id:
         return None
-    status = _normalized_verification_status(str(row.get("status") or ""))
-    sanity_status = str(row.get("sanity_status") or "").strip().lower()
+    status = _normalized_verification_status(row["status"])
+    sanity_status = row["sanity_status"].strip().lower()
     if sanity_status not in _SANITY_STATUS_TOKENS:
         sanity_status = "unknown"
     sanity_attention = sanity_status in {"warning", "failed"}
-    reason_source = row.get("fail_reason") or ""
+    reason_source = row["fail_reason"]
     if status == "ok" and sanity_attention:
-        reason_source = row.get("error") or ""
+        reason_source = row["error"]
     fail_reason_display, fail_reason_title = _list_reason_display(reason_source)
     status_display = status
     if status == "ok" and sanity_status == "warning":
@@ -151,13 +176,13 @@ def _verification_row_to_list_item(
         status_display = "ok (sanity failed)"
     if not access["can_view"]:
         return None
-    created_at = str(row.get("created_at") or "")
-    finished_at = str(row.get("finished_at") or "")
+    created_at = row["created_at"]
+    finished_at = row["finished_at"]
     return {
         "index": 0,
         "id": verification_id,
         "verification_id": verification_id,
-        "kind": str(row.get("kind") or ""),
+        "kind": row["kind"],
         "created_at": created_at,
         "finished_at": finished_at,
         "duration_display": _list_duration_display(
@@ -167,7 +192,7 @@ def _verification_row_to_list_item(
         "status_display": status_display,
         "status_tone": "warn" if status == "ok" and sanity_attention else status,
         "sanity_status": sanity_status,
-        "fail_reason": str(reason_source or ""),
+        "fail_reason": reason_source,
         "fail_reason_display": fail_reason_display,
         "fail_reason_title": fail_reason_title,
         "has_running": status == "running",
@@ -175,14 +200,15 @@ def _verification_row_to_list_item(
         "is_cancelled": status == "cancelled",
         "can_rejudge": access["can_rejudge"],
         "can_cancel": access["can_cancel"],
+        "source_display": "",
     }
 
 
-def run_list_rows(problem_id: int, workspace_id: int, workspace: Path, limit: int = 40, actor_user_id: int | None = None) -> list[dict]:
+def run_list_rows(problem_id: int, workspace_id: int, workspace: Path, limit: int = 40, actor_user_id: int | None = None) -> list[VerificationListRow]:
     if actor_user_id is None:
         raise ValueError("actor_user_id is required")
     limit_cap = max(1, int(limit))
-    result: list[dict[str, object]] = []
+    result: list[VerificationListRow] = []
     seen_ids: set[str] = set()
     revision_cache: dict[str, int | None] = {}
     verification_rows = runtime().verification_service.list_visible_verification_rows(
@@ -207,17 +233,17 @@ def run_list_rows(problem_id: int, workspace_id: int, workspace: Path, limit: in
             continue
         item["source_display"] = verification_source_display(
             workspace,
-            str(row.get("source_commit") or ""),
+            row["source_commit"],
             revision_cache,
         )
-        token = str(item["id"])
+        token = item["id"]
         if (not token) or token in seen_ids:
             continue
         seen_ids.add(token)
         result.append(item)
 
-    def _row_sort_key(item: dict[str, object]) -> tuple[int, float, str]:
-        raw = str(item.get("created_at") or "")
+    def _row_sort_key(item: VerificationListRow) -> tuple[int, float, str]:
+        raw = item["created_at"]
         parsed = parse_iso_utc(raw)
         if parsed is None:
             return (0, -1.0, raw)
@@ -225,6 +251,6 @@ def run_list_rows(problem_id: int, workspace_id: int, workspace: Path, limit: in
 
     result.sort(key=_row_sort_key, reverse=True)
     trimmed = result[:limit_cap]
-    for idx, row in enumerate(trimmed, start=1):
-        row["index"] = idx
+    for idx, item in enumerate(trimmed, start=1):
+        item["index"] = idx
     return trimmed

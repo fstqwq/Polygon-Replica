@@ -8,6 +8,7 @@ import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import TypedDict
 
 from app.service.importing.archive import ArchiveView
 from app.service.platform.workspace_path import (
@@ -17,6 +18,13 @@ from app.service.platform.workspace_path import (
     is_repository_answer_path,
 )
 from app.service.platform.zip_extract import extract_zip_entry_to_path_limited
+
+
+class WorkspaceDiffPayload(TypedDict):
+    changed: bool
+    uploads: list[str]
+    deletes: list[str]
+    same: list[str]
 
 
 @dataclass(frozen=True)
@@ -29,7 +37,7 @@ class WorkspaceDiff:
     def changed(self) -> bool:
         return bool(self.uploads or self.deletes)
 
-    def as_payload(self) -> dict[str, object]:
+    def as_payload(self) -> WorkspaceDiffPayload:
         return {
             "changed": self.changed,
             "uploads": self.uploads,

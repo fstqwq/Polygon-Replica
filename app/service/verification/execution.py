@@ -19,7 +19,8 @@ from app.service.verification.task_scheduler import (
     VerificationRuntimeCallbacks,
     VerificationRuntimeCoordinator,
 )
-from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
+from app.service.verification.types import VerificationTaskRow
+from app.service.verification.task_store import VerificationTaskStore
 from app.service.verification.types import VerificationStatus
 
 

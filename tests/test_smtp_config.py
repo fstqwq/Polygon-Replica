@@ -1,6 +1,13 @@
 import base64
 import os
-from unittest.mock import MagicMock, patch
+import smtplib
+import ssl
+from collections.abc import Iterator
+from contextlib import contextmanager
+from email import policy
+from email.message import EmailMessage
+from email.parser import BytesParser
+from unittest.mock import patch
 
 from tests.common import E2ETestBase
 from tests.db_helpers import db_fetch_one
@@ -13,6 +20,44 @@ from app.service.platform.secret_box import ENCRYPTION_KEY_ENV, SecretBox, Secre
 
 _KEY = base64.urlsafe_b64encode(b"0" * 32).decode("ascii").rstrip("=")
 _WRONG_KEY = base64.urlsafe_b64encode(b"1" * 32).decode("ascii").rstrip("=")
+
+
+class _SmtpMailbox:
+    """External SMTP peer requiring TLS and login before accepting mail."""
+
+    def __init__(self) -> None:
+        self.secure = False
+        self.authenticated = False
+        self.messages: list[bytes] = []
+
+    def ehlo(self) -> tuple[int, bytes]:
+        return 250, b"mailbox ready"
+
+    def starttls(self, *, context: ssl.SSLContext) -> tuple[int, bytes]:
+        if context.verify_mode != ssl.CERT_REQUIRED or not context.check_hostname:
+            raise smtplib.SMTPException("certificate validation required")
+        self.secure = True
+        return 220, b"TLS ready"
+
+    def login(self, user: str, password: str) -> tuple[int, bytes]:
+        if not self.secure:
+            raise smtplib.SMTPException("TLS required")
+        if (user, password) != ("mailer@example.com", "secret-token"):
+            raise smtplib.SMTPAuthenticationError(535, b"invalid credentials")
+        self.authenticated = True
+        return 235, b"authenticated"
+
+    def send_message(self, message: EmailMessage) -> dict[str, tuple[int, bytes]]:
+        if not self.authenticated:
+            raise smtplib.SMTPException("authentication required")
+        self.messages.append(message.as_bytes(policy=policy.SMTP))
+        return {}
+
+    @contextmanager
+    def connect(self, host: str, port: int, *, timeout: float) -> Iterator[_SmtpMailbox]:
+        if (host, port) != ("smtp.example.com", 587) or timeout <= 0:
+            raise OSError("mailbox unavailable")
+        yield self
 
 
 class TestSmtpConfig(UIHelpersMixin, E2ETestBase):
@@ -80,7 +125,7 @@ class TestSmtpConfig(UIHelpersMixin, E2ETestBase):
             self.assertIsNotNone(cleared)
             self.assertEqual(str(cleared["password_ciphertext"]), "")
 
-    def test_smtp_test_email_uses_starttls_for_587(self) -> None:
+    def test_mail_delivery_requires_tls_and_authentication(self) -> None:
         actor = db_fetch_one("SELECT id FROM users WHERE username=?", [self.user])
         self.assertIsNotNone(actor)
         with patch.dict(os.environ, {ENCRYPTION_KEY_ENV: _KEY}):
@@ -92,43 +137,29 @@ class TestSmtpConfig(UIHelpersMixin, E2ETestBase):
                 clear_password=False,
                 actor_user_id=int(actor["id"]),
             )
-            smtp_context = MagicMock()
-            smtp = smtp_context.__enter__.return_value
-            with patch("app.service.mail.smtp_config.smtplib.SMTP", return_value=smtp_context):
-                runtime.smtp_config_service.send_test_email(recipient="admin@example.com")
-
-        smtp.ehlo.assert_called()
-        smtp.starttls.assert_called_once()
-        smtp.login.assert_called_once_with("mailer@example.com", "secret-token")
-        smtp.send_message.assert_called_once()
-
-    def test_registration_email_sends_code_without_verification_link(self) -> None:
-        actor = db_fetch_one("SELECT id FROM users WHERE username=?", [self.user])
-        self.assertIsNotNone(actor)
-        with patch.dict(os.environ, {ENCRYPTION_KEY_ENV: _KEY}):
-            runtime.smtp_config_service.save_from_form(
-                host="smtp.example.com",
-                port="587",
-                username="mailer@example.com",
-                password="secret-token",
-                clear_password=False,
-                actor_user_id=int(actor["id"]),
-            )
-            smtp_context = MagicMock()
-            smtp = smtp_context.__enter__.return_value
-            with patch("app.service.mail.smtp_config.smtplib.SMTP", return_value=smtp_context):
-                runtime.smtp_config_service.send_registration_email(
-                    recipient="user@example.com",
-                    verification_code="8F3K-2Q7M-Z9PA",
-                    expires_in_sec=1800,
-                )
-
-        smtp.send_message.assert_called_once()
-        message = smtp.send_message.call_args.args[0]
-        body = message.get_content()
-        self.assertIn("8F3K-2Q7M-Z9PA", body)
-        self.assertIn("This code expires in 30 minutes.", body)
-        self.assertNotIn("http://", body)
-        self.assertNotIn("https://", body)
-        self.assertNotIn("/register/verify", body)
-        self.assertNotIn("token=", body)
+            for registration in (False, True):
+                with self.subTest(registration=registration):
+                    mailbox = _SmtpMailbox()
+                    with patch("app.service.mail.smtp_config.smtplib.SMTP", mailbox.connect):
+                        if registration:
+                            runtime.smtp_config_service.send_registration_email(
+                                recipient="user@example.com",
+                                verification_code="8F3K-2Q7M-Z9PA",
+                                expires_in_sec=1800,
+                            )
+                        else:
+                            runtime.smtp_config_service.send_test_email(recipient="user@example.com")
+                    self.assertEqual(len(mailbox.messages), 1)
+                    message = BytesParser(policy=policy.default).parsebytes(mailbox.messages[0])
+                    self.assertEqual(message["From"], "mailer@example.com")
+                    self.assertEqual(message["To"], "user@example.com")
+                    if registration:
+                        expected_body = (
+                            "Confirm your Polygon-Replica registration with this verification code:\n\n"
+                            "8F3K-2Q7M-Z9PA\n\n"
+                            "This code expires in 30 minutes.\n\n"
+                            "If you did not request this account, ignore this email.\n"
+                        )
+                    else:
+                        expected_body = "This is a Polygon-Replica SMTP test email.\n"
+                    self.assertEqual(message.get_content().replace("\r\n", "\n"), expected_body)

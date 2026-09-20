@@ -2,7 +2,6 @@
 from html.parser import HTMLParser
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
 from urllib.parse import parse_qs, unquote, urlencode, urlsplit
 
 from fastapi import HTTPException
@@ -13,7 +12,6 @@ from app.impl.contest.workspace_scope import (
     ContestWorkspaceScope,
     ProblemHrefBuilder,
     build_contest_problem_href,
-    problem_section_for_route,
     resolve_problem_contest_scope,
 )
 from tests.contest_support import ContestActionBase
@@ -110,26 +108,16 @@ class TestContestWorkspaceScope(ContestActionBase):
         self.assertIsNotNone(scope)
         return scope
 
-    def test_missing_scope_has_no_contest_or_problem_lookup(self) -> None:
+    def test_missing_scope_leaves_problem_routes_unscoped(self) -> None:
         request = _app_request(
             "/problems/alice/sample/statement",
             route_path="/problems/{problem:path}/statement",
         )
-        with (
-            patch.object(
-                runtime.contest_service,
-                "contest_context",
-                side_effect=AssertionError("contest lookup is forbidden"),
-            ),
-            patch.object(
-                runtime.workspace_service,
-                "page_identity",
-                side_effect=AssertionError("problem lookup is forbidden"),
-            ),
-        ):
-            self.assertIsNone(
-                resolve_problem_contest_scope(request, "alice/sample", "alice")
-            )
+        self.assertIsNone(
+            resolve_problem_contest_scope(request, "alice/sample", "alice")
+        )
+        href = ProblemHrefBuilder(request, "alice/sample", None)("problem_statement")
+        self.assertEqual(href, "/problems/alice/sample/statement")
 
     def test_url_builder_encodes_path_and_query_exactly_once(self) -> None:
         request = _app_request("/")
@@ -195,21 +183,6 @@ class TestContestWorkspaceScope(ContestActionBase):
                 "problem_files",
                 query={"contest": "different"},
             )
-
-    def test_detail_section_mapping_and_unknown_fallback(self) -> None:
-        expectations = {
-            "/problems/{problem:path}/statement/pdf": "statement",
-            "/problems/{problem:path}/verification/start": "run",
-            "/problems/{problem:path}/artifacts/{verification_id}/{rel_path:path}": "run",
-            "/problems/{problem:path}/solutions/editor": "solutions",
-            "/problems/{problem:path}/files/download": "files",
-            "/problems/{problem:path}/exports/{export_id}/{filename}": "export",
-            "/problems/{problem:path}/merge/{preview_id}": "workspace",
-            "/problems/{problem:path}/unknown/internal": "statement",
-        }
-        for route_path, expected in expectations.items():
-            with self.subTest(route_path=route_path):
-                self.assertEqual(problem_section_for_route(route_path), expected)
 
     def test_scope_http_errors_are_distinct(self) -> None:
         contest_slug, contest_id, actor_user_id = self.create_contest("errors")
@@ -528,6 +501,7 @@ class TestContestWorkspaceScope(ContestActionBase):
         self.assertTrue((workspace / "notes/scoped + directory").is_dir())
 
         self.assertEqual(uploaded.status_code, 303, uploaded.text)
+        self.assertEqual((workspace / "config/scoped + payload.txt").read_bytes(), b"payload\n")
         uploaded_location = urlsplit(uploaded.headers["location"])
         self.assertEqual(uploaded_location.path, "/problems/alice/sample/files")
         self.assertEqual(

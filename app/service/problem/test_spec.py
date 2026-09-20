@@ -2,7 +2,7 @@ import json
 import shlex
 from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
-from typing import Literal, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 from app.main_constant import (
     SOLUTION_SOURCE_EXTENSIONS,
@@ -48,6 +48,18 @@ class TestSpecEntry(TypedDict):
     sample_output: str
     sample_output_validate: bool
     sample_json: SampleJson | None
+
+
+class TestSpecDocumentEntry(TypedDict):
+    """Authored JSON entry; omitted optional fields receive canonical defaults."""
+
+    id: str
+    kind: TestKind
+    sample: NotRequired[bool]
+    sample_input: NotRequired[str]
+    sample_output: NotRequired[str]
+    sample_output_validate: NotRequired[bool]
+    sample_json: NotRequired[SampleJson]
 
 
 def dumps_default_tests_spec() -> str:
@@ -489,11 +501,11 @@ def dumps_tests_spec(
         entries,
         sample_max_bytes=sample_max_bytes,
     )
-    dumped_tests: list[dict] = []
+    dumped_tests: list[TestSpecDocumentEntry] = []
     for idx, row in enumerate(normalized, start=1):
-        row_payload: dict[str, object] = {
-            "id": row.get("id"),
-            "kind": row.get("kind"),
+        row_payload: TestSpecDocumentEntry = {
+            "id": row["id"],
+            "kind": row["kind"],
         }
         if row.get("sample", False):
             row_payload["sample"] = True
@@ -514,14 +526,15 @@ def dumps_tests_spec(
             row_payload["sample_output"] = sample_output
         if not sample_output_validate:
             row_payload["sample_output_validate"] = False
-        if row.get("sample_json") is not None:
-            row_payload["sample_json"] = row["sample_json"]
+        sample_json = row["sample_json"]
+        if sample_json is not None:
+            row_payload["sample_json"] = sample_json
         normalized_row = normalize_tests_spec_entry(
             row_payload,
             index=idx,
             sample_max_bytes=sample_max_bytes,
         )
-        dumped_row: dict[str, object] = {
+        dumped_row: TestSpecDocumentEntry = {
             "id": normalized_row["id"],
             "kind": normalized_row["kind"],
         }

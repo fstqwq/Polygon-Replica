@@ -2,7 +2,7 @@
 
 from typing import TypedDict
 
-from app.db import DB, now_iso
+from app.db import DB, SQLValue, now_iso
 
 
 class ExportJobRow(TypedDict):
@@ -26,6 +26,11 @@ class ExportJobRow(TypedDict):
 class ProblemExportRow(TypedDict):
     id: int
     slug: str
+
+
+class ExportProblemRow(TypedDict):
+    id: str
+    problem_id: int
 
 
 class WorkspaceSnapshotContext(TypedDict):
@@ -111,7 +116,7 @@ class ExportStore:
         *,
         limit: int,
     ) -> list[ExportJobRow]:
-        params: list[object] = [
+        params: list[SQLValue] = [
             int(problem_id),
             *self._job_formats,
             max(1, int(limit)),
@@ -167,7 +172,7 @@ class ExportStore:
         problem_id: int,
         job_id: str,
     ) -> ExportJobRow | None:
-        params: list[object] = [
+        params: list[SQLValue] = [
             job_id,
             int(problem_id),
             *self._package_formats,
@@ -292,7 +297,7 @@ class ExportStore:
             "size_bytes": int(row["size_bytes"]),
         }
 
-    def export_problem(self, export_id: str) -> dict[str, object] | None:
+    def export_problem(self, export_id: str) -> ExportProblemRow | None:
         row = self.db.fetch_one(
             """SELECT id,problem_id FROM exports
                WHERE id=? AND export_type IN ("""
@@ -300,7 +305,7 @@ class ExportStore:
             + ")",
             [export_id, *self._package_formats],
         )
-        return None if row is None else dict(row)
+        return None if row is None else {"id": str(row["id"]), "problem_id": int(row["problem_id"])}
 
     def workspace_export_context(self, workspace_id: int) -> WorkspaceSnapshotContext | None:
         row = self.db.fetch_one(

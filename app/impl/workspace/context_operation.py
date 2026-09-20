@@ -6,6 +6,7 @@ from typing import Literal, TypedDict
 from fastapi import HTTPException
 from app.impl.runtime.dependency import runtime
 from app.impl.workspace.context_model import (
+    RevisionPairView,
     SolutionsComponentContext,
     workspace_published_revision_pair,
 )
@@ -24,6 +25,8 @@ from app.service.problem.query import (
     SolutionSourceRow,
 )
 from app.service.access.policy import access_role
+from app.service.access.model import AccessRole
+from app.service.contest.service import ContestOverview
 
 
 _STANDARD_CHECKER_CACHE_TTL_SEC = 2.0
@@ -33,11 +36,31 @@ _STANDARD_CHECKER_CACHE_NAMES: tuple[str, ...] = ()
 _STANDARD_CHECKER_CACHE_SET: frozenset[str] = frozenset()
 
 
-def user_participating_problems(user_id: int, limit: int) -> list[dict]:
+class ParticipatingProblemView(TypedDict):
+    slug: str
+    role: AccessRole
+    workspace_id: int | None
+    has_workspace: bool
+    workspace_path: str
+    branch: str
+    head_commit: str
+    head_short: str
+    dirty: bool
+    revision_local: int | None
+    revision_upstream: int | None
+    revision_pair: RevisionPairView
+    revision_highlight: bool
+    revision_upstream_higher: bool
+    revision_missing: bool
+    updated_at: str
+    last_updated_at: str
+
+
+def user_participating_problems(user_id: int, limit: int) -> list[ParticipatingProblemView]:
     uid = int(user_id)
     cap = max(1, int(limit))
     rows = runtime().workspace_service.participating_problem_rows(uid, limit=cap)
-    items: list[dict] = []
+    items: list[ParticipatingProblemView] = []
     for row in rows:
         role = access_role(row['role'])
         head = row['head_commit']
@@ -74,7 +97,7 @@ def normalize_contest_title_required(value: str) -> str:
         raise ValueError(f'contest title is too long (max {max_length})')
     return title
 
-def user_contests_overview(user_id: int, limit: int) -> list[dict]:
+def user_contests_overview(user_id: int, limit: int) -> list[ContestOverview]:
     uid = int(user_id)
     cap = max(1, int(limit))
     return runtime().contest_service.user_contests_overview(uid, limit=cap)
@@ -320,9 +343,6 @@ def _normalize_standard_checker_name(raw: str) -> str:
     if not _K.STANDARD_CHECKER_NAME_RE.fullmatch(value):
         raise ValueError('invalid standard checker name')
     return value
-
-def _canonical_standard_checker_name(raw: str) -> str:
-    return f'std::{_normalize_standard_checker_name(raw)}'
 
 def resolve_standard_checker_path(raw_name: str) -> tuple[str, Path]:
     checker_name = _normalize_standard_checker_name(raw_name)

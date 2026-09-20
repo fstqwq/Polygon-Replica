@@ -1,56 +1,44 @@
 import asyncio
+import gzip
+import tarfile
+import tempfile
+import threading
+import time
 import unittest
-from types import SimpleNamespace
+from pathlib import Path
 from unittest.mock import patch
 
-from app.db import SchemaRequirementsError
-from app.main import MaintenanceAdmissionMiddleware, runtime
+from starlette.requests import Request
+from starlette.types import Message, Receive, Scope, Send
+
+from app.config.registry import build_config_values
+from app.db import DB, SchemaRequirementsError
+from app.main import MaintenanceAdmissionMiddleware, app, runtime
 from app.route.maintenance_route import maintenance_page
 from app.service.platform.maintenance.admission import MaintenanceAdmissionGate
-
-
-class _AdmissionStub:
-    def __init__(self) -> None:
-        self.gate = MaintenanceAdmissionGate()
-
-    @property
-    def active_requests(self) -> int:
-        with self.gate.locked():
-            return self.gate.active_requests_locked()
-
-    @staticmethod
-    def is_exempt(_path: str) -> bool:
-        return False
-
-    def is_drain_control(self, path: str, method: str) -> bool:
-        return self.gate.is_drain_control(path, method)
-
-    def enter_control_request(self) -> tuple[bool, bool]:
-        return self.gate.enter_control_request()
-
-    def enter_request(self) -> bool:
-        return self.gate.enter_request()
-
-    def leave_request(self) -> None:
-        self.gate.leave_request()
+from app.service.platform.maintenance.coordinator import MaintenanceCoordinator
+from app.service.platform.fs.layout import StorageLayout
+from app.service.platform.source_backup import SourceBackupService
+from app.service.platform.worker_queue import WorkerQueueService
+from tests.isolated_db_helpers import isolated_db_execute
 
 
 class TestMaintenanceAdmissionMiddleware(unittest.IsolatedAsyncioTestCase):
     async def test_schema_gap_returns_actionable_raw_503_without_dispatch(self) -> None:
         downstream_called = False
-        sent: list[dict[str, object]] = []
+        sent: list[Message] = []
 
-        async def downstream(scope, receive, send) -> None:
+        async def downstream(scope: Scope, receive: Receive, send: Send) -> None:
             nonlocal downstream_called
             downstream_called = True
 
-        async def receive() -> dict[str, object]:
+        async def receive() -> Message:
             return {"type": "http.request", "body": b"", "more_body": False}
 
-        async def send(message: dict[str, object]) -> None:
+        async def send(message: Message) -> None:
             sent.append(message)
 
-        scope = {
+        scope: Scope = {
             "type": "http",
             "asgi": {"version": "3.0"},
             "http_version": "1.1",
@@ -84,100 +72,90 @@ class TestMaintenanceAdmissionMiddleware(unittest.IsolatedAsyncioTestCase):
         self.assertIn(b"missing indexes: idx_exports_materialization_created", body)
         self.assertNotIn(b"<html", body.lower())
 
-    def test_raw_maintenance_page_reports_running_success_and_failure(self) -> None:
-        running_state = {
-            "status": "running",
-            "operation": "artifact_cleanup",
-            "operation_id": "cleanup-running",
-            "stage": "filesystem",
-            "started_at": "2026-08-08T00:00:00Z",
-        }
-        with patch.object(
-            runtime,
-            "maintenance_service",
-            SimpleNamespace(snapshot=lambda: running_state),
-        ):
-            running = maintenance_page(SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(runtime=runtime))))
-        self.assertEqual(running.status_code, 200)
-        self.assertEqual(running.headers.get("refresh"), "2")
-        self.assertIn("text/plain", running.headers.get("content-type", ""))
-        self.assertIn(b"stage: filesystem", running.body)
+    def test_raw_maintenance_page_tracks_backup_progress_and_completion(self) -> None:
+        for fail_write in (False, True):
+            with self.subTest(fail_write=fail_write), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                layout = StorageLayout(
+                    database_path=root / "metadata.db",
+                    bare_root=root / "bare", workspace_root=root / "workspaces",
+                    contest_source_root=root / "contests", artifacts_root=root / "artifacts",
+                    cache_root=root / "cache", backup_root=root / "backups",
+                )
+                for source in (layout.bare_root, layout.workspace_root, layout.contest_source_root):
+                    source.mkdir()
+                (layout.workspace_root / "fixture.txt").write_bytes(b"durable source\n")
+                database = DB(layout.database_path, config_values=build_config_values())
+                try:
+                    isolated_db_execute(database, "CREATE TABLE fixture (value TEXT)")
+                finally:
+                    database.close_connections()
+                gate = MaintenanceAdmissionGate()
+                backup = SourceBackupService(layout)
+                coordinator = MaintenanceCoordinator(
+                    admission_gate=gate,
+                    cleanup_service=runtime.artifact_cleanup_service,
+                    source_backup_service=backup,
+                    worker_queue_service=WorkerQueueService(),
+                    judgehost_task_service=runtime.judgehost_task_service,
+                )
+                request = Request({"type": "http", "app": app})
+                entered = threading.Event()
+                release = threading.Event()
+                original_write = gzip.GzipFile.write
 
-        succeeded_state = {
-            "status": "succeeded",
-            "operation": "artifact_cleanup",
-        }
-        with patch.object(
-            runtime,
-            "maintenance_service",
-            SimpleNamespace(snapshot=lambda: succeeded_state),
-        ):
-            succeeded = maintenance_page(SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(runtime=runtime))))
-        self.assertEqual(succeeded.status_code, 303)
-        self.assertEqual(
-            succeeded.headers.get("location"),
-            "/admin?cleanup=success",
-        )
+                def write_archive(stream: gzip.GzipFile, data: bytes) -> int:
+                    entered.set()
+                    if not release.wait(timeout=5):
+                        raise TimeoutError("backup archive write was not released")
+                    if fail_write:
+                        raise OSError("fixture archive write failed")
+                    return original_write(stream, data)
 
-        failed_state = {
-            "status": "failed",
-            "operation": "artifact_cleanup",
-            "operation_id": "cleanup-failed",
-            "stage": "vacuum",
-            "error": "disk full",
-            "result": {"completed_stage": "runtime"},
-        }
-        with patch.object(
-            runtime,
-            "maintenance_service",
-            SimpleNamespace(snapshot=lambda: failed_state),
-        ):
-            failed = maintenance_page(SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(runtime=runtime))))
-        self.assertEqual(failed.status_code, 200)
-        self.assertIn(b"completed_stage: runtime", failed.body)
-        self.assertIn(b"disk full", failed.body)
-
-        backup_succeeded_state = {
-            "status": "succeeded",
-            "operation": "source_backup",
-        }
-        with patch.object(
-            runtime,
-            "maintenance_service",
-            SimpleNamespace(snapshot=lambda: backup_succeeded_state),
-        ):
-            backup_succeeded = maintenance_page(SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(runtime=runtime))))
-        self.assertEqual(backup_succeeded.status_code, 303)
-        self.assertEqual(
-            backup_succeeded.headers.get("location"),
-            "/admin?backup=success",
-        )
-
-        backup_failed_state = {
-            "status": "failed",
-            "operation": "source_backup",
-            "operation_id": "backup-failed",
-            "stage": "archive",
-            "error": "disk full",
-            "result": {"completed_stage": "preflight"},
-        }
-        with patch.object(
-            runtime,
-            "maintenance_service",
-            SimpleNamespace(snapshot=lambda: backup_failed_state),
-        ):
-            backup_failed = maintenance_page(SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(runtime=runtime))))
-        self.assertEqual(backup_failed.status_code, 200)
-        self.assertIn(b"source backup failed", backup_failed.body)
-        self.assertIn(b"completed_stage: preflight", backup_failed.body)
+                with (
+                    patch.object(runtime, "maintenance_service", coordinator),
+                    patch.object(gzip.GzipFile, "write", write_archive),
+                ):
+                    self.assertTrue(coordinator.begin_drain().accepted)
+                    started = coordinator.start_source_backup(actor_user_id=1)
+                    self.assertTrue(started.accepted, started)
+                    try:
+                        self.assertTrue(entered.wait(timeout=5))
+                        running = maintenance_page(request)
+                        self.assertEqual(running.status_code, 200)
+                        self.assertEqual(running.headers["refresh"], "2")
+                        self.assertIn("text/plain", running.headers["content-type"])
+                        self.assertIn(b"stage: archive", running.body)
+                        self.assertEqual(gate.state(), "closed")
+                    finally:
+                        release.set()
+                        deadline = time.monotonic() + 5
+                        while coordinator.snapshot()["status"] == "running" and time.monotonic() < deadline:
+                            time.sleep(0.01)
+                    completed = maintenance_page(request)
+                    self.assertEqual(gate.state(), "open")
+                    if fail_write:
+                        self.assertEqual(completed.status_code, 200)
+                        self.assertIn(b"completed_stage: database", completed.body)
+                        self.assertIn(b"fixture archive write failed", completed.body)
+                        self.assertIsNone(backup.latest_archive_path())
+                    else:
+                        self.assertEqual(completed.status_code, 303)
+                        self.assertEqual(completed.headers["location"], "/admin?backup=success")
+                        archive_path = backup.latest_archive_path()
+                        self.assertIsNotNone(archive_path)
+                        with tarfile.open(archive_path, "r:gz") as archive:
+                            source = archive.extractfile("workspaces/fixture.txt")
+                            self.assertIsNotNone(source)
+                            self.assertEqual(source.read(), b"durable source\n")
 
     async def test_request_remains_counted_through_body_and_background_work(self) -> None:
-        stub = _AdmissionStub()
+        gate = MaintenanceAdmissionGate()
         body_finished = asyncio.Event()
         finish_background = asyncio.Event()
-        sent: list[dict[str, object]] = []
+        sent: list[Message] = []
 
-        async def downstream(scope, receive, send) -> None:
+        async def downstream(scope: Scope, receive: Receive, send: Send) -> None:
             await send(
                 {
                     "type": "http.response.start",
@@ -195,13 +173,13 @@ class TestMaintenanceAdmissionMiddleware(unittest.IsolatedAsyncioTestCase):
             body_finished.set()
             await finish_background.wait()
 
-        async def receive() -> dict[str, object]:
+        async def receive() -> Message:
             return {"type": "http.request", "body": b"", "more_body": False}
 
-        async def send(message: dict[str, object]) -> None:
+        async def send(message: Message) -> None:
             sent.append(message)
 
-        scope = {
+        scope: Scope = {
             "type": "http",
             "asgi": {"version": "3.0"},
             "http_version": "1.1",
@@ -216,35 +194,39 @@ class TestMaintenanceAdmissionMiddleware(unittest.IsolatedAsyncioTestCase):
         }
         middleware = MaintenanceAdmissionMiddleware(downstream, runtime)
 
-        with patch.object(runtime, "maintenance_admission_gate", stub):
+        with patch.object(runtime, "maintenance_admission_gate", gate):
             request_task = asyncio.create_task(middleware(scope, receive, send))
-            await asyncio.wait_for(body_finished.wait(), timeout=2)
-            self.assertEqual(stub.active_requests, 1)
-            self.assertFalse(request_task.done())
-            finish_background.set()
-            await asyncio.wait_for(request_task, timeout=2)
+            try:
+                await asyncio.wait_for(body_finished.wait(), timeout=2)
+                with gate.locked():
+                    self.assertEqual(gate.active_requests_locked(), 1)
+                self.assertFalse(request_task.done())
+            finally:
+                finish_background.set()
+                await asyncio.wait_for(request_task, timeout=2)
 
-        self.assertEqual(stub.active_requests, 0)
+        with gate.locked():
+            self.assertEqual(gate.active_requests_locked(), 0)
         self.assertEqual(sent[-1]["type"], "http.response.body")
 
     async def test_closed_admission_returns_immediate_raw_503(self) -> None:
-        stub = _AdmissionStub()
-        with stub.gate.locked():
-            stub.gate.close_locked()
+        gate = MaintenanceAdmissionGate()
+        with gate.locked():
+            gate.close_locked()
         downstream_called = False
-        sent: list[dict[str, object]] = []
+        sent: list[Message] = []
 
-        async def downstream(scope, receive, send) -> None:
+        async def downstream(scope: Scope, receive: Receive, send: Send) -> None:
             nonlocal downstream_called
             downstream_called = True
 
-        async def receive() -> dict[str, object]:
+        async def receive() -> Message:
             return {"type": "http.request", "body": b"", "more_body": False}
 
-        async def send(message: dict[str, object]) -> None:
+        async def send(message: Message) -> None:
             sent.append(message)
 
-        scope = {
+        scope: Scope = {
             "type": "http",
             "asgi": {"version": "3.0"},
             "http_version": "1.1",
@@ -259,7 +241,7 @@ class TestMaintenanceAdmissionMiddleware(unittest.IsolatedAsyncioTestCase):
         }
         middleware = MaintenanceAdmissionMiddleware(downstream, runtime)
 
-        with patch.object(runtime, "maintenance_admission_gate", stub):
+        with patch.object(runtime, "maintenance_admission_gate", gate):
             await middleware(scope, receive, send)
 
         self.assertFalse(downstream_called)
@@ -270,37 +252,38 @@ class TestMaintenanceAdmissionMiddleware(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(b"<html", bytes(sent[-1]["body"]).lower())
 
     async def test_draining_keeps_admin_available_and_releases_its_count(self) -> None:
-        stub = _AdmissionStub()
-        with stub.gate.locked():
-            stub.gate.drain_locked()
+        gate = MaintenanceAdmissionGate()
+        with gate.locked():
+            gate.drain_locked()
         downstream_called = False
 
-        async def downstream(scope, receive, send) -> None:
+        async def downstream(scope: Scope, receive: Receive, send: Send) -> None:
             nonlocal downstream_called
             downstream_called = True
             await send({"type": "http.response.start", "status": 200, "headers": []})
             await send({"type": "http.response.body", "body": b"admin"})
 
-        async def receive() -> dict[str, object]:
+        async def receive() -> Message:
             return {"type": "http.request", "body": b"", "more_body": False}
 
-        sent: list[dict[str, object]] = []
+        sent: list[Message] = []
 
-        async def send(message: dict[str, object]) -> None:
+        async def send(message: Message) -> None:
             sent.append(message)
 
-        scope = {
+        scope: Scope = {
             "type": "http",
             "path": "/admin/judgehosts",
             "method": "GET",
         }
         middleware = MaintenanceAdmissionMiddleware(downstream, runtime)
-        with patch.object(runtime, "maintenance_admission_gate", stub):
+        with patch.object(runtime, "maintenance_admission_gate", gate):
             await middleware(scope, receive, send)
 
         self.assertTrue(downstream_called)
         self.assertEqual(sent[0]["status"], 200)
-        self.assertEqual(stub.gate.active_requests_locked(), 0)
+        with gate.locked():
+            self.assertEqual(gate.active_requests_locked(), 0)
 
 
 if __name__ == "__main__":

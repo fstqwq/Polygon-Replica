@@ -35,6 +35,12 @@ class WorkspaceRecentVerificationRow(TypedDict):
     created_at: str
 
 
+class WorkspaceOwnerRow(TypedDict):
+    id: int
+    path: str
+    username: str
+
+
 class UserContestOverviewRow(TypedDict):
     id: int
     slug: str
@@ -547,7 +553,7 @@ class WorkspaceDiskStore:
             return ""
         return str(row["status"] or "")
 
-    def workspace_rows_for_problem(self, problem_id: int) -> list[dict[str, object]]:
+    def workspace_rows_for_problem(self, problem_id: int) -> list[WorkspaceOwnerRow]:
         rows = self.db.fetch_all(
             """
             SELECT w.id,w.path,u.username
@@ -558,7 +564,7 @@ class WorkspaceDiskStore:
             """,
             [int(problem_id)],
         )
-        items: list[dict[str, object]] = []
+        items: list[WorkspaceOwnerRow] = []
         for row in rows:
             items.append(
                 {

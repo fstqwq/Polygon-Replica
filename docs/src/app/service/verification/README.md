@@ -45,6 +45,18 @@ The temporary lookup contains only results encountered by the operation and is
 released when it returns. Returned rows own their result objects; subsequent
 reads obtain a fresh database snapshot.
 
+Public task, persisted-detail, testcase-metadata, and sanity rows have explicit
+types in `types.py`. SQLite rows remain inside persistence helpers; snapshot and
+UI consumers receive typed values, including optional artifact ownership and late
+diagnostics. Persisted diagnostic JSON is validated before it becomes an immutable
+snapshot. Scalar and list fields in activation metadata are narrowed at the write
+boundary, before inserting detail rows.
+
+Execution plans carry typed problem limits, source descriptors and testcase
+metadata. Program summaries and Agent runtime summaries also have fixed field
+contracts. Historical JSON summaries, compiler diagnostic extension fields and
+Judgehost request payloads keep validation at their decode or service boundary.
+
 Browser testcase fragments use a separate scoped read model. In one SQLite read
 transaction, the service reads the parent record, invokes authorization, then
 materializes persisted metadata and selected task evidence. A program selection

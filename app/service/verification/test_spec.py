@@ -1,36 +1,35 @@
 import shlex
+from collections.abc import Callable
 from pathlib import Path
+from typing import Literal, NotRequired, TypedDict
 
 from app.service.problem.test_spec import (
     TestSpecEntry,
-    load_tests_spec,
     payload_rel_path_for_test,
     resolve_generator_source,
 )
 from app.service.problem.source_file import resolve_source
 
 
-def load_tests_spec_entries(
-    snapshot: Path,
-    *,
-    document_max_bytes: int,
-    sample_max_bytes: int,
-) -> list[TestSpecEntry]:
-    spec_path = snapshot / "tests" / "spec.json"
-    try:
-        return load_tests_spec(
-            spec_path,
-            document_max_bytes=document_max_bytes,
-            sample_max_bytes=sample_max_bytes,
-        )
-    except ValueError as exc:
-        raise RuntimeError(f"invalid tests/spec.json: {exc}") from exc
+class VerificationRuntimeTest(TypedDict):
+    index: int
+    id: str
+    kind: Literal["manual", "gen"]
+    sample: bool
+    sample_input: str
+    sample_output: str
+    sample_output_validate: bool
+    source_rel: str
+    input: NotRequired[str]
+    cmd: NotRequired[str]
+    command_payload: NotRequired[str]
+    payload_rel: NotRequired[str]
+    target_name: NotRequired[str]
 
 
 def tests_spec_payload_text(
     snapshot: Path,
     row: TestSpecEntry,
-    index: int,
 ) -> tuple[str, str]:
     test_id = row["id"]
     kind = row["kind"]
@@ -48,9 +47,9 @@ def prepare_tests_spec_runtime(
     tests_spec_entries: list[TestSpecEntry],
     *,
     generator_sources: list[str],
-    parse_gen_command_tokens_fn,
-) -> tuple[list[dict], list[tuple[str, Path]]]:
-    runtime_entries: list[dict] = []
+    parse_gen_command_tokens_fn: Callable[[str], list[str]],
+) -> tuple[list[VerificationRuntimeTest], list[tuple[str, Path]]]:
+    runtime_entries: list[VerificationRuntimeTest] = []
     generator_targets: list[tuple[str, Path]] = []
     by_source_rel: dict[str, str] = {}
     selected_sources = tuple(generator_sources)
@@ -61,7 +60,7 @@ def prepare_tests_spec_runtime(
         sample_input = row.get("sample_input", "")
         sample_output = row.get("sample_output", "")
         sample_output_validate = row.get("sample_output_validate", True)
-        payload_rel, payload = tests_spec_payload_text(snapshot, row, index)
+        payload_rel, payload = tests_spec_payload_text(snapshot, row)
         if kind == "manual":
             runtime_entries.append(
                 {

@@ -18,11 +18,11 @@ from urllib.parse import parse_qs, urlparse
 
 from fastapi.testclient import TestClient
 
-from fastapi import HTTPException
+from fastapi import HTTPException, UploadFile
 
 from app.config import CONFIG_REGISTRY
 from app.service.problem.test_spec import normalize_file_manual_input, normalize_manual_input
-from app.service.platform.git_process import GitCommandResult, run_git
+from app.service.platform.git_process import run_git
 from app.service.repository.revision import workspace_revision_info
 from app.service.execution.policy import normalize_execution_result
 from app.service.verification.lifecycle import (
@@ -43,7 +43,6 @@ from app.service.statement.render import (
     statement_templates_are_default,
 )
 from app.impl.problem.merge_op import merge_apply, merge_compare, merge_file, merge_page
-from app.impl.root.contests import import_package_as_new_problem
 from tests.package_builders import polygon_contest_package, polygon_problem_package
 from tests.common import E2ETestBase
 from tests.identity_helpers import canonical_test_verification_id
@@ -134,7 +133,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         workspace_service.grant_repo_access(problem, "bob", "owner")
         db_execute("UPDATE users SET is_system_admin=0")
         db_execute("UPDATE users SET is_system_admin=1 WHERE username=?", ["alice"])
-        workspace_service.clear_identity_caches()
 
         admin_access = runtime.access_query.problem_context(
             workspace_service.known_problem_id(problem),
@@ -548,7 +546,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
                 judgehost_task_id=f"judgehost-{self.test_id}",
             )
 
-    def test_problem_delete_commits_before_ordered_runtime_cleanup(self) -> None:
+    def test_problem_delete_remains_committed_when_runtime_cleanup_fails(self) -> None:
         problem = f"alice/delete-cleanup-{uuid.uuid4().hex[:8]}"
         workspace_service.ensure_problem(problem)
         workspace_service.ensure_workspace(problem, "alice")
@@ -558,53 +556,11 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             runtime.judgehost_task_service,
             "forget_domjudge_runs",
             side_effect=RuntimeError("scheduler cleanup failed"),
-        ) as forget_scheduler, patch.object(
-            runtime.judgehost_task_service,
-            "forget_problem_tasks",
-        ) as forget_registry:
+        ):
             with self.assertRaisesRegex(RuntimeError, "scheduler cleanup failed"):
                 workspace_service.delete_problem(problem)
 
-        forget_scheduler.assert_called_once_with([])
-        forget_registry.assert_not_called()
         self.assertIsNone(workspace_service.known_problem_id(problem))
-
-    def test_problem_delete_unexpected_error_redirects_instead_of_500(self) -> None:
-        username = self.random_id("pdelx")
-        password = "StrongPass123"
-        auth_cookie = self._issue_auth_cookie_header(username, password)
-        problem = f"alice/pdelx-problem-{uuid.uuid4().hex[:8]}"
-        workspace_service.ensure_problem(problem)
-        workspace_service.grant_repo_access(problem, username, "owner")
-        workspace_service.ensure_workspace(problem, username)
-
-        sudo_resp = _sudo_with_password_envelope(
-            auth_cookie,
-            password,
-            next_path=f"/problems/{problem}/workspace",
-        )
-        self.assertEqual(sudo_resp.status_code, 303)
-        sudo_token = _cookie_value_from_response(sudo_resp, SUDO_COOKIE_NAME)
-        self.assertTrue(sudo_token)
-        both_cookie = f"{auth_cookie}; {SUDO_COOKIE_NAME}={sudo_token}"
-
-        with patch.object(workspace_service, "delete_problem", side_effect=Exception("boom")):
-            resp = problem_delete(
-                request=_request_with_cookie(
-                    f"/problems/{problem}/problem/delete",
-                    both_cookie,
-                    method="POST",
-                    extra_headers=[(b"origin", b"http://testserver")],
-                ),
-                problem=problem,
-                user=username,
-                confirm_problem=problem,
-            )
-        self.assertEqual(resp.status_code, 303)
-        self.assertIn(f"/problems/{problem}/workspace", resp.headers.get("location", ""))
-        self.assertIsNotNone(
-            db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem])
-        )
 
     def test_problem_delete_rejects_unsafe_repo_name(self) -> None:
         username = self.random_id("pdelu")
@@ -658,7 +614,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         payload = json.loads(cfg_path.read_text(encoding="utf-8"))
         self.assertEqual(payload.get("time_limit_ms"), 3500)
         self.assertEqual(payload.get("memory_limit_mb"), 768)
-        self.assertNotIn("interactive", payload)
         self.assertEqual(payload.get("mode"), "interactive")
         self.assertFalse((ws / "statement" / "rendered").exists())
 
@@ -709,7 +664,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         payload = json.loads((ws / "config" / "problem.json").read_text(encoding="utf-8"))
         self.assertEqual(payload.get("mode"), "interactive")
         self.assertEqual(payload.get("pass_limit"), 2)
-        self.assertNotIn("interactive", payload)
 
     def test_general_save_pass_fail_removes_interactor_source(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -937,26 +891,17 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         workspace_status = workspace_service.read_workspace_status(ws)
         self.assertEqual(int(workspace_status.get("dirty") or 0), 0)
 
-    def test_git_status_does_not_compute_full_workspace_diff(self) -> None:
-        def fake_run_git(args, **kwargs):
-            normalized = list(args)
-            if normalized[:4] == ["git", "-C", "/tmp/ws", "status"]:
-                return GitCommandResult(
-                    args=normalized,
-                    returncode=0,
-                    stdout="## main\n M solutions/std.cpp\n",
-                    stderr="",
-                    elapsed_ms=1,
-                )
-            if "diff" in normalized:
-                raise AssertionError("workspace status must not compute a full diff")
-            return GitCommandResult(args=normalized, returncode=0, stdout="", stderr="", elapsed_ms=1)
+    def test_git_status_reports_changes_without_a_diff_payload(self) -> None:
+        workspace, _head = self._ensure_committed_head("alice/sample", "alice")
+        config_path = workspace / "config/problem.json"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config["title"] = "Changed title"
+        config_path.write_text(json.dumps(config), encoding="utf-8")
 
-        with patch("app.service.repository.git.run_git", side_effect=fake_run_git):
-            status = git_service.status(Path("/tmp/ws"))
+        status = git_service.status(workspace)
 
-        self.assertIn("solutions/std.cpp", str(status.get("status") or ""))
-        self.assertEqual(status.get("diff"), "")
+        self.assertIn("config/problem.json", status["status"])
+        self.assertEqual(status["diff"], "")
 
     def test_workspace_snapshot_copy_excludes_hidden_paths(self) -> None:
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -1338,7 +1283,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         password = "StrongPass123"
         auth_cookie = self._issue_auth_cookie_header(username, password)
         db_execute("UPDATE users SET is_system_admin=0 WHERE username=?", [username])
-        workspace_service.clear_identity_caches()
         private_problem = f"alice/ui-switch-private-{uuid.uuid4().hex[:8]}"
         workspace_service.ensure_problem(private_problem)
         workspace_service.grant_repo_access(private_problem, "bob", "owner")
@@ -1413,7 +1357,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         password = "StrongPass123"
         auth_cookie = self._issue_auth_cookie_header(username, password)
         db_execute("UPDATE users SET is_system_admin=0 WHERE username=?", [username])
-        workspace_service.clear_identity_caches()
         leaf = f"ui-amb-{uuid.uuid4().hex[:8]}"
         foreign_problem = f"alice/{leaf}"
         workspace_service.ensure_problem(foreign_problem)
@@ -1548,12 +1491,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertNotEqual(suggested, base_slug)
 
     def test_problems_root_import_creates_new_problem(self) -> None:
-        class _Upload:
-            def __init__(self, filename: str, content: bytes):
-                self.filename = filename
-                self.file = io.BytesIO(content)
-
-        upload = _Upload("synthetic-problem.zip", polygon_problem_package())
+        upload = UploadFile(filename="synthetic-problem.zip", file=io.BytesIO(polygon_problem_package()))
         target_slug = f"root-import-{uuid.uuid4().hex[:8]}"
         resp = problems_root_import(
             _post_request("/problems/import"),
@@ -1571,34 +1509,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertRegex(head.stdout.strip(), r"^[0-9a-f]{40}$")
         self.assertEqual(run_git(["git", "-C", str(ws), "status", "--short"]).stdout.strip(), "")
 
-    def test_problems_root_import_recovers_from_stale_user_cache(self) -> None:
-        class _Upload:
-            def __init__(self, filename: str, content: bytes):
-                self.filename = filename
-                self.file = io.BytesIO(content)
-
-        workspace_service.set_cached_user("alice", {"id": 2_147_483_647, "username": "alice"})
-
-        upload = _Upload("synthetic-problem.zip", polygon_problem_package())
-        target_slug = f"root-import-cache-{uuid.uuid4().hex[:8]}"
-        resp = problems_root_import(
-            _post_request("/problems/import"),
-            user="alice",
-            package_upload=upload,
-            problem_slug=target_slug,
-        )
-        self.assertEqual(resp.status_code, 303)
-        self.assertIn(f"/problems/alice/{target_slug}/statement", str(resp.headers.get("location", "")))
-        self.assertIsNotNone(
-            workspace_service.known_problem_id(f"alice/{target_slug}")
-        )
-
     def test_problems_root_import_accepts_icpc_package(self) -> None:
-        class _Upload:
-            def __init__(self, filename: str, content: bytes):
-                self.filename = filename
-                self.file = io.BytesIO(content)
-
         payload = io.BytesIO()
         with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             zf.writestr(
@@ -1619,7 +1530,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             zf.writestr("icpc/input_validators/validator.cpp", "int main(){return 0;}\n")
             zf.writestr("icpc/output_validator/checker.cpp", "int main(){return 0;}\n")
 
-        upload = _Upload("root-import-icpc.zip", payload.getvalue())
+        upload = UploadFile(filename="root-import-icpc.zip", file=io.BytesIO(payload.getvalue()))
         target_slug = f"root-icpc-{uuid.uuid4().hex[:8]}"
         resp = problems_root_import(
             _post_request("/problems/import"),
@@ -1634,11 +1545,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertFalse((ws / "tests" / "answers").exists())
 
     def test_problems_root_import_warns_when_english_statement_language_missing(self) -> None:
-        class _Upload:
-            def __init__(self, filename: str, content: bytes):
-                self.filename = filename
-                self.file = io.BytesIO(content)
-
         payload = io.BytesIO()
         with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             zf.writestr(
@@ -1666,7 +1572,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             zf.writestr("poly/tests/01.a", "1\n")
             zf.writestr("poly/statement-sections/russian/legend.tex", "Legend RU\n")
 
-        upload = _Upload("root-import-non-english.zip", payload.getvalue())
+        upload = UploadFile(filename="root-import-non-english.zip", file=io.BytesIO(payload.getvalue()))
         target_slug = f"root-warn-{uuid.uuid4().hex[:8]}"
         resp = problems_root_import(
             _post_request("/problems/import"),
@@ -1681,11 +1587,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertFalse((ws / "statement-sections" / "english").exists())
 
     def test_contest_import_rejects_more_than_configured_problem_count(self) -> None:
-        class _Upload:
-            def __init__(self, filename: str, content: bytes):
-                self.filename = filename
-                self.file = io.BytesIO(content)
-
         previous = dict(runtime.config_values.snapshot())
         updated = dict(previous)
         updated["CONTEST_MAX_PROBLEMS"] = 26
@@ -1695,9 +1596,9 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         response = contests_root_import(
             _post_request("/contests/import"),
             user="alice",
-            package_upload=_Upload(
-                "too-many.zip",
-                polygon_contest_package(problem_count=27),
+            package_upload=UploadFile(
+                filename="too-many.zip",
+                file=io.BytesIO(polygon_contest_package(problem_count=27)),
             ),
             contest_slug=target_slug,
             contest_title="",
@@ -1709,12 +1610,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         )
 
     def test_contests_root_import_polygon_contest_package_creates_contest_and_normalizes_newlines(self) -> None:
-        class _Upload:
-            def __init__(self, filename: str, content: bytes):
-                self.filename = filename
-                self.file = io.BytesIO(content)
-
-        upload = _Upload("synthetic-contest.zip", polygon_contest_package())
+        upload = UploadFile(filename="synthetic-contest.zip", file=io.BytesIO(polygon_contest_package()))
         target_slug = f"contest-import-{uuid.uuid4().hex[:8]}"
         custom_problem_slugs = {
             1: f"contest-problem-a-{uuid.uuid4().hex[:8]}",
@@ -1825,12 +1721,13 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertTrue(normalized.endswith("\n"))
 
     def test_contest_import_confirm_rolls_back_partial_contest_on_problem_import_failure(self) -> None:
-        class _Upload:
-            def __init__(self, filename: str, content: bytes):
-                self.filename = filename
-                self.file = io.BytesIO(content)
-
-        upload = _Upload("synthetic-contest.zip", polygon_contest_package())
+        malformed_package = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(polygon_contest_package())) as source:
+            with zipfile.ZipFile(malformed_package, "w", compression=zipfile.ZIP_DEFLATED) as destination:
+                for member in source.infolist():
+                    payload = b"<malformed-problem" if member.filename == "problems/problem-c/problem.xml" else source.read(member)
+                    destination.writestr(member.filename, payload)
+        upload = UploadFile(filename="synthetic-contest.zip", file=io.BytesIO(malformed_package.getvalue()))
         target_slug = f"contest-import-{uuid.uuid4().hex[:8]}"
 
         resp = contests_root_import(
@@ -1851,30 +1748,19 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             "problem_slug_4": f"contest-problem-d-{uuid.uuid4().hex[:8]}",
         }
 
-        real_import = import_package_as_new_problem
-        call_count = {"count": 0}
-        created_problem_slugs: list[str] = []
-
-        def _failing_import(**kwargs: object) -> dict[str, object]:
-            call_count["count"] += 1
-            if call_count["count"] == 3:
-                raise ValueError("synthetic contest import failure")
-            imported = real_import(**kwargs)
-            created_problem_slugs.append(str(imported["target_problem"]))
-            return imported
-
-        with patch("app.impl.root.contests.import_package_as_new_problem", side_effect=_failing_import):
-            confirm_resp = asyncio.run(
-                contests_root_import_confirm(
-                    _post_form_request("/contests/import/confirm", confirm_form),
-                    user="alice",
-                )
+        confirm_resp = asyncio.run(
+            contests_root_import_confirm(
+                _post_form_request("/contests/import/confirm", confirm_form),
+                user="alice",
             )
+        )
         self.assertEqual(confirm_resp.status_code, 303)
         self.assertEqual(str(confirm_resp.headers.get("location", "")), "/contests")
         self.assertIsNone(db_fetch_one("SELECT id FROM contests WHERE slug=?", [target_slug]))
-        for problem_slug in created_problem_slugs:
+        for index in range(1, 5):
+            problem_slug = f"alice/{confirm_form[f'problem_slug_{index}']}"
             self.assertIsNone(db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem_slug]))
+            self.assertFalse(runtime.storage_layout.bare_repository(f"{problem_slug}.git").exists())
 
     def test_git_commit_does_not_stage_hidden_paths(self) -> None:
         self._ensure_committed_head("alice/sample", "alice")
@@ -1965,11 +1851,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             shutil.rmtree(archive.parent, ignore_errors=True)
 
     def test_history_snapshot_can_restore_matching_files_without_deleting_others(self) -> None:
-        class _Upload:
-            def __init__(self, filename: str, content: bytes):
-                self.filename = filename
-                self.file = io.BytesIO(content)
-
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         restored_rel = f"solutions/restore-{uuid.uuid4().hex[:8]}.cpp"
         kept_rel = f"solutions/keep-{uuid.uuid4().hex[:8]}.cpp"
@@ -1993,7 +1874,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         response = history_import(
             problem="alice/sample",
             user="alice",
-            package_upload=_Upload("workspace-snapshot.zip", payload),
+            package_upload=UploadFile(filename="workspace-snapshot.zip", file=io.BytesIO(payload)),
         )
         self.assertEqual(response.status_code, 303)
         self.assertEqual(

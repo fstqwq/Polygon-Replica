@@ -2,6 +2,7 @@ import secrets
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Literal, NotRequired, TypedDict
 
 from app.db import DB, now_iso
 from app.service.access.model import AgentGeneralScope, AgentScope
@@ -12,6 +13,7 @@ from app.service.access.policy import (
 )
 from app.service.access.query import AccessQuery
 from app.service.agent.store import (
+    AgentAccessRequestRow,
     AgentProblemGrantRow,
     AgentSessionRow,
     AgentStore,
@@ -24,6 +26,77 @@ _DEFAULT_REGISTER_TTL_SEC = 900
 _DEFAULT_REQUEST_TTL_SEC = 900
 _ALLOWED_APPROVAL_TTLS = {3600, 86400, 604800, 2592000}
 _AGENT_CREDENTIAL_PREFIX = "polygon_agent_"
+
+
+class AgentRegistrationCode(TypedDict):
+    code: str
+    expires_at: str
+    expires_in: int
+
+
+class AgentRegistrationResult(TypedDict):
+    agent_session_id: str
+    user: str
+    server_name: str
+    credential: str
+
+
+class AgentAccessRequestResult(TypedDict):
+    request_id: str
+    approve_path: str
+    expires_in: int
+    requested_scope: AgentScope
+
+
+class AgentAccessResolution(TypedDict):
+    status: str
+    grant_id: NotRequired[str]
+    granted_scope: NotRequired[str]
+    expires_at: NotRequired[str | None]
+
+
+class AgentAccessPollResult(AgentAccessResolution):
+    problem: str
+    requested_scope: str
+
+
+class AgentGrantStatus(TypedDict):
+    grant_id: str
+    problem: str
+    scope: AgentScope
+    effective_scope: AgentGeneralScope
+    created_at: str
+    expires_at: str | None
+
+
+class AgentGrantSettings(AgentGrantStatus):
+    revoked_at: str | None
+    status: Literal["revoked", "expired", "active"]
+
+
+class AgentSessionStatus(TypedDict):
+    status: Literal["ok"]
+    agent_session_id: str
+    user: str
+    server_name: str
+    last_seen_at: str
+    general_scope: AgentGeneralScope
+    problem_grants: list[AgentGrantStatus]
+
+
+class AgentCreatedProblem(TypedDict):
+    problem: str
+
+
+class AgentSessionSettings(TypedDict):
+    id: str
+    agent_name: str
+    desktop_id: str
+    init_ts: str
+    created_at: str
+    last_seen_at: str
+    general_scope: AgentGeneralScope
+    grants: list[AgentGrantSettings]
 
 
 @dataclass(frozen=True)
@@ -297,7 +370,7 @@ class AgentService:
         *,
         user_id: int,
         ttl_sec: int = _DEFAULT_REGISTER_TTL_SEC,
-    ) -> dict[str, object]:
+    ) -> AgentRegistrationCode:
         safe_ttl = max(60, min(3600, int(ttl_sec)))
         code = f"reg-{secrets.token_hex(8)}"
         expires_at = self._format_expiry(safe_ttl)
@@ -322,7 +395,7 @@ class AgentService:
         desktop_id: str,
         init_ts: str,
         existing_session_id: str,
-    ) -> dict[str, object]:
+    ) -> AgentRegistrationResult:
         now_text = now_iso()
         claimed = self._store.claim_registration_code(
             str(code or "").strip(),
@@ -392,7 +465,7 @@ class AgentService:
         problem: str,
         requested_scope: str,
         ttl_sec: int = _DEFAULT_REQUEST_TTL_SEC,
-    ) -> dict[str, object]:
+    ) -> AgentAccessRequestResult:
         safe_problem = self._require_problem_slug(problem)
         safe_scope = self.access_query.canonical_agent_scope(requested_scope)
         try:
@@ -458,7 +531,7 @@ class AgentService:
         *,
         session: AgentSessionIdentity,
         request_id: str,
-    ) -> dict[str, object]:
+    ) -> AgentAccessPollResult:
         row = self._store.access_request_by_id(request_id)
         if row is None or row["agent_session_id"] != session.agent_session_id:
             raise LookupError("access request not found")
@@ -474,7 +547,7 @@ class AgentService:
             row = self._store.access_request_by_id(request_id)
             if row is None:
                 raise LookupError("access request not found")
-        result: dict[str, object] = {
+        result: AgentAccessPollResult = {
             "status": row["status"],
             "problem": row["problem_slug"],
             "requested_scope": row["requested_scope"],
@@ -492,8 +565,8 @@ class AgentService:
     def _status_grants(
         self,
         session: AgentSessionIdentity,
-    ) -> list[dict[str, object]]:
-        result: list[dict[str, object]] = []
+    ) -> list[AgentGrantStatus]:
+        result: list[AgentGrantStatus] = []
         for grant in self._active_grants(session.agent_session_id):
             effective = self.access_query.effective_agent_scope(
                 declared_scope=grant["scope"],
@@ -517,11 +590,12 @@ class AgentService:
         *,
         session_id: str,
         user_id: int,
-    ) -> list[dict[str, object]]:
+    ) -> list[AgentGrantSettings]:
         now_value = datetime.now(timezone.utc)
-        result: list[dict[str, object]] = []
+        result: list[AgentGrantSettings] = []
         for grant in self._store.list_session_grants(session_id):
             expires_at = self._parse_iso_utc(grant["expires_at"])
+            status: Literal["revoked", "expired", "active"]
             if grant["revoked_at"]:
                 status = "revoked"
             elif grant["expires_at"] and (
@@ -555,7 +629,7 @@ class AgentService:
         self,
         *,
         session: AgentSessionIdentity,
-    ) -> dict[str, object]:
+    ) -> AgentSessionStatus:
         row = self._store.session_by_id(session.agent_session_id)
         if row is None:
             raise PermissionError("agent session is invalid")
@@ -574,7 +648,7 @@ class AgentService:
         *,
         session: AgentSessionIdentity,
         problem: str,
-    ) -> dict[str, object]:
+    ) -> AgentCreatedProblem:
         if session.general_scope == "none" or not self.access_query.agent_scope_allows(
             session.general_scope,
             "commit",
@@ -607,7 +681,7 @@ class AgentService:
         decision: str,
         scope: str,
         ttl: str,
-    ) -> dict[str, object]:
+    ) -> AgentAccessResolution:
         row = self._store.access_request_by_id(request_id)
         if row is None or row["user_id"] != int(actor_user_id):
             raise LookupError("access request not found")
@@ -680,8 +754,8 @@ class AgentService:
             "expires_at": approved["grant_expires_at"] or None,
         }
 
-    def list_user_sessions(self, *, user_id: int) -> list[dict[str, object]]:
-        items: list[dict[str, object]] = []
+    def list_user_sessions(self, *, user_id: int) -> list[AgentSessionSettings]:
+        items: list[AgentSessionSettings] = []
         for session_row in self._store.list_user_sessions(int(user_id)):
             items.append(
                 {
@@ -721,11 +795,11 @@ class AgentService:
         *,
         actor_user_id: int,
         request_id: str,
-    ) -> dict[str, object]:
+    ) -> AgentAccessRequestRow:
         row = self._store.access_request_by_id(request_id)
         if row is None or row["user_id"] != int(actor_user_id):
             raise LookupError("access request not found")
-        return dict(row)
+        return row
 
     def revoke_grant(self, *, actor_user_id: int, grant_id: str) -> None:
         updated = self._store.revoke_grant(

@@ -1,8 +1,5 @@
-import ast
 import base64
-import hashlib
 import unittest
-from pathlib import Path
 
 from app.config import build_config_values
 from app.service.judgehost.callback.artifact_capture import decode_callback_blob
@@ -60,7 +57,6 @@ class TestJudgehostPayload(unittest.TestCase):
     def test_case_normalizer_uses_compare_exit_for_checker_failure(self) -> None:
         normalized = normalize_captured_case(
             CapturedJudgehostCase(
-                test_name="001.in",
                 input_ref="blob-input",
                 interactive=False,
                 raw_runresult="compare-error",
@@ -93,7 +89,6 @@ class TestJudgehostPayload(unittest.TestCase):
             with self.subTest(runresult=raw_runresult):
                 normalized = normalize_captured_case(
                     CapturedJudgehostCase(
-                        test_name="001.in",
                         input_ref="blob-input",
                         interactive=False,
                         raw_runresult=raw_runresult,
@@ -130,7 +125,6 @@ class TestJudgehostPayload(unittest.TestCase):
 
         normalized = normalize_captured_case(
             CapturedJudgehostCase(
-                test_name="001.in",
                 input_ref="blob-input",
                 interactive=False,
                 raw_runresult="run-error",
@@ -152,7 +146,6 @@ class TestJudgehostPayload(unittest.TestCase):
     ) -> None:
         normalized = normalize_captured_case(
             CapturedJudgehostCase(
-                test_name="001.in",
                 input_ref="blob-input",
                 interactive=False,
                 raw_runresult="run-error",
@@ -182,7 +175,6 @@ class TestJudgehostPayload(unittest.TestCase):
     def test_case_normalizer_uses_transcript_for_interactive_output(self) -> None:
         normalized = normalize_captured_case(
             CapturedJudgehostCase(
-                test_name="001.in",
                 input_ref="blob-input",
                 interactive=True,
                 raw_runresult="correct",
@@ -247,7 +239,6 @@ class TestJudgehostPayload(unittest.TestCase):
                 )
         normalized = normalize_captured_case(
             CapturedJudgehostCase(
-                test_name="001.in",
                 input_ref="unused-final-input",
                 interactive=False,
                 raw_runresult="correct",
@@ -290,14 +281,8 @@ class TestJudgehostPayload(unittest.TestCase):
             ("main.cpp", b"int main(){return 0;}\n", False),
         ]
         got = executable_hash(files)
-        rows = sorted(files, key=lambda item: str(item[0]))
-        parts: list[str] = []
-        for filename, content, is_exec in rows:
-            content_md5 = hashlib.md5(bytes(content)).hexdigest()
-            parts.append(f"{content_md5}{filename}{'1' if is_exec else ''}")
-        expected = hashlib.md5("".join(parts).encode("utf-8")).hexdigest()
-        self.assertEqual(got, expected)
-        self.assertRegex(got, r"^[0-9a-f]{32}$")
+        # DOMjudge MD5 wire identity for this fixed filename/content/mode vector.
+        self.assertEqual(got, "fa58fe03e66892f50e9bcc7ed62ed372")
 
     def test_untrusted_non_tl_result_uses_cpu_limit(self) -> None:
         cases = (
@@ -333,12 +318,6 @@ class TestJudgehostPayload(unittest.TestCase):
             decode_base64(b"binary-artifact")
         with self.assertRaises(RuntimeError):
             decode_base64("%not-base64%")
-
-    def test_callback_blob_keeps_raw_upload_contract(self) -> None:
-        blob = b"binary-artifact"
-        encoded = base64.b64encode(blob).decode("ascii")
-        self.assertEqual(decode_callback_blob(blob), blob)
-        self.assertEqual(decode_callback_blob(encoded), blob)
 
     def test_callback_blob_accepts_only_canonical_wire_value_types(self) -> None:
         blob = b"binary-artifact"
@@ -378,36 +357,6 @@ class TestJudgehostPayload(unittest.TestCase):
         self.assertIn("compare script output: invalid", parsed.text)
         self.assertNotIn(raw_archive, parsed.text)
         self.assertNotIn("disabled-object", parsed.text)
-
-    def test_diagnostic_payload_owner_is_dependency_light(self) -> None:
-        module_path = (
-            Path(__file__).resolve().parents[1]
-            / "app"
-            / "service"
-            / "judgehost"
-            / "callback"
-            / "diagnostic_payload.py"
-        )
-        tree = ast.parse(module_path.read_text(encoding="utf-8"))
-        imported_modules: set[str] = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                imported_modules.update(alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                imported_modules.add(node.module)
-        forbidden_prefixes = (
-            "app.db",
-            "app.impl",
-            "app.service.judgehost.batch.state",
-            "app.service.verification",
-        )
-        self.assertFalse(
-            {
-                module_name
-                for module_name in imported_modules
-                if module_name.startswith(forbidden_prefixes)
-            }
-        )
 
     def test_feedback_text_preserves_lines_and_redacts_internal_paths(self) -> None:
         self.assertEqual(

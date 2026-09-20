@@ -6,19 +6,6 @@ from app.service.platform.runtime_blob_store import PayloadFile
 from app.service.verification.artifact import artifact_virtual_path
 
 
-def artifact_version_number(artifact_id: str | None) -> int | None:
-    raw = "" if artifact_id is None else artifact_id
-    if not raw:
-        return None
-    tail = raw.rsplit("-", 1)[-1]
-    if tail.isdigit():
-        try:
-            return int(tail)
-        except Exception:
-            return None
-    return None
-
-
 def verification_artifact_file(verification_id: str, rel: str) -> tuple[PayloadFile, str] | None:
     safe_verification_id = str(verification_id or "").strip()
     rel_norm = rel.lstrip("/")
@@ -38,17 +25,6 @@ def verification_blob_virtual_rel(token: str, *, filename: str = "") -> str:
     if not safe_token:
         return ""
     return artifact_virtual_path(safe_token)
-
-
-def workspace_verification_id_for_run(
-    ctx: ProblemPageContext,
-    run_id: str,
-) -> str:
-    return runtime().verification_service.workspace_verification_id_for_run(
-        int(ctx["problem"]["id"]),
-        int(ctx["workspace"]["id"]),
-        run_id,
-    )
 
 
 def assert_workspace_artifact_access(

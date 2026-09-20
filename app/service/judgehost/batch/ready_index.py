@@ -18,9 +18,6 @@ class ReadyBatchIndex:
     def first(self) -> ReadyBatchKey | None:
         return None if not self._keys else self._keys[0]
 
-    def key_for(self, batch_id: int) -> ReadyBatchKey | None:
-        return self._key_by_batch_id.get(int(batch_id))
-
     def update(self, batch_id: int, key: ReadyBatchKey | None) -> bool:
         numeric_id = int(batch_id)
         previous = self._key_by_batch_id.get(numeric_id)

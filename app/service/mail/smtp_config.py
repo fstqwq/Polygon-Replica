@@ -65,7 +65,7 @@ def _reject_control_text(value: str, *, label: str) -> str:
     return value
 
 
-def _normalize_host(value: object) -> str:
+def _normalize_host(value: str) -> str:
     host = _reject_control_text(form_text(value).strip(), label="SMTP host")
     if len(host) > _MAX_HOST_LEN:
         raise ValueError("SMTP host is too long")
@@ -74,21 +74,21 @@ def _normalize_host(value: object) -> str:
     return host
 
 
-def _normalize_username(value: object) -> str:
+def _normalize_username(value: str) -> str:
     username = _reject_control_text(form_text(value).strip(), label="SMTP username")
     if len(username) > _MAX_USERNAME_LEN:
         raise ValueError("SMTP username is too long")
     return username
 
 
-def _normalize_password(value: object) -> str:
+def _normalize_password(value: str) -> str:
     password = _reject_control_text(form_text(value), label="SMTP password")
     if len(password.encode("utf-8")) > _MAX_PASSWORD_BYTES:
         raise ValueError("SMTP password is too long")
     return password
 
 
-def _normalize_port(value: object) -> int:
+def _normalize_port(value: str) -> int:
     raw = form_text(value).strip()
     try:
         port = int(raw)
@@ -99,7 +99,7 @@ def _normalize_port(value: object) -> int:
     return port
 
 
-def _normalize_recipient(value: object) -> str:
+def _normalize_recipient(value: str) -> str:
     raw = _reject_control_text(form_text(value).strip(), label="test recipient")
     _, addr = parseaddr(raw)
     if not addr or "@" not in addr:
@@ -129,10 +129,10 @@ class SmtpConfigService:
     def save_from_form(
         self,
         *,
-        host: object,
-        port: object,
-        username: object,
-        password: object,
+        host: str,
+        port: str,
+        username: str,
+        password: str,
         clear_password: bool,
         actor_user_id: int,
     ) -> None:
@@ -183,7 +183,7 @@ class SmtpConfigService:
     def send_registration_email(
         self,
         *,
-        recipient: object,
+        recipient: str,
         verification_code: str,
         expires_in_sec: int,
     ) -> None:
@@ -215,7 +215,7 @@ class SmtpConfigService:
         except Exception as exc:
             raise ValueError(f"registration email failed: {exc}") from exc
 
-    def send_test_email(self, *, recipient: object) -> None:
+    def send_test_email(self, *, recipient: str) -> None:
         safe_recipient = _normalize_recipient(recipient)
         credentials = self.credentials()
         sender = (

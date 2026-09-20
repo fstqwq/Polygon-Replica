@@ -1,6 +1,8 @@
 import json
 import sqlite3
+from collections.abc import Mapping
 
+from app.config.model import ConfigValue
 from app.db import DB
 
 
@@ -13,8 +15,8 @@ class SystemConfigStore:
         conn: sqlite3.Connection,
         *,
         key: str,
-        value: object,
-        default: object,
+        value: ConfigValue,
+        default: ConfigValue,
         actor_user_id: int,
         updated_at: str,
     ) -> None:
@@ -42,8 +44,8 @@ class SystemConfigStore:
         self,
         *,
         keys: list[str],
-        values: dict[str, object],
-        defaults: dict[str, object],
+        values: Mapping[str, ConfigValue],
+        defaults: Mapping[str, ConfigValue],
         actor_user_id: int,
         updated_at: str,
     ) -> None:

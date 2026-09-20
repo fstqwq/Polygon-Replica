@@ -1,34 +1,32 @@
-
-import hashlib
 import tempfile
-import unittest
+from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
 
 from app.config import build_config_values
 from app.service.execution.model import (
     CAPTURE_COMPLETE,
     CAPTURE_METADATA_ONLY,
     ExecutionPassResult,
-    ExecutionResult,
     ExecutionUsage,
     PassArtifacts,
 )
-from app.service.platform.runtime_blob_store import PayloadFile
+from app.service.execution.policy import normalize_execution_result
+from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.problem.runtime_config import (
     default_problem_config,
     dumps_problem_config,
     problem_config_limits,
 )
-from app.service.problem.test_spec import dumps_tests_spec
+from app.service.problem.test_spec import TestSpecDocumentEntry, dumps_tests_spec
 from app.service.statement.examples import (
     StatementExamplesBundle,
     StatementExamplesProducer,
 )
-from app.service.verification.detail_read_model import VerificationDetailReadModel
-from app.service.verification.service import VerificationService
-from app.service.verification.task_store import VerificationTaskRow
-from app.service.verification.types import VerificationStatus, VerificationTaskStatus
+from app.service.verification.lifecycle import SanityFinish, verification_task_id
+from app.service.verification.task_completion import TaskCompletion
+from app.service.verification.types import VerificationTaskStatus, VerificationTestMetadata
+from tests.identity_helpers import canonical_test_verification_id
+from tests.verification_service_fixture import VerificationServiceTestBase
 
 
 _CONFIG_VALUES = build_config_values()
@@ -48,97 +46,62 @@ def _eof(milliseconds: int, direction: bytes) -> bytes:
     return f"[{seconds:3d}.{millis:03d}s/0]".encode("ascii") + direction
 
 
+@dataclass
+class _SampleTask:
+    test_name: str
+    passes: tuple[ExecutionPassResult, ...]
+
+
+@dataclass
 class _VerificationEvidence:
-    def __init__(
+    blobs: RuntimeBlobStore
+    mode: str
+    tests_meta_rows: list[VerificationTestMetadata]
+    tasks: list[_SampleTask]
+
+    def put(self, payload: bytes) -> str:
+        return self.blobs.put_bytes(payload).blob_ref
+
+    def pass_result(
         self,
-        root: Path,
+        number: int,
         *,
-        mode: str,
-        tests_meta_rows: list[dict[str, object]],
-        tasks: list[VerificationTaskRow],
-    ) -> None:
-        self.root = root
-        self.descriptors: dict[str, PayloadFile] = {}
-        self.read_model = cast(
-            VerificationDetailReadModel,
-            {
-                "record": {
-                    "status": VerificationStatus.OK,
-                    "fail_reason": "",
-                },
-                "details": {"tests_meta_rows": tests_meta_rows},
-                "tasks": tasks,
-                "mode": mode,
-            },
+        input_ref: str = "",
+        output_ref: str = "",
+        transcript_ref: str = "",
+        capture_status: str = CAPTURE_COMPLETE,
+    ) -> ExecutionPassResult:
+        empty_ref = self.put(b"")
+        captured = capture_status == CAPTURE_COMPLETE
+        return ExecutionPassResult(
+            number=number,
+            capture_status=capture_status,
+            runresult="correct",
+            verdict="OK",
+            score_text="",
+            answer_correct=True,
+            usage=ExecutionUsage(),
+            feedback="",
+            artifacts=PassArtifacts(
+                input_ref=(input_ref or empty_ref) if captured else "",
+                output_ref=output_ref,
+                transcript_ref=transcript_ref,
+                stderr_ref=empty_ref if captured else "",
+                system_ref=empty_ref if captured else "",
+                judge_message_ref=empty_ref if captured else "",
+                team_message_ref=empty_ref if captured else "",
+                metadata_ref=empty_ref,
+                compare_metadata_ref=empty_ref,
+            ),
         )
 
-    def put(self, name: str, payload: bytes) -> str:
-        path = self.root / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(payload)
-        digest = hashlib.sha256(payload).hexdigest()
-        ref = f"blob://sha256/{digest}"
-        self.descriptors[ref] = PayloadFile(
-            path=path,
-            size=len(payload),
-            identity=digest,
-            blob_ref=ref,
-        )
-        return ref
 
-    def verification_detail_read_model(
-        self, verification_id: str
-    ) -> VerificationDetailReadModel | None:
-        return self.read_model if verification_id == "ver-examples" else None
-
-    def artifact_descriptor(self, token: str) -> PayloadFile | None:
-        return self.descriptors.get(token)
-
-
-def _pass(
-    number: int,
-    *,
-    input_ref: str = "",
-    output_ref: str = "",
-    transcript_ref: str = "",
-    capture_status: str = CAPTURE_COMPLETE,
-) -> ExecutionPassResult:
-    return ExecutionPassResult(
-        number=number,
-        capture_status=capture_status,
-        runresult="correct",
-        verdict="OK",
-        score_text="",
-        answer_correct=True,
-        usage=ExecutionUsage(),
-        feedback="",
-        artifacts=PassArtifacts(
-            input_ref=input_ref,
-            output_ref=output_ref,
-            transcript_ref=transcript_ref,
-        ),
-    )
-
-
-def _task(test_name: str, passes: tuple[ExecutionPassResult, ...]) -> VerificationTaskRow:
-    return cast(
-        VerificationTaskRow,
-        {
-            "task_kind": "main-correct",
-            "program_id": "accepted",
-            "test_name": test_name,
-            "status": VerificationTaskStatus.DONE,
-            "result": ExecutionResult(passes=passes),
-        },
-    )
-
-
-class TestStatementExamplesProducer(unittest.TestCase):
+class TestStatementExamplesProducer(VerificationServiceTestBase):
     def setUp(self) -> None:
+        super().setUp()
         self.temporary = tempfile.TemporaryDirectory(prefix="statement-examples-")
         self.addCleanup(self.temporary.cleanup)
         self.workspace = Path(self.temporary.name) / "workspace"
-        self.artifacts = Path(self.temporary.name) / "artifacts"
         (self.workspace / "config").mkdir(parents=True)
         (self.workspace / "tests" / "manual").mkdir(parents=True)
         (self.workspace / "config" / "problem.json").write_text(
@@ -149,7 +112,7 @@ class TestStatementExamplesProducer(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def _write_spec(self, rows: list[dict[str, object]]) -> None:
+    def _write_spec(self, rows: list[TestSpecDocumentEntry]) -> None:
         (self.workspace / "tests" / "spec.json").write_text(
             dumps_tests_spec(
                 rows,
@@ -159,20 +122,51 @@ class TestStatementExamplesProducer(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def _producer(self, evidence: _VerificationEvidence) -> StatementExamplesProducer:
-        return StatementExamplesProducer(cast(VerificationService, evidence))
+    def _persist_evidence(self, evidence: _VerificationEvidence) -> str:
+        verification_id = canonical_test_verification_id(self.random_id("examples"))
+        self._insert_verification_row(verification_id)
+        detail = {
+            "mode": evidence.mode,
+            "pass_limit": max(len(task.passes) for task in evidence.tasks),
+            "tests_meta_rows": evidence.tests_meta_rows,
+            "sanity_status": "pending",
+        }
+        self._activate_graph(
+            verification_id,
+            tasks=[{
+                "id": verification_task_id(verification_id, "accepted", task.test_name),
+                "task_kind": "main-correct",
+                "source_path": "solutions/accepted.cpp",
+                "program_id": "accepted",
+                "test_name": task.test_name,
+                "expected_behavior": "accepted",
+            } for task in evidence.tasks],
+            edges=[], detail=detail,
+        )
+        self.verification_task_store.commit_task_completions(tuple(
+            TaskCompletion(
+                task_id=verification_task_id(verification_id, "accepted", task.test_name),
+                status=VerificationTaskStatus.DONE, run_id="", judgehost_task_id="",
+                result=normalize_execution_result(passes=task.passes, verdict="OK", answer_correct=True),
+            ) for task in evidence.tasks
+        ))
+        self.verification_service.finish_sanity(SanityFinish.build(
+            verification_id, detail={**detail, "sanity_status": "passed"}
+        ))
+        return verification_id
 
     def _produce(
         self,
         evidence: _VerificationEvidence,
         *,
         verification_id: str = "ver-examples",
+        sample_max_bytes: int = _SAMPLE_MAX_BYTES,
     ) -> StatementExamplesBundle:
-        return self._producer(evidence).produce(
+        return StatementExamplesProducer(self.verification_service).produce(
             self.workspace,
-            verification_id=verification_id,
+            verification_id=self._persist_evidence(evidence) if verification_id else "",
             tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
-            statement_sample_max_bytes=_SAMPLE_MAX_BYTES,
+            statement_sample_max_bytes=sample_max_bytes,
             problem_limits=_PROBLEM_LIMITS,
         )
 
@@ -194,7 +188,7 @@ class TestStatementExamplesProducer(unittest.TestCase):
             ]
         )
         evidence = _VerificationEvidence(
-            self.artifacts,
+            self.runtime_blob_store,
             mode="pass-fail",
             tests_meta_rows=[],
             tasks=[],
@@ -242,7 +236,7 @@ class TestStatementExamplesProducer(unittest.TestCase):
             ]
         )
         evidence = _VerificationEvidence(
-            self.artifacts,
+            self.runtime_blob_store,
             mode="interactive",
             tests_meta_rows=[],
             tasks=[],
@@ -261,7 +255,7 @@ class TestStatementExamplesProducer(unittest.TestCase):
         self._write_spec([{"id": "901", "kind": "manual", "sample": True}])
         source_before = (self.workspace / "tests" / "spec.json").read_bytes()
         evidence = _VerificationEvidence(
-            self.artifacts,
+            self.runtime_blob_store,
             mode="pass-fail",
             tests_meta_rows=[
                 {
@@ -273,17 +267,17 @@ class TestStatementExamplesProducer(unittest.TestCase):
             ],
             tasks=[],
         )
-        pass_one = _pass(
+        pass_one = evidence.pass_result(
             1,
-            input_ref=evidence.put("p1.in", b"first input\n"),
-            output_ref=evidence.put("p1.out", b"first output\n"),
+            input_ref=evidence.put(b"first input\n"),
+            output_ref=evidence.put(b"first output\n"),
         )
-        pass_two = _pass(
+        pass_two = evidence.pass_result(
             2,
-            input_ref=evidence.put("p2.in", b"second input\n"),
-            output_ref=evidence.put("p2.out", b"second output\n"),
+            input_ref=evidence.put(b"second input\n"),
+            output_ref=evidence.put(b"second output\n"),
         )
-        evidence.read_model["tasks"] = [_task("001.in", (pass_one, pass_two))]
+        evidence.tasks = [_SampleTask("001.in", (pass_one, pass_two))]
 
         bundle = self._produce(evidence)
 
@@ -319,7 +313,7 @@ class TestStatementExamplesProducer(unittest.TestCase):
             ]
         )
         evidence = _VerificationEvidence(
-            self.artifacts,
+            self.runtime_blob_store,
             mode="pass-fail",
             tests_meta_rows=[],
             tasks=[],
@@ -345,7 +339,7 @@ class TestStatementExamplesProducer(unittest.TestCase):
             ]
         )
         evidence = _VerificationEvidence(
-            self.artifacts,
+            self.runtime_blob_store,
             mode="pass-fail",
             tests_meta_rows=[
                 {
@@ -358,18 +352,18 @@ class TestStatementExamplesProducer(unittest.TestCase):
             tasks=[],
         )
         passes = (
-            _pass(
+            evidence.pass_result(
                 1,
-                input_ref=evidence.put("p1.in", b"captured one\n"),
-                output_ref=evidence.put("p1.out", b"intermediate\n"),
+                input_ref=evidence.put(b"captured one\n"),
+                output_ref=evidence.put(b"intermediate\n"),
             ),
-            _pass(
+            evidence.pass_result(
                 2,
-                input_ref=evidence.put("p2.in", b"captured two\n"),
-                output_ref=evidence.put("p2.out", b"final output\n"),
+                input_ref=evidence.put(b"captured two\n"),
+                output_ref=evidence.put(b"final output\n"),
             ),
         )
-        evidence.read_model["tasks"] = [_task("001.in", passes)]
+        evidence.tasks = [_SampleTask("001.in", passes)]
 
         bundle = self._produce(evidence)
 
@@ -392,7 +386,7 @@ class TestStatementExamplesProducer(unittest.TestCase):
             + _eof(30, b"]")
         )
         evidence = _VerificationEvidence(
-            self.artifacts,
+            self.runtime_blob_store,
             mode="interactive",
             tests_meta_rows=[
                 {
@@ -404,19 +398,17 @@ class TestStatementExamplesProducer(unittest.TestCase):
             ],
             tasks=[],
         )
-        transcript_ref = evidence.put("pass-1.transcript", transcript)
-        second_transcript_ref = evidence.put(
-            "pass-2.transcript",
-            _frame(40, b">", b"second question\n")
+        transcript_ref = evidence.put(transcript)
+        second_transcript_ref = evidence.put(_frame(40, b">", b"second question\n")
             + _frame(44, b"<", b"second answer\n")
             + _eof(50, b"]"),
         )
-        evidence.read_model["tasks"] = [
-            _task(
+        evidence.tasks = [
+            _SampleTask(
                 "001.in",
                 (
-                    _pass(1, transcript_ref=transcript_ref),
-                    _pass(2, transcript_ref=second_transcript_ref),
+                    evidence.pass_result(1, transcript_ref=transcript_ref),
+                    evidence.pass_result(2, transcript_ref=second_transcript_ref),
                 ),
             )
         ]
@@ -464,7 +456,7 @@ class TestStatementExamplesProducer(unittest.TestCase):
             ]
         )
         evidence = _VerificationEvidence(
-            self.artifacts,
+            self.runtime_blob_store,
             mode="pass-fail",
             tests_meta_rows=[
                 {"index": 1, "test_name": "001.in", "id": "901", "sample": True},
@@ -473,32 +465,32 @@ class TestStatementExamplesProducer(unittest.TestCase):
             tasks=[],
         )
         first = (
-            _pass(
+            evidence.pass_result(
                 1,
-                input_ref=evidence.put("first-1.in", b"ignored first input\n"),
-                output_ref=evidence.put("first-1.out", b"first intermediate\n"),
+                input_ref=evidence.put(b"ignored first input\n"),
+                output_ref=evidence.put(b"first intermediate\n"),
             ),
-            _pass(
+            evidence.pass_result(
                 2,
-                input_ref=evidence.put("first-2.in", b"ignored second input\n"),
-                output_ref=evidence.put("first-2.out", b"shown first output\n"),
+                input_ref=evidence.put(b"ignored second input\n"),
+                output_ref=evidence.put(b"shown first output\n"),
             ),
         )
         second = (
-            _pass(
+            evidence.pass_result(
                 1,
-                input_ref=evidence.put("second-1.in", b"second pass one input\n"),
-                output_ref=evidence.put("second-1.out", b"second pass one output\n"),
+                input_ref=evidence.put(b"second pass one input\n"),
+                output_ref=evidence.put(b"second pass one output\n"),
             ),
-            _pass(
+            evidence.pass_result(
                 2,
-                input_ref=evidence.put("second-2.in", b"second pass two input\n"),
-                output_ref=evidence.put("second-2.out", b"second pass two output\n"),
+                input_ref=evidence.put(b"second pass two input\n"),
+                output_ref=evidence.put(b"second pass two output\n"),
             ),
         )
-        evidence.read_model["tasks"] = [
-            _task("001.in", first),
-            _task("002.in", second),
+        evidence.tasks = [
+            _SampleTask("001.in", first),
+            _SampleTask("002.in", second),
         ]
 
         bundle = self._produce(evidence)
@@ -529,7 +521,7 @@ class TestStatementExamplesProducer(unittest.TestCase):
             ]
         )
         evidence = _VerificationEvidence(
-            self.artifacts,
+            self.runtime_blob_store,
             mode="interactive",
             tests_meta_rows=[
                 {
@@ -541,8 +533,8 @@ class TestStatementExamplesProducer(unittest.TestCase):
             ],
             tasks=[],
         )
-        evidence.read_model["tasks"] = [
-            _task("001.in", (_pass(1, transcript_ref=evidence.put("t", b"")),))
+        evidence.tasks = [
+            _SampleTask("001.in", (evidence.pass_result(1, transcript_ref=evidence.put(b"")),))
         ]
 
         with self.assertRaisesRegex(RuntimeError, "requires sample_output"):
@@ -551,7 +543,7 @@ class TestStatementExamplesProducer(unittest.TestCase):
     def test_incomplete_capture_and_malformed_transcript_fail_explicitly(self) -> None:
         self._write_spec([{"id": "901", "kind": "manual", "sample": True}])
         evidence = _VerificationEvidence(
-            self.artifacts,
+            self.runtime_blob_store,
             mode="pass-fail",
             tests_meta_rows=[
                 {
@@ -563,20 +555,20 @@ class TestStatementExamplesProducer(unittest.TestCase):
             ],
             tasks=[],
         )
-        evidence.read_model["tasks"] = [
-            _task(
+        evidence.tasks = [
+            _SampleTask(
                 "001.in",
-                (_pass(1, capture_status=CAPTURE_METADATA_ONLY),),
+                (evidence.pass_result(1, capture_status=CAPTURE_METADATA_ONLY),),
             )
         ]
         with self.assertRaisesRegex(RuntimeError, "not fully captured"):
             self._produce(evidence)
 
-        evidence.read_model["mode"] = "interactive"
-        evidence.read_model["tasks"] = [
-            _task(
+        evidence.mode = "interactive"
+        evidence.tasks = [
+            _SampleTask(
                 "001.in",
-                (_pass(1, transcript_ref=evidence.put("malformed", b"not runpipe")),),
+                (evidence.pass_result(1, transcript_ref=evidence.put(b"not runpipe")),),
             )
         ]
         with self.assertRaisesRegex(RuntimeError, "transcript is malformed"):
@@ -585,21 +577,25 @@ class TestStatementExamplesProducer(unittest.TestCase):
     def test_missing_blob_and_total_resource_limit_fail_explicitly(self) -> None:
         self._write_spec([{"id": "901", "kind": "manual", "sample": True}])
         evidence = _VerificationEvidence(
-            self.artifacts,
+            self.runtime_blob_store,
             mode="pass-fail",
             tests_meta_rows=[
                 {"index": 1, "test_name": "001.in", "id": "901", "sample": True}
             ],
             tasks=[],
         )
-        evidence.read_model["tasks"] = [
-            _task(
+        missing_input = evidence.put(b"unavailable input\n")
+        descriptor = self.runtime_blob_store.descriptor(missing_input)
+        assert descriptor is not None
+        descriptor.path.unlink()
+        evidence.tasks = [
+            _SampleTask(
                 "001.in",
                 (
-                    _pass(
+                    evidence.pass_result(
                         1,
-                        input_ref="blob://sha256/missing",
-                        output_ref=evidence.put("available.out", b"output\n"),
+                        input_ref=missing_input,
+                        output_ref=evidence.put(b"output\n"),
                     ),
                 ),
             )
@@ -607,27 +603,17 @@ class TestStatementExamplesProducer(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "pass 1 input is unavailable"):
             self._produce(evidence)
 
-        evidence.read_model["tasks"] = [
-            _task(
+        evidence.tasks = [
+            _SampleTask(
                 "001.in",
                 (
-                    _pass(
+                    evidence.pass_result(
                         1,
-                        input_ref=evidence.put("large.in", b"12345678"),
-                        output_ref=evidence.put("large.out", b"abcdefgh"),
+                        input_ref=evidence.put(b"12345678"),
+                        output_ref=evidence.put(b"abcdefgh"),
                     ),
                 ),
             )
         ]
         with self.assertRaisesRegex(RuntimeError, "resources exceed byte limit"):
-            self._producer(evidence).produce(
-                self.workspace,
-                verification_id="ver-examples",
-                tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
-                statement_sample_max_bytes=12,
-                problem_limits=_PROBLEM_LIMITS,
-            )
-
-
-if __name__ == "__main__":
-    unittest.main()
+            self._produce(evidence, sample_max_bytes=12)

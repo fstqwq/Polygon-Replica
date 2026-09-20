@@ -1,6 +1,7 @@
 import re
 from pathlib import Path
-from typing import cast
+from collections.abc import Sequence
+from typing import NotRequired, TypedDict, cast
 from urllib.parse import urlencode
 
 from fastapi import File, Form, HTTPException, Request, UploadFile
@@ -17,8 +18,8 @@ from app.impl.runtime.dependency import runtime
 from app.impl.workspace.context_job import start_export_job, start_verification_job
 from app.impl.workspace.context_job_helper import allocate_verification_id
 from app.impl.workspace.context_run_detail import normalize_run_test_name_token
-from app.impl.workspace.problem_config import read_problem_config
 from app.impl.workspace.run_view_detail import build_run_detail_context
+from app.impl.workspace.run_view_model import RunCellView, RunColumn, RunDetailContext
 from app.service.agent.service import (
     AgentGeneralPermissionRequired,
     AgentPermissionRequired,
@@ -35,8 +36,31 @@ from app.service.importing.upload import spool_upload
 from app.service.platform.git_process import run_git
 from app.service.problem_package.workflow import build_full_verification_targets
 from app.service.repository.workspace import WorkspaceContext
-from app.service.verification.task_store import VerificationTaskRow
 from app.service.workspace.mutation import WorkspaceMutationConflict
+
+
+class AgentExportStatus(TypedDict):
+    job_id: str
+    status: str
+    created_at: str
+    started_at: str
+    finished_at: str
+    format: str
+    phase: str
+    source_commit: str
+    native_package_id: str
+    error: str
+    download_path: NotRequired[str]
+    filename: NotRequired[str]
+
+
+class AgentWorkspaceFile(TypedDict):
+    path: str
+    is_dir: bool
+    size_bytes: NotRequired[int]
+    media_type: NotRequired[str]
+    encoding: NotRequired[str]
+    content: NotRequired[str]
 
 
 def _json_body(payload: object, *, status_code: int = 200) -> JSONResponse:
@@ -359,7 +383,7 @@ async def agent_verification_status(request: Request, verification_id: str):
     ):
         return json_error_response("verification not found", status_code=404)
     runtime_summary = runtime().verification_service.verification_runtime_summary_from_tasks(
-        cast(list[VerificationTaskRow], snapshot["tasks"])
+        snapshot["tasks"]
     )
     return _json_body(
         {
@@ -428,7 +452,7 @@ def _role_from_task_kind(task_kind: str) -> str:
     return str(task_kind or "") or "-"
 
 
-def _column_keys(columns: list[dict[str, object]]) -> list[str]:
+def _column_keys(columns: Sequence[RunColumn]) -> list[str]:
     title_counts: dict[str, int] = {}
     for col in columns:
         title = str(col.get("title") or col.get("source") or col.get("id") or "column")
@@ -453,9 +477,9 @@ def _append_scalar(lines: list[str], key: str, value: object, *, indent: int = 0
     lines.append(f"{' ' * indent}{_yaml_key(key)}: {_yaml_scalar(value)}")
 
 
-def _append_diagnostics(lines: list[str], detail_ctx: dict[str, object], *, indent: int = 0) -> None:
+def _append_diagnostics(lines: list[str], detail_ctx: RunDetailContext, *, indent: int = 0) -> None:
     diagnostics: list[str] = []
-    for col in cast(list[dict[str, object]], detail_ctx.get("detail_columns") or []):
+    for col in detail_ctx.get("detail_columns", []):
         title = str(col.get("title") or col.get("source") or "")
         error = str(col.get("error_display") or col.get("error") or "").strip()
         match_reason = str(col.get("match_reason") or "").strip()
@@ -463,7 +487,7 @@ def _append_diagnostics(lines: list[str], detail_ctx: dict[str, object], *, inde
             diagnostics.append(f"{title}: {error}" if title else error)
         elif match_reason:
             diagnostics.append(f"{title}: {match_reason}" if title else match_reason)
-        for item in cast(list[dict[str, object]], col.get("compile_diagnostics") or []):
+        for item in col.get("compile_diagnostics", []):
             message = str(item.get("message") or "").strip()
             if not message:
                 continue
@@ -471,21 +495,21 @@ def _append_diagnostics(lines: list[str], detail_ctx: dict[str, object], *, inde
             level = str(item.get("level_upper") or item.get("level") or "").strip()
             body = ": ".join(part for part in (location, level, message) if part)
             diagnostics.append(f"{title}: {body}" if title and body else body)
-    verification_logs = cast(dict[str, object], detail_ctx.get("detail_verification_logs") or {})
+    verification_logs = detail_ctx["detail_verification_logs"]
     verification_error = str(verification_logs.get("error_display") or verification_logs.get("error") or "").strip()
     if verification_error:
         diagnostics.append(f"Verification: {verification_error}")
-    for item in cast(list[dict[str, object]], verification_logs.get("diagnostics") or []):
+    for item in verification_logs.get("diagnostics", []):
         message = str(item.get("message") or "").strip()
         if not message:
             continue
         location = str(item.get("location_display") or "").strip()
         level = str(item.get("level_upper") or item.get("level") or "").strip()
         diagnostics.append("Verification: " + ": ".join(part for part in (location, level, message) if part))
-    sanity = cast(dict[str, object], detail_ctx.get("detail_sanity") or {})
-    for task in cast(list[dict[str, object]], sanity.get("attention_tasks") or []):
+    sanity = detail_ctx["detail_sanity"]
+    for task in sanity.get("attention_tasks", []):
         task_status = str(task.get("status") or "")
-        messages = cast(list[dict[str, object]], task.get("messages") or [])
+        messages = task.get("messages", [])
         for raw_message in messages:
             severity = str(raw_message.get("severity") or task_status)
             if severity not in {"warning", "failed"}:
@@ -512,8 +536,8 @@ def _canonical_int(value: object, *, field: str) -> int:
     return value
 
 
-def _append_sanity(lines: list[str], detail_ctx: dict[str, object]) -> None:
-    sanity = cast(dict[str, object], detail_ctx.get("detail_sanity") or {})
+def _append_sanity(lines: list[str], detail_ctx: RunDetailContext) -> None:
+    sanity = detail_ctx["detail_sanity"]
     if not bool(sanity.get("available")):
         return
     lines.append("")
@@ -534,7 +558,7 @@ def _append_sanity(lines: list[str], detail_ctx: dict[str, object]) -> None:
         _canonical_int(sanity.get("task_count", 0), field="sanity task_count"),
         indent=2,
     )
-    tasks = cast(list[dict[str, object]], sanity.get("tasks") or [])
+    tasks = sanity.get("tasks", [])
     if not tasks:
         lines.append("  checks: []")
         return
@@ -546,16 +570,16 @@ def _append_sanity(lines: list[str], detail_ctx: dict[str, object]) -> None:
         detail = str(task.get("detail") or "")
         if detail:
             _append_scalar(lines, "detail", detail, indent=6)
-        messages = cast(list[dict[str, object]], task.get("messages") or [])
+        messages = task.get("messages", [])
         if messages:
             lines.append("      messages:")
             for message in messages:
                 lines.append(f"        - {_yaml_scalar(message.get('message') or '')}")
 
 
-def _render_full_verification_yaml(verification_id: str, detail_ctx: dict[str, object]) -> str:
-    columns = cast(list[dict[str, object]], detail_ctx.get("detail_columns") or [])
-    rows = cast(list[dict[str, object]], detail_ctx.get("detail_rows") or [])
+def _render_full_verification_yaml(verification_id: str, detail_ctx: RunDetailContext) -> str:
+    columns = detail_ctx.get("detail_columns", [])
+    rows = detail_ctx.get("detail_rows", [])
     keys = _column_keys(columns)
     lines: list[str] = []
     _append_scalar(lines, "verification", verification_id)
@@ -565,7 +589,7 @@ def _render_full_verification_yaml(verification_id: str, detail_ctx: dict[str, o
         _append_scalar(lines, "reason", fail_reason)
     lines.append("")
     lines.append("tasks:")
-    task_counts = cast(dict[str, object], detail_ctx.get("detail_task_counts") or {})
+    task_counts = detail_ctx["detail_task_counts"]
     for key in ("pending", "queued", "running", "done", "failed", "cancelled"):
         _append_scalar(
             lines,
@@ -573,7 +597,7 @@ def _render_full_verification_yaml(verification_id: str, detail_ctx: dict[str, o
             _canonical_int(task_counts.get(key, 0), field=f"task count {key}"),
             indent=2,
         )
-    running_tasks = cast(list[dict[str, object]], detail_ctx.get("detail_running_tasks") or [])
+    running_tasks = detail_ctx.get("detail_running_tasks", [])
     lines.append("")
     if running_tasks:
         lines.append("running:")
@@ -602,10 +626,12 @@ def _render_full_verification_yaml(verification_id: str, detail_ctx: dict[str, o
         lines.append("    tests:")
         if rows:
             for row in rows:
-                cells = cast(list[dict[str, object]], row.get("cells") or [])
+                cells = row.get("cells", [])
                 test_name = str(row.get("test_name") or row.get("display_name") or "")
-                cell = cells[index] if index < len(cells) else {}
-                cell_text = _compact_result_text(str(cell.get("short") or cell.get("text") or "--"), str(cell.get("metrics") or ""))
+                cell_text = "--"
+                if index < len(cells):
+                    cell = cells[index]
+                    cell_text = _compact_result_text(cell["short"] or cell["text"] or "--", cell["metrics"])
                 _append_scalar(lines, test_name, cell_text, indent=6)
         else:
             lines[-1] = "    tests: {}"
@@ -614,9 +640,9 @@ def _render_full_verification_yaml(verification_id: str, detail_ctx: dict[str, o
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _cell_detail_status(cell: dict[str, object]) -> str:
-    detail = cast(dict[str, object], cell.get("detail") or {})
-    final_row = cast(dict[str, object], detail.get("final_row") or {})
+def _cell_detail_status(cell: RunCellView) -> str:
+    detail = cell["detail"]
+    final_row = detail["final_row"] if detail is not None else None
     if final_row:
         return _compact_result_text(
             str(final_row.get("verdict_short") or cell.get("short") or cell.get("text") or "-"),
@@ -626,22 +652,24 @@ def _cell_detail_status(cell: dict[str, object]) -> str:
     return _compact_result_text(str(cell.get("short") or cell.get("text") or "--"), str(cell.get("metrics") or ""))
 
 
-def _cell_feedback(cell: dict[str, object]) -> str:
-    detail = cast(dict[str, object], cell.get("detail") or {})
-    final_row = cast(dict[str, object], detail.get("final_row") or {})
-    feedback = str(final_row.get("feedback_display") or "")
+def _cell_feedback(cell: RunCellView) -> str:
+    detail = cell["detail"]
+    final_row = detail["final_row"] if detail is not None else None
+    feedback = final_row["feedback_display"] if final_row is not None else ""
     return "" if feedback == "-" else feedback
 
 
-def _cell_error(cell: dict[str, object]) -> str:
-    detail = cast(dict[str, object], cell.get("detail") or {})
-    return str(detail.get("compile_error_display") or "")
+def _cell_error(cell: RunCellView) -> str:
+    detail = cell["detail"]
+    return detail["compile_error_display"] if detail is not None else ""
 
 
-def _cell_diagnostics(cell: dict[str, object]) -> list[str]:
-    detail = cast(dict[str, object], cell.get("detail") or {})
+def _cell_diagnostics(cell: RunCellView) -> list[str]:
+    detail = cell["detail"]
     values: list[str] = []
-    for item in cast(list[dict[str, object]], detail.get("compile_diagnostics") or []):
+    if detail is None:
+        return values
+    for item in detail.get("compile_diagnostics", []):
         message = str(item.get("message") or "").strip()
         if not message:
             continue
@@ -651,7 +679,7 @@ def _cell_diagnostics(cell: dict[str, object]) -> list[str]:
     return values
 
 
-def _append_cell_detail(lines: list[str], *, col: dict[str, object], cell: dict[str, object], indent: int) -> None:
+def _append_cell_detail(lines: list[str], *, col: RunColumn, cell: RunCellView, indent: int) -> None:
     _append_scalar(lines, "source", col.get("source") or "", indent=indent)
     _append_scalar(lines, "role", _role_from_task_kind(str(col.get("task_kind") or "")), indent=indent)
     _append_scalar(lines, "result", _cell_detail_status(cell), indent=indent)
@@ -666,15 +694,15 @@ def _append_cell_detail(lines: list[str], *, col: dict[str, object], cell: dict[
         lines.append(f"{' ' * indent}diagnostics: []")
 
 
-def _render_test_zoom_yaml(verification_id: str, detail_ctx: dict[str, object], *, source_filter: str = "") -> tuple[str, bool]:
-    rows = cast(list[dict[str, object]], detail_ctx.get("detail_rows") or [])
+def _render_test_zoom_yaml(verification_id: str, detail_ctx: RunDetailContext, *, source_filter: str = "") -> tuple[str, bool]:
+    rows = detail_ctx.get("detail_rows", [])
     if not rows:
         return ("test detail not found\n", False)
     row = rows[0]
-    columns = cast(list[dict[str, object]], detail_ctx.get("detail_columns") or [])
+    columns = detail_ctx.get("detail_columns", [])
     keys = _column_keys(columns)
-    selected: list[tuple[str, dict[str, object], dict[str, object]]] = []
-    cells = cast(list[dict[str, object]], row.get("cells") or [])
+    selected: list[tuple[str, RunColumn, RunCellView]] = []
+    cells = row.get("cells", [])
     for index, col in enumerate(columns):
         source = str(col.get("source") or "")
         if source_filter and source != source_filter:
@@ -688,7 +716,7 @@ def _render_test_zoom_yaml(verification_id: str, detail_ctx: dict[str, object], 
     _append_scalar(lines, "verification", verification_id)
     _append_scalar(lines, "status", detail_ctx.get("detail_status") or "")
     _append_scalar(lines, "test", row.get("test_name") or row.get("display_name") or "")
-    generate_detail = cast(dict[str, object], row.get("generate_detail") or {})
+    generate_detail = row.get("generate_detail")
     if generate_detail:
         lines.append("")
         lines.append("generation:")
@@ -717,11 +745,8 @@ def _agent_verification_detail_yaml(
     test_name: str,
     source_filter: str,
 ) -> tuple[str, int]:
-    workspace = Path(str(ctx["workspace"]["path"])).resolve()
-    _problem_cfg, general_cfg, _statement_cfg = read_problem_config(workspace)
     detail_ctx = build_run_detail_context(
         ctx,
-        str(general_cfg["mode"]),
         requested_verification_id=verification_id,
         include_row_details=bool(test_name),
         detail_test_name=test_name,
@@ -796,7 +821,7 @@ async def agent_export_status(request: Request, job_id: str):
     )["can_view"]:
         return json_error_response("export not found", status_code=404)
     status = str(job.get("status") or "")
-    payload: dict[str, object] = {
+    payload: AgentExportStatus = {
         "job_id": job_id,
         "status": status,
         "created_at": str(job.get("created_at") or ""),
@@ -1022,7 +1047,7 @@ async def agent_workspace_file(request: Request):
     rel = str(request.query_params.get("path") or "").strip()
     try:
         file_payload = runtime().workspace_file_service.file_payload(workspace, rel, require_allowed_root=True)
-        payload: dict[str, object] = {
+        payload: AgentWorkspaceFile = {
             "path": file_payload.path,
             "is_dir": file_payload.is_dir,
         }

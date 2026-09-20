@@ -5,12 +5,59 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, TypedDict
+from typing import Callable, Literal, NotRequired, TypedDict
 
 from app.service.platform.maintenance.admission import MaintenanceAdmissionGate
 
 WorkerFunc = Callable[[], None]
 WorkerPayload = tuple[str, str, WorkerFunc]
+
+
+class WorkerDurableEvent(TypedDict):
+    event: Literal["job_created", "job_started", "job_finished", "job_recovered"]
+    job_id: str
+    ts: float
+    name: NotRequired[str]
+    job_type: NotRequired[str]
+    queue_name: NotRequired[str]
+    dedupe_key: NotRequired[str]
+    status: NotRequired[str]
+    error: NotRequired[str]
+    error_code: NotRequired[str]
+    created_at: NotRequired[float]
+    started_at: NotRequired[float]
+    finished_at: NotRequired[float]
+
+
+class WorkerJobView(TypedDict):
+    id: str
+    name: str
+    job_type: str
+    queue: str
+    dedupe_key: str
+    status: str
+    created_at: float
+    started_at: float
+    finished_at: float
+    error: str
+    error_code: str
+
+
+class WorkerQueueSnapshot(TypedDict):
+    worker_count: int
+    queue_capacity: int
+    queue_depth: int
+    running: int
+    queued: int
+    history_limit: int
+    durable_log: str
+    job_type_stats: dict[str, JobTypeStatsBucket]
+    jobs: list[WorkerJobView]
+
+
+class WorkerFailureCount(TypedDict):
+    code: str
+    count: int
 
 
 @dataclass
@@ -72,7 +119,7 @@ JobTypeStatsBucket = TypedDict(
         "avg_run_ms": float,
         "p95_run_ms": float,
         "failure_rate": float,
-        "top_failure_codes": list[dict[str, int | str]],
+        "top_failure_codes": list[WorkerFailureCount],
     },
 )
 
@@ -212,13 +259,11 @@ class WorkerQueueService:
             return "runtime_error"
         return "worker_error"
 
-    def _append_durable_event_locked(self, event: dict[str, object]) -> None:
+    def _append_durable_event_locked(self, event: WorkerDurableEvent) -> None:
         if self._durable_log_path is None:
             return
-        payload = dict(event)
-        payload["ts"] = self._safe_float(payload.get("ts"), time.time())
         try:
-            encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+            encoded = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
             with self._durable_log_path.open("a", encoding="utf-8") as fp:
                 fp.write(encoded + "\n")
         except OSError:
@@ -790,11 +835,11 @@ class WorkerQueueService:
             }
         return rows
 
-    def snapshot(self, limit: int = 200) -> dict[str, object]:
+    def snapshot(self, limit: int = 200) -> WorkerQueueSnapshot:
         cap = max(1, min(2000, int(limit)))
         with self._lock:
             job_ids = list(reversed(self._record_order[-cap:]))
-            jobs: list[dict[str, object]] = []
+            jobs: list[WorkerJobView] = []
             for job_id in job_ids:
                 record = self._records.get(job_id)
                 if record is None:

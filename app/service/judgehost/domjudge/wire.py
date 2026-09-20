@@ -3,8 +3,12 @@ from collections.abc import Iterable
 from app.service.judgehost.configuration import JudgehostSettings
 from app.service.judgehost.domjudge.codec import (
     config_payload,
-    decode_text,
     languages_payload,
+)
+from app.service.judgehost.domjudge.wire_model import (
+    DomjudgeConfiguration,
+    DomjudgeHost,
+    DomjudgeLanguage,
 )
 from app.service.judgehost.host.model import (
     JudgehostHostRow,
@@ -16,36 +20,34 @@ class DomjudgeWireProjector:
     """Project canonical application values onto the DOMjudge wire shapes."""
 
     @staticmethod
-    def configuration(settings: JudgehostSettings) -> dict[str, object]:
+    def configuration(settings: JudgehostSettings) -> DomjudgeConfiguration:
         return config_payload(settings.values)
 
     @staticmethod
-    def languages() -> list[dict[str, object]]:
+    def languages() -> list[DomjudgeLanguage]:
         return languages_payload()
 
     @staticmethod
-    def hosts(rows: Iterable[JudgehostHostRow]) -> list[dict[str, object]]:
+    def hosts(rows: Iterable[JudgehostHostRow]) -> list[DomjudgeHost]:
         return _hosts_payload(rows)
 
 
 def _hosts_payload(
     hosts: Iterable[JudgehostHostRow],
-) -> list[dict[str, object]]:
+) -> list[DomjudgeHost]:
     rows = sorted(
-        (dict(row) for row in hosts),
-        key=lambda item: judgehost_name_sort_key(
-            decode_text(raw=item.get("hostname"))
-        ),
+        hosts,
+        key=lambda item: judgehost_name_sort_key(item["hostname"]),
     )
-    out: list[dict[str, object]] = []
+    out: list[DomjudgeHost] = []
     for row in rows:
-        token = decode_text(raw=row.get("hostname"))
+        token = row["hostname"]
         if token:
             out.append(
                 {
                     "hostname": token,
-                    "enabled": bool(row.get("enabled", True)),
-                    "polltime": decode_text(raw=row.get("last_seen_at")),
+                    "enabled": row["enabled"],
+                    "polltime": row["last_seen_at"],
                 }
             )
     return out

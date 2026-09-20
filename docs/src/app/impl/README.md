@@ -6,6 +6,12 @@ Reusable domain behavior, verification planning, and package policy remain in `a
 
 Service-owned read models provide problem, contest, and verification state. HTTP modules authorize access and project them into page- or API-specific responses.
 
+Workspace verification projections share typed columns, testcase cells, pass
+details, sanity checks and artifact previews with browser fragments and Agent
+YAML. Historical execution mode and result facts come from the persisted
+verification. Display limits and diagnostic formatting are applied by the
+projection that owns the rendered fields.
+
 The authentication middleware checks browser sessions and same-origin state
 changes in the thread pool for protected browser paths. Identity is shared by
 the ASGI request scope; each new request checks durable session validity.

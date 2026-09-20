@@ -1,14 +1,20 @@
-from collections.abc import Callable
-from typing import cast
+import sqlite3
+from collections.abc import Callable, Mapping
 
 from app.config import ConfigValues
 from app.db import DB
-from app.service.disk.verification_store import VerificationRecordRow, VerificationStore
+from app.service.disk.verification_store import VerificationStore
 from app.service.platform.runtime_blob_store import PayloadFile, RuntimeBlobStore
 from app.service.platform.fs.layout import StorageLayout
 from app.service.repository.workspace import WorkspaceService
 from app.service.verification.types import (
     Kind,
+    VerificationDetail,
+    VerificationDetailEnvelope,
+    VerificationSanityCheckRow,
+    VerificationSanityMessageRow,
+    VerificationTestMetadata,
+    VerificationRecordRow,
     VerificationStatus,
     WorkspaceVerificationKey,
     WorkspaceVerificationRow,
@@ -34,6 +40,7 @@ from app.service.verification.lifecycle import (
 )
 
 from app.service.verification.read_model import (
+    VerificationRuntimeSummary,
     program_ids,
     running_tasks,
     solution_source_paths,
@@ -45,33 +52,27 @@ from app.service.verification.detail_read_model import (
     build_verification_detail_read_model,
     build_verification_test_detail_read_model,
 )
-from app.service.verification.task_store import VerificationTaskRow, VerificationTaskStore
+from app.service.verification.types import VerificationTaskRow
+from app.service.verification.task_store import VerificationTaskStore
 
 from app.service.judgehost.api import Judgehost
 
 
-_DETAIL_SCALAR_DEFAULTS: dict[str, object] = {
-    "mode": "pass-fail",
-    "pass_limit": 1,
-    "run_config_json": "",
-    "error": "",
-    "failed_step": "",
-    "failed_check": "",
-    "failed_test": "",
-    "sanity_status": "",
-    "sanity_checked_count": 0,
-    "validation_status": "",
-    "validated_count": 0,
-}
-
-
-def _payload_int(payload: dict[str, object], key: str, *, default: int) -> int:
+def _payload_int(payload: Mapping[str, object], key: str, *, default: int) -> int:
     value = payload.get(key)
     if value is None:
         return default
     if not isinstance(value, int) or isinstance(value, bool):
         raise ValueError(f"verification detail {key} must be an integer")
     return value
+
+
+def _payload_list(payload: Mapping[str, object], key: str) -> list[object]:
+    value = payload.get(key) or []
+    if not isinstance(value, list):
+        raise ValueError(f"verification detail {key} must be a list")
+    return value
+
 
 class VerificationService:
     def __init__(
@@ -93,62 +94,16 @@ class VerificationService:
         self._config_values = config_values
         self._verification_store = VerificationStore(db)
         self._artifact_query = VerificationArtifactQuery(db, runtime_blob_store)
-    def export_runtime_verification(self, problem_id: int, verification_id: str) -> dict[str, object] | None:
-        row = self.verification_record(verification_id)
-        if row is None or int(row["problem_id"]) != int(problem_id):
-            return None
-        return {
-            "id": str(row["id"] or ""),
-            "status": str(row["status"] or ""),
-            "details": self.verification_detail(verification_id),
-        }
-
-    def has_export_detail_verification(self, problem_id: int, verification_id: str) -> bool:
-        return self._verification_store.exists_for_problem(int(problem_id), verification_id)
-
-    def artifact_path_for_problem_artifact(self, problem_id: int, artifact_id: str) -> str:
-        row = self.db.fetch_one(
-            "SELECT id FROM verifications WHERE id=? AND problem_id=?",
-            [artifact_id, int(problem_id)],
-        )
-        return "" if row is None else str(self.storage_layout.resolve_verification_root(artifact_id))
-
-    def artifact_path_for_verification(self, verification_id: str) -> str:
-        row = self.db.fetch_one("SELECT id FROM verifications WHERE id=?", [verification_id])
-        return "" if row is None else str(self.storage_layout.resolve_verification_root(verification_id))
 
     def allocate_verification_id(self) -> str:
         return new_verification_id()
-
-    def workspace_verification_id_for_run(self, problem_id: int, workspace_id: int, run_id: str) -> str:
-        token = run_id
-        if not token:
-            return ""
-        task_store = self.task_store
-        for row in self._verification_store.list_rows(
-            problem_id=int(problem_id),
-            workspace_id=int(workspace_id),
-            limit=512,
-            kinds=(Kind.ALL, Kind.SAMPLE, Kind.CUSTOM),
-        ):
-            verification_id = str(row["id"])
-            for task_row in task_store.list_rows(verification_id):
-                if str(task_row["run_id"] or "") == token:
-                    return verification_id
-        return ""
-
-    def workspace_verification_exists(self, problem_id: int, workspace_id: int, verification_id: str) -> bool:
-        return self._verification_store.workspace_verification_exists(int(problem_id), int(workspace_id), verification_id)
-
-    def workspace_artifact_exists(self, problem_id: int, workspace_id: int, artifact_id: str) -> bool:
-        return self._verification_store.workspace_artifact_exists(int(problem_id), int(workspace_id), artifact_id)
 
     def workspace_verification_detail(
         self,
         problem_id: int,
         workspace_id: int,
         verification_id: str,
-    ) -> dict[str, object] | None:
+    ) -> VerificationDetailEnvelope | None:
         snapshot = self.verification_snapshot(verification_id)
         if snapshot is None:
             return None
@@ -192,7 +147,7 @@ class VerificationService:
         table_name: str,
         column_name: str,
         *,
-        conn=None,
+        conn: sqlite3.Connection | None = None,
     ) -> list[str]:
         sql = f"""
             SELECT {column_name}
@@ -213,8 +168,8 @@ class VerificationService:
         self,
         verification_id: str,
         *,
-        conn=None,
-    ) -> list[dict[str, object]]:
+        conn: sqlite3.Connection | None = None,
+    ) -> list[VerificationTestMetadata]:
         sql = """
             SELECT ordinal,test_name,source_kind,source_id,is_sample,sample_input_custom,sample_output_custom,
                    sample_output_validate,description,source_path,command_text,payload_source_path
@@ -224,9 +179,9 @@ class VerificationService:
             """
         params = [str(verification_id or "").strip()]
         rows = self.db.fetch_all(sql, params) if conn is None else conn.execute(sql, params).fetchall()
-        values: list[dict[str, object]] = []
+        values: list[VerificationTestMetadata] = []
         for row in rows:
-            item: dict[str, object] = {
+            item: VerificationTestMetadata = {
                 "index": max(1, int(row["ordinal"] or 0)),
                 "test_name": str(row["test_name"] or ""),
                 "kind": str(row["source_kind"] or ""),
@@ -251,8 +206,8 @@ class VerificationService:
         self,
         verification_id: str,
         *,
-        conn=None,
-    ) -> list[dict[str, object]]:
+        conn: sqlite3.Connection | None = None,
+    ) -> list[VerificationSanityCheckRow]:
         safe_verification_id = str(verification_id or "").strip()
         check_sql = """
             SELECT ordinal,check_name,status,checked_count
@@ -272,7 +227,7 @@ class VerificationService:
         else:
             check_rows = conn.execute(check_sql, [safe_verification_id]).fetchall()
             message_rows = conn.execute(message_sql, [safe_verification_id]).fetchall()
-        messages_by_check: dict[str, list[dict[str, object]]] = {}
+        messages_by_check: dict[str, list[VerificationSanityMessageRow]] = {}
         for row in message_rows:
             check_name = str(row["check_name"] or "")
             if not check_name:
@@ -284,7 +239,7 @@ class VerificationService:
                     "message": str(row["message"] or ""),
                 }
             )
-        results: list[dict[str, object]] = []
+        results: list[VerificationSanityCheckRow] = []
         for row in check_rows:
             check_name = str(row["check_name"] or "")
             if not check_name:
@@ -301,9 +256,9 @@ class VerificationService:
 
     def _verification_detail_from_connection(
         self,
-        conn,
+        conn: sqlite3.Connection,
         verification_id: str,
-    ) -> dict[str, object]:
+    ) -> VerificationDetail:
         row = conn.execute(
             """
             SELECT mode,pass_limit,run_config_json,error,failed_step,failed_check,failed_test,
@@ -338,7 +293,7 @@ class VerificationService:
             "tests_meta_rows": self._verification_tests_meta_rows(verification_id, conn=conn),
         }
 
-    def verification_detail(self, verification_id: str) -> dict[str, object]:
+    def verification_detail(self, verification_id: str) -> VerificationDetail:
         safe_verification_id = str(verification_id or "").strip()
         if not safe_verification_id:
             return {}
@@ -351,7 +306,7 @@ class VerificationService:
 
     def _replace_ordered_detail_tokens(
         self,
-        conn,
+        conn: sqlite3.Connection,
         verification_id: str,
         *,
         table_name: str,
@@ -370,9 +325,9 @@ class VerificationService:
                 [verification_id, ordinal, token],
             )
 
-    def _normalized_sanity_check_results(self, payload: dict[str, object]) -> list[dict[str, object]]:
+    def _normalized_sanity_check_results(self, payload: Mapping[str, object]) -> list[VerificationSanityCheckRow]:
         raw_results = payload.get("sanity_check_results")
-        results: list[dict[str, object]] = []
+        results: list[VerificationSanityCheckRow] = []
         if isinstance(raw_results, list):
             for raw in raw_results:
                 if not isinstance(raw, dict):
@@ -380,8 +335,8 @@ class VerificationService:
                 check_name = str(raw.get("name") or raw.get("check_name") or "")
                 if not check_name:
                     continue
-                messages: list[dict[str, object]] = []
-                for message_raw in cast(list[object], raw.get("messages") or []):
+                messages: list[VerificationSanityMessageRow] = []
+                for message_raw in _payload_list(raw, "messages"):
                     if not isinstance(message_raw, dict):
                         continue
                     message = str(message_raw.get("message") or "")
@@ -405,15 +360,15 @@ class VerificationService:
             return results
         return [
             {"name": token, "status": "", "checked_count": 0, "messages": []}
-            for token in [str(item or "") for item in cast(list[object], payload.get("sanity_checks") or []) if str(item or "")]
+            for token in [str(item or "") for item in _payload_list(payload, "sanity_checks") if str(item or "")]
         ]
 
     def _replace_sanity_check_results(
         self,
-        conn,
+        conn: sqlite3.Connection,
         verification_id: str,
         *,
-        results: list[dict[str, object]],
+        results: list[VerificationSanityCheckRow],
         clear_existing: bool = True,
     ) -> None:
         if clear_existing:
@@ -425,11 +380,8 @@ class VerificationService:
                 "DELETE FROM verification_sanity_checks WHERE verification_id=?",
                 [verification_id],
             )
-        for ordinal, raw in enumerate(results, start=1):
-            item = dict(raw)
-            check_name = str(item.get("name") or "")
-            if not check_name:
-                continue
+        for ordinal, item in enumerate(results, start=1):
+            check_name = item["name"]
             conn.execute(
                 """
                 INSERT INTO verification_sanity_checks(verification_id,ordinal,check_name,status,checked_count)
@@ -439,16 +391,11 @@ class VerificationService:
                     verification_id,
                     ordinal,
                     check_name,
-                    str(item.get("status") or ""),
-                    _payload_int(item, "checked_count", default=0),
+                    item["status"],
+                    item["checked_count"],
                 ],
             )
-            for message_ordinal, message_raw in enumerate(cast(list[object], item.get("messages") or []), start=1):
-                if not isinstance(message_raw, dict):
-                    continue
-                message = str(message_raw.get("message") or "")
-                if not message:
-                    continue
+            for message_ordinal, message in enumerate(item["messages"], start=1):
                 conn.execute(
                     """
                     INSERT INTO verification_sanity_check_messages(
@@ -460,15 +407,15 @@ class VerificationService:
                         verification_id,
                         check_name,
                         message_ordinal,
-                        str(message_raw.get("severity") or item.get("status") or ""),
-                        str(message_raw.get("test_name") or ""),
-                        message,
+                        message["severity"] or item["status"],
+                        message["test_name"],
+                        message["message"],
                     ],
                 )
 
     def _replace_tests_meta_rows(
         self,
-        conn,
+        conn: sqlite3.Connection,
         verification_id: str,
         *,
         selected_test_names: list[str],
@@ -526,15 +473,15 @@ class VerificationService:
 
     def _write_verification_detail(
         self,
-        conn,
+        conn: sqlite3.Connection,
         verification_id: str,
-        detail: dict[str, object],
+        detail: Mapping[str, object],
         *,
         clear_existing: bool = True,
     ) -> None:
         payload = dict(detail)
         scalar_values = {
-            "mode": str(payload.get("mode") or _DETAIL_SCALAR_DEFAULTS["mode"]),
+            "mode": str(payload.get("mode") or "pass-fail"),
             "pass_limit": _payload_int(payload, "pass_limit", default=1),
             "run_config_json": str(payload.get("run_config_json") or ""),
             "error": str(payload.get("error") or ""),
@@ -548,10 +495,10 @@ class VerificationService:
             "validation_status": str(payload.get("validation_status") or ""),
             "validated_count": _payload_int(payload, "validated_count", default=0),
         }
-        selected_test_names = [str(item or "") for item in cast(list[object], payload.get("selected_test_names") or []) if str(item or "")]
-        source_paths = [str(item or "") for item in cast(list[object], payload.get("source_paths") or []) if str(item or "")]
+        selected_test_names = [str(item or "") for item in _payload_list(payload, "selected_test_names") if str(item or "")]
+        source_paths = [str(item or "") for item in _payload_list(payload, "source_paths") if str(item or "")]
         sanity_check_results = self._normalized_sanity_check_results(payload)
-        tests_meta_rows = [dict(item) for item in cast(list[object], payload.get("tests_meta_rows") or []) if isinstance(item, dict)]
+        tests_meta_rows = [dict(item) for item in _payload_list(payload, "tests_meta_rows") if isinstance(item, dict)]
 
         conn.execute(
             """
@@ -663,31 +610,13 @@ class VerificationService:
     ) -> VerificationArtifact | None:
         return self._artifact_query.resolve(verification_id, virtual_path)
 
-    def workspace_verification_run_ids(
-        self,
-        problem_id: int,
-        workspace_id: int,
-        verification_id: str,
-    ) -> list[str] | None:
-        safe_verification_id = str(verification_id or "").strip()
-        if not safe_verification_id:
-            return None
-        if not self.workspace_verification_exists(int(problem_id), int(workspace_id), safe_verification_id):
-            return None
-        values: list[str] = []
-        for row in self.task_store.list_rows(safe_verification_id):
-            run_id = str(row["run_id"] or "")
-            if run_id and run_id not in values:
-                values.append(run_id)
-        return values
-
     def artifact_descriptor(self, token: str) -> PayloadFile | None:
         return self.runtime_blob_store.descriptor(token)
 
     @staticmethod
     def verification_runtime_summary_from_tasks(
         rows: list[VerificationTaskRow],
-    ) -> dict[str, object]:
+    ) -> VerificationRuntimeSummary:
         counts = task_counts(rows)
         return {
             "task_graph": bool(rows),
@@ -701,18 +630,9 @@ class VerificationService:
             "test_names": list(dict.fromkeys(str(row["test_name"] or "") for row in rows if str(row["test_name"] or ""))),
         }
 
-    def verification_runtime_summary(self, verification_id: str) -> dict[str, object]:
-        snapshot = self.verification_snapshot(verification_id)
-        rows: list[VerificationTaskRow] = (
-            []
-            if snapshot is None
-            else cast(list[VerificationTaskRow], snapshot["tasks"])
-        )
-        return self.verification_runtime_summary_from_tasks(rows)
-
     def verification_source_paths(self, verification_id: str) -> list[str]:
         detail = self.verification_detail(verification_id)
-        return list(cast(list[str], detail.get("source_paths") or []))
+        return list(detail.get("source_paths") or [])
 
     def list_visible_verification_rows(
         self,
@@ -720,13 +640,12 @@ class VerificationService:
         workspace_id: int,
         *,
         limit: int = 40,
-    ) -> list[dict[str, object]]:
-        rows = self._verification_store.list_visible_rows(
+    ) -> list[VerificationRecordRow]:
+        return self._verification_store.list_visible_rows(
             problem_id=int(problem_id),
             workspace_id=int(workspace_id),
             limit=int(limit),
         )
-        return [dict(row) for row in rows]
 
     def visible_verification_rows(
         self,
@@ -892,7 +811,7 @@ class VerificationService:
         except RuntimeError:
             return None
 
-        def _read(conn) -> VerificationSnapshot | None:
+        def _read(conn: sqlite3.Connection) -> VerificationSnapshot | None:
             row = conn.execute(
                 """
                 SELECT id,problem_id,workspace_id,signature,source_commit,kind,

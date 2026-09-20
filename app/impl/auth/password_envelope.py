@@ -4,6 +4,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TypedDict
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -28,6 +29,13 @@ _PASSWORD_ENVELOPE_TTL_SEC = 30
 _PASSWORD_ENVELOPE_MAX_ENTRIES = 128
 _PASSWORD_ENVELOPE_RATE_WINDOW_SEC = 10.0
 _PASSWORD_ENVELOPE_RATE_MAX = 128
+
+
+class PasswordEnvelope(TypedDict):
+    key_id: str
+    public_key: str
+    envelope_token: str
+    expires_at: int
 
 
 @dataclass
@@ -153,7 +161,7 @@ class PasswordEnvelopeStore:
         username: str,
         csrf_token: str,
         rate_key: str = "",
-    ) -> dict[str, object]:
+    ) -> PasswordEnvelope:
         """Create a short-lived public key bound to a password CSRF token."""
 
         safe_scope, safe_purpose = normalize_password_envelope_scope_purpose(scope, purpose)

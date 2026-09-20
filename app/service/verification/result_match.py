@@ -1,4 +1,4 @@
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 
 from app.service.execution.model import ExecutionResult
 from app.service.problem.solution_metadata import normalize_expected_behavior
@@ -49,7 +49,7 @@ def run_verdict_short(verdict: str) -> str:
 
 def run_actual_failed_codes(
     run_status: str,
-    summary: dict[str, object] | None,
+    summary: Mapping[str, object] | None,
 ) -> list[str]:
     if run_status == "cancelled" or run_status in _TRANSIENT_RUN_STATUSES:
         return []
@@ -67,7 +67,7 @@ def run_actual_failed_codes(
 
 def run_actual_short(
     run_status: str,
-    summary: dict[str, object] | None,
+    summary: Mapping[str, object] | None,
 ) -> str:
     failed_codes = run_actual_failed_codes(run_status, summary)
     if failed_codes:
@@ -140,7 +140,7 @@ def _status_codes_allowed_match(
 
 def _status_rule_match(
     expected_behavior: str,
-    summary: dict[str, object] | None,
+    summary: Mapping[str, object] | None,
 ) -> tuple[bool, str]:
     observed_codes = run_actual_failed_codes("ok", summary)
     if not observed_codes:
@@ -150,7 +150,7 @@ def _status_rule_match(
 
 
 def _summary_observed_codes(
-    summary: dict[str, object] | None,
+    summary: Mapping[str, object] | None,
 ) -> list[str]:
     if summary is None:
         return []
@@ -170,7 +170,7 @@ def _summary_observed_codes(
 
 def _run_completed(
     run_status: str,
-    summary: dict[str, object] | None,
+    summary: Mapping[str, object] | None,
 ) -> bool:
     if (
         run_status == "cancelled"
@@ -198,7 +198,7 @@ def _run_completed(
 
 def _run_passed(
     run_status: str,
-    summary: dict[str, object] | None,
+    summary: Mapping[str, object] | None,
 ) -> bool:
     if not _run_completed(run_status, summary) or summary is None:
         return False
@@ -234,7 +234,7 @@ def verification_verdict_match(
 def verification_solution_match(
     expected_behavior: str,
     run_status: str,
-    summary: dict[str, object] | None,
+    summary: Mapping[str, object] | None,
 ) -> tuple[bool, bool, bool, str]:
     if run_status in _TRANSIENT_RUN_STATUSES:
         return (False, False, False, "running")

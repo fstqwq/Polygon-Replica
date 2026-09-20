@@ -9,7 +9,7 @@ import sys
 import time
 import unittest
 from pathlib import Path
-from typing import Callable, ClassVar
+from typing import Callable, ClassVar, TextIO
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -99,8 +99,11 @@ def validate_resource_contracts(groups: dict[str, list[str]]) -> None:
 class TimingResult(unittest.TextTestResult):
     resource_guard: ClassVar[Callable[[], None] | None] = None
 
-    def __init__(self, *args: object, **kwargs: object) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(
+        self, stream: TextIO, descriptions: bool, verbosity: int,
+        *, durations: int | None = None,
+    ) -> None:
+        super().__init__(stream, descriptions, verbosity, durations=durations)
         self._started_at = 0.0
         self.durations: list[tuple[float, str]] = []
 

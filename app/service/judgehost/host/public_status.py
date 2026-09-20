@@ -5,6 +5,12 @@ import time
 from pathlib import PurePosixPath
 from typing import Callable, TypedDict
 
+from app.service.judgehost.domjudge.compile_spec import CompileSpecStatus
+from app.service.judgehost.host.model import (
+    HostToolchainStatus,
+    JudgehostStatus,
+    JudgehostStatusRow,
+)
 from app.service.judgehost.languages import JUDGEHOST_LANGUAGE_BY_ID
 
 
@@ -55,8 +61,8 @@ class PublicJudgehostStatus(TypedDict):
     toolchain_mismatch: bool
 
 
-def _duration_label(age_sec: object) -> str:
-    if not isinstance(age_sec, int) or age_sec < 0:
+def _duration_label(age_sec: int | None) -> str:
+    if age_sec is None or age_sec < 0:
         return "not reported"
     if age_sec < 60:
         return "just now"
@@ -69,25 +75,19 @@ def _duration_label(age_sec: object) -> str:
     return f"{hours // 24}d ago"
 
 
-def _nonnegative_int(raw: object) -> int:
-    if isinstance(raw, bool) or not isinstance(raw, int):
-        return 0
-    return max(0, raw)
-
-
 def _safe_command(raw: str) -> str:
-    token = str(raw).replace("\\", "/").strip()
+    token = raw.replace("\\", "/").strip()
     return PurePosixPath(token).name or "unknown"
 
 
-def _safe_argument(raw: object) -> str:
-    token = " ".join(str(raw).split())[:240]
+def _safe_argument(raw: str) -> str:
+    token = " ".join(raw.split())[:240]
     return _PRIVATE_PATH_RE.sub("[path]", token)
 
 
-def _safe_version_lines(raw: object) -> tuple[str, str]:
+def _safe_version_lines(raw: str) -> tuple[str, str]:
     lines: list[str] = []
-    for raw_line in str(raw or "").replace("\r", "\n").splitlines():
+    for raw_line in raw.replace("\r", "\n").splitlines():
         line = " ".join(raw_line.split())
         if not line or line.startswith("command="):
             continue
@@ -98,28 +98,25 @@ def _safe_version_lines(raw: object) -> tuple[str, str]:
     return lines[0], "\n".join(lines)
 
 
-def _reported_toolchains(raw_toolchains: object) -> dict[str, tuple[str, str]]:
+def _reported_toolchains(raw_toolchains: list[HostToolchainStatus]) -> dict[str, tuple[str, str]]:
     entries: dict[str, tuple[str, str]] = {}
-    if isinstance(raw_toolchains, list):
-        for raw in raw_toolchains:
-            if not isinstance(raw, dict):
-                continue
-            language_id = str(raw.get("language_id") or "")
-            if language_id not in JUDGEHOST_LANGUAGE_BY_ID:
-                continue
-            _compiler_display, compiler_key = _safe_version_lines(raw.get("compiler"))
-            _runner_display, runner_key = _safe_version_lines(raw.get("runner"))
-            if compiler_key or runner_key:
-                entries[language_id] = (compiler_key, runner_key)
+    for raw in raw_toolchains:
+        language_id = raw["language_id"]
+        if language_id not in JUDGEHOST_LANGUAGE_BY_ID:
+            continue
+        _compiler_display, compiler_key = _safe_version_lines(raw["compiler"])
+        _runner_display, runner_key = _safe_version_lines(raw["runner"])
+        if compiler_key or runner_key:
+            entries[language_id] = (compiler_key, runner_key)
     return entries
 
 
 def _toolchain_summaries(
-    online_hosts: list[dict[str, object]],
+    online_hosts: list[JudgehostStatusRow],
 ) -> list[PublicToolchainSummary]:
     version_counts: dict[str, dict[tuple[str, str], int]] = {}
     for raw in online_hosts:
-        for language_id, version in _reported_toolchains(raw.get("toolchains")).items():
+        for language_id, version in _reported_toolchains(raw["toolchains"]).items():
             language_counts = version_counts.setdefault(language_id, {})
             language_counts[version] = language_counts.get(version, 0) + 1
     summaries: list[PublicToolchainSummary] = []
@@ -148,18 +145,17 @@ def _toolchain_summaries(
 
 
 def _public_hosts(
-    hosts_source: list[dict[str, object]],
+    hosts_source: list[JudgehostStatusRow],
 ) -> list[PublicJudgehostView]:
     hosts: list[PublicJudgehostView] = []
     for index, raw in enumerate(hosts_source, start=1):
-        enabled = bool(raw.get("enabled"))
-        online = enabled and bool(raw.get("online"))
-        active_leases = _nonnegative_int(raw.get("active_leases"))
+        online = raw["enabled"] and raw["online"]
+        active_leases = raw["active_leases"]
         state = "online" if online else "offline"
-        recent_raw = raw.get("recent_avg_per_case_sec")
+        recent_raw = raw["recent_avg_per_case_sec"]
         recent_average = (
-            f"{float(recent_raw):.3f}s per case"
-            if isinstance(recent_raw, (int, float))
+            f"{recent_raw:.3f}s per case"
+            if recent_raw is not None
             else "not available"
         )
         hosts.append(
@@ -167,9 +163,9 @@ def _public_hosts(
                 "label": f"Judgehost {index}",
                 "state": state,
                 "tone": "ok" if online else "danger",
-                "last_contact": _duration_label(raw.get("age_sec")),
+                "last_contact": _duration_label(raw["age_sec"]),
                 "activity": "busy" if online and active_leases > 0 else "idle",
-                "judged_cases": _nonnegative_int(raw.get("judged_case_count")),
+                "judged_cases": max(0, raw["judged_case_count"]),
                 "recent_average": recent_average,
             }
         )
@@ -192,25 +188,20 @@ def _health_summary(
 
 
 def _compile_specs(
-    raw_compile_specs: list[dict[str, object]],
+    raw_compile_specs: list[CompileSpecStatus],
 ) -> list[PublicCompileSpec]:
     specs: list[PublicCompileSpec] = []
     for raw in raw_compile_specs:
-        language_id = str(raw.get("language_id") or "")
+        language_id = raw["language_id"]
         language = JUDGEHOST_LANGUAGE_BY_ID.get(language_id)
         if language is None:
             continue
-        arguments_raw = raw.get("arguments")
-        arguments = (
-            [_safe_argument(value) for value in arguments_raw]
-            if isinstance(arguments_raw, list)
-            else []
-        )
+        arguments = [_safe_argument(value) for value in raw["arguments"]]
         specs.append(
             {
                 "language_id": language_id,
                 "language_label": language.label,
-                "command": _safe_command(str(raw.get("command") or "")),
+                "command": _safe_command(raw["command"]),
                 "arguments": arguments,
             }
         )
@@ -218,32 +209,27 @@ def _compile_specs(
 
 
 def project_public_status(
-    raw_status: dict[str, object],
-    raw_compile_specs: list[dict[str, object]],
+    raw_status: JudgehostStatus,
+    raw_compile_specs: list[CompileSpecStatus],
 ) -> PublicJudgehostStatus:
-    raw_hosts = raw_status.get("hosts")
-    hosts_source = (
-        [raw for raw in raw_hosts if isinstance(raw, dict)] if isinstance(raw_hosts, list) else []
-    )
+    hosts_source = raw_status["hosts"]
     online_hosts = [
-        raw for raw in hosts_source if bool(raw.get("enabled")) and bool(raw.get("online"))
+        raw for raw in hosts_source if raw["enabled"] and raw["online"]
     ]
     toolchains = _toolchain_summaries(online_hosts)
     public_hosts = _public_hosts(hosts_source)
 
-    enabled = bool(raw_status.get("enabled"))
-    hosts_online = _nonnegative_int(raw_status.get("hosts_online"))
-    hosts_total = _nonnegative_int(raw_status.get("hosts_total"))
+    enabled = raw_status["enabled"]
+    hosts_online = max(0, raw_status["hosts_online"])
+    hosts_total = max(0, raw_status["hosts_total"])
     busy_hosts = sum(host["activity"] == "busy" for host in public_hosts)
     summary, tone = _health_summary(enabled, hosts_online, hosts_total, busy_hosts)
 
-    queue_raw = raw_status.get("queue")
-    queue = queue_raw if isinstance(queue_raw, dict) else {}
     return {
         "enabled": enabled,
         "hosts_online": hosts_online,
         "hosts_total": hosts_total,
-        "queued": _nonnegative_int(queue.get("queued")),
+        "queued": max(0, raw_status["queue"]["queued"]),
         "busy_hosts": busy_hosts,
         "summary": summary,
         "tone": tone,
@@ -258,7 +244,7 @@ class PublicJudgehostStatusCache:
     def __init__(
         self,
         source_provider: Callable[
-            [], tuple[dict[str, object], list[dict[str, object]]]
+            [], tuple[JudgehostStatus, list[CompileSpecStatus]]
         ],
         *,
         ttl_sec: float = 2.0,

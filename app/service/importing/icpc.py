@@ -3,7 +3,7 @@ import shutil
 import uuid
 import zipfile
 from pathlib import Path, PurePosixPath
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 import yaml
 
@@ -45,7 +45,7 @@ from app.service.statement.render import (
     default_olymp_sty_text,
     normalize_problem_title,
 )
-from app.service.problem.test_spec import dumps_tests_spec
+from app.service.problem.test_spec import TestSpecDocumentEntry, dumps_tests_spec
 
 
 SOLUTION_SUFFIX_ALLOW = {".cpp", ".cc", ".cxx", ".c++", ".py", ".java"}
@@ -124,6 +124,21 @@ ProblemConfigWriteResult = TypedDict(
         "file_io_warning": str,
     },
 )
+
+
+class ICPCImportResult(TypedDict):
+    commit: NotRequired[str]
+    package_name: str
+    title: str
+    statement: StatementSummary
+    tests: TestsSummary
+    solutions: SolutionsSummary
+    components: ComponentsSummary
+    problem_cfg: ProblemConfig
+    build_cfg: BuildConfig
+    domjudge: DomjudgeMeta
+    warnings: list[str]
+    file_io_warning: NotRequired[str]
 
 
 def _normalize_zip_path(raw: str) -> str:
@@ -516,11 +531,11 @@ class ICPCPackageImportService:
             raise ValueError("data/sample/*.in or data/secret/*.in not found in ICPC package")
 
         used_ids: set[str] = set()
-        entry_by_id: dict[str, dict[str, object]] = {}
-        spec_entries: list[dict[str, object]] = []
+        entry_by_id: dict[str, TestSpecDocumentEntry] = {}
+        spec_entries: list[TestSpecDocumentEntry] = []
         answer_count = 0
 
-        def _import_answer(rel: str, test_id: str, spec_row: dict[str, object]) -> None:
+        def _import_answer(rel: str, spec_row: TestSpecDocumentEntry) -> None:
             nonlocal answer_count
             ans_rel = rel[:-len(".in")] + ".ans"
             ans_info = entries.get(ans_rel)
@@ -537,7 +552,7 @@ class ICPCPackageImportService:
             answer_count += 1
             spec_row["sample_output"] = ans_payload.decode("utf-8", errors="replace")
 
-        def _import_input(rel: str, *, sample: bool, fallback_index: int) -> dict[str, object]:
+        def _import_input(rel: str, *, sample: bool, fallback_index: int) -> None:
             preferred_id = self._test_id_from_data_path(rel)
             test_id = self._unique_imported_test_id(preferred_id, used_ids, fallback_index)
             target = workspace / "tests" / "manual" / f"{test_id}.in"
@@ -546,12 +561,11 @@ class ICPCPackageImportService:
                 target,
                 normalize_newlines=normalize_test_data_newlines,
             )
-            spec_row: dict[str, object] = {"id": test_id, "kind": "manual", "sample": sample}
+            spec_row: TestSpecDocumentEntry = {"id": test_id, "kind": "manual", "sample": sample}
             used_ids.add(test_id)
             entry_by_id[test_id] = spec_row
             spec_entries.append(spec_row)
-            _import_answer(rel, test_id, spec_row)
-            return spec_row
+            _import_answer(rel, spec_row)
 
         for idx, rel in enumerate(sample_inputs, start=1):
             _import_input(rel, sample=True, fallback_index=idx)
@@ -559,7 +573,7 @@ class ICPCPackageImportService:
         for idx, rel in enumerate(secret_inputs, start=len(spec_entries) + 1):
             preferred_id = self._test_id_from_data_path(rel)
             if preferred_id and preferred_id in entry_by_id:
-                _import_answer(rel, preferred_id, entry_by_id[preferred_id])
+                _import_answer(rel, entry_by_id[preferred_id])
                 continue
             _import_input(rel, sample=False, fallback_index=idx)
 
@@ -898,7 +912,7 @@ class ICPCPackageImportService:
         text_limit_bytes: int,
         statement_sample_max_bytes: int,
         problem_config_limits: ProblemConfigLimits,
-    ) -> dict[str, object]:
+    ) -> ICPCImportResult:
         package_name = package_name.strip()
         rooted = package.rooted_at("problem.yaml")
         zf = rooted.zip_file
@@ -963,7 +977,7 @@ class ICPCPackageImportService:
             tests_spec_max_bytes=text_limit_bytes,
             statement_sample_max_bytes=statement_sample_max_bytes,
         )
-        result: dict[str, object] = {
+        result: ICPCImportResult = {
             "package_name": package_name,
             "title": meta["title"],
             "statement": statement_summary,

@@ -1,7 +1,7 @@
 import sqlite3
 
 from app.db import DB
-from app.service.access.model import AccessRole, ProblemParticipationRow
+from app.service.access.model import AccessRole, ProblemParticipationRow, WritableProblemRow
 from app.service.access.policy import access_role
 
 
@@ -291,7 +291,7 @@ class AccessStore:
         user_id: int,
         *,
         limit: int,
-    ) -> list[dict[str, object]]:
+    ) -> list[WritableProblemRow]:
         if self.is_system_admin(user_id):
             rows = self._db.fetch_all(
                 """
@@ -320,4 +320,8 @@ class AccessStore:
                 """,
                 [int(user_id), int(contest_id), max(1, int(limit))],
             )
-        return [dict(row) for row in rows]
+        return [
+            {"problem_id": int(row["problem_id"]), "problem_slug": str(row["problem_slug"]),
+             "role": access_role(str(row["role"]))}
+            for row in rows
+        ]

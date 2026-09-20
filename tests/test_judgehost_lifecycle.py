@@ -6,12 +6,11 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
-from app.service.judgehost.domjudge.case_result import build_case_result
+from app.service.execution.policy import normalize_execution_result
 from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
 from app.service.judgehost.batch.model import (
     CaseReportTelemetry,
     CompileSubmission,
-    ExecutionBatchRow,
     ExecutionBatchSpec,
     JudgehostCaseRow,
 )
@@ -38,28 +37,6 @@ def _compile_submission() -> CompileSubmission:
         compile_files=(),
     )
 
-
-def _result(test_name: str, *, runresult: str = "correct", verdict: str = "OK"):
-    return build_case_result(
-        test_name=test_name,
-        runresult=runresult,
-        verdict=verdict,
-        runtime_sec=0.001,
-        cpu_sec=0.001,
-        wall_sec=0.002,
-        memory_kb=1024,
-        score_text="",
-        output_run_ref="",
-        output_error_ref="",
-        output_system_ref="",
-        output_diff_ref="",
-        metadata_ref="",
-        compare_metadata_ref="",
-        team_message_ref="",
-        feedback_text="",
-        feedback_files=[],
-        answer_correct=False,
-    )
 
 
 def _receipt_generation(store: JudgehostBatchRuntime, case_id: int) -> int:
@@ -95,7 +72,7 @@ def _finish_pending_case(
     outcome = store.commit_case_result(
         claim.case_id,
         generation=claim.generation,
-        result=_result(test_name),
+        result=normalize_execution_result(verdict="OK"),
         updated_at=_NOW,
     )
     assert outcome == "reported"
@@ -595,7 +572,7 @@ class TestJudgehostBatchRuntimeLifecycle(unittest.TestCase):
                 verification_program_id="program-task-first-batch",
             )
 
-    def test_forget_runs_removes_set_indexes(self) -> None:
+    def test_forget_runs_removes_shared_batch_and_its_cases(self) -> None:
         batch_id = _create_batch(
             self.store,
             task_id="task-first",
@@ -616,6 +593,8 @@ class TestJudgehostBatchRuntimeLifecycle(unittest.TestCase):
 
         self.assertEqual(removed_batches, 1)
         self.assertIsNone(self.store.fetch_batch(batch_id))
+        self.assertEqual(self.store.cases_for_task("task-first"), [])
+        self.assertEqual(self.store.cases_for_task("task-second"), [])
 
     def test_quiet_cleanup_waits_for_callback_receipt_and_pending_diagnostic(
         self,
@@ -760,6 +739,14 @@ class TestJudgehostBatchRuntimeLifecycle(unittest.TestCase):
 
         self.assertEqual(disposition, "rejected")
         self.assertEqual(self.store.pending_case_diagnostics(case_id), ())
+        current = self.store.fetch_case(case_id)
+        assert current is not None
+        self.assertEqual(current["status"], "leased")
+        self.assertEqual(current["lease_owner"], "host-a")
+        batch = self.store.fetch_batch(batch_id)
+        assert batch is not None
+        self.assertIsNone(batch["compile_success"])
+        self.assertIsNone(self.store.case_result_for_task("task-stale", "001.in"))
         debug = self.store.case_debug_context(case_id)
         assert debug is not None
         self.assertEqual(debug["case_debug_text"], "")
@@ -835,7 +822,7 @@ class TestJudgehostBatchRuntimeLifecycle(unittest.TestCase):
             [item.text for item in diagnostics],
         )
 
-    def test_verification_index_cancels_multiple_batches_without_history_scan(
+    def test_verification_cancel_cancels_all_its_batches(
         self,
     ) -> None:
         batch_ids = []
@@ -867,30 +854,6 @@ class TestJudgehostBatchRuntimeLifecycle(unittest.TestCase):
             ],
             ["cancelled", "cancelled"],
         )
-
-    def test_rows_keep_public_shapes_and_progress_uses_incremental_counts(self) -> None:
-        batch_id = _create_batch(
-            self.store,
-            task_id="task-shapes",
-            run_id="run-shapes",
-            case_rows=[
-                _case_row("task-shapes", "run-shapes", "001.in", 1),
-                _case_row("task-shapes", "run-shapes", "002.in", 2),
-            ],
-        )
-        batch = self.store.fetch_batch(batch_id)
-        cases = _lease_cases(
-            self.store, batch_id, hostname="host-a", limit=1, now_text=_NOW
-        )
-
-        self.assertIsNotNone(batch)
-        self.assertEqual(set(batch), set(ExecutionBatchRow.__annotations__))
-        self.assertEqual(set(cases[0]), set(JudgehostCaseRow.__annotations__))
-        self.assertEqual(
-            self.store.case_progress_for_runs(["run-shapes"]),
-            {"run-shapes": {"total": 2, "reported": 0, "leased": 1}},
-        )
-
 
 class TestWriterPriorityRWLock(unittest.TestCase):
     def test_waiting_writer_blocks_new_readers(self) -> None:

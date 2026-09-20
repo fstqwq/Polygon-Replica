@@ -1,5 +1,98 @@
 import statistics
-from typing import Mapping
+from typing import Mapping, NotRequired, TypedDict
+
+
+class HostReport(TypedDict):
+    hostname: str
+    compile_sec: float
+    execute_sec: float
+    idle_sec: float
+    disconnected_sec: float
+    utilization: float
+    compile_key_count: int
+    program_switch_count: int
+
+
+class VerificationReport(TypedDict):
+    verification_id: str
+    arrival_sec: float
+    first_progress_sec: float | None
+    completion_sec: float | None
+    critical_path_sec: float
+    slowdown: float | None
+
+
+class ForegroundReport(TypedDict):
+    verification_id: str
+    arrival_sec: float
+    ready_to_lease_sec: float | None
+    ready_to_compile_start_sec: float | None
+    completion_sec: float | None
+    makespan_sec: float | None
+    wait_for_current_lease_sec: float | None
+    hostname: str | None
+    prior_background_batch_id: int | None
+    resumed_previous_background: bool | None
+
+
+class TraceFields(TypedDict, total=False):
+    verification_id: str
+    verification_program_id: str
+    host: str
+    node: str
+    case_id: int
+    batch_id: int
+    case_ids: list[int]
+    nodes: list[str]
+
+
+class TraceEvent(TraceFields):
+    at_sec: float
+    event: str
+
+
+class SimulationReport(TypedDict):
+    schema_version: int
+    workload: str
+    seed: int
+    strategy: str
+    summary: dict[str, int | float]
+    verifications: list[VerificationReport]
+    foreground_tasks: list[ForegroundReport]
+    hosts: list[HostReport]
+    batch_host_counts: dict[str, int]
+    unfinished_cases: list[str]
+    dangling_batches: list[int]
+    invariant_violations: list[str]
+    assertion_failures: list[str]
+    trace: NotRequired[list[TraceEvent]]
+
+
+class MetricAggregate(TypedDict):
+    median: float
+    p95: float
+    minimum: float
+    maximum: float
+
+
+class AggregateReport(TypedDict):
+    schema_version: int
+    workload: str
+    run_count: int
+    aggregate: dict[str, MetricAggregate]
+
+
+class MetricComparison(TypedDict):
+    baseline: float
+    current: float
+    delta: float
+    relative_delta: float | None
+
+
+class ComparisonReport(TypedDict):
+    baseline_workload: str | None
+    current_workload: str
+    metrics: dict[str, MetricComparison]
 
 
 _NUMERIC_FIELDS = (
@@ -32,12 +125,12 @@ _NUMERIC_FIELDS = (
 )
 
 
-def aggregate_reports(reports: list[dict[str, object]]) -> dict[str, object]:
+def aggregate_reports(reports: list[SimulationReport]) -> AggregateReport:
     if not reports:
         raise ValueError("at least one simulation report is required")
-    aggregates = {}
+    aggregates: dict[str, MetricAggregate] = {}
     for metric_name in _NUMERIC_FIELDS:
-        values = [float(_summary(report)[metric_name]) for report in reports]
+        values = [float(report["summary"][metric_name]) for report in reports]
         aggregates[metric_name] = {
             "median": _round(statistics.median(values)),
             "p95": _round(_percentile(values, 0.95)),
@@ -53,17 +146,20 @@ def aggregate_reports(reports: list[dict[str, object]]) -> dict[str, object]:
 
 
 def compare_aggregates(
-    current: Mapping[str, object],
+    current: AggregateReport,
     baseline: Mapping[str, object],
-) -> dict[str, object]:
-    current_metrics = _mapping_field(current, "aggregate")
+) -> ComparisonReport:
+    current_metrics = current["aggregate"]
     baseline_metrics = _mapping_field(baseline, "aggregate")
-    deltas: dict[str, object] = {}
+    deltas: dict[str, MetricComparison] = {}
     for metric_name in sorted(set(current_metrics).intersection(baseline_metrics)):
-        current_row = _mapping_field(current_metrics, metric_name)
+        current_row = current_metrics[metric_name]
         baseline_row = _mapping_field(baseline_metrics, metric_name)
         current_value = float(current_row["median"])
-        baseline_value = float(baseline_row["median"])
+        baseline_median = baseline_row["median"]
+        if not isinstance(baseline_median, (int, float)):
+            raise ValueError(f"{metric_name}.median must be a number")
+        baseline_value = float(baseline_median)
         deltas[metric_name] = {
             "baseline": _round(baseline_value),
             "current": _round(current_value),
@@ -73,16 +169,16 @@ def compare_aggregates(
             else _round((current_value - baseline_value) / baseline_value),
         }
     return {
-        "baseline_workload": baseline.get("workload"),
-        "current_workload": current.get("workload"),
+        "baseline_workload": str(baseline["workload"]) if "workload" in baseline else None,
+        "current_workload": current["workload"],
         "metrics": deltas,
     }
 
 
 def evaluate_assertions(
-    report: Mapping[str, object], assertions: Mapping[str, float]
+    report: SimulationReport, assertions: Mapping[str, float]
 ) -> list[str]:
-    summary = _summary(report)
+    summary = report["summary"]
     checks = {
         "max_duplicate_compile_count": (
             "duplicate_compile_count",
@@ -113,10 +209,6 @@ def evaluate_assertions(
         if not predicate(actual, float(limit)):
             failures.append(f"{assertion}: actual={actual:g} limit={float(limit):g}")
     return failures
-
-
-def _summary(report: Mapping[str, object]) -> Mapping[str, object]:
-    return _mapping_field(report, "summary")
 
 
 def _mapping_field(payload: Mapping[str, object], field: str) -> Mapping[str, object]:

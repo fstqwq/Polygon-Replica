@@ -4,6 +4,8 @@ from itertools import islice
 from typing import Literal, NotRequired, TypedDict
 
 from app.service.judgehost.task.retention import compact_payload_for_retention
+from app.service.judgehost.task.model import TaskPayload
+from app.service.judgehost.task.result_model import TaskStoredResult, TaskSummary
 from app.service.platform.rwlock import WriterPriorityRWLock
 
 
@@ -17,25 +19,25 @@ class JudgehostTaskRow(TypedDict):
     verification_id: str
     verification_task_id: str
     status: str
-    payload: dict[str, object]
-    result: dict[str, object]
+    payload: TaskPayload
+    result: TaskStoredResult
     persist_verification_run: bool
     error_text: str
     created_at: str
     updated_at: str
     completed_at: str
-    summary: dict[str, object]
+    summary: TaskSummary
     enqueue_fingerprint: str
     run_status: NotRequired[str]
 
 
 class JudgehostTaskPatch(TypedDict, total=False):
-    payload: dict[str, object]
-    result: dict[str, object]
+    payload: TaskPayload
+    result: TaskStoredResult
     error_text: str
     updated_at: str
     completed_at: str
-    summary: dict[str, object]
+    summary: TaskSummary
     run_status: str
 
 
@@ -125,10 +127,6 @@ class JudgehostTaskRegistry:
                     self._active_tasks_by_verification[verification_id].add(task_id)
             self._status_counts[str(stored["status"])] += 1
         self._notify()
-
-    def task_id_for_run(self, run_id: str) -> str | None:
-        with self._lock.read_lock():
-            return self._task_id_by_run.get(run_id)
 
     def get(self, task_id: str) -> JudgehostTaskRow | None:
         with self._lock.read_lock():

@@ -80,7 +80,7 @@ class ArtifactCleanupFilesystem:
         classes: tuple[CleanupFilesystemClass, ...],
         *,
         create_roots: bool = False,
-    ) -> dict[str, object]:
+    ) -> dict[str, str]:
         roots = validate_runtime_startup_preconditions(self._storage)
         cleanup_roots = self.roots(classes)
         for root in cleanup_roots.values():
@@ -88,7 +88,7 @@ class ArtifactCleanupFilesystem:
         if create_roots:
             for root in cleanup_roots.values():
                 root.mkdir(parents=True, exist_ok=True)
-        result: dict[str, object] = {
+        result: dict[str, str] = {
             name: str(root) for name, root in roots.items()
         }
         result["database"] = str(self._storage.database_path.absolute().resolve())

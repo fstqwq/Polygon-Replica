@@ -63,6 +63,7 @@ from app.service.problem.readiness import PackageReadiness, WorkspaceReadinessSu
 from app.service.problem.runtime_config import problem_config_limits
 from app.service.repository.git import StatusChangeSummary
 from app.service.repository.revision import workspace_revision_info
+from app.service.workspace.state import WorkspaceStatus
 
 logger = logging.getLogger(__name__)
 
@@ -232,32 +233,25 @@ def page_ctx(
         'Workspace updated to the published revision.' if auto_updated else ''
     )
     undo_context = runtime().workspace_merge_service.undo_context(workspace_path)
-    ctx['workspace_merge_result'] = undo_context or {}
+    ctx['workspace_merge_result'] = undo_context
     ctx['workspace_has_merge_undo'] = undo_context is not None
     if refresh_status:
-        live_status: dict[str, object] | None = None
+        live_status: WorkspaceStatus | None = None
         try:
-            live_status = cast(
-                dict[str, object],
-                runtime().workspace_service.refresh_workspace_status_with_ids(
-                    workspace_path,
-                    int(ctx['problem']['id']),
-                    int(ctx['user']['id']),
-                ),
+            live_status = runtime().workspace_service.refresh_workspace_status_with_ids(
+                workspace_path,
+                ctx['problem']['id'],
+                ctx['user']['id'],
             )
         except Exception:
             live_status = None
         if live_status is not None:
-            branch_raw = cast(str | None, live_status.get('branch'))
-            ctx['workspace']['branch'] = branch_raw or 'main'
-            head_commit_raw = cast(str | None, live_status.get('head_commit'))
-            ctx['workspace']['head_commit'] = head_commit_raw or ''
-            ctx['workspace']['dirty'] = 1 if bool(live_status.get('dirty')) else 0
-    branch_raw = cast(str | None, ctx['workspace'].get('branch'))
-    workspace_branch = branch_raw or 'main'
-    workspace_head_raw = cast(str | None, ctx['workspace'].get('head_commit'))
-    workspace_head = workspace_head_raw or ''
-    workspace_dirty = bool(ctx['workspace'].get('dirty'))
+            ctx['workspace']['branch'] = live_status['branch']
+            ctx['workspace']['head_commit'] = live_status['head_commit']
+            ctx['workspace']['dirty'] = live_status['dirty']
+    workspace_branch = ctx['workspace']['branch']
+    workspace_head = ctx['workspace']['head_commit']
+    workspace_dirty = bool(ctx['workspace']['dirty'])
     with runtime().workspace_service.workspace_lock(workspace_path):
         source_state = inspect_authoring_source(
             workspace_path,
@@ -283,12 +277,8 @@ def page_ctx(
                 int(ctx['problem']['id']),
                 int(ctx['user']['id']),
             )
-            ctx['workspace']['head_commit'] = (
-                cast(str | None, normalized_status.get('head_commit')) or ''
-            )
-            ctx['workspace']['dirty'] = (
-                1 if bool(normalized_status.get('dirty')) else 0
-            )
+            ctx['workspace']['head_commit'] = normalized_status['head_commit']
+            ctx['workspace']['dirty'] = normalized_status['dirty']
         except Exception:
             logger.exception(
                 "workspace status refresh after source normalization failed for %s",
@@ -513,9 +503,9 @@ def render_workspace_page(request: Request, problem: str, user: Annotated[str, D
         acl_entries = problem_acl_entries(int(ctx['problem']['id']))
         return template_response(request, 'access.html', {'ctx': ctx, 'message': message, 'acl_entries': acl_entries, 'repo_role_options': ['write', 'read']})
 
-    shell = cast(ProblemShellContext, ctx['shell'])
+    shell = ctx['shell']
     workspace_changes = shell['workspace_changes']
-    change_rows = cast(list[dict[str, object]], workspace_changes.get('rows') or [])
+    change_rows = workspace_changes['rows']
     requested_path = normalize_workspace_rel_path(request.query_params.get('path'))
     selected_path = ''
     if requested_path and any((row.get('link_path') == requested_path for row in change_rows)):

@@ -1,7 +1,6 @@
 """Role-aware page smoke checks and concurrent workspace collaboration E2E."""
 
 import os
-import sqlite3
 import subprocess
 from collections.abc import Callable
 from html.parser import HTMLParser
@@ -9,6 +8,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
+
+from runner import _connect
 
 
 ALICE = "alice"
@@ -46,31 +47,8 @@ class _MergeChoiceParser(HTMLParser):
             self.workspace_choices.add(name)
 
 
-def _connect() -> sqlite3.Connection:
-    database = Path(os.environ["POLYGON_REPLICA_E2E_DB"]).resolve()
-    connection = sqlite3.connect(
-        f"file:{database.as_posix()}?mode=ro",
-        uri=True,
-        timeout=1.0,
-    )
-    connection.row_factory = sqlite3.Row
-    return connection
-
-
 def _git(*args: str) -> str:
-    completed = subprocess.run(
-        ["git", *args],
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
-    if completed.returncode != 0:
-        raise RuntimeError(
-            f"git {' '.join(args)} failed: {completed.stderr or completed.stdout}"
-        )
-    return completed.stdout.strip()
+    return _git_bytes(*args).decode("utf-8", errors="replace").strip()
 
 
 def _git_bytes(*args: str) -> bytes:
@@ -373,7 +351,8 @@ def _assert_contest_writer_adds_problem(
             "dir": "attachments",
         },
     )
-    if not (_workspace_path(addable_problem, BOB) / awarded_path).is_file():
+    written = _workspace_path(addable_problem, BOB) / awarded_path
+    if written.read_bytes() != b"direct write granted by Contest access matrix\n":
         raise RuntimeError("matrix-awarded writer could not edit the added Problem")
 
 

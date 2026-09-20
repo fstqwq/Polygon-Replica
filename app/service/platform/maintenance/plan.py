@@ -1,6 +1,6 @@
 """Declarative inventory of cleanup-safe derived database state."""
 
-from typing import Literal, TypedDict
+from typing import Literal, Protocol, TypedDict, runtime_checkable
 
 
 ARTIFACT_TABLES = (
@@ -50,3 +50,38 @@ class ArtifactUsageSnapshot(TypedDict):
     artifact_rows: int
     removable_rows: int
     table_rows: dict[str, int]
+
+
+class SourceTreeStats(TypedDict):
+    entries: int
+    bytes: int
+
+
+class MaintenanceResult(TypedDict, total=False):
+    """Progress and outcome fields emitted by cleanup and source backup."""
+
+    operation_id: str
+    started_at: str
+    finished_at: str
+    completed_stage: str
+    failed_stage: str
+    error: str
+    duration_ms: int
+    roots: dict[str, str]
+    deleted_rows: dict[str, int]
+    deleted_row_total: int
+    affected_row_total: int
+    reclaimed_bytes: dict[str, int]
+    total_reclaimed_bytes: int
+    database_bytes_before: int
+    database_bytes_after: int
+    filesystem_bytes_before: dict[CleanupFilesystemClass, int]
+    source_stats: dict[str, SourceTreeStats]
+    archive_bytes: int
+
+
+@runtime_checkable
+class MaintenanceFailureDetails(Protocol):
+    """Typed report attached by the operation runner to its original exception."""
+
+    maintenance_result: MaintenanceResult

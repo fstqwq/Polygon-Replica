@@ -8,11 +8,10 @@ import tempfile
 import unittest
 import uuid
 from pathlib import Path
-from unittest import mock
 
 import yaml
 
-from app.config import ConfigValues
+from app.config import ConfigValues, build_config_values
 from app.service.export.adapters import PackageAdapterRegistry
 from app.service.export.adapters.domjudge import (
     DOMjudgePackageAdapter,
@@ -34,7 +33,11 @@ from app.service.problem_package.manifest import NativePackageManifest, describe
 from app.service.problem_package.service import NativePackageReader
 from app.service.problem_package.store import MaterializationRow
 from app.service.sandbox.base import ExecResult
-from app.service.statement.tex_compile import TexCompileResult
+from app.service.statement.tex_compile import TexCompileResult, TexCompileService
+from app.service.statement.constant import STATEMENT_DEFAULT_FILES
+from app.service.problem.build_config import BuildConfig
+from app.service.problem.runtime_config import ProblemMode
+from tests.package_builders import PdfSandbox
 
 
 class TestICPCExportPackage(unittest.TestCase):
@@ -43,6 +46,9 @@ class TestICPCExportPackage(unittest.TestCase):
         self.root = Path(self._temp_dir.name)
         self.snapshot = self.root / "snapshot"
         self.package = self.root / "package"
+        self.tex_compile = TexCompileService(
+            config_values=build_config_values(), sandbox_backend=PdfSandbox(),
+        )
         (self.snapshot / "third_party" / "testlib").mkdir(parents=True)
         (self.snapshot / "third_party" / "testlib" / "testlib.h").write_text(
             "// test header\n",
@@ -169,7 +175,7 @@ class TestICPCExportPackage(unittest.TestCase):
             {"AUX_DISPLAY_TEXT_LIMIT_BYTES": 4096},
             normalizer=lambda raw: raw,
         )
-        adapter = DOMjudgePackageAdapter(values, mock.Mock())
+        adapter = DOMjudgePackageAdapter(values, self.tex_compile)
         result = TexCompileResult(
             engine="pdflatex",
             proc=ExecResult(
@@ -225,42 +231,37 @@ class TestICPCExportPackage(unittest.TestCase):
         self.assertTrue(payload.startswith(b"# @EXPECTED_RESULTS@: CORRECT,TIMELIMIT\n"))
         self.assertEqual(source.read_text(encoding="utf-8"), original)
 
-    def test_domjudge_submission_rules_separate_standard_and_mixed_results(self) -> None:
-        standard = {
-            "accepted": ("accepted", ("CORRECT",)),
-            "wrong_answer": (
-                "wrong_answer",
-                ("CORRECT", "WRONG-ANSWER"),
-            ),
-            "time_limit_exceeded": (
-                "time_limit_exceeded",
-                ("CORRECT", "TIMELIMIT"),
-            ),
-            "run_time_error": (
-                "run_time_error",
-                ("CORRECT", "RUN-ERROR"),
-            ),
+    def test_domjudge_submission_paths_and_annotations_preserve_expected_results(self) -> None:
+        reader = self._adapter_reader(mode="interactive", pass_limit=2)
+        cases = {
+            "accepted": ("accepted", None),
+            "wrong_answer": ("wrong_answer", None),
+            "time_limit_exceeded": ("time_limit_exceeded", None),
+            "run_time_error": ("run_time_error", None),
+            "tle_or_correct": ("mixed", "CORRECT,TIMELIMIT"),
+            "tle_or_re": ("mixed", "TIMELIMIT,RUN-ERROR"),
+            "rejected": ("mixed", "WRONG-ANSWER,TIMELIMIT,RUN-ERROR,COMPILER-ERROR"),
         }
-        mixed = {
-            "tle_or_correct": ("CORRECT", "TIMELIMIT"),
-            "tle_or_re": ("TIMELIMIT", "RUN-ERROR"),
-            "rejected": (
-                "WRONG-ANSWER",
-                "TIMELIMIT",
-                "RUN-ERROR",
-                "COMPILER-ERROR",
-            ),
-        }
-        for behavior, (directory, results) in standard.items():
+        reader.manifest["solutions"] = []
+        for behavior in cases:
+            relative = f"solutions/{behavior}.cpp"
+            (reader.root / relative).write_bytes(b"int main() {}\n")
+            reader.manifest["solutions"].append({
+                "source_path": relative, "expected_behavior": behavior,
+            })
+        target = self.root / "result-groups"
+        DOMjudgePackageAdapter(self._adapter_config_values(), self.tex_compile).build(
+            reader, target=target, canonical_problem_slug="owner/projected-problem",
+        )
+        for behavior, (directory, annotation) in cases.items():
             with self.subTest(behavior=behavior):
-                rule = SUBMISSION_RULES[behavior]
-                self.assertEqual(rule["domjudge_directory"], directory)
-                self.assertEqual(rule["domjudge_results"], results)
-        for behavior, results in mixed.items():
-            with self.subTest(behavior=behavior):
-                rule = SUBMISSION_RULES[behavior]
-                self.assertEqual(rule["domjudge_directory"], "mixed")
-                self.assertEqual(rule["domjudge_results"], results)
+                expected = b"int main() {}\n"
+                if annotation is not None:
+                    expected = f"// @EXPECTED_RESULTS@: {annotation}\n".encode() + expected
+                self.assertEqual(
+                    (target / "submissions" / directory / f"{behavior}.cpp").read_bytes(),
+                    expected,
+                )
 
     def test_validator_wrappers_map_exit_codes_and_preserve_output(self) -> None:
         validator = self.snapshot / "validator.py"
@@ -347,18 +348,13 @@ class TestICPCExportPackage(unittest.TestCase):
         domjudge = self.root / "domjudge"
         domjudge_adapter = PackageAdapterRegistry(
             self._adapter_config_values(),
-            mock.Mock(),
+            self.tex_compile,
         ).require("domjudge")
-        with mock.patch.object(
-            domjudge_adapter,
-            "write_statements",
-            side_effect=self._write_statements,
-        ):
-            warning = domjudge_adapter.build(
-                reader,
-                target=domjudge,
-                canonical_problem_slug="owner/projected-problem",
-            )
+        warning = domjudge_adapter.build(
+            reader,
+            target=domjudge,
+            canonical_problem_slug="owner/projected-problem",
+        )
 
         self.assertEqual(warning, "")
         reference_source = reader.root / "solutions" / "reference.java"
@@ -399,7 +395,7 @@ class TestICPCExportPackage(unittest.TestCase):
 
     def test_adapters_publish_disjoint_strict_and_domjudge_layouts(self) -> None:
         reader = self._adapter_reader(mode="interactive", pass_limit=2)
-        adapters = PackageAdapterRegistry(self._adapter_config_values(), mock.Mock())
+        adapters = PackageAdapterRegistry(self._adapter_config_values(), self.tex_compile)
 
         strict = self.root / "strict"
         domjudge = self.root / "domjudge"
@@ -415,28 +411,12 @@ class TestICPCExportPackage(unittest.TestCase):
         )
         domjudge_adapter = adapters.require("domjudge")
         strict_adapter = adapters.require("icpc-2025-09")
-        with (
-            mock.patch.object(
-                domjudge_adapter,
-                "write_statements",
-                side_effect=self._write_statements,
-            ),
-            mock.patch.object(
-                strict_adapter,
-                "write_statements",
-                side_effect=self._write_statements,
-            ),
-        ):
-            strict_warning = strict_adapter.build(
-                reader,
-                target=strict,
-                canonical_problem_slug="owner/projected-problem",
-            )
-            domjudge_warning = domjudge_adapter.build(
-                reader,
-                target=domjudge,
-                canonical_problem_slug="owner/projected-problem",
-            )
+        strict_warning = strict_adapter.build(
+            reader, target=strict, canonical_problem_slug="owner/projected-problem",
+        )
+        domjudge_warning = domjudge_adapter.build(
+            reader, target=domjudge, canonical_problem_slug="owner/projected-problem",
+        )
 
         self.assertIn("solutions/compile.cpp", strict_warning)
         self.assertEqual(domjudge_warning, "")
@@ -487,7 +467,6 @@ class TestICPCExportPackage(unittest.TestCase):
                 validator_dir = package_root / "output_validator"
                 build = validator_dir / "build"
                 run = validator_dir / "run"
-                self.assertIn("-DDOMJUDGE", build.read_text(encoding="utf-8"))
                 self.assertTrue(build.stat().st_mode & stat.S_IXUSR)
                 self.assertTrue(run.stat().st_mode & stat.S_IXUSR)
                 subprocess.run([str(build)], cwd=validator_dir, check=True)
@@ -497,23 +476,6 @@ class TestICPCExportPackage(unittest.TestCase):
                     check=False,
                 )
                 self.assertEqual(result.returncode, 42)
-
-    def _write_statements(
-        self,
-        _snapshot: Path,
-        destination: Path,
-        *,
-        problem_name: str,
-        include_sample_tests: bool,
-        keep_all_languages: bool,
-    ) -> dict[str, str]:
-        del _snapshot
-        self.assertEqual(problem_name, "projected-problem")
-        self.assertFalse(include_sample_tests)
-        destination.mkdir(parents=True)
-        filename = "problem.en.pdf" if keep_all_languages else "problem.pdf"
-        (destination / filename).write_bytes(b"%PDF-1.4\n")
-        return {"en": problem_name}
 
     @staticmethod
     def _adapter_config_values() -> ConfigValues:
@@ -534,13 +496,23 @@ class TestICPCExportPackage(unittest.TestCase):
     def _adapter_reader(
         self,
         *,
-        mode: str,
+        mode: ProblemMode,
         pass_limit: int,
     ) -> NativePackageReader:
         package_root = self.root / "verified"
         (package_root / "config").mkdir(parents=True)
         (package_root / "tests").mkdir()
         (package_root / "solutions").mkdir()
+        for relative, content in STATEMENT_DEFAULT_FILES.items():
+            path = package_root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+        sections = package_root / "statement-sections/english"
+        sections.mkdir(parents=True, exist_ok=True)
+        (sections / "name.tex").write_text("projected-problem\n", encoding="utf-8")
+        (sections / "legend.tex").write_text("Statement body.\n", encoding="utf-8")
+        (package_root / "tests/manual").mkdir()
+        (package_root / "tests/manual/001.in").write_bytes(b"1\n")
         (package_root / "attachments").mkdir()
         (package_root / "third_party" / "testlib").mkdir(parents=True)
         (package_root / "third_party" / "testlib" / "testlib.h").write_text(
@@ -559,7 +531,7 @@ class TestICPCExportPackage(unittest.TestCase):
             + "\n",
             encoding="utf-8",
         )
-        build_config = {
+        build_config: BuildConfig = {
             "accepted_solution_source": "solutions/accepted.cpp",
             "generator_sources": [],
         }

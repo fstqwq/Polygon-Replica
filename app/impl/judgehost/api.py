@@ -16,6 +16,7 @@ from starlette.types import Receive, Scope, Send
 
 from app.impl.runtime.dependency import runtime
 from app.main_util import read_upload_bytes_limited
+from app.service.judgehost.api import Judgehost
 from app.service.judgehost.batch.model import CaseClaimBusy
 from app.service.judgehost.validation import (
     InvalidJudgehostHostname,
@@ -90,7 +91,7 @@ def _request_peer_ip(request: Request) -> str:
     return str(client.host or "").strip()
 
 
-def _record_host_peer_ip(service, request: Request, hostname: str) -> None:
+def _record_host_peer_ip(service: Judgehost, request: Request, hostname: str) -> None:
     peer_ip = _request_peer_ip(request)
     if peer_ip:
         service.record_host_peer_addr(hostname, peer_ip)
@@ -255,7 +256,7 @@ async def _request_payload(request: Request) -> JudgehostPayload:
     return query_payload
 
 
-def _require_judgehost_auth(request: Request):
+def _require_judgehost_auth(request: Request) -> Judgehost:
     service = runtime().judgehost_task_service
     if not service.enabled():
         raise HTTPException(status_code=404, detail="judgehost API is disabled")
@@ -291,7 +292,7 @@ async def _run_service_call(fn, /, *args, **kwargs):
 
 
 async def _persist_case_callback_rejection(
-    service,
+    service: Judgehost,
     *,
     hostname: str,
     judgetask_id: int,
@@ -317,7 +318,7 @@ async def _persist_case_callback_rejection(
 
 async def _case_callback_payload(
     request: Request,
-    service,
+    service: Judgehost,
     *,
     hostname: str,
     judgetask_id: int,
@@ -336,7 +337,7 @@ async def _case_callback_payload(
 
 
 @contextmanager
-def _callback_admission(service):
+def _callback_admission(service: Judgehost) -> Generator[bool, None, None]:
     admitted = service.enter_callback()
     try:
         yield admitted
@@ -348,7 +349,7 @@ def _callback_admission(service):
 class _CallbackAdmissionRelease:
     """Release a streaming admission exactly once on close or failure."""
 
-    def __init__(self, service) -> None:
+    def __init__(self, service: Judgehost) -> None:
         self._service = service
         self._lock = threading.Lock()
         self._released = False
@@ -361,7 +362,7 @@ class _CallbackAdmissionRelease:
         self._service.leave_callback()
 
 
-def _begin_file_download(service) -> _CallbackAdmissionRelease:
+def _begin_file_download(service: Judgehost) -> _CallbackAdmissionRelease:
     if not service.enter_callback():
         raise HTTPException(
             status_code=503,
@@ -384,7 +385,7 @@ def _admitted_file_stream(
 class _AdmittedFileResponse(StreamingResponse):
     """Release stream resources even when ASGI send raises on disconnect."""
 
-    def __init__(self, rows: Sequence[DomjudgeDownloadFile], release: _CallbackAdmissionRelease):
+    def __init__(self, rows: Sequence[DomjudgeDownloadFile], release: _CallbackAdmissionRelease) -> None:
         self._source = _admitted_file_stream(rows, release)
         self._release = release
         super().__init__(self._source, media_type="application/json")
@@ -407,22 +408,22 @@ def _file_stream_response(
     return _AdmittedFileResponse(rows, release)
 
 
-async def domjudge_config(request: Request):
+async def domjudge_config(request: Request) -> JSONResponse:
     service = _require_judgehost_auth(request)
     return JSONResponse(await _run_service_call(service.domjudge_config))
 
 
-async def domjudge_languages(request: Request):
+async def domjudge_languages(request: Request) -> JSONResponse:
     service = _require_judgehost_auth(request)
     return JSONResponse(await _run_service_call(service.domjudge_languages))
 
 
-async def domjudge_judgehosts_get(request: Request):
+async def domjudge_judgehosts_get(request: Request) -> JSONResponse:
     service = _require_judgehost_auth(request)
     return JSONResponse(await _run_service_call(service.domjudge_list_hosts))
 
 
-async def domjudge_judgehosts_post(request: Request):
+async def domjudge_judgehosts_post(request: Request) -> JSONResponse:
     service = _require_judgehost_auth(request)
     with _callback_admission(service) as admitted:
         if not admitted:
@@ -437,7 +438,7 @@ async def domjudge_judgehosts_post(request: Request):
         return JSONResponse(rows)
 
 
-async def domjudge_fetch_work(request: Request):
+async def domjudge_fetch_work(request: Request) -> JSONResponse:
     service = _require_judgehost_auth(request)
     payload = await _request_payload(request)
     hostname = _hostname_from_payload(payload, required=True)
@@ -453,7 +454,7 @@ async def domjudge_fetch_work(request: Request):
     return JSONResponse(tasks)
 
 
-async def domjudge_get_files_source(request: Request, contest_id: str, item_id: str):
+async def domjudge_get_files_source(request: Request, contest_id: str, item_id: str) -> StreamingResponse:
     service = _require_judgehost_auth(request)
     release = _begin_file_download(service)
     handed_off = False
@@ -475,7 +476,7 @@ async def domjudge_get_files_source(request: Request, contest_id: str, item_id: 
             release()
 
 
-async def domjudge_get_files_source_submit(request: Request, item_id: str):
+async def domjudge_get_files_source_submit(request: Request, item_id: str) -> StreamingResponse:
     service = _require_judgehost_auth(request)
     release = _begin_file_download(service)
     handed_off = False
@@ -497,7 +498,7 @@ async def domjudge_get_files_source_submit(request: Request, item_id: str):
             release()
 
 
-async def domjudge_get_files_by_type(request: Request, file_type: str, item_id: str):
+async def domjudge_get_files_by_type(request: Request, file_type: str, item_id: str) -> StreamingResponse:
     service = _require_judgehost_auth(request)
     release = _begin_file_download(service)
     handed_off = False
@@ -531,14 +532,14 @@ async def domjudge_get_files_by_type(request: Request, file_type: str, item_id: 
             release()
 
 
-async def domjudge_get_version_commands(request: Request, judgetask_id: int):
+async def domjudge_get_version_commands(request: Request, judgetask_id: int) -> JSONResponse:
     service = _require_judgehost_auth(request)
     return JSONResponse(
         await _run_service_call(service.domjudge_get_version_commands, judgetask_id)
     )
 
 
-async def domjudge_check_versions(request: Request, judgetask_id: int):
+async def domjudge_check_versions(request: Request, judgetask_id: int) -> JSONResponse:
     service = _require_judgehost_auth(request)
     with _callback_admission(service) as admitted:
         if not admitted:
@@ -556,7 +557,7 @@ async def domjudge_check_versions(request: Request, judgetask_id: int):
         return JSONResponse(result)
 
 
-async def domjudge_update_judging(request: Request, hostname: str, judgetask_id: int):
+async def domjudge_update_judging(request: Request, hostname: str, judgetask_id: int) -> JSONResponse:
     service = _require_judgehost_auth(request)
     with _callback_admission(service) as admitted:
         if not admitted:
@@ -575,7 +576,7 @@ async def domjudge_update_judging(request: Request, hostname: str, judgetask_id:
         return JSONResponse({})
 
 
-async def domjudge_add_judging_run(request: Request, hostname: str, judgetask_id: int):
+async def domjudge_add_judging_run(request: Request, hostname: str, judgetask_id: int) -> JSONResponse:
     service = _require_judgehost_auth(request)
     with _callback_admission(service) as admitted:
         if not admitted:
@@ -605,7 +606,7 @@ async def domjudge_add_judging_run(request: Request, hostname: str, judgetask_id
         return JSONResponse(int(result))
 
 
-async def domjudge_internal_error(request: Request):
+async def domjudge_internal_error(request: Request) -> JSONResponse:
     service = _require_judgehost_auth(request)
     with _callback_admission(service) as admitted:
         if not admitted:
@@ -624,7 +625,7 @@ async def domjudge_internal_error(request: Request):
         return JSONResponse(int(result))
 
 
-async def domjudge_add_debug_info(request: Request, hostname: str, judgetask_id: int):
+async def domjudge_add_debug_info(request: Request, hostname: str, judgetask_id: int) -> JSONResponse:
     service = _require_judgehost_auth(request)
     with _callback_admission(service) as admitted:
         if not admitted:

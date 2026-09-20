@@ -1,7 +1,7 @@
 import io
 import tarfile
 import unittest
-from unittest.mock import patch
+from dataclasses import replace
 
 from app.service.judgehost.domjudge.case_result import decode_case_test_row
 from app.service.judgehost.callback.pass_bundle import (
@@ -92,7 +92,7 @@ def _complete_pass_entries(number: int) -> list[tuple[str, bytes]]:
 
 
 class TestExecutionResult(unittest.TestCase):
-    def test_overview_preserves_final_usage_without_building_pass_displays(self) -> None:
+    def test_overview_omits_pass_details_and_preserves_final_usage(self) -> None:
         for interactive in (False, True):
             with self.subTest(interactive=interactive):
                 result = normalize_execution_result(passes=(
@@ -100,11 +100,7 @@ class TestExecutionResult(unittest.TestCase):
                     _pass(2, usage=ExecutionUsage(0.04, 0.05, 0.06, 1024), interactive=interactive),
                 ))
                 full = decode_case_test_row(result, test_name="001.in")
-                with (
-                    patch("app.service.judgehost.domjudge.case_result.build_execution_test_pass_row", side_effect=AssertionError("pass projection")),
-                    patch("app.service.execution.test_rows.build_execution_test_pass_row", side_effect=AssertionError("implicit pass")),
-                ):
-                    overview = decode_case_test_row(result, test_name="001.in", include_passes=False)
+                overview = decode_case_test_row(result, test_name="001.in", include_passes=False)
                 self.assertEqual(len(full["passes"]), 2)
                 self.assertEqual(overview, {**full, "passes": []})
                 self.assertEqual(overview["memory_kb"], 1024)
@@ -202,7 +198,6 @@ class TestExecutionResult(unittest.TestCase):
 
         row = decode_case_test_row(interactive_multi, test_name="001.in")
         projected_passes = row["passes"]
-        assert isinstance(projected_passes, list)
         self.assertEqual([item["pass"] for item in projected_passes], [1, 2])
         self.assertTrue(
             all(item["capture_status"] == CAPTURE_COMPLETE for item in projected_passes)
@@ -223,16 +218,9 @@ class TestExecutionResult(unittest.TestCase):
                 )
             )
         invalid = _pass(1, usage=ExecutionUsage())
-        invalid = ExecutionPassResult(
-            **{
-                **invalid.__dict__,
-                "artifacts": PassArtifacts(
-                    **{
-                        **invalid.artifacts.__dict__,
-                        "transcript_ref": "blob://transcript",
-                    }
-                ),
-            }
+        invalid = replace(
+            invalid,
+            artifacts=replace(invalid.artifacts, transcript_ref="blob://transcript"),
         )
         with self.assertRaisesRegex(ValueError, "mutually exclusive"):
             normalize_execution_result(passes=(invalid,))

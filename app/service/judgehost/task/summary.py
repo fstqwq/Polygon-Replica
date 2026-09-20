@@ -1,21 +1,12 @@
+from collections.abc import Mapping
+
+from app.service.execution.model import JsonValue
 from app.service.judgehost.task.registry import JudgehostTaskRegistry
 from app.service.judgehost.task.registry import JudgehostTaskRow
+from app.service.judgehost.task.result_model import TaskSummary
 
 
-def summary_mapping(value: object) -> dict[str, object]:
-    if value is None:
-        return {}
-    if not isinstance(value, dict):
-        raise RuntimeError("judgehost summary must be an object")
-    summary: dict[str, object] = {}
-    for key, item in value.items():
-        if not isinstance(key, str):
-            raise RuntimeError("judgehost summary keys must be strings")
-        summary[key] = item
-    return summary
-
-
-def summary_text(summary: dict[str, object], key: str) -> str:
+def summary_text(summary: Mapping[str, object], key: str) -> str:
     value = summary.get(key)
     if value is None:
         return ""
@@ -24,16 +15,11 @@ def summary_text(summary: dict[str, object], key: str) -> str:
     return value
 
 
-def summary_compile_diagnostics(summary: dict[str, object]) -> list[dict[str, object]]:
-    value = summary.get("compile_diagnostics")
-    if value is None:
-        return []
-    if not isinstance(value, list):
-        raise RuntimeError("judgehost compile_diagnostics must be a list")
-    return [summary_mapping(item) for item in value]
+def summary_compile_diagnostics(summary: TaskSummary) -> list[dict[str, JsonValue]]:
+    return [item.copy() for item in summary.get("compile_diagnostics", [])]
 
 
-def summary_error_text(summary: dict[str, object]) -> str:
+def summary_error_text(summary: TaskSummary) -> str:
     for item in summary_compile_diagnostics(summary):
         message = summary_text(item, "message")
         if message:
@@ -45,7 +31,7 @@ def load_run_summary(
     tasks: JudgehostTaskRegistry,
     run_id: str,
     verification_id: str = "",
-) -> dict[str, object]:
+) -> TaskSummary:
     if not run_id:
         return {}
     row = tasks.get_for_run(run_id)
@@ -64,11 +50,11 @@ def task_summary_for_row(
     *,
     run_id: str,
     verification_id: str,
-) -> dict[str, object]:
+) -> TaskSummary:
     summary = load_run_summary(tasks, run_id, verification_id)
     if summary:
         return summary
     row_summary = row["summary"].copy()
     if row_summary:
         return row_summary
-    return summary_mapping(row["result"].get("summary"))
+    return row["result"].get("summary", {}).copy()

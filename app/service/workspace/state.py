@@ -1,6 +1,12 @@
 from typing import TypedDict
 
 
+class WorkspaceStatus(TypedDict):
+    branch: str
+    head_commit: str
+    dirty: int
+
+
 class WorkspaceState(TypedDict):
     """Storage-neutral workspace status returned by the repository service."""
 

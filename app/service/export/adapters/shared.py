@@ -13,7 +13,7 @@ import shutil
 import stat
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, TypedDict, cast
+from typing import NotRequired, Protocol, TypedDict, cast
 
 from app.config import ConfigValues
 from app.service.problem.build_config import (
@@ -43,6 +43,18 @@ from app.service.statement.tex_compile import TexCompileResult, TexCompileServic
 
 
 type PackageFormat = str
+
+
+class PackageLimits(TypedDict):
+    time_limit: float
+    memory: NotRequired[int]
+    validation_passes: NotRequired[int]
+
+
+class SubmissionMetadata(TypedDict):
+    language: str
+    permitted: list[str]
+    required: list[str]
 
 
 @dataclass(frozen=True)
@@ -552,10 +564,10 @@ class PackageAdapterSupport:
         solutions: tuple[NativePackageSolutionEntry, ...],
         collect_metadata: bool,
         annotate_mixed: bool,
-    ) -> dict[str, dict[str, object]]:
+    ) -> dict[str, SubmissionMetadata]:
         submissions = package_root / "submissions"
         submissions.mkdir(parents=True)
-        metadata: dict[str, dict[str, object]] = {}
+        metadata: dict[str, SubmissionMetadata] = {}
         for solution in solutions:
             source_file = snapshot / solution["source_path"]
             expected = solution["expected_behavior"]

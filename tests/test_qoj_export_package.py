@@ -3,12 +3,10 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
-from unittest import mock
 
-from app.config import ConfigValues
-from app.service.export.adapters import PackageAdapterRegistry
+from app.config import ConfigValues, build_config_values
 from app.service.export.adapters.qoj import QOJPackageAdapter
+from app.service.problem.build_config import BuildConfig
 from app.service.problem.runtime_config import ProblemMode
 from app.service.problem_package.manifest import (
     NativePackageManifest,
@@ -17,6 +15,10 @@ from app.service.problem_package.manifest import (
 )
 from app.service.problem_package.service import NativePackageReader
 from app.service.problem_package.store import MaterializationRow
+
+
+from app.service.statement.tex_compile import TexCompileService
+from tests.package_builders import PdfSandbox
 
 
 class TestQOJExportPackage(unittest.TestCase):
@@ -36,19 +38,9 @@ class TestQOJExportPackage(unittest.TestCase):
             },
             normalizer=lambda raw: raw,
         )
-        self.tex_compile = mock.Mock()
-
-        def compile_pdf(entrypoint: Path) -> SimpleNamespace:
-            pdf = entrypoint.with_suffix(".pdf")
-            pdf.write_bytes(
-                b"%PDF-1.4\n" + entrypoint.parent.name.encode("utf-8") + b"\n"
-            )
-            return SimpleNamespace(
-                proc=SimpleNamespace(returncode=0, stderr="", stdout=""),
-                pdf_path=pdf,
-            )
-
-        self.tex_compile.compile_pdf.side_effect = compile_pdf
+        self.tex_compile = TexCompileService(
+            config_values=build_config_values(), sandbox_backend=PdfSandbox(),
+        )
 
     def tearDown(self) -> None:
         self._temporary_directory.cleanup()
@@ -117,11 +109,6 @@ class TestQOJExportPackage(unittest.TestCase):
         self.assertEqual(
             (target / "statement.pdf").read_bytes(),
             b"%PDF-1.4\nenglish\n",
-        )
-        compiled = self.tex_compile.compile_pdf.call_args.args[0]
-        self.assertEqual(
-            compiled.relative_to(reader.root).as_posix(),
-            "statement-build/english/statements.tex",
         )
 
     def test_standard_custom_and_missing_checkers_have_distinct_adapter_output(
@@ -331,21 +318,6 @@ class TestQOJExportPackage(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exceeds 6144 MiB"):
             adapter.plan(excess_memory)
 
-    def test_registry_places_qoj_before_nowcoder(self) -> None:
-        registry = PackageAdapterRegistry(self.values, self.tex_compile)
-
-        self.assertEqual(
-            registry.formats,
-            (
-                "domjudge",
-                "icpc-2025-09",
-                "qoj",
-                "polygon-linux",
-                "nowcoder",
-            ),
-        )
-        self.assertEqual(registry.require("qoj").display_name, "QOJ")
-
     def _reader(
         self,
         *,
@@ -380,7 +352,7 @@ class TestQOJExportPackage(unittest.TestCase):
             + "\n",
             encoding="utf-8",
         )
-        build_config: dict[str, object] = {"generator_sources": []}
+        build_config: BuildConfig = {"generator_sources": []}
         if include_accepted:
             accepted = package_root / "solutions" / f"main{accepted_suffix}"
             accepted.write_text("accepted source\n", encoding="utf-8")

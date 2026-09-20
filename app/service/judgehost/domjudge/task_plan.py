@@ -1,8 +1,10 @@
 import json
+from collections.abc import Mapping
 
 from app.service.judgehost.domjudge.codec import decode_text
 from app.service.judgehost.domjudge.result import parse_bool
 from app.service.platform.hashing import sha256_hex_text
+from app.service.judgehost.task.model import ExecutionTemplatePayload
 
 TASK_KIND_COMPILE_ONLY = "compile-only"
 TASK_KIND_GENERATE_INPUT = "generate-input"
@@ -27,7 +29,7 @@ def force_cpp_define(source_bytes: bytes) -> bytes:
 
 
 def task_kind(
-    payload: dict[str, object] | None = None,
+    payload: Mapping[str, object] | None = None,
     *,
     verification_source: str | None = None,
     compile_only: object | None = None,
@@ -64,7 +66,7 @@ def task_kind(
 
 
 def execution_modes(
-    payload: dict[str, object] | None = None,
+    payload: Mapping[str, object] | None = None,
     *,
     verification_source: str | None = None,
     compile_only: object | None = None,
@@ -81,7 +83,7 @@ def execution_modes(
     )
 
 
-def execution_mode(payload: dict[str, object]) -> str:
+def execution_mode(payload: Mapping[str, object]) -> str:
     kind = task_kind(payload)
     if kind == TASK_KIND_COMPILE_ONLY:
         return "pass-fail"
@@ -101,49 +103,36 @@ def execution_mode(payload: dict[str, object]) -> str:
     return problem_mode
 
 
-def execution_signature(payload: dict[str, object]) -> str:
-    precomputed = payload.get("precomputed")
-    if not isinstance(precomputed, dict):
-        return ""
-    hashes = {
-        name: decode_text(lower=True, raw=precomputed.get(name))
-        for name in ("compile_hash", "run_hash", "compare_hash", "source_hash")
-    }
-    if any(not value for value in hashes.values()):
-        return ""
-    configs: dict[str, object] = {}
+def execution_signature(
+    bundle: ExecutionTemplatePayload,
+    policy: tuple[str, str, str, bool],
+) -> str:
     config_hashes: dict[str, str] = {}
-    for name in ("compile_config", "run_config", "compare_config"):
-        value = precomputed.get(name)
-        configs[name] = {} if value is None else value
+    for name, config in (
+        ("compile_config", bundle["compile_config"]),
+        ("run_config", bundle["run_config"]),
+        ("compare_config", bundle["compare_config"]),
+    ):
         config_hashes[f"{name}_hash"] = sha256_hex_text(
             json.dumps(
-                configs[name],
+                config,
                 ensure_ascii=True,
                 sort_keys=True,
                 separators=(",", ":"),
             )
         )
-    compile_config = configs["compile_config"]
-    toolchain_digest = (
-        decode_text(lower=True, raw=compile_config.get("toolchain_cmd_digest"))
-        if isinstance(compile_config, dict)
-        else ""
-    )
+    kind, verification_source, expected_behavior, bypass = policy
     signature_payload = {
-        "task_kind": task_kind(payload),
-        "verification_source": decode_text(
-            lower=True, raw=payload.get("verification_source")
-        ),
-        "expected_behavior": decode_text(
-            lower=True, raw=payload.get("expected_behavior")
-        ),
-        "bypass_case_result_cache": parse_bool(
-            payload.get("bypass_case_result_cache"), default=False
-        ),
-        **hashes,
+        "task_kind": kind,
+        "verification_source": verification_source,
+        "expected_behavior": expected_behavior,
+        "bypass_case_result_cache": bypass,
+        "compile_hash": bundle["compile_hash"],
+        "run_hash": bundle["run_hash"],
+        "compare_hash": bundle["compare_hash"],
+        "source_hash": bundle["source_hash"],
         **config_hashes,
-        "toolchain_cmd_digest": toolchain_digest,
+        "toolchain_cmd_digest": bundle["compile_config"]["toolchain_cmd_digest"],
     }
     return sha256_hex_text(
         json.dumps(

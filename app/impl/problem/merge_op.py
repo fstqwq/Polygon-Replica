@@ -1,7 +1,7 @@
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated, cast
+from typing import Annotated, TypedDict
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -19,6 +19,41 @@ from app.impl.workspace.context_model import ProblemPageContext
 from app.service.repository.merge import MergeEntry, MergeFile, MergePreview
 
 
+class MergeFileView(TypedDict):
+    path: str
+    size: int
+    executable: bool
+    content_kind: str
+
+
+class MergeEntryView(TypedDict):
+    entry_id: str
+    group_id: str
+    path: str
+    change_kind: str
+    change_label: str
+    content_kind: str
+    workspace: MergeFileView | None
+    published: MergeFileView | None
+    suggested: MergeFileView | None
+
+
+class MergeGroupView(TypedDict):
+    id: str
+    entries: list[MergeEntryView]
+
+
+class MergePreviewView(TypedDict):
+    id: str
+    created_at: str
+    suggested_available: bool
+    fast_forward_possible: bool
+    suggested_entries: list[MergeEntryView]
+    groups: list[MergeGroupView]
+    manual_affected_count: int
+    suggested_affected_count: int
+
+
 def _workspace_context(
     problem: str,
     user: str,
@@ -28,7 +63,7 @@ def _workspace_context(
     return ctx, Path(ctx["workspace"]["path"])
 
 
-def _file_view(row: MergeFile | None) -> dict[str, object] | None:
+def _file_view(row: MergeFile | None) -> MergeFileView | None:
     if row is None:
         return None
     return {
@@ -56,7 +91,7 @@ def _entry_view(
     target: str,
     *,
     change_kind: str = "",
-) -> dict[str, object]:
+) -> MergeEntryView:
     right = entry.suggested if target == "suggested" else entry.published
     kind = change_kind or _change_kind(entry.workspace, right)
     descriptors = [row for row in (entry.workspace, right) if row is not None]
@@ -85,8 +120,8 @@ def _entry_view(
     }
 
 
-def _preview_view(preview: MergePreview) -> dict[str, object]:
-    entries_by_group: dict[str, list[dict[str, object]]] = {
+def _preview_view(preview: MergePreview) -> MergePreviewView:
+    entries_by_group: dict[str, list[MergeEntryView]] = {
         group_id: [] for group_id, _paths in preview.groups
     }
     group_sizes = {group_id: len(paths) for group_id, paths in preview.groups}
@@ -203,19 +238,24 @@ def merge_compare(
         )
         payload = asdict(comparison)
         href_builder = problem_href_builder(request, problem)
-        for side_name in ("left", "right"):
-            side = cast(dict[str, object], payload[side_name])
-            open_side = str(side.pop("open_side") or "")
-            side["open_url"] = (
+        for side_name, side in (("left", comparison.left), ("right", comparison.right)):
+            open_url = (
                 href_builder(
                     "merge_file",
                     preview_id=preview_id,
                     entry_id=entry_id,
-                    query={"side": open_side},
+                    query={"side": side.open_side},
                 )
-                if open_side
+                if side.open_side
                 else ""
             )
+            payload[side_name] = {
+                "label": side.label,
+                "exists": side.exists,
+                "size": side.size,
+                "executable": side.executable,
+                "open_url": open_url,
+            }
         return JSONResponse(payload)
     except HTTPException:
         raise

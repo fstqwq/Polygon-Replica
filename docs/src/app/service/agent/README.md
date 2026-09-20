@@ -15,6 +15,10 @@ an independent `readonly`, `workspace`, or `commit` grant with its own expiry
 or explicit forever lifetime. Disconnecting deletes the session and all of its
 requests and grants. No ordinary agent API uses a per-problem bearer token.
 
+Registration, approval, session and grant views have explicit typed result
+records. HTTP and browser consumers use those records directly; request JSON
+validation remains in the HTTP adapter.
+
 Contest roster discovery requires general `readonly` permission and current
 contest read access. It returns only a SQLite roster snapshot. The per-problem
 contest snapshot route rechecks the roster generation and direct problem access

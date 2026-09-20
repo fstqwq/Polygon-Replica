@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Callable, Generic, TypeVar
 
 from app.service.repository.workspace import WorkspaceService
+from app.service.workspace.state import WorkspaceStatus
 
 T = TypeVar("T")
 
@@ -14,7 +15,7 @@ class WorkspaceMutationConflict(ValueError):
 @dataclass(frozen=True)
 class WorkspaceMutationResult(Generic[T]):
     value: T
-    status: dict[str, str | int | None]
+    status: WorkspaceStatus
 
 
 class WorkspaceMutationService:

@@ -1,9 +1,17 @@
 import shlex
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, TypedDict
+
+from app.config.model import ConfigValue
 
 CompileFamily = Literal["native", "java", "python"]
+
+
+class CompileSpecStatus(TypedDict):
+    language_id: str
+    command: str
+    arguments: list[str]
 
 
 @dataclass(frozen=True)
@@ -48,7 +56,7 @@ def _tokens(raw: str) -> tuple[str, ...]:
         return tuple(raw.split())
 
 
-def _config_text(values: Mapping[str, object], key: str) -> str:
+def _config_text(values: Mapping[str, ConfigValue], key: str) -> str:
     value = values[key]
     if not isinstance(value, str):
         raise RuntimeError(f"invalid internal text configuration: {key}")
@@ -56,7 +64,7 @@ def _config_text(values: Mapping[str, object], key: str) -> str:
 
 
 def compile_spec(
-    values: Mapping[str, object], language_id: str
+    values: Mapping[str, ConfigValue], language_id: str
 ) -> JudgehostCompileSpec:
     if language_id == "cpp":
         return JudgehostCompileSpec(

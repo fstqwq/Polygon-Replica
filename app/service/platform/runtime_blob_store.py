@@ -9,12 +9,19 @@ import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, TypedDict
 
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _BLOB_REF_RE = re.compile(r"^blob://sha256/(?P<identity>[0-9a-f]{64})$")
 _COPY_CHUNK_SIZE = 16 * 1024 * 1024
+
+
+class PayloadFileDescriptor(TypedDict):
+    path: str
+    size: int
+    identity: str
+    blob_ref: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,7 +40,7 @@ class PayloadFile:
         object.__setattr__(self, "path", self.path.resolve())
         object.__setattr__(self, "identity", identity)
 
-    def to_payload(self) -> dict[str, object]:
+    def to_payload(self) -> PayloadFileDescriptor:
         return {
             "path": str(self.path),
             "size": self.size,

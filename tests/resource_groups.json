@@ -7,7 +7,6 @@
     "test_contest_problem_index.py",
     "test_execution_result.py",
     "test_icpc_package_import.py",
-    "test_judgehost_host_telemetry.py",
     "test_judgehost_identity.py",
     "test_judgehost_payload.py",
     "test_judgehost_scheduler.py",
@@ -24,9 +23,7 @@
     "test_runtime_blob_store.py",
     "test_statement_style.py",
     "test_statement_html_sanitize.py",
-    "test_statement_examples.py",
     "test_verification_analysis.py",
-    "test_verification_runtime_coordinator.py",
     "test_workspace_path_security.py"
   ],
   "service": [
@@ -38,7 +35,7 @@
     "test_judgehost_lifecycle.py",
     "test_judgehost_runtime_service.py",
     "test_large_package_import.py",
-    "test_problem_readiness_service.py",
+    "test_statement_examples.py",
     "test_verification_completion_service.py",
     "test_verification_detail_read_model.py",
     "test_verification_lifecycle_service.py",
@@ -48,6 +45,7 @@
     "test_workspace_store_service.py"
   ],
   "executor": [
+    "test_judgehost_host_telemetry.py",
     "test_browser_interactions.py",
     "test_icpc_export_package.py",
     "test_import_policy.py",
@@ -68,6 +66,7 @@
     "test_export.py",
     "test_judgehost_service.py",
     "test_maintenance_http.py",
+    "test_problem_readiness_service.py",
     "test_preview.py",
     "test_runtime_composition.py",
     "test_runtime_startup_e2e.py",
@@ -83,6 +82,7 @@
     "test_ui_run.py",
     "test_ui_workspace.py",
     "test_verification_adapters.py",
+    "test_verification_runtime_coordinator.py",
     "test_verification_policy.py"
   ]
 }

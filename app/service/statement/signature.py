@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import NotRequired, TypedDict
 
 from app.service.platform.hashing import quick_fp_digest, sha256_hex_bytes
 from app.service.problem.test_spec import TESTS_SPEC_REL, load_tests_spec, payload_rel_path_for_test
@@ -12,6 +13,16 @@ from app.service.statement.constant import (
     STATEMENT_SECTIONS_DIR,
     is_canonical_statement_section_entry,
 )
+
+
+class _StatementSourceEntry(TypedDict):
+    kind: str
+    value: NotRequired[str]
+    path: NotRequired[str]
+    state: NotRequired[str]
+    size: NotRequired[int]
+    mtime_ns: NotRequired[int]
+    digest: NotRequired[str]
 
 
 def _safe_workspace_regular_file(workspace: Path, rel: Path) -> Path | None:
@@ -39,7 +50,7 @@ def statement_sources_signature(
 ) -> str:
     """Stable signature of statement sources (excluding derived statement/main.tex)."""
     statement_root = workspace / STATEMENT_DIR
-    entries: list[dict[str, object]] = [
+    entries: list[_StatementSourceEntry] = [
         {"kind": "renderer-version", "value": STATEMENT_RENDERER_SIGNATURE_VERSION},
     ]
     if not statement_root.exists() or not statement_root.is_dir() or statement_root.is_symlink():

@@ -1,58 +1,7 @@
 from collections.abc import Mapping
-from typing import TypedDict
-
-from app.impl.runtime.dependency import runtime
-
 from app.impl.workspace.context_operation import dedupe_preserve_order
-from app.impl.workspace.context_run_detail import normalize_run_id_token, normalize_run_test_name_token
-VerificationDetailSummaryRow = TypedDict(
-    "VerificationDetailSummaryRow",
-    {
-        "details": dict[str, object],
-        "created_at": str,
-    },
-)
+from app.impl.workspace.context_run_detail import normalize_run_test_name_token
 
-VerificationSummary = TypedDict(
-    "VerificationSummary",
-    {
-        "tests_total": int,
-        "selected_tests_count": int,
-        "selected_tests": list[str],
-        "execution_skipped": bool,
-        "tests": list[dict[str, object]],
-        "usage": dict[str, object],
-    },
-    total=False,
-)
-
-def load_verification_detail_summary(problem_id: int, verification_id: str) -> VerificationDetailSummaryRow | dict[str, object]:
-    safe_verification_id = normalize_run_id_token(verification_id)
-    if not safe_verification_id:
-        return {}
-    verification_row = runtime().verification_service.verification_record(safe_verification_id)
-    if verification_row is None:
-        return {}
-    verification_problem_id = verification_row["problem_id"]
-    if (
-        isinstance(verification_problem_id, bool)
-        or not isinstance(verification_problem_id, int)
-        or verification_problem_id != problem_id
-    ):
-        return {}
-    detail = runtime().verification_service.verification_detail(safe_verification_id)
-    details = {
-        **detail,
-        **runtime().verification_service.verification_runtime_summary(safe_verification_id),
-        'verification_id': safe_verification_id,
-        'finished_at': verification_row['finished_at'],
-    }
-    details['status'] = verification_row['status']
-    details['artifact_verification_id'] = safe_verification_id
-    return {
-        'details': details,
-        'created_at': verification_row['created_at'],
-    }
 
 def _verification_tests_meta_stats(
     summary: Mapping[str, object] | None,

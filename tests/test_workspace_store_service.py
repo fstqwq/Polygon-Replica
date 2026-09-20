@@ -12,10 +12,34 @@ from app.service.statement.constant import STATEMENT_DEFAULT_FILES
 from app.service.statement.render import statement_templates_are_default
 
 from tests.db_fixture import DBTestBase
-from tests.isolated_db_helpers import isolated_db_fetch_one
+from tests.isolated_db_helpers import isolated_db_execute, isolated_db_fetch_one
 
 
 class TestWorkspaceStoreService(DBTestBase):
+    def test_identity_lookup_observes_changed_and_replaced_users(self) -> None:
+        for lookup in (self.workspace_service.ensure_user, self.workspace_service.known_user):
+            with self.subTest(lookup=lookup.__name__):
+                username = f"cached-{uuid.uuid4().hex[:8]}"
+                original = self.workspace_service.ensure_user(username)
+                isolated_db_execute(
+                    self.db, "UPDATE users SET is_banned=1 WHERE id=?", [original["id"]]
+                )
+                self.assertEqual(lookup(username)["is_banned"], 1)
+                isolated_db_execute(
+                    self.db,
+                    "UPDATE users SET username=? WHERE id=?",
+                    [f"renamed-{username}", original["id"]],
+                )
+                isolated_db_execute(
+                    self.db,
+                    "INSERT INTO users(username,created_at) VALUES(?,?)",
+                    [username, original["created_at"]],
+                )
+                replacement = lookup(username)
+                self.assertNotEqual(replacement["id"], original["id"])
+                self.assertEqual(replacement["username"], username)
+                self.assertEqual(replacement["is_banned"], 0)
+
     def test_new_workspace_seeds_default_statement_templates(self) -> None:
         self.workspace_service.ensure_problem(self.problem)
         self.workspace_service.ensure_user(self.user)

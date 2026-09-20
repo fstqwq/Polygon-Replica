@@ -60,13 +60,6 @@ class BatchDispatch:
         batch.dispatch_count += 1
         self._state._touch_batch_locked(batch)
 
-    def _take_ready_batch_locked(self) -> ExecutionBatchRecord | None:
-        batch = self._peek_ready_batch_locked()
-        if batch is None:
-            return None
-        self._dispatch_batch_locked(batch)
-        return batch
-
     @staticmethod
     def _json_object(raw: str, *, label: str) -> dict[str, object]:
         try:

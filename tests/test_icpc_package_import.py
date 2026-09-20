@@ -8,8 +8,8 @@ from pathlib import Path
 
 import yaml
 
-from app.service.export.adapters.shared import SUBMISSION_RULES
-from app.service.importing.icpc import ICPCPackageImportService
+from app.service.export.adapters.shared import SUBMISSION_RULES, SubmissionMetadata
+from app.service.importing.icpc import ICPCImportResult, ICPCPackageImportService
 from app.service.statement.render import (
     PROBLEM_TITLE_MAX_LEN,
     normalize_problem_title,
@@ -52,7 +52,7 @@ class TestICPCPackageImport(unittest.TestCase):
         ini_name: str = "",
         external_id: str = "two-sum",
         package_name: str = "package.zip",
-    ) -> dict[str, object]:
+    ) -> ICPCImportResult:
         payload = io.BytesIO()
         yaml_lines = ["validation: default"]
         if yaml_name:
@@ -263,7 +263,7 @@ limits:
     def test_submission_yaml_round_trips_all_expected_behaviors_and_strips_annotations(self) -> None:
         ws = self._workspace_path()
         payload = io.BytesIO()
-        metadata: dict[str, dict[str, object]] = {}
+        metadata: dict[str, SubmissionMetadata] = {}
         with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             zf.writestr(
                 "roundtrip/problem.yaml",

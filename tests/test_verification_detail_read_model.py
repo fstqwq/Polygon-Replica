@@ -1,11 +1,12 @@
 import threading
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from unittest.mock import patch
 
 from app.service.execution.policy import normalize_execution_result
 from app.service.execution.codec import execution_result_json
-from app.service.verification.lifecycle import ActivationPlan, PlannedTask, verification_task_id
+from app.service.verification.detail_read_model import VerificationTestDetailReadModel
+from app.service.verification.lifecycle import ActivationPlan, PlannedTask, VerificationSnapshotRecord, VerificationTaskKind, verification_task_id
 from app.service.verification.task_completion import TaskCompletion
 from app.service.verification.types import VerificationTaskStatus
 from tests.identity_helpers import canonical_test_verification_id
@@ -14,10 +15,10 @@ from tests.verification_service_fixture import VerificationServiceTestBase, make
 
 
 class TestVerificationDetailReadModel(VerificationServiceTestBase):
-    def _fixture(self):
-        verification_id = canonical_test_verification_id(self.test_id)
+    def _fixture(self, suffix: str = "") -> tuple[str, tuple[PlannedTask, ...]]:
+        verification_id = canonical_test_verification_id(self.test_id + suffix)
         self._insert_verification_row(verification_id)
-        kinds = {"generator-0": "generate-input", "accepted": "main-correct", "solution-0": "solution-run", "solution-1": "solution-run"}
+        kinds: dict[str, VerificationTaskKind] = {"generator-0": "generate-input", "accepted": "main-correct", "solution-0": "solution-run", "solution-1": "solution-run"}
         tasks = tuple(
             PlannedTask(
                 task_id=verification_task_id(verification_id, program, test),
@@ -34,10 +35,20 @@ class TestVerificationDetailReadModel(VerificationServiceTestBase):
         ))
         return verification_id, tasks
 
-    def _read(self, verification_id, test="002.in", program="solution-0", authorize=lambda _record: None):
-        return self.verification_service.verification_test_detail_read_model(
-            verification_id, test_name=test, program_id=program, authorize=authorize,
+    def _read(
+        self,
+        verification_id: str,
+        test: str = "002.in",
+        program: str | None = "solution-0",
+        authorize: Callable[[VerificationSnapshotRecord], None] | None = None,
+    ) -> VerificationTestDetailReadModel:
+        result = self.verification_service.verification_test_detail_read_model(
+            verification_id, test_name=test, program_id=program,
+            authorize=authorize or (lambda _record: None),
         )
+        self.assertIsNotNone(result)
+        assert result is not None
+        return result
 
     def test_scoped_tasks_all_programs_and_complete_pass_evidence(self):
         verification_id, tasks = self._fixture()
@@ -58,17 +69,25 @@ class TestVerificationDetailReadModel(VerificationServiceTestBase):
         self.assertEqual(len(full["tasks"]), 12)
         self.assertEqual(full["task_counts"]["total"], 12)
 
-    def test_authorization_precedes_detail_and_evidence_materialization(self):
-        verification_id, _tasks = self._fixture()
-        def denied(record):
-            self.assertEqual(record["id"], verification_id)
-            raise PermissionError("denied")
-        with (
-            patch.object(self.verification_task_store, "snapshot_rows", side_effect=AssertionError("evidence read")),
-            patch.object(self.verification_service, "_verification_detail_from_connection", side_effect=AssertionError("detail read")),
-            self.assertRaisesRegex(PermissionError, "denied"),
+    def test_authorization_precedes_detail_and_evidence_materialization(self) -> None:
+        for section, sql in (
+            ("detail", "UPDATE verifications SET pass_limit='invalid' WHERE id=?"),
+            ("evidence", "UPDATE verification_tasks SET result_json='invalid' WHERE verification_id=?"),
         ):
-            self._read(verification_id, authorize=denied)
+            with self.subTest(section=section):
+                verification_id, _tasks = self._fixture(section)
+                isolated_db_execute(self.db, sql, [verification_id])
+
+                def denied(record: VerificationSnapshotRecord) -> None:
+                    self.assertEqual(record["id"], verification_id)
+                    raise PermissionError("denied")
+
+                # A permitted reader reaches the corrupt persisted data. An
+                # unauthorized reader must be rejected before decoding it.
+                with self.assertRaises(ValueError):
+                    self._read(verification_id)
+                with self.assertRaisesRegex(PermissionError, "denied"):
+                    self._read(verification_id, authorize=denied)
 
     def test_cancellation_commit_keeps_current_snapshot_and_next_request_sees_it(self):
         verification_id, _tasks = self._fixture()

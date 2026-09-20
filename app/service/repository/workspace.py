@@ -45,7 +45,7 @@ from app.service.problem.test_spec import dumps_default_tests_spec
 from app.service.repository.revision import workspace_revision_info
 from app.service.statement.constant import STATEMENT_DEFAULT_FILES
 from app.service.verification.task_store import VerificationTaskStore
-from app.service.workspace.state import WorkspaceState
+from app.service.workspace.state import WorkspaceState, WorkspaceStatus
 
 
 class GlobalUserContext(TypedDict):
@@ -59,6 +59,21 @@ class WorkspaceContext(TypedDict):
     user: UserRow
     workspace: WorkspaceState
     latest_artifact_verification: WorkspaceRecentVerificationRow | None
+
+
+class WorkspaceDeleteResult(TypedDict):
+    problem: str
+    username: str
+    workspace_path: str
+    removed: bool
+    workspace_row_reset: bool
+
+
+class ProblemDeleteResult(TypedDict):
+    problem: str
+    problem_id: int
+    workspace_count: int
+    fs_warnings: list[str]
 
 
 def _workspace_transaction_path(workspace: Path) -> Path:
@@ -172,15 +187,15 @@ class WorkspaceService:
         self.config_values = config_values
         self.access_query = access_query
         self._store = WorkspaceDiskStore(db, verification_task_store=verification_task_store)
-        self._problem_cache: dict[str, dict] = {}
-        self._user_cache: dict[str, dict] = {}
+        self._problem_cache: dict[str, int] = {}
+        self._user_cache: dict[str, int] = {}
         self._cache_lock = threading.Lock()
         self._problem_deletion_guard: (
             Callable[[], ContextManager[None]] | None
         ) = None
         self._cleanup_problem_runtime: Callable[[str], None] | None = None
 
-    def _cache_get(self, cache: dict[str, dict], key: str) -> dict | None:
+    def _cache_get(self, cache: dict[str, int], key: str) -> int | None:
         with self._cache_lock:
             value = cache.get(key)
             if value is None:
@@ -190,7 +205,7 @@ class WorkspaceService:
             cache[key] = value
             return value
 
-    def _cache_put(self, cache: dict[str, dict], key: str, value: dict, max_entries: int) -> None:
+    def _cache_put(self, cache: dict[str, int], key: str, value: int, max_entries: int) -> None:
         with self._cache_lock:
             cache.pop(key, None)
             cache[key] = value
@@ -198,21 +213,16 @@ class WorkspaceService:
                 oldest_key = next(iter(cache))
                 cache.pop(oldest_key, None)
 
-    def _cache_evict(self, cache: dict[str, dict], key: str) -> None:
+    def _cache_evict(self, cache: dict[str, int], key: str) -> None:
         with self._cache_lock:
             cache.pop(key, None)
-
-    def clear_identity_caches(self) -> None:
-        with self._cache_lock:
-            self._problem_cache.clear()
-            self._user_cache.clear()
 
     def problem_row(self, problem: str) -> ProblemRow:
         """Resolve an existing problem without creating a Workspace."""
 
         return self._problem_row(problem)
 
-    def user_row(self, username: str):
+    def user_row(self, username: str) -> UserRow:
         """Resolve an existing user without creating a Workspace."""
 
         return self._user_row(username)
@@ -227,13 +237,6 @@ class WorkspaceService:
 
         self._problem_deletion_guard = guard
         self._cleanup_problem_runtime = cleanup_problem_runtime
-
-    def set_cached_user(self, username: str, row: dict[str, object]) -> None:
-        safe_username = str(username or "").strip()
-        if not safe_username:
-            return
-        with self._cache_lock:
-            self._user_cache[safe_username] = dict(row)
 
     def _validate_identifier(self, value: str, label: str) -> str:
         ident = str(value or "").strip()
@@ -267,65 +270,41 @@ class WorkspaceService:
             ensure_dir(bare.parent)
             run_git(["git", "init", "--bare", str(bare)])
         row = self._store.ensure_problem_row(slug=slug, repo_name=repo_name)
-        self._cache_put(self._problem_cache, slug, dict(row), self.PROBLEM_CACHE_MAX_ENTRIES)
+        self._cache_put(self._problem_cache, slug, row["id"], self.PROBLEM_CACHE_MAX_ENTRIES)
 
     def ensure_user(self, username: str) -> UserRow:
         username = self._validate_identifier(username, "user")
-        cached = self._cache_get(self._user_cache, username)
-        if cached is not None:
-            try:
-                cached_id = int(cached["id"])
-            except Exception:
-                cached_id = 0
-            if cached_id > 0:
-                row = self._store.user_row_by_id_username(cached_id, username)
-                if row is not None:
-                    cached_row = UserRow(**row)
-                    self._cache_put(
-                        self._user_cache,
-                        username,
-                        dict(cached_row),
-                        self.USER_CACHE_MAX_ENTRIES,
-                    )
-                    return cached_row
+        cached_id = self._cache_get(self._user_cache, username)
+        if cached_id is not None:
+            row = self._store.user_row_by_id_username(cached_id, username)
+            if row is not None:
+                return row
             self._cache_evict(self._user_cache, username)
-        row_dict = UserRow(**self._store.ensure_user_row(username))
+        row_dict = self._store.ensure_user_row(username)
         self._cache_put(
             self._user_cache,
             username,
-            dict(row_dict),
+            row_dict["id"],
             self.USER_CACHE_MAX_ENTRIES,
         )
         return row_dict
 
     def known_user(self, username: str) -> UserRow:
         safe_username = self._validate_identifier(username, "user")
-        cached = self._cache_get(self._user_cache, safe_username)
-        if cached is not None:
-            try:
-                cached_id = int(cached["id"])
-            except Exception:
-                cached_id = 0
-            if cached_id > 0:
-                row = self._store.user_row_by_id_username(cached_id, safe_username)
-                if row is not None:
-                    cached_row = UserRow(**row)
-                    self._cache_put(
-                        self._user_cache,
-                        safe_username,
-                        dict(cached_row),
-                        self.USER_CACHE_MAX_ENTRIES,
-                    )
-                    return cached_row
+        cached_id = self._cache_get(self._user_cache, safe_username)
+        if cached_id is not None:
+            row = self._store.user_row_by_id_username(cached_id, safe_username)
+            if row is not None:
+                return row
             self._cache_evict(self._user_cache, safe_username)
         row = self._store.user_row_by_username(safe_username)
         if row is None:
             raise ValueError(f"user {safe_username} not found; ask them to register first")
-        row_dict = UserRow(**row)
+        row_dict = row
         self._cache_put(
             self._user_cache,
             safe_username,
-            dict(row_dict),
+            row_dict["id"],
             self.USER_CACHE_MAX_ENTRIES,
         )
         return row_dict
@@ -338,32 +317,20 @@ class WorkspaceService:
 
     def _problem_row(self, slug: str) -> ProblemRow:
         slug = self._validate_identifier(slug, "problem")
-        cached = self._cache_get(self._problem_cache, slug)
-        if cached is not None:
-            try:
-                cached_id = int(cached["id"])
-            except Exception:
-                cached_id = 0
-            if cached_id > 0:
-                row = self._store.problem_row_by_id_slug(cached_id, slug)
-                if row is not None:
-                    cached_row = ProblemRow(**row)
-                    self._cache_put(
-                        self._problem_cache,
-                        slug,
-                        dict(cached_row),
-                        self.PROBLEM_CACHE_MAX_ENTRIES,
-                    )
-                    return cached_row
+        cached_id = self._cache_get(self._problem_cache, slug)
+        if cached_id is not None:
+            row = self._store.problem_row_by_id_slug(cached_id, slug)
+            if row is not None:
+                return row
             self._cache_evict(self._problem_cache, slug)
         row = self._store.problem_row_by_slug(slug)
         if row is None:
             raise ValueError(f"Unknown problem: {slug}")
-        row_dict = ProblemRow(**row)
+        row_dict = row
         self._cache_put(
             self._problem_cache,
             slug,
-            dict(row_dict),
+            row_dict["id"],
             self.PROBLEM_CACHE_MAX_ENTRIES,
         )
         return row_dict
@@ -466,11 +433,9 @@ class WorkspaceService:
     def owner_count(self, problem_id: int) -> int:
         return self._store.problem_owner_count(int(problem_id))
 
-    def _user_row(self, username: str):
+    def _user_row(self, username: str) -> UserRow:
         username = self._validate_identifier(username, "user")
         row = self.known_user(username)
-        if row is None:
-            raise ValueError(f"Unknown user: {username}")
         return row
 
     @contextmanager
@@ -649,11 +614,11 @@ class WorkspaceService:
         # Keep newly-created repositories at v0 without an automatic initial commit.
         run_git(["git", "-C", str(workspace), "symbolic-ref", "HEAD", "refs/heads/main"])
 
-    def _refresh_workspace_status_with_ids(self, workspace: Path, problem_id: int, user_id: int) -> dict[str, str | int | None]:
+    def _refresh_workspace_status_with_ids(self, workspace: Path, problem_id: int, user_id: int) -> WorkspaceStatus:
         status = self.read_workspace_status(workspace)
-        branch = branch if isinstance(branch := status.get("branch"), str) and branch else "main"
-        head = head if isinstance(head := status.get("head_commit"), str) else ""
-        dirty = 1 if bool(status.get("dirty")) else 0
+        branch = status["branch"]
+        head = status["head_commit"]
+        dirty = status["dirty"]
         revision = workspace_revision_info(
             workspace,
             branch,
@@ -676,10 +641,10 @@ class WorkspaceService:
         )
         return {"branch": branch, "head_commit": head, "dirty": dirty}
 
-    def refresh_workspace_status_with_ids(self, workspace: Path, problem_id: int, user_id: int) -> dict[str, str | int | None]:
+    def refresh_workspace_status_with_ids(self, workspace: Path, problem_id: int, user_id: int) -> WorkspaceStatus:
         return self._refresh_workspace_status_with_ids(workspace, int(problem_id), int(user_id))
 
-    def refresh_workspace_status_by_path(self, workspace: Path) -> dict[str, str | int | None] | None:
+    def refresh_workspace_status_by_path(self, workspace: Path) -> WorkspaceStatus | None:
         safe_workspace = Path(workspace).resolve()
         if not safe_workspace.exists() or not safe_workspace.is_dir():
             return None
@@ -695,7 +660,7 @@ class WorkspaceService:
             int(identity["user_id"]),
         )
 
-    def read_workspace_status(self, workspace: Path) -> dict[str, str | int | None]:
+    def read_workspace_status(self, workspace: Path) -> WorkspaceStatus:
         status_v2 = run_git(["git", "-C", str(workspace), "status", "--porcelain=2", "--branch"])
         if status_v2.returncode == 0:
             branch, head, dirty = self._parse_status_v2(status_v2.stdout)
@@ -811,13 +776,13 @@ class WorkspaceService:
         return target
 
     @staticmethod
-    def _is_active_status(raw: object) -> bool:
+    def _is_active_status(raw: str) -> bool:
         status = str(raw or "").strip().lower()
         if not status:
             return False
         return status not in {"ok", "failed", "error", "done", "completed", "cancelled"}
 
-    def delete_workspace(self, problem: str, username: str) -> dict[str, object]:
+    def delete_workspace(self, problem: str, username: str) -> WorkspaceDeleteResult:
         safe_problem = self._validate_identifier(problem, "problem")
         safe_user = self._validate_identifier(username, "user")
         p = self._problem_row(safe_problem)
@@ -862,7 +827,7 @@ class WorkspaceService:
             "workspace_row_reset": bool(workspace_id > 0),
         }
 
-    def delete_problem(self, problem: str) -> dict[str, object]:
+    def delete_problem(self, problem: str) -> ProblemDeleteResult:
         safe_problem = self._validate_identifier(problem, "problem")
         p = self._problem_row(safe_problem)
         problem_id = int(p["id"])

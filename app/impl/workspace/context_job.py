@@ -1,5 +1,6 @@
 import logging
 import re
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from app.runtime import ApplicationRuntime, ExportInFlight
@@ -32,7 +33,7 @@ def _run_verification_start_worker(
     workspace_head: str,
     workspace_dirty: bool,
     allow_package_certification: bool,
-    targets: list[dict[str, object]],
+    targets: Sequence[Mapping[str, object]],
     verification_id: str,
     source_commit: str = "",
     kind: str = Kind.ALL.value,
@@ -99,7 +100,7 @@ def start_verification_job(
     workspace_id: int,
     workspace_head: str,
     workspace_dirty: bool,
-    targets: list[dict[str, object]],
+    targets: Sequence[Mapping[str, object]],
     verification_id: str,
     allow_package_certification: bool,
     workspace_path: Path | str | None = None,

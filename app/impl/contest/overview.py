@@ -5,13 +5,17 @@ from fastapi import Request, Depends, HTTPException
 
 from app.impl.auth.session import require_session_user
 from app.impl.auth.shared import template_response
-from app.impl.contest.problem_status import contest_problem_status
-from app.impl.contest.workspace_scope import add_contest_problem_hrefs
+from app.impl.contest.problem_status import ContestProblemStatusView, contest_problem_status
+from app.impl.contest.workspace_scope import ContestProblemHrefRow, add_contest_problem_hrefs
 from app.impl.runtime.dependency import runtime
 from app.impl.workspace.context_job import start_export_job
 from app.service.export.service import NATIVE_PACKAGE_FORMAT
 
 from app.impl.contest.shared import _contest_ctx, _contest_redirect
+
+
+class ContestOverviewProblemRow(ContestProblemHrefRow):
+    status: ContestProblemStatusView | None
 
 
 def contest_overview_page(request: Request, contest: str, user: Annotated[str, Depends(require_session_user)]):
@@ -28,14 +32,13 @@ def contest_overview_page(request: Request, contest: str, user: Annotated[str, D
             include_review=True,
         ),
     )
-    rows: list[dict[str, object]] = []
+    rows: list[ContestOverviewProblemRow] = []
     for source_row in source_rows:
-        row = dict(source_row)
         readiness = source_row["readiness"]
-        row["status"] = (
-            contest_problem_status(readiness) if readiness is not None else None
-        )
-        rows.append(row)
+        rows.append(ContestOverviewProblemRow(
+            **source_row,
+            status=contest_problem_status(readiness) if readiness is not None else None,
+        ))
     owner_prefix_chars = max(
         (len(str(row["slug_owner"])) + 1 for row in rows),
         default=0,

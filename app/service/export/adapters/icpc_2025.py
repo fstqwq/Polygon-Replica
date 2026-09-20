@@ -10,6 +10,8 @@ from app.service.export.adapters.shared import (
     PackageAdapterPlan,
     PackageAdapterSupport,
     PackageFormat,
+    PackageLimits,
+    SubmissionMetadata,
 )
 from app.service.problem_package.service import NativePackageReader
 from app.service.statement.render import statement_title_from_snapshot
@@ -54,14 +56,14 @@ def render_problem_yaml(
         name_value = names["en"]
     else:
         name_value = names
-    limits: dict[str, object] = {
+    limits: PackageLimits = {
         "time_limit": max(0.001, time_limit_ms / 1000.0),
     }
     if memory_limit_mb is not None:
         limits["memory"] = memory_limit_mb
     if pass_limit > 1:
         limits["validation_passes"] = pass_limit
-    payload: dict[str, object] = {
+    payload: dict[str, str | list[str] | dict[str, str] | PackageLimits] = {
         "problem_format_version": "2025-09",
         "type": type_value,
         "name": name_value,
@@ -78,7 +80,7 @@ def render_problem_yaml(
     )
 
 
-def render_submissions_yaml(entries: dict[str, dict[str, object]]) -> str:
+def render_submissions_yaml(entries: dict[str, SubmissionMetadata]) -> str:
     return yaml.safe_dump(
         entries,
         allow_unicode=True,

@@ -1,6 +1,8 @@
 import uuid
+from collections.abc import Mapping
 
-from app.service.judgehost.task.model import ExecutionTemplate
+from app.service.judgehost.task.model import ExecutionTemplate, TaskPayload
+from app.service.judgehost.task.result_model import TaskSummary
 from app.db import now_iso
 from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
 from app.service.judgehost.domjudge import task_plan
@@ -41,8 +43,8 @@ class JudgehostTaskAdmission:
         selected_tests: list[str],
         verification_source: str,
         task_kind: str,
-    ) -> dict[str, object]:
-        summary: dict[str, object] = {
+    ) -> TaskSummary:
+        summary: TaskSummary = {
             "mode": mode,
             "pass_limit": max(1, pass_limit),
             "source": source_label,
@@ -83,7 +85,7 @@ class JudgehostTaskAdmission:
         bypass_case_result_cache: bool = False,
         compile_only: bool = False,
         persist_verification_run: bool = False,
-        prepared_payload: dict[str, object] | None = None,
+        prepared_payload: Mapping[str, object] | None = None,
         execution_template: ExecutionTemplate | None = None,
         service_class: str = "background",
         admission_gate: MaintenanceAdmissionGate | None = None,
@@ -220,14 +222,13 @@ class JudgehostTaskAdmission:
             verification_id=safe_verification_id,
             verification_task_id=safe_verification_task_id,
             verification_program_id=safe_program_id,
-            payload=payload,
         )
         return task_id
 
     def _insert_task(
         self,
         *,
-        payload: dict[str, object],
+        payload: TaskPayload,
         fingerprint: str,
         run_id: str,
         problem: str,
@@ -264,7 +265,7 @@ class JudgehostTaskAdmission:
                 "verification_id": verification_id,
                 "verification_task_id": verification_task_id,
                 "status": "enqueuing",
-                "payload": dict(payload),
+                "payload": payload.copy(),
                 "result": {},
                 "persist_verification_run": persist_verification_run,
                 "error_text": "",
@@ -294,12 +295,12 @@ class JudgehostTaskAdmission:
         *,
         task_id: str,
         run_id: str,
-        payload: dict[str, object],
+        payload: TaskPayload,
     ) -> int:
         batch_id = 0
         try:
             batch_id = self._batch_admission.stage(
-                {"task_id": task_id, "run_id": run_id, "payload": dict(payload)}
+                task_id=task_id, run_id=run_id, payload=payload.copy(),
             )
             queued = self._tasks.transition(
                 task_id,
@@ -339,7 +340,6 @@ class JudgehostTaskAdmission:
         verification_id: str,
         verification_task_id: str,
         verification_program_id: str,
-        payload: dict[str, object],
     ) -> None:
         try:
             def expose() -> None:
@@ -398,7 +398,7 @@ class JudgehostTaskAdmission:
         verification_program_id: str,
         expected_behavior: str = "compile",
         verification_source: str = "compile.only",
-        prepared_payload: dict[str, object] | None = None,
+        prepared_payload: Mapping[str, object] | None = None,
         admission_gate: MaintenanceAdmissionGate | None = None,
     ) -> str:
         return self.enqueue_task(

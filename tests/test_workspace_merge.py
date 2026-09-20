@@ -2,26 +2,20 @@ import json
 import os
 import tempfile
 import unittest
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator, cast
 
 from app.service.platform.git_process import run_git
 from app.service.platform.fs.layout import StorageLayout
 from app.service.repository.git import GitService
 from app.service.repository.merge import WorkspaceMergeService
-from app.service.repository.workspace import WorkspaceService, recover_workspace_swap
+from app.service.repository.workspace import recover_workspace_swap
 from app.setting import Settings
+from tests.db_fixture import DBTestBase
 
 
-class _WorkspaceLockStub:
-    @contextmanager
-    def workspace_lock(self, _workspace: Path) -> Iterator[None]:
-        yield
-
-
-class TestWorkspaceMerge(unittest.TestCase):
+class TestWorkspaceMerge(DBTestBase):
     def setUp(self) -> None:
+        super().setUp()
         self._temp = tempfile.TemporaryDirectory(prefix="polygon-merge-")
         self.root = Path(self._temp.name)
         self.remote = self.root / "problem.git"
@@ -48,10 +42,9 @@ class TestWorkspaceMerge(unittest.TestCase):
             contest_source_root=self.root / "contest-sources",
             backup_root=self.root / "backups",
         )
-        workspace_service = cast(WorkspaceService, _WorkspaceLockStub())
         self.service = WorkspaceMergeService(
             StorageLayout.from_settings(settings),
-            workspace_service,
+            self.workspace_service,
         )
 
     def tearDown(self) -> None:

@@ -2,6 +2,7 @@ import atexit
 import json
 import os
 import shutil
+import threading
 import time
 import unittest
 import uuid
@@ -155,45 +156,7 @@ password_envelope_module.password_envelope_store = PasswordEnvelopeStore(
 
 from app.main import runtime  # noqa: E402
 
-_COMPLETION_REF_ABORT_TRIGGER = "test_abort_verification_completion_ref_insert"
-_ACTIVATION_TASK_ABORT_TRIGGER = "test_abort_verification_activation_task_insert"
 _STARTUP_RECOVERY_ABORT_TRIGGER = "test_abort_verification_startup_recovery"
-
-
-def install_completion_ref_abort_fault() -> None:
-    """Force completion commits to fail while inserting artifact refs."""
-
-    runtime.db.execute(f"""
-        CREATE TRIGGER {_COMPLETION_REF_ABORT_TRIGGER}
-        BEFORE INSERT ON verification_task_artifacts
-        BEGIN
-            SELECT RAISE(ABORT, 'forced artifact ref failure');
-        END
-        """)
-
-
-def clear_completion_ref_abort_fault() -> None:
-    """Remove the completion fault installed by the matching test helper."""
-
-    runtime.db.execute(f"DROP TRIGGER IF EXISTS {_COMPLETION_REF_ABORT_TRIGGER}")
-
-
-def install_activation_task_abort_fault() -> None:
-    """Force activation to fail while inserting its immutable task graph."""
-
-    runtime.db.execute(f"""
-        CREATE TRIGGER {_ACTIVATION_TASK_ABORT_TRIGGER}
-        BEFORE INSERT ON verification_tasks
-        BEGIN
-            SELECT RAISE(ABORT, 'forced activation task failure');
-        END
-        """)
-
-
-def clear_activation_task_abort_fault() -> None:
-    """Remove the activation fault installed by the matching test helper."""
-
-    runtime.db.execute(f"DROP TRIGGER IF EXISTS {_ACTIVATION_TASK_ABORT_TRIGGER}")
 
 
 def install_startup_recovery_abort_fault() -> None:
@@ -216,9 +179,12 @@ def clear_startup_recovery_abort_fault() -> None:
 
 
 from app.config import ConfigValues  # noqa: E402
+from app.config.model import ConfigValue  # noqa: E402
 from app.impl.runtime.dependency import bind_application  # noqa: E402
 from app.main import app  # noqa: E402
 from app.service.platform.testlib_source import maintained_testlib_header  # noqa: E402
+from app.service.platform.worker_queue import WorkerFuture  # noqa: E402
+from app.service.problem.runtime_config import ProblemConfig  # noqa: E402
 
 
 def _expected_test_db_path() -> Path:
@@ -246,7 +212,7 @@ runtime.config_values.replace(_test_config_values)
 def override_config_values(
     test_case: unittest.TestCase,
     values: ConfigValues,
-    **updates: object,
+    **updates: ConfigValue,
 ) -> None:
     """Apply one validated test snapshot and restore it during cleanup."""
 
@@ -258,21 +224,19 @@ def override_config_values(
 
 
 def _wait_for_worker_group(
-    lock_attr: str, workers_attr: str, timeout_sec: float = 300.0
+    lock: threading.Lock, current: set[WorkerFuture], timeout_sec: float = 300.0
 ) -> None:
     deadline = time.monotonic() + max(0.0, float(timeout_sec))
     while True:
-        lock = getattr(runtime, lock_attr)
         with lock:
-            workers = [w for w in getattr(runtime, workers_attr) if w.is_alive()]
-            current = getattr(runtime, workers_attr)
+            workers = [worker for worker in current if worker.is_alive()]
             current.clear()
             current.update(workers)
         if not workers:
             return
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            return
+            raise TimeoutError("test runtime still has active workers")
         runtime.worker_queue_service.wait_for_futures(
             workers, timeout_sec=min(0.2, remaining)
         )
@@ -280,12 +244,12 @@ def _wait_for_worker_group(
 
 def _wait_for_verification_workers(timeout_sec: float = 300.0) -> None:
     _wait_for_worker_group(
-        "verification_lock", "verification_workers", timeout_sec=timeout_sec
+        runtime.verification_lock, runtime.verification_workers, timeout_sec=timeout_sec
     )
 
 
 def _wait_for_export_workers(timeout_sec: float = 300.0) -> None:
-    _wait_for_worker_group("export_lock", "export_workers", timeout_sec=timeout_sec)
+    _wait_for_worker_group(runtime.export_lock, runtime.export_workers, timeout_sec=timeout_sec)
 
 
 db = runtime.db
@@ -362,13 +326,6 @@ class RuntimeDBTestBase(unittest.TestCase):
     def random_id(self, prefix: str) -> str:
         safe_prefix = str(prefix or "").strip("-")[:7] or "user"
         return f"{safe_prefix}-{uuid.uuid4().hex[:8]}"
-
-    def _artifact_root(self, artifact_id: str) -> Path:
-        problem = str(getattr(self, "problem", "alice/sample"))
-        return (
-            Path(os.environ["POLYGON_REPLICA_ARTIFACTS_ROOT"]) / problem / artifact_id
-        )
-
 
 class WorkspaceTestBase(RuntimeDBTestBase):
     """DB fixture that creates real Git workspaces only when requested."""
@@ -460,7 +417,7 @@ class WorkspaceTestBase(RuntimeDBTestBase):
     @staticmethod
     def _seed_verification_files(ws: Path) -> None:
         problem_cfg = ws / "config/problem.json"
-        problem_cfg_payload: dict[str, object] = {
+        problem_cfg_payload: ProblemConfig = {
             "memory_limit_mb": 1024,
             "mode": "pass-fail",
             "pass_limit": 1,
@@ -490,7 +447,6 @@ class WorkspaceTestBase(RuntimeDBTestBase):
 
     def setUp(self) -> None:
         super().setUp()
-        workspace_service.clear_identity_caches()
         if not self.allow_worker_submit:
             submit_guard = patch.object(
                 runtime.worker_queue_service,

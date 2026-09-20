@@ -1,132 +1,78 @@
 import io
+import shutil
 import stat
 import tempfile
+import threading
+import time
 import unittest
 import zipfile
 from pathlib import Path
-from types import SimpleNamespace
-from typing import cast
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
-from app.config import ConfigValues
 from app.impl.contest.package import _prepare_external_packages
+from app.impl.runtime.dependency import bind_application
+from app.main import app, runtime
 from app.service.contest.package import (
     ContestPackageService,
     ContestPackageSnapshot,
 )
-from app.service.contest.service import ContestService
-from app.service.export.adapters import PackageAdapterRegistry
 from app.service.export.service import CachedExternalPackage
-from app.service.problem_package.service import ProblemPackageService
+from app.service.problem_package.store import MaterializationRow
+from tests.common import E2ETestBase
+from tests.db_helpers import db_fetch_all, db_fetch_one
+from tests.package_builders import PdfSandbox
+from tests.package_support import (
+    blocked_export_queue,
+    publish_problem,
+    verification_builder,
+)
 
 
-class _ContestService:
-    def __init__(self, root: Path) -> None:
-        self.root = root
-        self.source_generation = 4
-        self.roster = [
-            {
-                "contest_problem_id": 11,
-                "idx": "A",
-                "problem_id": 101,
-                "statement_folder": "A",
-                "problem_slug": "alice/alpha",
-                "slug_leaf": "alpha",
-                "created_at": "2026-08-19T00:00:00+00:00",
-            },
-            {
-                "contest_problem_id": 12,
-                "idx": "B",
-                "problem_id": 102,
-                "statement_folder": "B",
-                "problem_slug": "alice/beta",
-                "slug_leaf": "beta",
-                "created_at": "2026-08-19T00:00:00+00:00",
-            },
-        ]
-        self.download_root_calls = 0
+class TestContestPackageDownload(E2ETestBase):
+    seed_primary_workspace = False
 
-    def contest_context(self, contest_slug: str) -> dict[str, object] | None:
-        if contest_slug != "example-contest":
-            return None
-        return {
-            "id": 7,
-            "slug": contest_slug,
-            "source_generation": self.source_generation,
-        }
-
-    def contest_problems(self, _contest_id: int) -> list[dict[str, object]]:
-        return self.roster
-
-    def package_download_root(self, _contest_slug: str, operation_id: str) -> Path:
-        self.download_root_calls += 1
-        root = self.root / operation_id
-        root.mkdir(parents=True)
-        return root
-
-
-class _ProblemPackageService:
-    def __init__(self) -> None:
-        self.statuses = {101: "ready", 102: "ready"}
-        self.languages = {
-            "np-101": ["english", "chinese"],
-            "np-102": ["english", "chinese", "german"],
-        }
-
-    def published_readiness_many(
-        self, problem_ids: list[int]
-    ) -> dict[int, dict[str, object]]:
-        return {
-            problem_id: {
-                "problem_id": problem_id,
-                "published_commit": str(problem_id) * 20,
-                "published_revision_number": problem_id,
-                "native_package_revision_number": problem_id,
-                "native_package_id": f"np-{problem_id}",
-                "status": self.statuses[problem_id],
-                "verified": self.statuses[problem_id] == "ready",
-                "missing_reason": "",
-            }
-            for problem_id in problem_ids
-        }
-
-    @staticmethod
-    def native_package(native_package_id: str) -> dict[str, object]:
-        problem_id = int(native_package_id.removeprefix("np-"))
-        return {
-            "id": native_package_id,
-            "problem_id": problem_id,
-            "status": "available",
-            "source_commit": str(problem_id) * 20,
-            "revision_number": problem_id,
-            "archive_sha256": str(problem_id)[-1] * 64,
-        }
-
-    def statement_languages(self, native_package_id: str) -> list[str]:
-        return self.languages[native_package_id]
-
-
-class TestContestPackageDownload(unittest.TestCase):
     def setUp(self) -> None:
+        super().setUp()
+        self.user = "alice"
         self.temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp_dir.cleanup)
         self.root = Path(self.temp_dir.name)
-        self.contest = _ContestService(self.root)
-        self.packages = _ProblemPackageService()
-        self.registry = PackageAdapterRegistry(
-            ConfigValues({}, normalizer=lambda raw: raw),
-            Mock(),
+        self.contest = runtime.contest_service
+        self.packages = runtime.problem_package_service
+        self.registry = runtime.export_service.package_adapters
+        self.native_packages = [
+            self._publish_package("alice/alpha", ("english", "chinese")),
+            self._publish_package("alice/beta", ("english", "chinese", "german")),
+        ]
+        self.actor_id = int(db_fetch_one("SELECT id FROM users WHERE username='alice'")["id"])
+        self.contest_id = self.contest.create_contest_with_owner(
+            slug="example-contest", title="Package fixture", owner_user_id=self.actor_id,
         )
+        self.problem_ids = [package["problem_id"] for package in self.native_packages]
+        for idx, package in zip(("A", "B"), self.native_packages, strict=True):
+            self.contest.add_problem(self.contest_id, idx, package["problem_id"], self.actor_id)
         self.service = ContestPackageService(
-            cast(ContestService, self.contest),
-            self.registry,
-            cast(ProblemPackageService, self.packages),
+            self.contest, self.registry, self.packages,
             problem_zip_max_expanded_bytes=4 * 1024 * 1024,
         )
 
+    def _publish_package(self, problem_slug: str, languages: tuple[str, ...]) -> MaterializationRow:
+        workspace = self._seed_workspace(problem_slug, self.user)
+        english = workspace / "statement-sections/english"
+        for language in languages:
+            if language != "english":
+                destination = workspace / "statement-sections" / language
+                shutil.copytree(english, destination, dirs_exist_ok=True)
+        for directory in (workspace / "statement-sections").iterdir():
+            if directory.is_dir() and directory.name not in languages:
+                shutil.rmtree(directory)
+        _workspace, problem_id, _commit = publish_problem(workspace, problem_slug, self.user)
+        revision = self.packages.published_revision(problem_id)
+        return self.packages.ensure_native_package(revision, verification_builder(problem_id))
+
     def _snapshot(self, package_format: str = "domjudge") -> ContestPackageSnapshot:
         return self.service.freeze_download(
-            contest_id=7,
+            contest_id=self.contest_id,
             contest_slug="example-contest",
             package_format=package_format,
         )
@@ -171,27 +117,26 @@ class TestContestPackageDownload(unittest.TestCase):
     def test_freeze_requires_ready_packages_and_intersects_languages(self) -> None:
         snapshot = self._snapshot()
 
-        self.assertEqual(snapshot.source_generation, 4)
+        self.assertEqual(snapshot.source_generation, self.contest.contest_context("example-contest")["source_generation"])
         self.assertEqual(snapshot.statement_languages, ("english", "chinese"))
         self.assertEqual(
             [item.native_package_id for item in snapshot.items],
-            ["np-101", "np-102"],
+            [package["id"] for package in self.native_packages],
         )
 
-        self.packages.statuses[102] = "none"
+        self.packages.store.invalidate_materialization(self.native_packages[1]["id"], "fixture unavailable")
         with self.assertRaisesRegex(ValueError, "Packages are not ready: alice/beta"):
             self._snapshot()
-        self.assertEqual(self.contest.download_root_calls, 0)
 
     def test_validate_snapshot_rejects_contest_changes(self) -> None:
         snapshot = self._snapshot()
-        self.contest.source_generation += 1
+        self.contest.remove_problem(self.contest_id, self.problem_ids[1])
 
         with self.assertRaisesRegex(ValueError, "retry download"):
             self.service.validate_snapshot(snapshot)
 
     def test_freeze_requires_one_common_statement_language(self) -> None:
-        self.packages.languages["np-102"] = ["german"]
+        self._publish_package("alice/beta", ("german",))
 
         with self.assertRaisesRegex(ValueError, "no common statement language"):
             self._snapshot()
@@ -258,7 +203,7 @@ class TestContestPackageDownload(unittest.TestCase):
     def test_download_rejects_incomplete_inputs(self) -> None:
         snapshot = self._snapshot()
         external_packages = self._external_packages(snapshot)
-        external_packages.pop(102)
+        external_packages.pop(self.problem_ids[1])
         with self.assertRaisesRegex(ValueError, "external package set is incomplete"):
             self.service.build_download(
                 snapshot,
@@ -271,7 +216,7 @@ class TestContestPackageDownload(unittest.TestCase):
             with self.subTest(package_format=package_format):
                 snapshot = self._snapshot(package_format)
                 external_packages = self._external_packages(snapshot)
-                external_packages[101].path.write_bytes(b"not a zip")
+                external_packages[self.problem_ids[0]].path.write_bytes(b"not a zip")
 
                 with self.assertRaisesRegex(ValueError, "cached external package is invalid"):
                     self.service.build_download(
@@ -286,10 +231,10 @@ class TestContestPackageDownload(unittest.TestCase):
                 with self.subTest(package_format=package_format, invalid_kind=invalid_kind):
                     snapshot = self._snapshot(package_format)
                     external_packages = self._external_packages(snapshot)
-                    path = external_packages[101].path
+                    path = external_packages[self.problem_ids[0]].path
                     if invalid_kind == "crc":
                         path.write_bytes(
-                            path.read_bytes().replace(b"input-101\n", b"input-109\n", 1)
+                            path.read_bytes().replace(f"input-{self.problem_ids[0]}\n".encode(), f"INPUT-{self.problem_ids[0]}\n".encode(), 1)
                         )
                     else:
                         with zipfile.ZipFile(path, "w") as archive:
@@ -313,7 +258,7 @@ class TestContestPackageDownload(unittest.TestCase):
                 with self.subTest(package_format=package_format, invalid_kind=invalid_kind):
                     snapshot = self._snapshot(package_format)
                     external_packages = self._external_packages(snapshot)
-                    path = external_packages[101].path
+                    path = external_packages[self.problem_ids[0]].path
                     directory = zipfile.ZipInfo("payload/")
                     directory.external_attr = (
                         stat.S_IFLNK if invalid_kind == "symlink" else stat.S_IFDIR
@@ -341,7 +286,7 @@ class TestContestPackageDownload(unittest.TestCase):
             with self.subTest(package_format=package_format):
                 snapshot = self._snapshot(package_format)
                 external_packages = self._external_packages(snapshot)
-                with zipfile.ZipFile(external_packages[101].path, "w") as archive:
+                with zipfile.ZipFile(external_packages[self.problem_ids[0]].path, "w") as archive:
                     archive.writestr("data/secret/020.ans", b"x" * (4 * 1024 * 1024 + 1))
 
                 with self.assertRaises(ValueError) as raised:
@@ -352,7 +297,7 @@ class TestContestPackageDownload(unittest.TestCase):
                     )
 
                 filename = (
-                    "external-101.zip"
+                    f"external-{self.problem_ids[0]}.zip"
                     if package_format == "domjudge"
                     else "A-alice-alpha.zip"
                 )
@@ -366,112 +311,57 @@ class TestContestPackageDownload(unittest.TestCase):
     def test_freeze_rejects_unregistered_format(self) -> None:
         with self.assertRaisesRegex(ValueError, "unsupported package format: custom"):
             self._snapshot("custom")
-        self.assertEqual(self.contest.download_root_calls, 0)
 
     def test_prepare_submits_missing_exports_together_and_reuses_completed_cache(self) -> None:
         snapshot = self._snapshot()
-        ready: dict[int, CachedExternalPackage] = {}
-        submitted: list[int] = []
-        test_root = self.root
+        results: list[dict[int, CachedExternalPackage]] = []
+        errors: list[BaseException] = []
 
-        def cached_external_package(
-            *,
-            problem_id: int,
-            native_package_id: str,
-            package_format: str,
-        ) -> CachedExternalPackage | None:
-            del native_package_id, package_format
-            return ready.get(problem_id)
+        def prepare() -> None:
+            try:
+                with bind_application(app):
+                    results.append(_prepare_external_packages(snapshot, actor_user_id=self.actor_id))
+            except BaseException as exc:
+                errors.append(exc)
 
-        fake_runtime = SimpleNamespace(
-            export_service=SimpleNamespace(
-                cached_external_package=cached_external_package,
-            ),
-            config_values=SimpleNamespace(integer=lambda _key: 4096),
-        )
-
-        class Future:
-            def __init__(self, item_problem_id: int) -> None:
-                self.problem_id = item_problem_id
-
-            def join(self) -> None:
-                self.assert_all_submitted()
-                item = next(
-                    row
-                    for row in snapshot.items
-                    if row.problem_id == self.problem_id
-                )
-                path = test_root / f"prepared-{self.problem_id}.zip"
-                path.write_bytes(b"external")
-                ready[self.problem_id] = CachedExternalPackage(
-                    export_id=f"e-{self.problem_id}",
-                    native_package_id=item.native_package_id,
-                    package_format=snapshot.package_format,
-                    filename=path.name,
-                    path=path,
-                )
-
-            @staticmethod
-            def exception() -> None:
-                return None
-
-            @staticmethod
-            def assert_all_submitted() -> None:
-                if len(submitted) != 2:
-                    raise AssertionError("waiting started before all jobs were submitted")
-
-        def start_job(*_args: object, problem_id: int, **_kwargs: object):
-            submitted.append(problem_id)
-            return (f"job-{problem_id}", Future(problem_id))
-
-        with (
-            patch("app.impl.contest.package.runtime", return_value=fake_runtime),
-            patch(
-                "app.impl.contest.package.start_ready_external_export_job",
-                side_effect=start_job,
-            ),
-        ):
-            result = _prepare_external_packages(snapshot, actor_user_id=9)
-            reused = _prepare_external_packages(snapshot, actor_user_id=9)
-
-        self.assertEqual(submitted, [101, 102])
-        self.assertEqual(set(result), {101, 102})
-        self.assertEqual(reused, result)
+        with patch.object(runtime.tex_compile_service, "sandbox", PdfSandbox(),), blocked_export_queue() as release:
+            thread = threading.Thread(target=prepare, daemon=True)
+            thread.start()
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                queued = db_fetch_one("SELECT COUNT(*) AS n FROM export_jobs WHERE status='queued'")
+                if int(queued["n"]) == 2:
+                    break
+                threading.Event().wait(0.01)
+            self.assertEqual(int(queued["n"]), 2)
+            self.assertTrue(thread.is_alive())
+            release.set()
+            thread.join(timeout=20)
+            self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(set(results[0]), set(self.problem_ids))
+        reused = _prepare_external_packages(snapshot, actor_user_id=self.actor_id)
+        self.assertEqual(reused, results[0])
+        rows = db_fetch_all("SELECT status FROM export_jobs")
+        self.assertEqual([row["status"] for row in rows], ["succeeded", "succeeded"])
+        for cached in reused.values():
+            with zipfile.ZipFile(cached.path) as archive:
+                self.assertIn("problem.yaml", archive.namelist())
 
     def test_prepare_reports_problem_identity_format_and_worker_error(self) -> None:
         snapshot = self._snapshot()
-        fake_runtime = SimpleNamespace(
-            export_service=SimpleNamespace(
-                cached_external_package=Mock(return_value=None),
-            ),
-            config_values=SimpleNamespace(integer=lambda _key: 4096),
-        )
-
-        class FailedFuture:
-            @staticmethod
-            def join() -> None:
-                return None
-
-            @staticmethod
-            def exception() -> ValueError:
-                return ValueError("adapter failed")
-
-        with (
-            patch("app.impl.contest.package.runtime", return_value=fake_runtime),
-            patch(
-                "app.impl.contest.package.start_ready_external_export_job",
-                side_effect=lambda *_args, **_kwargs: (
-                    "failed-job",
-                    FailedFuture(),
-                ),
-            ),
-            self.assertRaisesRegex(
-                ValueError,
-                r"A alice/alpha \[domjudge\]: adapter failed",
-            ),
-        ):
-            _prepare_external_packages(snapshot, actor_user_id=9)
-
+        package = self.native_packages[0]
+        runtime.storage_layout.resolve_artifact(package["archive_rel_path"]).write_bytes(b"damaged archive")
+        with patch.object(runtime.tex_compile_service, "sandbox", PdfSandbox(),):
+            with self.assertRaises(ValueError) as raised:
+                _prepare_external_packages(snapshot, actor_user_id=self.actor_id)
+        self.assertIn("A alice/alpha [domjudge]:", str(raised.exception))
+        failures = db_fetch_all("SELECT error FROM export_jobs WHERE problem_id=? AND status='failed'", [self.problem_ids[0]])
+        self.assertEqual(len(failures), 1)
+        self.assertTrue(failures[0]["error"])
+        self.assertIsNone(runtime.export_service.cached_external_package(
+            problem_id=self.problem_ids[0], native_package_id=package["id"], package_format="domjudge",
+        ))
 
 if __name__ == "__main__":
     unittest.main()

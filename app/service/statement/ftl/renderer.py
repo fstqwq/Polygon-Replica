@@ -1,4 +1,5 @@
 import re
+from collections.abc import Mapping
 
 from app.service.statement.ftl.evaluator import (
     UNDEFINED,
@@ -70,7 +71,7 @@ def _render_nodes(nodes: list[FtlNode], scope: dict[str, object]) -> str:
     return "".join(out)
 
 
-def render_ftl_template(template_text: str, context: dict[str, object]) -> str:
+def render_ftl_template(template_text: str, context: Mapping[str, object]) -> str:
     stripped = FTL_COMMENT_RE.sub("", template_text)
     stripped = _strip_standalone_directive_lines(stripped)
     nodes, _pos, _stop_tag, _stop_arg = _parse_nodes(stripped, 0, set(), set())

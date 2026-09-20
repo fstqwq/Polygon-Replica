@@ -39,7 +39,7 @@ class TestUIComponents(UIHelpersMixin, E2ETestBase):
     seed_default_workspace = False
 
     @staticmethod
-    def _update_build_config(ws: Path, **updates: object) -> None:
+    def _update_build_config(ws: Path, **updates: str | list[str]) -> None:
         path = ws / "config/build.json"
         payload = json.loads(path.read_text(encoding="utf-8"))
         payload.update(updates)

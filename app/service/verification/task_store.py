@@ -4,9 +4,9 @@ from collections.abc import Callable, Iterable, Iterator
 from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
 from threading import Condition, RLock
-from typing import TypeVar, TypedDict, cast
+from typing import TypeVar
 
-from app.db import DB, now_iso
+from app.db import DB, SQLValue, now_iso
 from app.service.execution.codec import (
     execution_result_from_json,
     execution_result_json,
@@ -46,64 +46,7 @@ from app.service.verification.task_completion import (
     TaskCompletion,
 )
 from app.service.verification.task_metadata import canonical_diagnostics
-from app.service.verification.types import VerificationStatus, VerificationTaskStatus
-
-
-class VerificationTaskContext(TypedDict):
-    """Immutable task metadata and the identities of its current execution."""
-
-    id: str
-    verification_id: str
-    task_kind: str
-    source_path: str
-    program_id: str
-    test_name: str
-    expected_behavior: str
-    run_id: str
-    judgehost_task_id: str
-
-
-class VerificationTaskRow(VerificationTaskContext):
-    predecessor_task_id: str
-    queue_index: int
-    status: VerificationTaskStatus
-    result: ExecutionResult
-    result_json: str
-    verdict: str
-    runtime_sec: float | None
-    cpu_sec: float | None
-    wall_sec: float | None
-    memory_kb: int | None
-    answer_correct: bool
-    compile_log: str
-    error_text: str
-    feedback_text: str
-    output_ref: str
-    started_at: str | None
-    finished_at: str | None
-    created_at: str
-    updated_at: str
-
-
-class VerificationTaskListRow(TypedDict):
-    id: str
-    verification_id: str
-    task_kind: str
-    source_path: str
-    program_id: str
-    test_name: str
-    expected_behavior: str
-    status: VerificationTaskStatus
-    verdict: str
-
-
-class VerificationTaskReadRow(TypedDict):
-    id: str
-    task_kind: str
-    source_path: str
-    program_id: str
-    test_name: str
-    status: VerificationTaskStatus
+from app.service.verification.types import VerificationDetail, VerificationStatus, VerificationTaskContext, VerificationTaskRow, VerificationTaskStatus
 
 
 @dataclass(frozen=True)
@@ -383,7 +326,7 @@ class VerificationTaskStore:
         plan: ActivationPlan,
         *,
         write_detail: Callable[
-            [sqlite3.Connection, str, dict[str, object]],
+            [sqlite3.Connection, str, VerificationDetail],
             None,
         ],
     ) -> ActivationCommit:
@@ -468,11 +411,11 @@ class VerificationTaskStore:
                 })
             return commit
 
-    def _runtime_status(self, row: dict[str, object]) -> _RuntimeTaskState | None:
+    def _runtime_status(self, row: sqlite3.Row) -> _RuntimeTaskState | None:
         with self._runtime_lock:
             return self._runtime_by_task_id.get(str(row["id"]))
 
-    def _row_order(self, row: dict[str, object]) -> tuple[object, ...]:
+    def _row_order(self, row: sqlite3.Row) -> tuple[int, tuple[int, str], str, str]:
         return (
             _task_kind_rank(str(row["task_kind"] or "")),
             _test_name_order(str(row["test_name"] or "")),
@@ -481,7 +424,7 @@ class VerificationTaskStore:
         )
 
     def _decorate_row(
-        self, index: int, row: dict[str, object], *, results: dict[str, ExecutionResult],
+        self, index: int, row: sqlite3.Row, *, results: dict[str, ExecutionResult],
     ) -> VerificationTaskRow:
         task_id = str(row["id"] or "")
         with self._runtime_lock:
@@ -496,7 +439,7 @@ class VerificationTaskStore:
     def _decorate_row_with_runtime(
         self,
         index: int,
-        row: dict[str, object],
+        row: sqlite3.Row,
         *,
         runtime: _RuntimeTaskState | None,
         results: dict[str, ExecutionResult] | None = None,
@@ -551,53 +494,11 @@ class VerificationTaskStore:
             "updated_at": updated_at,
         }
 
-    def _decorate_list_row(
-        self, row: dict[str, object], *, results: dict[str, ExecutionResult],
-    ) -> VerificationTaskListRow:
-        runtime = self._runtime_status(row)
-        final_status = str(row["final_status"] or "")
-        if final_status:
-            status = VerificationTaskStatus(final_status)
-        elif runtime is not None:
-            status = runtime.status
-        else:
-            status = VerificationTaskStatus.PENDING
-        task_id = str(row["id"] or "")
-        result = _stored_result(runtime, str(row["result_json"] or "{}"), results=results)
-        return {
-            "id": task_id,
-            "verification_id": str(row["verification_id"] or ""),
-            "task_kind": str(row["task_kind"] or ""),
-            "source_path": str(row["source_path"] or ""),
-            "program_id": str(row["program_id"] or ""),
-            "test_name": str(row["test_name"] or ""),
-            "expected_behavior": str(row["expected_behavior"] or ""),
-            "status": status,
-            "verdict": result.verdict,
-        }
-
     def list_rows(self, verification_id: str) -> list[VerificationTaskRow]:
-        rows = [dict(row) for row in self.db.fetch_all("SELECT * FROM verification_tasks WHERE verification_id=?", [verification_id])]
+        rows = self.db.fetch_all("SELECT * FROM verification_tasks WHERE verification_id=?", [verification_id])
         ordered = sorted(rows, key=self._row_order)
         results: dict[str, ExecutionResult] = {}
         return [self._decorate_row(index + 1, row, results=results) for index, row in enumerate(ordered)]
-
-    def list_rows_for_list(self, verification_id: str) -> list[VerificationTaskListRow]:
-        rows = [
-            dict(row)
-            for row in self.db.fetch_all(
-                """
-                SELECT id,verification_id,task_kind,source_path,program_id,
-                       test_name,expected_behavior,final_status,result_json
-                FROM verification_tasks
-                WHERE verification_id=?
-                """,
-                [verification_id],
-            )
-        ]
-        ordered = sorted(rows, key=self._row_order)
-        results: dict[str, ExecutionResult] = {}
-        return [self._decorate_list_row(row, results=results) for row in ordered]
 
     def snapshot_rows(
         self,
@@ -606,9 +507,9 @@ class VerificationTaskStore:
         *,
         test_name: str | None = None,
         program_id: str | None = None,
-    ) -> list[dict[str, object]]:
+    ) -> list[VerificationTaskRow]:
         where = "task.verification_id=?"
-        params: list[object] = [verification_id]
+        params: list[SQLValue] = [verification_id]
         if test_name is not None:
             where += " AND task.test_name=?"
             params.append(test_name)
@@ -620,7 +521,7 @@ class VerificationTaskStore:
             FROM verification_tasks task
             LEFT JOIN verification_task_diagnostics diagnostic ON diagnostic.task_id=task.id
             WHERE """
-        rows = [dict(row) for row in conn.execute(query + where, params).fetchall()]
+        rows = conn.execute(query + where, params).fetchall()
         if test_name is not None:
             # Duplicate ownership follows completion order, independently of the
             # artifact index's task-id ordering. Only generator evidence is read.
@@ -649,12 +550,12 @@ class VerificationTaskStore:
             owner_ids.difference_update(str(row["id"]) for row in rows)
             if owner_ids:
                 placeholders = ",".join("?" for _ in owner_ids)
-                rows.extend(dict(row) for row in conn.execute(
+                rows.extend(conn.execute(
                     query + f"task.verification_id=? AND task.id IN ({placeholders})",
                     [verification_id, *sorted(owner_ids)],
                 ).fetchall())
         artifact_where = "verification_id=? AND role IN ('generated-input','accepted-answer')"
-        artifact_params: list[object] = [verification_id]
+        artifact_params: list[SQLValue] = [verification_id]
         if test_name is not None:
             artifact_where += " AND test_name=?"
             artifact_params.append(test_name)
@@ -672,20 +573,18 @@ class VerificationTaskStore:
                 for row in rows if str(row["id"]) in self._runtime_by_task_id
             }
         ordered = sorted(rows, key=self._row_order)
-        values: list[dict[str, object]] = []
+        values: list[VerificationTaskRow] = []
         # Share immutable results within this materialized query only. The map
         # has at most one entry per row and is released when the read returns.
         results: dict[str, ExecutionResult] = {}
         limit_bytes = self._limit_bytes()
         for index, row in enumerate(ordered, start=1):
             task_id = str(row["id"] or "")
-            decorated = dict(
-                self._decorate_row_with_runtime(
-                    index,
-                    row,
-                    runtime=runtimes.get(task_id),
-                    results=results,
-                )
+            decorated = self._decorate_row_with_runtime(
+                index,
+                row,
+                runtime=runtimes.get(task_id),
+                results=results,
             )
             snapshot = task_diagnostic_snapshot_from_json(
                 str(row["late_diagnostic_json"] or "")
@@ -693,7 +592,7 @@ class VerificationTaskStore:
             decorated["input_ref"] = artifact_owners.get((str(row["test_name"]), "generated-input"), "")
             decorated["answer_ref"] = artifact_owners.get((str(row["test_name"]), "accepted-answer"), "")
             display = compose_task_diagnostic_display(
-                cast(ExecutionResult, decorated["result"]),
+                decorated["result"],
                 snapshot,
                 limit_bytes=limit_bytes,
             )
@@ -730,7 +629,7 @@ class VerificationTaskStore:
             return None
         return self._decorate_row_with_runtime(
             1,
-            dict(row),
+            row,
             runtime=runtime,
         )
 
@@ -979,15 +878,14 @@ class VerificationTaskStore:
             """,
             [verification_id, *completed_program_ids],
         ).fetchall()
-        rows_by_program: dict[str, list[dict[str, object]]] = {}
+        rows_by_program: dict[str, list[sqlite3.Row]] = {}
         # Current transaction results are already canonical; runtime results
         # are reusable only when their text matches this SQLite snapshot.
         results = {text: result for text, result in stored_results.values()}
         for row in rows:
-            task_row = dict(row)
             rows_by_program.setdefault(
-                str(task_row["program_id"] or ""), []
-            ).append(task_row)
+                str(row["program_id"] or ""), []
+            ).append(row)
 
         for program_id in completed_program_ids:
             program_rows = rows_by_program.get(program_id)
@@ -1647,7 +1545,7 @@ class VerificationTaskStore:
         finish: SanityFinish,
         *,
         write_detail: Callable[
-            [sqlite3.Connection, str, dict[str, object]],
+            [sqlite3.Connection, str, VerificationDetail],
             None,
         ],
     ) -> VerificationTransitionCommit:

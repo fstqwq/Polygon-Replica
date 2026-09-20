@@ -1,6 +1,8 @@
 import base64
 import hashlib
 import json
+import subprocess
+import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -15,7 +17,7 @@ from app.service.judgehost.batch.model import (
 )
 from app.service.judgehost.batch.runtime import JudgehostBatchRuntime
 from app.service.judgehost.configuration import JudgehostConfiguration
-from app.service.judgehost.domjudge.case_result import build_case_result
+from app.service.execution.policy import normalize_execution_result
 from app.service.judgehost.domjudge.identity import submit_id
 from app.service.judgehost.domjudge.wire import DomjudgeWireProjector
 from app.service.judgehost.host.registry import JudgehostHostRegistry
@@ -34,21 +36,90 @@ _HASH = "1" * 64
 _COMPILE_KEY = "5" * 64
 
 
-class _VersionScheduler:
-    def __init__(self) -> None:
-        self.case: dict[str, object] | None = None
-        self.batch: dict[str, object] | None = None
-
-    def fetch_case(self, case_id: int) -> dict[str, object] | None:
-        return self.case
-
-    def fetch_batch(self, batch_id: int) -> dict[str, object] | None:
-        return self.batch
+def _create_telemetry_batch(
+    scheduler: JudgehostBatchRuntime,
+    *,
+    task_id: str,
+    case_count: int,
+    language_id: str = "cpp",
+    toolchain_cmd_digest: str = "a" * 64,
+) -> int:
+    batch_id = scheduler.create_batch_with_cases(
+        task_id=task_id,
+        run_id=task_id,
+        verification_program_id=task_id,
+        execution_signature=hashlib.sha256(task_id.encode()).hexdigest(),
+        task_kind="solution-run",
+        verification_id="ver-1",
+        compile_key=_COMPILE_KEY,
+        compile_submission=CompileSubmission(
+            compile_key=_COMPILE_KEY,
+            submit_id=submit_id(_COMPILE_KEY),
+            source_name="ac.cpp",
+            source_file=PayloadFile(
+                path=Path("/tmp/telemetry-ac.cpp"),
+                size=13,
+                identity=hashlib.sha256(b"int main(){}\n").hexdigest(),
+            ),
+            extra_source_items=(),
+            compile_files=(),
+        ),
+        contest_id="default",
+        mode="pass-fail",
+        source_name="ac.cpp",
+        compile_hash="2" * 32,
+        run_hash="3" * 32,
+        compare_hash="4" * 32,
+        source_hash=_HASH,
+        compile_config_json=json.dumps({"toolchain_cmd_digest": toolchain_cmd_digest}),
+        run_config_json=json.dumps({"language_id": language_id}),
+        compare_config_json="{}",
+        expected_behavior="accepted",
+        verification_source="run.execute",
+        bypass_case_result_cache=0,
+        service_class="background",
+        batch_spec=ExecutionBatchSpec(),
+        created_at=_NOW,
+        case_rows=[
+            {
+                "task_id": task_id,
+                "run_id": task_id,
+                "test_name": f"{index:03}.in",
+                "ordinal": index,
+                "scope_sequence": 1,
+                "testcase_id": None,
+                "testcase_hash": _HASH,
+                "testcase_input_hash": _HASH,
+                "testcase_answer_hash": _HASH,
+                "input_ref": "",
+                "answer_ref": "",
+                "status": "pending",
+            }
+            for index in range(1, case_count + 1)
+        ],
+    )
+    claim = scheduler.claim_materialization(batch_id, now_text=_NOW)
+    assert claim is not None
+    submission = replace(
+        claim.submission,
+        source_file=replace(
+            claim.submission.source_file,
+            blob_ref=f"blob://sha256/{claim.submission.source_file.identity}",
+        ),
+    )
+    assert scheduler.finish_materialization(
+        claim,
+        success=True,
+        materialized_submission=submission,
+        error_text="",
+        now_text=_NOW,
+    )
+    return batch_id
 
 
 class TestToolchainVersionCollector(unittest.TestCase):
     def setUp(self) -> None:
-        self.scheduler = _VersionScheduler()
+        self.scheduler = JudgehostBatchRuntime(id_base=100)
         self.config_values = build_config_values()
         self.config_values.replace(
             {
@@ -70,80 +141,94 @@ class TestToolchainVersionCollector(unittest.TestCase):
         self,
         language_id: str,
         *,
-        case_id: int = 101,
         hostname: str = "judgehost-a",
-        status: str = "leased",
         toolchain_cmd_digest: str = "a" * 64,
     ) -> None:
-        self.scheduler.case = {
-            "id": case_id,
-            "batch_id": 11,
-            "status": status,
-            "lease_owner": hostname,
-        }
-        self.scheduler.batch = {
-            "batch_id": 11,
-            "compile_config_json": json.dumps(
-                {"toolchain_cmd_digest": toolchain_cmd_digest}
-            ),
-            "run_config_json": json.dumps({"language_id": language_id}),
-        }
+        self.scheduler.reset()
+        batch_id = _create_telemetry_batch(
+            self.scheduler, task_id="version-probe", case_count=1,
+            language_id=language_id, toolchain_cmd_digest=toolchain_cmd_digest,
+        )
+        claim = self.scheduler.claim_lease(
+            batch_id, hostname=hostname, limit=1, now_text=_NOW,
+        )
+        assert claim is not None
+        assert self.scheduler.commit_lease(claim)
+        self.case_id = claim.cases[0]["id"]
 
     @staticmethod
     def _encoded(payload: bytes) -> str:
         return base64.b64encode(payload).decode("ascii")
 
     def test_version_commands_match_actual_language_toolchains(self) -> None:
-        cpp = self.collector.version_commands(101)
-        cpp_script = str(cpp["compiler_version_command"])
-        self.assertNotIn("runner_version_command", cpp)
-        self.assertIn("command -v '/opt/tool chains/clang++'", cpp_script)
-        self.assertIn("exec '/opt/tool chains/clang++' --version 2>&1", cpp_script)
+        with tempfile.TemporaryDirectory() as temporary:
+            tool_dir = Path(temporary) / "tool chains"
+            tool_dir.mkdir()
+            for name in ("clang++", "javac-custom", "java", "pypy3", "python3", "python"):
+                tool = tool_dir / name
+                tool.write_text(f"#!/bin/sh\nprintf '%s\\n' '{name}' \"$@\"\n", encoding="utf-8")
+                tool.chmod(0o700)
+            self.config_values.replace({
+                **self.config_values.snapshot(),
+                "TOOLCHAIN_CPP_COMPILER": str(tool_dir / "clang++"),
+            })
 
-        self._lease("java")
-        java = self.collector.version_commands(101)
-        self.assertIn(
-            "exec javac-custom -version 2>&1", str(java["compiler_version_command"])
-        )
-        self.assertIn("exec java -version 2>&1", str(java["runner_version_command"]))
+            def run(script: str) -> str:
+                return subprocess.run(
+                    ["/bin/sh"], input=script, text=True, capture_output=True,
+                    env={"PATH": str(tool_dir)}, check=True, timeout=5,
+                ).stdout
 
-        self._lease("py")
-        python = self.collector.version_commands(101)
-        compiler_script = str(python["compiler_version_command"])
-        self.assertEqual(python["runner_version_command"], compiler_script)
-        self.assertLess(
-            compiler_script.index("pypy3"), compiler_script.index("python3")
-        )
-        self.assertLess(
-            compiler_script.index("python3"), compiler_script.index("python;")
-        )
+            cpp = self.collector.version_commands(self.case_id)
+            self.assertNotIn("runner_version_command", cpp)
+            self.assertEqual(
+                run(cpp["compiler_version_command"]),
+                f"command={tool_dir / 'clang++'}\nclang++\n--version\n",
+            )
 
-    def test_version_commands_reject_removed_c_toolchain(self) -> None:
-        self._lease("c")
+            self._lease("java")
+            java = self.collector.version_commands(self.case_id)
+            for script, name in ((java["compiler_version_command"], "javac-custom"),
+                                 (java["runner_version_command"], "java")):
+                self.assertEqual(
+                    run(script), f"command={tool_dir / name}\n{name}\n-version\n",
+                )
+
+            self._lease("py")
+            python = self.collector.version_commands(self.case_id)
+            for name in ("pypy3", "python3", "python"):
+                with self.subTest(python=name):
+                    for script in python.values():
+                        self.assertEqual(
+                            run(script), f"command={tool_dir / name}\n{name}\n--version\n",
+                        )
+                    (tool_dir / name).unlink()
+
+    def test_version_commands_reject_unknown_toolchain_language(self) -> None:
+        self._lease("unsupported-language")
 
         with self.assertRaisesRegex(
             RuntimeError,
-            "unsupported judgehost toolchain language: c",
+            "unsupported judgehost toolchain language: unsupported-language",
         ):
-            self.collector.version_commands(101)
+            self.collector.version_commands(self.case_id)
 
     def test_version_commands_require_an_active_non_skip_lease(self) -> None:
-        self.scheduler.case = None
-        self.assertEqual(self.collector.version_commands(101), {})
+        self.assertEqual(self.collector.version_commands(-1), {})
 
-        self._lease("cpp", status="reported")
-        self.assertEqual(self.collector.version_commands(101), {})
+        self.scheduler.release_host_leases("judgehost-a", now_text=_NOW)
+        self.assertEqual(self.collector.version_commands(self.case_id), {})
 
         self._lease(
             "cpp",
             toolchain_cmd_digest=compile_command_digest("skip.compile", []),
         )
-        self.assertEqual(self.collector.version_commands(101), {})
+        self.assertEqual(self.collector.version_commands(self.case_id), {})
 
     def test_report_decodes_and_canonicalizes_version_output(self) -> None:
         self.assertTrue(
             self.collector.record_report(
-                101,
+                self.case_id,
                 hostname="judgehost-a",
                 compiler=self._encoded(b" command=/usr/bin/g++\r\ng++ 14\xff\x00 \r\n"),
                 runner="",
@@ -154,13 +239,13 @@ class TestToolchainVersionCollector(unittest.TestCase):
         self.assertEqual(telemetry.language_id, "cpp")
         self.assertEqual(telemetry.compiler, "command=/usr/bin/g++\ng++ 14\ufffd\ufffd")
         self.assertEqual(telemetry.runner, "")
-        self.assertEqual(telemetry.judgetask_id, 101)
+        self.assertEqual(telemetry.judgetask_id, self.case_id)
         self.assertTrue(telemetry.observed_at)
 
     def test_report_requires_current_owner_and_valid_bounded_content(self) -> None:
         self.assertFalse(
             self.collector.record_report(
-                101,
+                self.case_id,
                 hostname="judgehost-b",
                 compiler=self._encoded(b"g++ 14"),
                 runner="",
@@ -170,7 +255,7 @@ class TestToolchainVersionCollector(unittest.TestCase):
 
         self.assertFalse(
             self.collector.record_report(
-                101,
+                self.case_id,
                 hostname="judgehost-a",
                 compiler="not base64",
                 runner=self._encoded(
@@ -184,20 +269,20 @@ class TestToolchainVersionCollector(unittest.TestCase):
         self,
     ) -> None:
         self.collector.record_report(
-            101,
+            self.case_id,
             hostname="judgehost-a",
             compiler=self._encoded(b"g++ 13"),
             runner="",
         )
         self.collector.record_report(
-            101,
+            self.case_id,
             hostname="judgehost-a",
             compiler=self._encoded(b"g++ 14"),
             runner="",
         )
-        self._lease("java", case_id=102)
+        self._lease("java")
         self.collector.record_report(
-            102,
+            self.case_id,
             hostname="judgehost-a",
             compiler=self._encoded(b"javac 21"),
             runner=self._encoded(b"java 21"),
@@ -217,7 +302,7 @@ class TestToolchainVersionCollector(unittest.TestCase):
 
         handler.record_report(
             ToolchainVersionReport(
-                judgetask_id=101,
+                judgetask_id=self.case_id,
                 hostname="judgehost-a",
                 compiler=self._encoded(b"g++ 14"),
                 runner="",
@@ -235,13 +320,12 @@ class TestToolchainVersionCollector(unittest.TestCase):
             self.configuration,
             self.hosts,
         )
-        assert self.scheduler.batch is not None
-        self.scheduler.batch["compile_config_json"] = "not-json"
+        self._lease("unsupported-language")
 
-        self.assertEqual(handler.version_commands(101), {})
+        self.assertEqual(handler.version_commands(self.case_id), {})
         handler.record_report(
             ToolchainVersionReport(
-                judgetask_id=101,
+                judgetask_id=self.case_id,
                 hostname="judgehost-a",
                 compiler=self._encoded(b"g++ 14"),
                 runner="",
@@ -251,21 +335,20 @@ class TestToolchainVersionCollector(unittest.TestCase):
         self.assertEqual(self.hosts.host_rows(), [])
         self.assertEqual(self.hosts.toolchain_rows(), {})
 
-    def test_handler_contains_host_contact_sink_failure(self) -> None:
+    def test_handler_keeps_telemetry_when_host_contact_clock_fails(self) -> None:
         handler = ToolchainTelemetryHandler(
             self.scheduler,
             self.configuration,
             self.hosts,
         )
 
-        with patch.object(
-            self.hosts,
-            "record_contact",
-            side_effect=RuntimeError("host contact store unavailable"),
+        with patch(
+            "app.service.judgehost.host.registry.now_iso",
+            side_effect=RuntimeError("host contact clock unavailable"),
         ):
             handler.record_report(
                 ToolchainVersionReport(
-                    judgetask_id=101,
+                    judgetask_id=self.case_id,
                     hostname="judgehost-a",
                     compiler=self._encoded(b"g++ 14"),
                     runner="",
@@ -287,8 +370,6 @@ class TestHostStatus(unittest.TestCase):
             JudgehostBatchRuntime(id_base=500),
         ).status(JudgehostConfiguration(build_config_values()).snapshot())
         rows = status["hosts"]
-        self.assertIsInstance(rows, list)
-        assert isinstance(rows, list)
 
         self.assertEqual(
             [row["hostname"] for row in rows],
@@ -300,28 +381,6 @@ class TestHostStatus(unittest.TestCase):
         )
 
 
-def _result(test_name: str):
-    return build_case_result(
-        test_name=test_name,
-        runresult="correct",
-        verdict="OK",
-        runtime_sec=0.001,
-        cpu_sec=0.001,
-        wall_sec=0.002,
-        memory_kb=1024,
-        score_text="",
-        output_run_ref="",
-        output_error_ref="",
-        output_system_ref="",
-        output_diff_ref="",
-        metadata_ref="",
-        compare_metadata_ref="",
-        team_message_ref="",
-        feedback_text="",
-        feedback_files=[],
-        answer_correct=False,
-    )
-
 
 class TestHostTelemetryStore(unittest.TestCase):
     def setUp(self) -> None:
@@ -330,83 +389,11 @@ class TestHostTelemetryStore(unittest.TestCase):
 
     def _batch(self, case_count: int) -> int:
         self.sequence += 1
-        task_id = f"task-{self.sequence}"
-        run_id = f"run-{self.sequence}"
-        signature = hashlib.sha256(run_id.encode()).hexdigest()
-        batch_id = self.scheduler.create_batch_with_cases(
-            task_id=task_id,
-            run_id=run_id,
-            verification_program_id=f"solution-{self.sequence}",
-            execution_signature=signature,
-            task_kind="solution-run",
-            verification_id="ver-1",
-            compile_key=_COMPILE_KEY,
-            compile_submission=CompileSubmission(
-                compile_key=_COMPILE_KEY,
-                submit_id=submit_id(_COMPILE_KEY),
-                source_name="ac.cpp",
-                source_file=PayloadFile(
-                    path=Path("/tmp/telemetry-ac.cpp"),
-                    size=13,
-                    identity=hashlib.sha256(b"int main(){}\n").hexdigest(),
-                ),
-                extra_source_items=(),
-                compile_files=(),
-            ),
-            contest_id="default",
-            mode="pass-fail",
-            source_name="ac.cpp",
-            compile_hash="2" * 32,
-            run_hash="3" * 32,
-            compare_hash="4" * 32,
-            source_hash=_HASH,
-            compile_config_json="{}",
-            run_config_json="{}",
-            compare_config_json="{}",
-            expected_behavior="accepted",
-            verification_source="run.execute",
-            bypass_case_result_cache=0,
-            service_class="background",
-            batch_spec=ExecutionBatchSpec(),
-            created_at=_NOW,
-            case_rows=[
-                {
-                    "task_id": task_id,
-                    "run_id": run_id,
-                    "test_name": f"{index:03}.in",
-                    "ordinal": index,
-                    "scope_sequence": 1,
-                    "testcase_id": None,
-                    "testcase_hash": _HASH,
-                    "testcase_input_hash": _HASH,
-                    "testcase_answer_hash": _HASH,
-                    "input_ref": "",
-                    "answer_ref": "",
-                    "status": "pending",
-                }
-                for index in range(1, case_count + 1)
-            ],
+        return _create_telemetry_batch(
+            self.scheduler,
+            task_id=f"task-{self.sequence}",
+            case_count=case_count,
         )
-        claim = self.scheduler.claim_materialization(batch_id, now_text=_NOW)
-        self.assertIsNotNone(claim)
-        assert claim is not None
-        materialized_submission = replace(
-            claim.submission,
-            source_file=replace(
-                claim.submission.source_file,
-                blob_ref=f"blob://sha256/{claim.submission.source_file.identity}",
-            ),
-        )
-        self.assertTrue(
-            self.scheduler.finish_materialization(
-                claim,
-                success=True,
-                materialized_submission=materialized_submission,
-                error_text="",
-                now_text=_NOW,
-            )
-        )
-        return batch_id
 
     def _lease_cases(
         self,
@@ -453,7 +440,7 @@ class TestHostTelemetryStore(unittest.TestCase):
         outcome = self.scheduler.commit_case_result(
             case_id,
             generation=claim.generation,
-            result=_result(str(row["test_name"])),
+            result=normalize_execution_result(verdict="OK"),
             updated_at=_NOW,
             report_telemetry=report,
         )

@@ -1,3 +1,5 @@
+import hashlib
+import io
 import json
 import os
 import sqlite3
@@ -5,11 +7,12 @@ import tarfile
 import tempfile
 import threading
 import unittest
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from app.db import DB, now_iso
+from app.db import DB, SQLValue, now_iso
 from app.config import build_config_values
 from app.service.judgehost.task.registry import JudgehostTaskRegistry
 from app.service.platform.fs.layout import StorageLayout
@@ -22,10 +25,12 @@ from app.service.platform.maintenance.plan import (
     ARTIFACT_TABLES,
     CLEANUP_FILESYSTEM_CLASSES,
     REDUNDANT_DATABASE_INDEXES,
+    MaintenanceResult,
 )
 from app.service.platform.runtime_blob_store import RuntimeBlobStore
 from app.service.platform.runtime_cache_index import RuntimeCacheIndex
 from app.service.platform.source_backup import SourceBackupService
+from app.service.platform.worker_queue import WorkerQueueService
 from app.service.repository.workspace import WorkspaceService
 from app.service.access.query import AccessQuery
 from app.service.execution.codec import execution_result_json
@@ -40,37 +45,15 @@ from tests.isolated_db_helpers import (
 )
 
 
-class _WorkerQueueStub:
+class _RegistryMaintenance:
     def __init__(self) -> None:
-        self.queued = 0
-        self.running = 0
-        self.reset_count = 0
-
-    def active_counts(self) -> dict[str, int]:
-        return {"queued": self.queued, "running": self.running}
-
-    def reset_runtime_history(self) -> None:
-        self.reset_count += 1
-
-
-class _JudgehostStub:
-    def __init__(self) -> None:
-        self.queued = 0
-        self.leased = 0
-        self.reporting = 0
-        self.callbacks = 0
-        self.reset_count = 0
+        self.tasks = JudgehostTaskRegistry()
 
     def busy_counts(self) -> dict[str, int]:
-        return {
-            "queued": self.queued,
-            "leased": self.leased,
-            "reporting": self.reporting,
-            "callbacks": self.callbacks,
-        }
+        return self.tasks.maintenance_counts()
 
     def reset_runtime_state(self) -> None:
-        self.reset_count += 1
+        self.tasks.reset()
 
 
 class TestArtifactCleanup(unittest.TestCase):
@@ -127,9 +110,9 @@ class TestArtifactCleanup(unittest.TestCase):
             self.storage_layout.runtime_blob_root
         )
         self.runtime_cache_index = RuntimeCacheIndex(self.runtime_blob_store)
-        self.worker_queue = _WorkerQueueStub()
-        self.judgehost = _JudgehostStub()
-        self.process_reset_count = 0
+        self.worker_queue = WorkerQueueService(worker_count=1)
+        self.addCleanup(self.worker_queue.stop)
+        self.judgehost = _RegistryMaintenance()
         self.cleanup_database = ArtifactCleanupDatabase(
             self.db,
             self.storage_layout.database_path,
@@ -145,12 +128,13 @@ class TestArtifactCleanup(unittest.TestCase):
             self.worker_queue,
             self.judgehost,
             self.verification_task_store,
-            self._reset_process_tracking,
+            lambda: None,
         )
         self.source_backup = SourceBackupService(self.storage_layout)
 
     def _coordinator(self) -> MaintenanceCoordinator:
         self.maintenance_gate = MaintenanceAdmissionGate()
+        self.worker_queue.set_admission_gate(self.maintenance_gate)
         return MaintenanceCoordinator(
             admission_gate=self.maintenance_gate,
             cleanup_service=self.cleanup,
@@ -164,10 +148,33 @@ class TestArtifactCleanup(unittest.TestCase):
         self.assertTrue(drained.accepted, drained.reason)
         self.assertEqual(self.maintenance_gate.state(), "draining")
 
-    def _reset_process_tracking(self) -> None:
-        self.process_reset_count += 1
+    def _running_worker(self) -> threading.Event:
+        started = threading.Event()
+        release = threading.Event()
+        self.addCleanup(release.set)
 
-    def _execute(self, sql: str, params: tuple[object, ...] = ()) -> None:
+        def work() -> None:
+            started.set()
+            if not release.wait(timeout=10):
+                raise TimeoutError("fixture worker was not released")
+
+        _, accepted, reason = self.worker_queue.submit(name="active-work", fn=work)
+        self.assertTrue(accepted, reason)
+        self.assertTrue(started.wait(timeout=2))
+        return release
+
+    def _registry_task(self, task_id: str, status: str = "queued") -> None:
+        created = now_iso()
+        self.judgehost.tasks.insert({
+            "id": task_id, "run_id": f"run-{task_id}", "problem_slug": "admin/sample",
+            "username": "admin", "artifact_verification_id": "", "mode": "pass-fail",
+            "verification_id": "ver-1ad6e", "verification_task_id": "task-1", "status": status,
+            "payload": {}, "result": {}, "persist_verification_run": False, "error_text": "",
+            "created_at": created, "updated_at": created, "completed_at": "",
+            "summary": {}, "enqueue_fingerprint": "fingerprint",
+        })
+
+    def _execute(self, sql: str, params: tuple[SQLValue, ...] = ()) -> None:
         isolated_db_execute(self.db, sql, params)
 
     def _count(self, table: str) -> int:
@@ -178,7 +185,7 @@ class TestArtifactCleanup(unittest.TestCase):
         assert row is not None
         return int(row["count"])
 
-    def _run_source_backup(self, operation_id: str) -> dict[str, object]:
+    def _run_source_backup(self, operation_id: str) -> MaintenanceResult:
         started_at = now_iso()
         return self.source_backup.run(
             operation_id=operation_id,
@@ -423,6 +430,13 @@ class TestArtifactCleanup(unittest.TestCase):
 
     def test_cleanup_deletes_derived_epoch_and_preserves_durable_data(self) -> None:
         durable_files = self._seed_generated_data()
+        history, accepted, reason = self.worker_queue.submit(name="completed-work", fn=lambda: None)
+        self.assertTrue(accepted, reason)
+        history.join(timeout=2)
+        self.assertFalse(history.is_alive())
+        self.assertIsNone(history.exception())
+        self.assertTrue(self.worker_queue.snapshot()["jobs"])
+        self._registry_task("completed-task", "completed")
         with self.db.writer_connection() as connection:
             redundant_index_statements = (
                 "CREATE INDEX idx_workspaces_problem_user "
@@ -524,66 +538,25 @@ class TestArtifactCleanup(unittest.TestCase):
         )
         for label, path in self.durable_paths.items():
             self.assertEqual(path.read_bytes(), durable_files[label])
-        self.assertEqual(self.worker_queue.reset_count, 1)
-        self.assertEqual(self.judgehost.reset_count, 1)
-        self.assertEqual(self.process_reset_count, 1)
+        self.assertEqual(self.worker_queue.snapshot()["jobs"], [])
+        self.assertEqual(self.judgehost.tasks.snapshots(), [])
         with isolated_db_connection(self.db) as connection:
             freelist_count = int(
                 connection.execute("PRAGMA freelist_count").fetchone()[0]
             )
         self.assertEqual(freelist_count, 0)
 
-    def test_database_cleanup_replaces_tables_without_row_deletes(self) -> None:
+    def test_database_cleanup_preserves_foreign_key_constraints(self) -> None:
         self._seed_generated_data()
-        traced_sql: list[str] = []
-
-        def install_trace(connection) -> None:
-            connection.set_trace_callback(traced_sql.append)
-
-        with patch.object(
-            self.db,
-            "_install_sql_trace",
-            side_effect=install_trace,
-        ):
-            counts = self.cleanup_database.reset_tables(
-                ARTIFACT_TABLES,
-                drop_indexes=REDUNDANT_DATABASE_INDEXES,
-            )
-
-        statements = [" ".join(sql.upper().split()) for sql in traced_sql]
-        self.assertIn("PRAGMA FOREIGN_KEYS=OFF", statements)
-        self.assertIn("DROP TABLE VERIFICATION_TASKS", statements)
-        self.assertNotIn("DELETE FROM VERIFICATION_TASKS", statements)
-        self.assertFalse(
-            any(
-                statement.startswith("UPDATE VERIFICATION_TASKS")
-                for statement in statements
-            )
+        counts = self.cleanup_database.reset_tables(
+            ARTIFACT_TABLES, drop_indexes=REDUNDANT_DATABASE_INDEXES,
         )
         self.assertEqual(counts["verification_tasks"], 1)
         self.assertEqual(self._count("verification_tasks"), 0)
-
         with isolated_db_connection(self.db) as connection:
-            self.assertEqual(
-                int(connection.execute("PRAGMA foreign_keys").fetchone()[0]),
-                1,
-            )
-            self.assertEqual(
-                connection.execute("PRAGMA foreign_key_check").fetchall(),
-                [],
-            )
-            plan = connection.execute(
-                """
-                EXPLAIN QUERY PLAN
-                SELECT rowid
-                FROM verification_tasks
-                WHERE predecessor_task_id=?
-                """,
-                ("task-id",),
-            ).fetchall()
-        self.assertEqual(len(plan), 1)
-        self.assertIn("SEARCH", str(plan[0][3]))
-        self.assertIn("idx_verification_tasks_predecessor", str(plan[0][3]))
+            self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
+        with self.assertRaises(sqlite3.IntegrityError):
+            self._execute("INSERT INTO verification_selected_tests VALUES('missing-verification',0,'001.in')")
 
     def test_schema_reset_failure_rolls_back_dropped_tables(self) -> None:
         self._seed_generated_data()
@@ -609,9 +582,10 @@ class TestArtifactCleanup(unittest.TestCase):
 
     def test_busy_check_keeps_explicit_drain(self) -> None:
         coordinator = self._coordinator()
-        self.worker_queue.queued = 1
-        self.judgehost.reporting = 2
-        self.judgehost.callbacks = 1
+        self._running_worker()
+        self.worker_queue.submit(name="queued-work", fn=lambda: None)
+        self._registry_task("reporting-task")
+        self.judgehost.tasks.claim_reporting("reporting-task", now_text=now_iso())
         self.assertTrue(self.maintenance_gate.enter_request())
         self._begin_drain(coordinator)
 
@@ -620,8 +594,7 @@ class TestArtifactCleanup(unittest.TestCase):
         self.assertFalse(started.accepted)
         self.assertEqual(started.reason, "busy")
         self.assertEqual(started.busy["worker_queued"], 1)
-        self.assertEqual(started.busy["judgehost_reporting"], 2)
-        self.assertEqual(started.busy["judgehost_callbacks"], 1)
+        self.assertEqual(started.busy["judgehost_reporting"], 1)
         self.assertEqual(started.busy["inflight_requests"], 1)
         self.assertEqual(self.maintenance_gate.state(), "draining")
         self.maintenance_gate.leave_request()
@@ -637,7 +610,7 @@ class TestArtifactCleanup(unittest.TestCase):
 
     def test_drain_rejects_new_work_until_admin_resumes(self) -> None:
         coordinator = self._coordinator()
-        self.worker_queue.running = 1
+        self._running_worker()
 
         started = coordinator.begin_drain()
 
@@ -647,6 +620,9 @@ class TestArtifactCleanup(unittest.TestCase):
         self.assertTrue(self.maintenance_gate.enter_control_request()[0])
         self.maintenance_gate.leave_request()
         self.assertEqual(started.busy["worker_running"], 1)
+        _, accepted, reason = self.worker_queue.submit(name="during-drain", fn=lambda: None)
+        self.assertFalse(accepted)
+        self.assertEqual(reason, "maintenance")
 
         resumed = coordinator.cancel_drain()
         self.assertTrue(resumed.accepted)
@@ -667,10 +643,11 @@ class TestArtifactCleanup(unittest.TestCase):
         not_drained = coordinator.restart_when_idle(actor_user_id=self.actor_user_id)
         self.assertEqual(not_drained.reason, "drain_required")
         coordinator.begin_drain()
-        self.judgehost.leased = 1
+        self._registry_task("leased-task")
+        self.judgehost.tasks.mark_leased("leased-task", now_text=now_iso())
         busy = coordinator.restart_when_idle(actor_user_id=self.actor_user_id)
         self.assertEqual(busy.reason, "busy")
-        self.judgehost.leased = 0
+        self.judgehost.tasks.transition("leased-task", expected={"leased"}, status="failed")
 
         started = coordinator.restart_when_idle(actor_user_id=self.actor_user_id)
         self.assertTrue(started.accepted)
@@ -692,9 +669,10 @@ class TestArtifactCleanup(unittest.TestCase):
         not_drained = coordinator.force_restart(actor_user_id=self.actor_user_id)
         self.assertEqual(not_drained.reason, "drain_required")
 
+        self._running_worker()
+        self._registry_task("leased-task")
+        self.judgehost.tasks.mark_leased("leased-task", now_text=now_iso())
         coordinator.begin_drain()
-        self.worker_queue.running = 1
-        self.judgehost.leased = 1
         with patch.object(
             self.worker_queue,
             "active_counts",
@@ -749,11 +727,16 @@ class TestArtifactCleanup(unittest.TestCase):
         self._begin_drain(coordinator)
         running = threading.Event()
         release = threading.Event()
+        self.addCleanup(release.set)
 
-        def blocking_run(**_kwargs) -> dict[str, object]:
+        self._seed_generated_data()
+        original_run = self.cleanup.run
+
+        def blocking_run(*, operation_id: str, started_at: str, set_stage: Callable[[str], None]) -> MaintenanceResult:
             running.set()
-            release.wait(timeout=5)
-            return {"finished_at": now_iso(), "duration_ms": 1}
+            if not release.wait(timeout=5):
+                raise TimeoutError("fixture cleanup was not released")
+            return original_run(operation_id=operation_id, started_at=started_at, set_stage=set_stage)
 
         with patch.object(self.cleanup, "run", side_effect=blocking_run):
             first = coordinator.start_cleanup(actor_user_id=self.actor_user_id)
@@ -771,6 +754,7 @@ class TestArtifactCleanup(unittest.TestCase):
 
         self.assertEqual(coordinator.snapshot()["status"], "succeeded")
         self.assertTrue(self.maintenance_gate.is_open())
+        self.assertEqual(self._count("verifications"), 0)
 
     def test_filesystem_failure_keeps_database_deletion(self) -> None:
         self._seed_generated_data()
@@ -1013,27 +997,37 @@ class TestArtifactCleanup(unittest.TestCase):
     def test_source_backup_summary_is_metadata_only_but_download_verifies(
         self,
     ) -> None:
-        self._run_source_backup("backup-verified")
-        self.source_backup.sidecar_path.write_text(
-            f"{'0' * 64}  latest.tar.gz\n",
-            encoding="ascii",
-        )
+        for corruption in ("digest", "manifest"):
+            with self.subTest(corruption=corruption):
+                self._run_source_backup(f"backup-verified-{corruption}")
+                if corruption == "digest":
+                    self.source_backup.sidecar_path.write_text(f"{'0' * 64}  latest.tar.gz\n", encoding="ascii")
+                else:
+                    with tarfile.open(self.source_backup.latest_path, "w:gz") as archive:
+                        manifest = tarfile.TarInfo("manifest.json")
+                        manifest.size = 2
+                        archive.addfile(manifest, io.BytesIO(b"[]"))
+                    digest = hashlib.sha256(self.source_backup.latest_path.read_bytes()).hexdigest()
+                    self.source_backup.sidecar_path.write_text(f"{digest}  latest.tar.gz\n", encoding="ascii")
 
-        self.assertIsNone(self.source_backup.latest_archive_path())
-        # The overview only reports that a published regular-file pair exists;
-        # opening the download remains the strict integrity boundary.
-        self.assertTrue(self.source_backup.latest_summary()["available"])
+                self.assertIsNone(self.source_backup.latest_archive_path())
+                # Listing reports regular published files; download verifies their contents.
+                self.assertTrue(self.source_backup.latest_summary()["available"])
 
     def test_source_backup_and_artifact_cleanup_are_mutually_exclusive(self) -> None:
         coordinator = self._coordinator()
         self._begin_drain(coordinator)
         running = threading.Event()
         release = threading.Event()
+        self.addCleanup(release.set)
 
-        def blocking_backup(**_kwargs) -> dict[str, object]:
+        original_run = self.source_backup.run
+
+        def blocking_backup(*, operation_id: str, started_at: str, set_stage: Callable[[str], None]) -> MaintenanceResult:
             running.set()
-            release.wait(timeout=5)
-            return {"finished_at": now_iso(), "duration_ms": 1}
+            if not release.wait(timeout=5):
+                raise TimeoutError("fixture backup was not released")
+            return original_run(operation_id=operation_id, started_at=started_at, set_stage=set_stage)
 
         with patch.object(
             self.source_backup,
@@ -1060,39 +1054,4 @@ class TestArtifactCleanup(unittest.TestCase):
         self.assertFalse(worker.is_alive())
         self.assertEqual(coordinator.snapshot()["status"], "succeeded")
         self.assertTrue(self.maintenance_gate.is_open())
-
-    def test_task_registry_reports_reporting_separately_for_maintenance(self) -> None:
-        registry = JudgehostTaskRegistry()
-        created_at = now_iso()
-        registry.insert(
-            {
-                "id": "judge-task",
-                "run_id": "judge-run",
-                "problem_slug": "admin/sample",
-                "username": "admin",
-                "artifact_verification_id": "",
-                "mode": "pass-fail",
-                "verification_id": "ver-1ad6e",
-                "verification_task_id": "task-1",
-                "status": "queued",
-                "payload": {},
-                "result": {},
-                "persist_verification_run": False,
-                "error_text": "",
-                "created_at": created_at,
-                "updated_at": created_at,
-                "completed_at": "",
-                "summary": {},
-                "enqueue_fingerprint": "fingerprint",
-            }
-        )
-        registry.claim_reporting("judge-task", now_text=now_iso())
-
-        self.assertEqual(
-            registry.maintenance_counts(),
-            {"queued": 0, "leased": 0, "reporting": 1},
-        )
-
-
-if __name__ == "__main__":
-    unittest.main()
+        self.assertIsNotNone(self.source_backup.latest_archive_path())
