@@ -39,6 +39,7 @@ class AuthoringSourceState(TypedDict):
     build: BuildConfig
     tests: list[TestSpecEntry]
     tests_valid: bool
+    tests_error: str
     issues: list[AuthoringSourceIssue]
     build_normalized: bool
 
@@ -174,6 +175,7 @@ def inspect_authoring_source(
 
     tests: list[TestSpecEntry] = []
     tests_valid = True
+    tests_error = ""
     try:
         tests = load_tests_spec(
             root / TESTS_SPEC_REL,
@@ -182,13 +184,15 @@ def inspect_authoring_source(
         )
     except ValueError as exc:
         tests_valid = False
-        _append_issue(issues, str(exc), "danger")
+        tests_error = str(exc)
+        _append_issue(issues, tests_error, "danger")
 
     return {
         "problem": problem,
         "build": build,
         "tests": tests,
         "tests_valid": tests_valid,
+        "tests_error": tests_error,
         "issues": issues,
         "build_normalized": build_normalized,
     }

@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict
 
 from app.service.access.model import ProblemAccessContext, WorkspaceAccessContext
+from app.service.problem.authoring_source import AuthoringSourceState
 from app.service.problem.content_review import ProblemContentReview
 from app.service.problem.context import (
     ContextTone,
@@ -144,6 +145,7 @@ class ProblemShellContext(TypedDict):
 class ProblemPageContext(WorkspaceContext):
     access: ProblemAccessContext
     workspace_access: WorkspaceAccessContext
+    source: AuthoringSourceState
     workspace_auto_update_message: str
     workspace_merge_result: MergeUndoContext | None
     workspace_has_merge_undo: bool

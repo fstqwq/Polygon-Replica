@@ -6,6 +6,12 @@ Reusable domain behavior, verification planning, and package policy remain in `a
 
 Service-owned read models provide problem, contest, and verification state. HTTP modules authorize access and project them into page- or API-specific responses.
 
+Problem pages retain their typed authoring configuration for the current
+operation. The Tests editor shares those testcase entries; Run New reuses them
+and the already-built solution component rows. Each form
+keeps its own display limits, and submitted work goes through its service-owned
+source checks.
+
 Workspace verification projections share typed columns, testcase cells, pass
 details, sanity checks and artifact previews with browser fragments and Agent
 YAML. Historical execution mode and result facts come from the persisted

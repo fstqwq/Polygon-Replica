@@ -24,7 +24,6 @@ from app.impl.workspace.context_operation import (
     RunSolutionOption,
     dedupe_preserve_order,
     run_solution_options_context,
-    run_test_options_context,
 )
 from app.impl.workspace.context_run_detail import (
     normalize_run_test_name_token,
@@ -41,6 +40,7 @@ from app.impl.workspace.context_model import ProblemPageContext
 from app.impl.workspace.run_view_list import run_list_rows
 from app.main_util import normalize_optional_component_source_path, normalize_optional_component_source_path_safe, read_fileobj_bytes_limited
 from app.service.problem.solution_metadata import normalize_expected_behavior
+from app.service.problem.query import run_solution_options_from_entries
 from app.service.problem.sample_json import SampleJsonEvent, SampleJsonPass, normalize_sample_json
 from app.service.problem.test_spec import read_statement_sample_text
 from app.service.statement.sample_transcript import statement_sample_events_from_transcript
@@ -117,16 +117,15 @@ def run_new_page(request: Request, problem: str, user: Annotated[str, Depends(re
         include_workspace_changes=True,
         contest_workspace=contest_workspace_context_from_request(request),
     )
-    workspace = Path(ctx['workspace']['path'])
-    try:
-        solution_options, default_submission_path, solution_options_truncated = (
-            run_solution_options_context(workspace)
+    solutions = ctx['shell']['components']['solutions']
+    solution_options, default_submission_path, solution_options_truncated = (
+        run_solution_options_from_entries(
+            solutions['entries'], solutions['accepted_source'], solutions['truncated'],
         )
-    except ValueError:
-        solution_options = []
-        default_submission_path = ''
-        solution_options_truncated = False
-    test_options, test_options_truncated = run_test_options_context(workspace)
+    )
+    test_options, test_options_truncated = runtime().problem_source_query_service.run_test_options(
+        ctx['source']['tests'],
+    )
     selected_solution_paths: list[str] = []
     for raw in request.query_params.getlist('solution_paths'):
         normalized = normalize_optional_component_source_path_safe(raw, 'solutions', 'solution path')

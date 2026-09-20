@@ -63,6 +63,7 @@ from tests.ui_support import (
 )
 
 import app.impl.workspace.context_job as workspace_context_job
+from app.impl.run_export.run import run_new_page
 from app.impl.workspace.run_view_list import run_list_rows
 from app.service.problem.readiness import ProblemReadiness, WorkspaceReadinessSubject
 from app.service.execution.model import (
@@ -754,10 +755,18 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             303,
         )
 
+        override_config_values(self, runtime.config_values, TESTS_SPEC_ROWS_LIMIT=1)
+        page = tests_page(_request("/problems/alice/sample/tests"), "alice/sample", "alice")
+        self.assertEqual(page.status_code, 200)
+        self.assertTrue(page.context["tests_editor"]["truncated"])
+        self.assertEqual(page.context["tests_editor"]["shown"], 1)
+        script = page.context["tests_gen_script"]["text"]
+        self.assertEqual(script.splitlines(), ["gen 10 1", "gen 20 2"])
+
         updated = tests_spec_gen_script_save(
             problem="alice/sample",
             user="alice",
-            gen_script_text="gen 10 1\r\ngen 30 3\r\n",
+            gen_script_text=script.replace("gen 20 2", "gen 30 3").replace("\n", "\r\n") + "\r\n",
         )
         self.assertEqual(updated.status_code, 303)
         self.assertTrue(str(updated.headers.get("location", "")).endswith("/problems/alice/sample/tests"))
@@ -777,6 +786,42 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertEqual([(row.get("id"), row.get("kind")) for row in tests_after], [("001", "manual")])
         self.assertFalse((generator_dir / "002.in").exists())
         self.assertFalse((generator_dir / "003.in").exists())
+
+    def test_tests_page_keeps_invalid_sources_available_for_repair(self) -> None:
+        workspace = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        spec_path = workspace / "tests/spec.json"
+        invalid_spec = '{"tests": [}\n'
+        spec_path.write_text(invalid_spec, encoding="utf-8")
+
+        page = tests_page(_request("/problems/alice/sample/tests"), "alice/sample", "alice")
+
+        self.assertEqual(page.status_code, 200)
+        self.assertTrue(page.context["message"])
+        self.assertFalse(page.context["tests_editor"]["exists"])
+        self.assertEqual(spec_path.read_text(encoding="utf-8"), invalid_spec)
+
+        spec_path.write_text(json.dumps({"tests": [
+            {"id": "001", "kind": "manual"}, {"id": "002", "kind": "gen"},
+        ]}), encoding="utf-8")
+        manual_path = workspace / "tests/manual/001.in"
+        manual_path.parent.mkdir(parents=True, exist_ok=True)
+        manual_path.write_bytes(b"\xff")
+        generator_path = workspace / "tests/generator/002.in"
+        generator_path.parent.mkdir(parents=True, exist_ok=True)
+        generator_path.write_text("gen 10 1\n", encoding="utf-8")
+
+        page = tests_page(_request("/problems/alice/sample/tests"), "alice/sample", "alice")
+
+        self.assertEqual(page.status_code, 200)
+        self.assertTrue(page.context["message"])
+        self.assertEqual(page.context["tests_gen_script"]["text"], "gen 10 1")
+        saved = tests_spec_gen_script_save(
+            problem="alice/sample", user="alice",
+            gen_script_text=page.context["tests_gen_script"]["text"],
+        )
+        self.assertEqual(saved.status_code, 303)
+        self.assertEqual(manual_path.read_bytes(), b"\xff")
+        self.assertEqual(generator_path.read_text(encoding="utf-8"), "gen 10 1")
 
     def test_tests_gen_script_save_error_returns_to_editor(self) -> None:
         workspace = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
@@ -1147,6 +1192,46 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                             verification_id, reason="UI request coverage complete",
                         )
                         _wait_for_verification_workers(timeout_sec=5)
+
+    def test_run_new_selection_uses_visible_main_and_test_limits(self) -> None:
+        problem = f"alice/run-options-{uuid.uuid4().hex[:8]}"
+        workspace = self._prepare_verification_workspace(problem)
+        self._write_solution_fixture(workspace, "aaa.cpp", "accepted")
+        (workspace / "tests/manual/002.in").write_text("8\n", encoding="utf-8")
+        (workspace / "tests/spec.json").write_text(json.dumps({"tests": [
+            {"id": "001", "kind": "manual"}, {"id": "002", "kind": "manual"},
+        ]}), encoding="utf-8")
+        override_config_values(
+            self, runtime.config_values, SOLUTION_LIST_LIMIT=1, RUN_TEST_SELECTOR_LIMIT=1,
+        )
+
+        page = run_new_page(_request(f"/problems/{problem}/run/new"), problem, "alice")
+
+        self.assertEqual(page.status_code, 200)
+        self.assertEqual([row["path"] for row in page.context["solution_options"]], ["solutions/aaa.cpp"])
+        self.assertTrue(page.context["solution_options_truncated"])
+        self.assertEqual(page.context["selected_solution_paths"], [])
+        self.assertEqual([row["name"] for row in page.context["test_options"]], ["001.in"])
+        self.assertTrue(page.context["test_options_truncated"])
+        self.assertEqual(page.context["selected_test_names"], [])
+
+        (workspace / "solutions/aaa.cpp").unlink()
+        override_config_values(self, runtime.config_values, RUN_TEST_SELECTOR_LIMIT=2)
+        page = run_new_page(_request(f"/problems/{problem}/run/new"), problem, "alice")
+        self.assertEqual(page.context["selected_solution_paths"], ["solutions/accepted.cpp"])
+        self.assertEqual(page.context["selected_test_names"], ["001.in", "002.in"])
+
+        build_path = workspace / "config/build.json"
+        invalid_build = '{"accepted_solution_source": 123}\n'
+        build_path.write_text(invalid_build, encoding="utf-8")
+        page = run_new_page(_request(f"/problems/{problem}/run/new"), problem, "alice")
+        self.assertEqual(page.status_code, 200)
+        self.assertEqual(
+            [row["path"] for row in page.context["solution_options"]],
+            ["solutions/accepted.cpp"],
+        )
+        self.assertEqual(page.context["selected_solution_paths"], [])
+        self.assertEqual(build_path.read_text(encoding="utf-8"), invalid_build)
 
     def test_verification_start_requires_main_correct_solution_marker(self) -> None:
         problem = f"alice/verify-main-required-{uuid.uuid4().hex[:8]}"

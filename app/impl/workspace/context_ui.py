@@ -278,6 +278,7 @@ def page_ctx(
                 "workspace status refresh after source normalization failed for %s",
                 problem,
             )
+    ctx['source'] = source_state
     general_cfg = source_state['problem']
     build_cfg = source_state['build']
     safe_mode = general_cfg['mode']

@@ -26,7 +26,6 @@ from app.impl.tests_spec.shared import (
 )
 from app.impl.workspace.access import require_write_access
 from app.impl.workspace.context_ui import page_ctx
-from app.impl.workspace.context_operation import tests_spec_editor_context
 from app.impl.workspace.test_spec import (
     read_tests_spec,
     tests_spec_bool_flag,
@@ -109,8 +108,11 @@ def render_tests_page(request: Request, problem: str, user: Annotated[str, Depen
     tests_editor_error = ''
     tests_gen_script: GeneratorScriptContext = {'text': '', 'count': 0}
     try:
-        tests_editor = tests_spec_editor_context(
+        if ctx['source']['tests_error']:
+            raise ValueError(ctx['source']['tests_error'])
+        tests_editor = runtime().problem_source_query_service.tests_spec_editor(
             workspace,
+            ctx['source']['tests'],
             limit=runtime().config_values.integer("TESTS_SPEC_ROWS_LIMIT"),
         )
     except (ValueError, OSError) as exc:

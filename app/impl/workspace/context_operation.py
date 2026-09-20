@@ -21,7 +21,6 @@ from app.service.problem.build_config import (
 )
 from app.service.problem.query import (
     RunSolutionOption,
-    RunTestOption,
     SolutionSourceRow,
 )
 from app.service.access.policy import access_role
@@ -387,12 +386,6 @@ def workspace_rel_file_exists(workspace: Path, rel: str | None) -> bool:
     except OSError:
         return False
 
-def tests_spec_editor_context(workspace: Path, limit: int) -> dict:
-    return runtime().problem_source_query_service.tests_spec_editor(
-        workspace,
-        limit,
-    )
-
 def solution_metadata_entry(workspace: Path, source_rel: str) -> SolutionSourceRow:
     return runtime().problem_source_query_service.solution_entry(
         workspace,
@@ -454,9 +447,3 @@ def run_solution_options_context(
     workspace: Path,
 ) -> tuple[list[RunSolutionOption], str, bool]:
     return runtime().problem_source_query_service.run_solution_options(workspace)
-
-
-def run_test_options_context(
-    workspace: Path,
-) -> tuple[list[RunTestOption], bool]:
-    return runtime().problem_source_query_service.run_test_options(workspace)

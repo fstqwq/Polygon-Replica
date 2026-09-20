@@ -6,6 +6,14 @@ Strict source codecs protect verification, import, and package workflows. Author
 
 Generator resolution builds an alias index from the selected source list once per operation. Repeated testcase lookups share the index during that operation.
 
+Authoring configuration carries parsed testcase entries and their diagnostic
+through page assembly. Test editor and Run selectors project these entries;
+solution selectors also reuse the component's existing source rows. Editor row
+limits apply to payload display. The generator-script reader holds the workspace
+lock while reading its own spec and every declared generator command, keeping
+the script consistent with concurrent testcase replacement. Run New uses the
+authoring projection for its choices; submitted work loads strict configuration.
+
 Single-file Java entry-point detection is shared source interpretation used by judgehost preparation and external-package adapters.
 
 Problem identifier normalization is shared by individual and Contest package

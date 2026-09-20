@@ -17,7 +17,6 @@ from app.service.problem.sample_json import dumps_sample_json
 from app.service.problem.test_spec import (
     TESTS_SPEC_REL,
     TestSpecEntry,
-    load_tests_spec,
     payload_rel_path_for_test,
     summarize_tests_spec,
 )
@@ -47,6 +46,28 @@ class RunSolutionOption(TypedDict):
 class RunTestOption(TypedDict):
     name: str
     label: str
+
+
+def run_solution_options_from_entries(
+    entries: list[SolutionSourceRow],
+    accepted_source: str,
+    truncated: bool,
+) -> tuple[list[RunSolutionOption], str, bool]:
+    default_path = (
+        accepted_source
+        if any(row["source_path"] == accepted_source for row in entries)
+        else ""
+    )
+    options: list[RunSolutionOption] = [
+        {
+            "path": row["source_path"],
+            "label": f'{row["source_path"]} ({row["expected_behavior_label"]})',
+            "is_accepted": row["is_accepted"],
+            "expected_behavior": row["expected_behavior"],
+        }
+        for row in entries
+    ]
+    return options, default_path, truncated
 
 
 def _human_size(num_bytes: int) -> str:
@@ -91,19 +112,6 @@ class ProblemSourceQueryService:
     def __init__(self, config_values: ConfigValues) -> None:
         self._config_values = config_values
 
-    def _tests(self, workspace: Path) -> tuple[list[TestSpecEntry], Path]:
-        path = workspace / TESTS_SPEC_REL
-        return (
-            load_tests_spec(
-                path,
-                document_max_bytes=self._config_values.integer("TEXTAREA_MAX_BYTES"),
-                sample_max_bytes=self._config_values.integer(
-                    "STATEMENT_SAMPLE_MAX_BYTES"
-                ),
-            ),
-            path,
-        )
-
     @staticmethod
     def _payload_path(workspace: Path, entry: TestSpecEntry) -> Path | None:
         relative = payload_rel_path_for_test(entry["id"], entry["kind"])
@@ -112,8 +120,9 @@ class ProblemSourceQueryService:
         except ValueError:
             return None
 
-    def tests_spec_editor(self, workspace: Path, limit: int) -> dict:
-        entries, path = self._tests(workspace)
+    def tests_spec_editor(
+        self, workspace: Path, entries: list[TestSpecEntry], limit: int,
+    ) -> dict:
         summary = summarize_tests_spec(entries)
         rows: list[dict] = []
         cap = max(1, int(limit))
@@ -261,31 +270,16 @@ class ProblemSourceQueryService:
         self,
         workspace: Path,
     ) -> tuple[list[RunSolutionOption], str, bool]:
-        entries, truncated = self.solution_entries(workspace)
-        default_path = self.accepted_solution_source(workspace)
-        if default_path not in {row["source_path"] for row in entries}:
-            default_path = ""
-        options: list[RunSolutionOption] = [
-            {
-                "path": row["source_path"],
-                "label": (
-                    f'{row["source_path"]} ({row["expected_behavior_label"]})'
-                ),
-                "is_accepted": row["is_accepted"],
-                "expected_behavior": row["expected_behavior"],
-            }
-            for row in entries
-        ]
-        return options, default_path, truncated
+        build_config = load_build_config(workspace)
+        entries, truncated = self.solution_entries(workspace, build_config=build_config)
+        return run_solution_options_from_entries(
+            entries, build_config.get("accepted_solution_source", ""), truncated,
+        )
 
     def run_test_options(
         self,
-        workspace: Path,
+        entries: list[TestSpecEntry],
     ) -> tuple[list[RunTestOption], bool]:
-        try:
-            entries, _path = self._tests(workspace)
-        except ValueError:
-            return [], False
         limit = self._config_values.integer("RUN_TEST_SELECTOR_LIMIT")
         options: list[RunTestOption] = []
         for index, row in enumerate(entries[:limit], start=1):
