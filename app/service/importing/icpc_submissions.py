@@ -86,6 +86,8 @@ def _archive_path(raw: object) -> str:
     if not isinstance(raw, str) or not raw or "\\" in raw:
         raise ValueError("submissions.yaml contains an invalid submission path")
     rel = PurePosixPath(raw)
+    if not rel.parts:
+        raise ValueError("submissions.yaml contains an invalid submission path")
     if rel.is_absolute() or any(part in {"", ".", ".."} for part in rel.parts):
         raise ValueError("submissions.yaml contains an unsafe submission path")
     parts = rel.parts[1:] if rel.parts[0] == "submissions" else rel.parts

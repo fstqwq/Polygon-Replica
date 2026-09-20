@@ -4,4 +4,6 @@ Owns bounded archive admission and conversion of Polygon, native package, ICPC, 
 
 Importers validate archive structure and paths, charge selected members against expansion limits, and stream selected files into staging. Unknown payloads remain unopened. Native package import selects authored roots and excludes test data, offline statement builds, generated answers, and certification.
 
+ICPC submission metadata validation rejects paths that normalize to an empty path.
+
 The caller owns Git and workspace integration. The [package protocol](../../../../protocol/package.md) defines formats, budgets, and merge behavior.

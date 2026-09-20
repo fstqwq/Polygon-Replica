@@ -45,12 +45,14 @@ from app.service.statement.render import (
 from app.impl.problem.merge_op import merge_apply, merge_compare, merge_file, merge_page
 from tests.package_builders import polygon_contest_package, polygon_problem_package
 from tests.common import E2ETestBase
+from app.main import app
 from tests.identity_helpers import canonical_test_verification_id
 
 from tests.ui_support import (
     AUTH_COOKIE_NAME,
     Path,
     UIHelpersMixin,
+    _b64url_decode,
     _cookie_value_from_response,
     _post_form_request,
     _post_request,
@@ -1509,40 +1511,83 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertRegex(head.stdout.strip(), r"^[0-9a-f]{40}$")
         self.assertEqual(run_git(["git", "-C", str(ws), "status", "--short"]).stdout.strip(), "")
 
-    def test_problems_root_import_accepts_icpc_package(self) -> None:
-        payload = io.BytesIO()
-        with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr(
-                "icpc/problem.yaml",
-                "\n".join(
-                    [
-                        "problem_format_version: 2025-09",
-                        "name: Root Import ICPC",
-                        "validation: custom",
-                    ]
+    def test_problems_root_icpc_import_rolls_back_invalid_metadata_and_can_retry(self) -> None:
+        def package_bytes(submission_path: str) -> bytes:
+            payload = io.BytesIO()
+            with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr(
+                    "icpc/problem.yaml",
+                    "problem_format_version: 2025-09\nname: Root Import ICPC\nvalidation: custom\n",
                 )
-                + "\n",
-            )
-            zf.writestr("icpc/data/secret/001.in", "1\n")
-            zf.writestr("icpc/data/secret/001.ans", "1\n")
-            zf.writestr("icpc/data/sample/1.in", "1\n")
-            zf.writestr("icpc/submissions/accepted/ac.cpp", "int main(){return 0;}\n")
-            zf.writestr("icpc/input_validators/validator.cpp", "int main(){return 0;}\n")
-            zf.writestr("icpc/output_validator/checker.cpp", "int main(){return 0;}\n")
+                zf.writestr("icpc/data/secret/001.in", "1\n")
+                zf.writestr("icpc/data/secret/001.ans", "1\n")
+                zf.writestr("icpc/data/sample/1.in", "1\n")
+                zf.writestr("icpc/submissions/accepted/ac.cpp", "int main(){return 0;}\n")
+                zf.writestr("icpc/input_validators/validator.cpp", "int main(){return 0;}\n")
+                zf.writestr("icpc/output_validator/checker.cpp", "int main(){return 0;}\n")
+                zf.writestr(
+                    "icpc/submissions/submissions.yaml",
+                    f"{json.dumps(submission_path)}:\n  permitted: [AC]\n  required: [AC]\n",
+                )
+            return payload.getvalue()
 
-        upload = UploadFile(filename="root-import-icpc.zip", file=io.BytesIO(payload.getvalue()))
-        target_slug = f"root-icpc-{uuid.uuid4().hex[:8]}"
-        resp = problems_root_import(
-            _post_request("/problems/import"),
-            user="alice",
-            package_upload=upload,
-            problem_slug=target_slug,
+        runtime.auth_service.create_user_with_password_verifier(
+            f"import-admin-{self.test_id}", "11" * 32, "22" * 16, 10000,
         )
-        self.assertEqual(resp.status_code, 303)
-        self.assertIn(f"/problems/alice/{target_slug}/statement", str(resp.headers.get("location", "")))
-        ws = Path(workspace_service.ensure_workspace(f"alice/{target_slug}", "alice"))
-        self.assertTrue((ws / "tests" / "manual" / "001.in").is_file())
-        self.assertFalse((ws / "tests" / "answers").exists())
+        user_id = runtime.auth_service.create_user_with_password_verifier(
+            self.user, "33" * 32, "44" * 16, 10000,
+        )
+        self.assertEqual(workspace_service.known_user(self.user)["is_system_admin"], 0)
+        session = runtime.auth_service.create_session_for_user(user_id)
+        target_slug = f"root-icpc-{uuid.uuid4().hex[:8]}"
+        target_problem = f"{self.user}/{target_slug}"
+        workspace = runtime.storage_layout.workspace(self.user, target_problem)
+        bare = runtime.storage_layout.bare_repository(f"{target_problem}.git")
+        existing = Path(workspace_service.ensure_workspace(self.default_problem, self.default_user))
+        existing_source = existing / "statement-sections/english/legend.tex"
+        original_source = existing_source.read_bytes()
+        before_rows = {
+            table: [tuple(row) for row in db_fetch_all(f"SELECT * FROM {table} ORDER BY id")]
+            for table in ("problems", "workspaces", "repo_acl")
+        }
+        headers = {"cookie": f"{AUTH_COOKIE_NAME}={session}", "origin": "http://testserver"}
+
+        with TestClient(app) as client:
+            failed = client.post(
+                "/problems/import",
+                data={"problem_slug": target_slug},
+                files={"package_upload": ("icpc.zip", package_bytes("."), "application/zip")},
+                headers=headers,
+                follow_redirects=False,
+            )
+            self.assertEqual(failed.status_code, 303)
+            self.assertEqual(failed.headers["location"], "/problems")
+            flash = failed.cookies[runtime.config_values.text("FLASH_COOKIE_NAME")]
+            messages = json.loads(_b64url_decode(flash))
+            self.assertEqual(messages, ["submissions.yaml contains an invalid submission path."])
+            for table, rows in before_rows.items():
+                self.assertEqual([tuple(row) for row in db_fetch_all(f"SELECT * FROM {table} ORDER BY id")], rows)
+            self.assertFalse(workspace.exists())
+            self.assertFalse(bare.exists())
+            self.assertEqual(list(runtime.storage_layout.archive_upload_root.iterdir()), [])
+            self.assertEqual(existing_source.read_bytes(), original_source)
+
+            imported = client.post(
+                "/problems/import",
+                data={"problem_slug": target_slug},
+                files={"package_upload": ("icpc.zip", package_bytes("accepted/ac.cpp"), "application/zip")},
+                headers=headers,
+                follow_redirects=False,
+            )
+            self.assertEqual(imported.status_code, 303)
+            self.assertEqual(imported.headers["location"], f"/problems/{target_problem}/statement")
+            self.assertIsNotNone(db_fetch_one("SELECT id FROM problems WHERE slug=?", [target_problem]))
+            self.assertEqual((workspace / "tests/manual/001.in").read_text(encoding="utf-8"), "1\n")
+            self.assertFalse((workspace / "tests/answers").exists())
+            self.assertEqual((workspace / "solutions/ac.cpp").read_text(encoding="utf-8"), "int main(){return 0;}\n")
+            published_source = run_git(["git", "--git-dir", str(bare), "show", "main:solutions/ac.cpp"])
+            self.assertEqual(published_source.returncode, 0, published_source.stderr)
+            self.assertEqual(published_source.stdout, "int main(){return 0;}\n")
 
     def test_problems_root_import_warns_when_english_statement_language_missing(self) -> None:
         payload = io.BytesIO()

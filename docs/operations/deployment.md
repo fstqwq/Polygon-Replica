@@ -16,7 +16,8 @@ sudo install -d -o polygon -g polygon /opt/polygon-replica
 sudo -u polygon git clone <repo-url> /opt/polygon-replica
 ```
 
-The web process listens on loopback port 8001. Only nginx is public. Run exactly
+The web process listens on loopback port 8001. Every production client, including
+judgehosts, enters through nginx with the request-header limits below. Run exactly
 one application process or Compose replica.
 
 ## Systemd installation
@@ -95,6 +96,13 @@ shared, and remote BuildKit builders. Selective `COPY` instructions only keep a
 file out of the final image; they do not keep it out of the context sent to the
 builder.
 
+Place a proxy in front of the loopback-published port before opening production
+traffic. Keep the app's container network private to the app and its trusted
+proxy: attaching judgehosts or other clients to that network would expose the
+container's backend listener directly. Judgehosts use the proxy URL. Direct
+connections in controlled protocol tests and local health checks do not define
+the production entrypoint.
+
 ## TLS proxy
 
 A TLS certificate, including a locally trusted self-signed certificate, is strongly recommended. Outside localhost, the browser password flow requires HTTPS because it uses Web Crypto. `AUTH_COOKIE_SECURE` also defaults to `true`, so authentication cookies are sent only over HTTPS.
@@ -108,12 +116,14 @@ server {
     server_name <domain>;
     ssl_certificate <certificate-path>;
     ssl_certificate_key <private-key-path>;
+    include /opt/polygon-replica/scripts/nginx/request-limits.conf;
     client_max_body_size 1024m;
 
     location / {
         proxy_pass http://127.0.0.1:8001;
         proxy_http_version 1.1;
-        proxy_set_header Host $host;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Host $http_host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
@@ -123,9 +133,60 @@ server {
 }
 ```
 
-Keep port 8001 private because uvicorn trusts forwarded headers from its direct
-peer. A same-host judgehost may use the private HTTP listener; remote judgehosts
-must use the HTTPS endpoint.
+Include the same limits in every Polygon HTTP/HTTPS entrypoint, including the
+default server for each listener, since nginx starts parsing before selecting
+the virtual host. The snippet uses a 1 KiB initial header buffer, up to four
+8 KiB large buffers, and a 10-second header-read deadline. Request lines or single
+header fields exceeding one large buffer are rejected. Body upload limits and
+long response timeouts remain independent.
+
+Keep port 8001 private because Uvicorn trusts forwarded headers from its direct
+peer. A same-host judgehost may use a private nginx HTTP endpoint; remote
+judgehosts use HTTPS. The backend retains httptools; the header bounds are
+enforced at nginx.
+
+### SSH tunnel behind an edge proxy
+
+For an edge TLS proxy such as Caddy, forward its Polygon upstream through nginx
+on the application host. Keep the remote tunnel listener on loopback:
+
+```text
+-R 127.0.0.1:18001:127.0.0.1:80
+```
+
+The port-80 nginx entrypoint includes the same request limits, upload size and
+long response settings as the TLS entrypoint above. Preserve the original Host.
+When local SSH connections carry the edge proxy's `X-Forwarded-Proto`, use this
+map in nginx's `http` context and set `X-Forwarded-Proto` to
+`$polygon_forwarded_proto` in that entrypoint's proxy location:
+
+```nginx
+map "$remote_addr:$http_x_forwarded_proto" $polygon_forwarded_proto {
+    default $scheme;
+    "127.0.0.1:https" https;
+    "::1:https" https;
+}
+```
+
+Allow private HTTP proxy access only from the tunnel and authorized judgehost
+network. This preserves HTTPS for trusted local tunnel traffic and HTTP for
+direct private judgehost traffic. Keep the edge proxy's existing routing and
+timeouts: nginx's header deadline governs its own connection and does not
+replace the edge proxy's public-client deadline.
+
+To switch an existing tunnel that targets port 8001:
+
+1. Save the existing nginx configuration and tunnel service unit. Add the limits
+   to HTTP/HTTPS entrypoints and preserve the forwarded Host and scheme.
+2. Run `sudo nginx -t`, then `sudo systemctl reload nginx`. Check the internal
+   proxy URL and the loopback proxy with the public Host and forwarded HTTPS.
+3. Pause admission and wait for active tasks to drain. Change only the tunnel's
+   local target to `127.0.0.1:80`, reload systemd, and restart the tunnel service.
+4. Check public/internal login, judgehost heartbeats, and every existing edge
+   route, including any separate `/yuanshen/` service, then resume admission.
+
+If these checks fail, restore the saved tunnel unit and nginx configuration,
+validate nginx before reloading, and restart the tunnel with its previous target.
 
 ## First use
 
@@ -141,7 +202,12 @@ JUDGEHOST_API_USERNAME = judgehost
 JUDGEHOST_API_TOKEN = <strong random secret>
 ```
 
-Use the Settings-generated judgehost command. Each daemon needs a unique hostname, daemon ID, CPU assignment, and unused `RUN_USER_UID_GID`. Verify IDs with `getent passwd <id>` and `getent group <id>`. A same-host container normally reaches `http://host.docker.internal:8001/`.
+Use the Settings-generated judgehost command, whose URL defaults to the current
+site's proxy URL. Each daemon needs a unique hostname, daemon ID, CPU assignment,
+and unused `RUN_USER_UID_GID`. Verify IDs with `getent passwd <id>` and
+`getent group <id>`. A same-host container can use `http://host.docker.internal/`
+when nginx's private HTTP endpoint is reachable on the host gateway. The URL
+field also accepts another internal proxy address.
 
 ### Judgehost image choice
 

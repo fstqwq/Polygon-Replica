@@ -11,6 +11,13 @@ event loop. Both are pinned application dependencies in `requirements.txt`.
 
 Production terminates HTTPS at a TLS proxy and exposes uvicorn only on loopback. The browser password flow requires HTTPS outside localhost, and `AUTH_COOKIE_SECURE` defaults to `true`. Systemd and Compose bind host port `8001` to loopback and trust forwarded headers from the direct proxy peer.
 
+Browser, agent, judgehost, and SSH-tunnel traffic enters through nginx using
+`scripts/nginx/request-limits.conf`. This boundary supplies request-line/header
+size limits and a header-read deadline for the httptools backend. Container
+backend networks remain private to the application and trusted proxy. The
+[deployment runbook](deployment.md#tls-proxy) covers direct TLS and edge-tunnel
+entrypoints.
+
 Generated judgehost commands use `domjudge/judgehost:latest`. The [judgehost image guide](deployment.md#judgehost-image-choice) documents the modified image for long-running stability.
 
 ## Host installation

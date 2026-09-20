@@ -11,6 +11,11 @@ Pandoc output is sanitized before `content.html` is persisted, so direct and
 cached HTML reads return the same safe fragment. Preview metadata is narrowed
 to typed summaries at the SQLite JSON boundary.
 
+The TeX presentation preprocessor scans each input in linear time, preserving
+comments, escapes, and verbatim regions while identifying supported layout
+commands. It recognizes environment names with bounded comparisons and copies
+only consumed source spans. Pandoc owns the subsequent LaTeX parsing.
+
 Problem and contest rendering share one sample model for pair, multi-pass, interactive, and multi-pass interactive examples. The optional authored `statement/examples.tex` overrides the canonical fallback and is rendered beside `problem.tex`.
 
 The [problem source protocol](../../../../protocol/problem-source.md) owns authored layout. The [statement preview protocol](../../../../protocol/statement-preview.md) owns rendering, identity, sandbox, and cache behavior.

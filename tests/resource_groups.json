@@ -45,6 +45,7 @@
     "test_workspace_store_service.py"
   ],
   "executor": [
+    "test_http_proxy_limits.py",
     "test_judgehost_host_telemetry.py",
     "test_browser_interactions.py",
     "test_icpc_export_package.py",

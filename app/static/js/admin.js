@@ -68,7 +68,7 @@ function initJudgehostConfiguration() {
     const ids = parseIds();
     const parsedBase = Math.floor(Number(runUidBase && runUidBase.value));
     const uidBase = parsedBase >= 1 && parsedBase <= 65533 ? parsedBase : 60706;
-    let endpoint = safeText(baseUrl.value, "http://host.docker.internal:8001/");
+    let endpoint = safeText(baseUrl.value, baseUrl.defaultValue);
     if (!endpoint.endsWith("/")) endpoint += "/";
     const largestRunUidGid = uidBase + Math.max(...ids);
     if (largestRunUidGid > 65533) {

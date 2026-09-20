@@ -313,6 +313,28 @@ limits:
             "solutions/accepted.cpp",
         )
 
+    def test_submission_yaml_rejects_invalid_paths_in_uploaded_package(self) -> None:
+        for index, submission_path in enumerate(
+            (".", "./", "././", "", "/main.cpp", "../main.cpp", "accepted\\main.cpp")
+        ):
+            with self.subTest(submission_path=submission_path):
+                payload = io.BytesIO()
+                with zipfile.ZipFile(payload, "w", zipfile.ZIP_DEFLATED) as package:
+                    package.writestr("problem.yaml", "name: Invalid submission path\nvalidation: default\n")
+                    package.writestr("data/secret/001.in", "1\n")
+                    package.writestr("submissions/accepted/main.cpp", "int main(){return 0;}\n")
+                    package.writestr(
+                        "submissions/submissions.yaml",
+                        yaml.safe_dump({submission_path: {"permitted": ["AC"], "required": ["AC"]}}),
+                    )
+                with self.assertRaisesRegex(ValueError, "submission path"):
+                    import_problem_package(
+                        ICPCPackageImportService(),
+                        self.workspace / f"invalid-{index}",
+                        "invalid-submission.zip",
+                        payload.getvalue(),
+                    )
+
     def test_submission_yaml_overrides_annotation_and_directory_with_warning(self) -> None:
         ws = self._workspace_path()
         payload = io.BytesIO()

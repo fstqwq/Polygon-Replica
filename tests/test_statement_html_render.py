@@ -144,6 +144,38 @@ class TestStatementHtmlRender(BackendE2ETestBase):
                 )
                 self.assertEqual(result.warnings, ())
 
+    def test_large_inert_tex_preserves_rendered_content_in_body_and_include(self) -> None:
+        root = Path(tempfile.mkdtemp(prefix="statement-large-", dir=suite_root()))
+        self.addCleanup(shutil.rmtree, root, True)
+        render_root = root / "render"
+        render_root.mkdir()
+        opening = (
+            "\\begin{problem}{Large inert source}{stdin}{stdout}"
+            "{1 second}{256 megabytes}\nBefore payload.\n\n"
+        )
+        ending = "\n\nAfter payload.\n\\end{problem}\n"
+        problem_tex = render_root / "problem.tex"
+        problem_tex.write_text(opening + ending, encoding="utf-8")
+        reference = runtime.statement_html_renderer.render(
+            render_root, root / "reference", subject_token="large-inert-source",
+        )
+        payloads = {
+            "comments": "%\n" * (32 * 1024),
+            "unused-macro": r"\newcommand{\unused}{" + "\\" * (64 * 1024) + "}",
+        }
+        for kind, payload in payloads.items():
+            for source in ("body", "include"):
+                with self.subTest(kind=kind, source=source):
+                    (render_root / "payload.tex").write_text(payload, encoding="utf-8")
+                    body = payload if source == "body" else r"\input{payload.tex}"
+                    problem_tex.write_text(opening + body + ending, encoding="utf-8")
+                    result = runtime.statement_html_renderer.render(
+                        render_root, root / f"{kind}-{source}",
+                        subject_token="large-inert-source",
+                    )
+                    self.assertEqual(result.fragment, reference.fragment)
+                    self.assertEqual(result.warnings, ())
+
     def test_problem_reader_can_render_own_workspace_html_and_pdf(self) -> None:
         reader = "statement-reader"
         workspace = self._seed_workspace(self.problem, reader)

@@ -39,6 +39,9 @@ jobs:
         if [ "${{ matrix.group }}" = "e2e" ]; then
           packages+=(pandoc poppler-utils librsvg2-bin)
         fi
+        if [ "${{ matrix.group }}" = "executor" ]; then
+          packages+=(nginx)
+        fi
         sudo apt-get install -y "${packages[@]}"
         sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
         if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then

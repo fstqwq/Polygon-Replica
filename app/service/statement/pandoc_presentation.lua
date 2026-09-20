@@ -50,14 +50,26 @@ local function argument(text, cursor, opening, closing)
   error('unterminated presentation argument')
 end
 
+local function presentation_environment(text, cursor)
+  local opening = text:find('%S',cursor)
+  if not opening or text:sub(opening,opening) ~= '{' then return nil,cursor end
+  -- Unknown names must not scan an arbitrarily long, possibly unclosed argument.
+  for _,name in ipairs({'verbatim','Verbatim','lstlisting','minted','minipage','tabular'}) do
+    local finish = opening+#name+1
+    if text:sub(opening+1,finish) == name..'}' then return name,finish+1 end
+  end
+  return nil,cursor
+end
+
 -- Keep box and table boundaries before Pandoc's LaTeX reader flattens them.
 function M.prepare(text)
   local output, cursor = {}, 1
   while cursor <= #text do
-    local tail = text:sub(cursor)
-    local comment = tail:match('^%%[^\n]*')
-    local command = tail:match('^\\([A-Za-z]+)')
-    if comment then table.insert(output,comment); cursor=cursor+#comment
+    local char = text:sub(cursor,cursor)
+    local command = char == '\\' and text:match('^\\([A-Za-z]+)',cursor)
+    if char == '%' then
+      local finish = text:find('\n',cursor,true) or (#text+1)
+      table.insert(output,text:sub(cursor,finish-1)); cursor=finish
     elseif command == 'verb' then
       local start = cursor + 5
       if text:sub(start,start) == '*' then start=start+1 end
@@ -65,16 +77,19 @@ function M.prepare(text)
       if not finish then error('unterminated verbatim text') end
       table.insert(output,text:sub(cursor,finish)); cursor=finish+1
     elseif command == 'begin' or command == 'end' then
-      local opening, name = tail:match('^(\\%a+%s*{([^}]+)})')
-      if opening and command == 'begin' and ({verbatim=true,Verbatim=true,lstlisting=true,minted=true})[name] then
-        local _,finish=text:find('\\end{'..name..'}',cursor+#opening,true)
+      local name,after = presentation_environment(text,cursor+#command+1)
+      if name and command == 'begin' and ({verbatim=true,Verbatim=true,lstlisting=true,minted=true})[name] then
+        local _,finish=text:find('\\end{'..name..'}',after,true)
         if not finish then error('unterminated verbatim environment') end
         table.insert(output,text:sub(cursor,finish)); cursor=finish+1
-      elseif opening and (name == 'minipage' or name == 'tabular') then
+      elseif name == 'minipage' or name == 'tabular' then
         local replacement = name == 'minipage' and 'StatementMinipage' or 'StatementTabular'
         table.insert(output,'\\'..command..'{'..replacement..'}')
-        cursor=cursor+#opening
-        if name == 'minipage' and command == 'begin' and not text:sub(cursor):match('^%s*%[') then table.insert(output,'[c]') end
+        cursor=after
+        if name == 'minipage' and command == 'begin' then
+          local option = text:find('%S',cursor) or (#text+1)
+          if text:sub(option,option) ~= '[' then table.insert(output,'[c]') end
+        end
       else
         table.insert(output,'\\'..command); cursor=cursor+#command+1
       end
@@ -95,7 +110,7 @@ function M.prepare(text)
       table.insert(output,'\\texttt{'..token..'}')
       cursor=end_cursor
     elseif command then table.insert(output,'\\'..command); cursor=cursor+#command+1
-    elseif tail:sub(1,1) == '\\' then table.insert(output,tail:sub(1,2)); cursor=cursor+2
+    elseif char == '\\' then table.insert(output,text:sub(cursor,cursor+1)); cursor=cursor+2
     else
       local next_special=text:find('[\\%%]',cursor+1) or (#text+1)
       table.insert(output,text:sub(cursor,next_special-1)); cursor=next_special

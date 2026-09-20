@@ -22,3 +22,7 @@ fetch; browser layout and paint require a separate browser check.
 The profile reads Navigation Timing and Server-Timing. TTFB is response start minus
 request start; estimated network overhead is TTFB minus application elapsed time. Unavailable metrics
 display `n/a`.
+
+The admin judgehost command generator starts with the request's current site
+URL and retains explicit operator overrides for private proxy endpoints. Clearing
+the URL restores that site default.

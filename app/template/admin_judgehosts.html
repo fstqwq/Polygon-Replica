@@ -73,7 +73,7 @@
   </div>
   <div class="form-row">
     <label for="judgehost_gen_script_baseurl">DOMSERVER_BASEURL</label>
-    <input id="judgehost_gen_script_baseurl" type="text" value="http://host.docker.internal:8001/" spellcheck="false" data-gen-script-baseurl="1" />
+    <input id="judgehost_gen_script_baseurl" type="text" value="{{ request.base_url }}" spellcheck="false" data-gen-script-baseurl="1" />
   </div>
   <label class="admin-inline-toggle" for="judgehost_gen_script_use_sudo">
     <input id="judgehost_gen_script_use_sudo" type="checkbox" data-gen-script-sudo="1" />
