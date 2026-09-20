@@ -123,7 +123,13 @@ async function fixture() {
     await module.evaluate();
   }
   document.dispatchEvent({ type: 'DOMContentLoaded' });
-  const opener = (name, program = 'solution-0', target = overlay.id) => add(table, 'button', '', '', { popupOpen: target, testName: name, programId: program });
+  const testRows = new Map();
+  const opener = (name, program = 'solution-0', target = overlay.id) => {
+    if (!testRows.has(name)) {
+      testRows.set(name, add(table, 'tr', '', '', { testName: name, testSourceKind: 'manual', testCommand: '' }));
+    }
+    return add(testRows.get(name), 'button', '', '', { popupOpen: target, programId: program });
+  };
   const flush = async () => { await new Promise(resolve => setImmediate(resolve)); };
   const finish = async (index, html, ok = true) => { requests[index].resolve({ ok, text: async () => html }); await flush(); };
   const focus = () => { while (timers.length) timers.shift()(); };

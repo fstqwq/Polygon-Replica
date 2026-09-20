@@ -82,8 +82,10 @@ function initRunDetails() {
   document.addEventListener("polygonlike:popup-opened", (event) => {
     const { overlay, opener } = event.detail;
     if (overlay.id !== "run-test-detail-popup" || !opener || !table.contains(opener)) return;
-    const testName = String(opener.dataset.testName || "").trim();
-    renderTitle(testName, String(opener.dataset.testSourceKind || ""), String(opener.dataset.testCommand || ""));
+    const row = opener.closest("tr[data-test-name]");
+    if (!row) return;
+    const testName = String(row.dataset.testName || "").trim();
+    renderTitle(testName, String(row.dataset.testSourceKind || ""), String(row.dataset.testCommand || ""));
     load(testName, String(opener.dataset.programId || ""));
   });
   document.addEventListener("polygonlike:popup-closed", (event) => {

@@ -16,6 +16,8 @@ Run details retain one pending request keyed by URL, verification, testcase, and
 program. Repeated clicks on its key share that request. Switching or closing aborts
 it; completion, failure, and cleanup check request identity before changing UI.
 Reopening after completion fetches current diagnostics. Closing clears content.
+The opener supplies the program identity; its testcase row supplies the shared
+test name, source kind, and generator command.
 The executor Node harness exercises the real modules with controlled events and
 fetch; browser layout and paint require a separate browser check.
 
