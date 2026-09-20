@@ -69,43 +69,6 @@ class TestContestProblemActions(ContestActionBase):
             {first_problem_id, second_problem_id},
         )
 
-    def test_save_updates_indices_and_only_changed_limits(self) -> None:
-        contest_slug, contest_id, actor_user_id = self.create_contest("save")
-        first_id, first_problem_id, _ = self.add_owned_problem(
-            contest_id, actor_user_id, "A", "save-first"
-        )
-        second_id, second_problem_id, _ = self.add_owned_problem(
-            contest_id, actor_user_id, "B", "save-second"
-        )
-
-        with patch(
-            "app.impl.contest.problem._run_problem_general_update",
-            return_value={"problem_id": second_problem_id, "status": "success"},
-        ) as update:
-            response = contest_problems_save(
-                contest=contest_slug,
-                user="alice",
-                contest_problem_ids=[str(first_id), str(second_id)],
-                contest_problem_indices=["B", "A"],
-                problem_ids=[str(first_problem_id), str(second_problem_id)],
-                time_limit_ms_values=["1000", "3000"],
-                memory_limit_mb_values=["256", "512"],
-                original_time_limit_ms_values=["1000", "2000"],
-                original_memory_limit_mb_values=["256", "512"],
-            )
-
-        self.assertEqual(response.status_code, 303)
-        update.assert_called_once()
-        self.assertEqual(update.call_args.kwargs["problem_id"], second_problem_id)
-        rows = db_fetch_all(
-            "SELECT id,idx FROM contest_problems WHERE contest_id=?",
-            [contest_id],
-        )
-        self.assertEqual(
-            {int(row["id"]): str(row["idx"]) for row in rows},
-            {first_id: "B", second_id: "A"},
-        )
-
     def test_contest_writer_adds_only_directly_writable_problems(self) -> None:
         target_slug, target_id, _target_actor_user_id = self.create_contest(
             "writer-add"
@@ -180,7 +143,11 @@ class TestContestProblemActions(ContestActionBase):
             runtime.contest_service.contest_has_problem(target_id, inaccessible_id)
         )
 
-        workspace_service.revoke_repo_access_for_problem_id(direct_id, writer)
+        runtime.access_command.revoke_problem_access(
+            actor_user_id=source_actor_id,
+            problem_id=direct_id,
+            target_username=writer,
+        )
         self.assertTrue(
             runtime.contest_service.contest_has_problem(target_id, direct_id)
         )

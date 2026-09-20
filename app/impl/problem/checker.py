@@ -123,6 +123,7 @@ def checker_rename_source(
     )
 
 def checker_save_source(
+    request: Request,
     problem: str,
     user: Annotated[str, Depends(require_session_user)],
     path: str = Form('checkers/checker.cpp'),
@@ -158,6 +159,6 @@ def checker_save_source(
     redirect_url = f'/problems/{problem}/checker'
     if json_requested:
         if save_ok:
-            return json_redirect_response(redirect_url, msg)
+            return json_redirect_response(request, redirect_url, msg)
         return json_error_response(msg)
     return redirect_response(redirect_url, status_code=303, message=msg)

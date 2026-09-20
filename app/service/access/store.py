@@ -16,9 +16,6 @@ class AccessStore:
         )
         return row is not None and int(row["is_system_admin"] or 0) == 1
 
-    def direct_problem_role(self, problem_id: int, user_id: int) -> AccessRole:
-        return self.direct_problem_roles([problem_id], user_id)[int(problem_id)]
-
     def direct_problem_roles(
         self,
         problem_ids: list[int],

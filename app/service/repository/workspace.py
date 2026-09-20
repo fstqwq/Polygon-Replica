@@ -466,36 +466,6 @@ class WorkspaceService:
     def owner_count(self, problem_id: int) -> int:
         return self._store.problem_owner_count(int(problem_id))
 
-    def set_repo_access_for_problem_id(self, problem_id: int, username: str, role: str) -> dict[str, object]:
-        target_user = self.known_user(username)
-        safe_role = repo_role(role)
-        existing = self._store.repo_access_row(int(problem_id), int(target_user["id"]))
-        existing_role = "" if existing is None else str(existing["role"])
-        if safe_role == "owner" or existing_role == "owner":
-            raise ValueError("owner access is fixed and cannot be transferred")
-        self._store.upsert_repo_access(int(problem_id), int(target_user["id"]), safe_role)
-        return {
-            "target_user_id": int(target_user["id"]),
-            "target_username": str(target_user["username"]),
-            "previous_role": existing_role,
-            "role": safe_role,
-        }
-
-    def revoke_repo_access_for_problem_id(self, problem_id: int, username: str) -> dict[str, object]:
-        target_user = self.known_user(username)
-        existing = self._store.repo_access_row(int(problem_id), int(target_user["id"]))
-        if existing is None:
-            raise ValueError("access entry not found")
-        existing_role = str(existing["role"])
-        if existing_role == "owner":
-            raise ValueError("owner access is fixed and cannot be transferred")
-        self._store.delete_repo_access(int(problem_id), int(target_user["id"]))
-        return {
-            "target_user_id": int(target_user["id"]),
-            "target_username": str(target_user["username"]),
-            "previous_role": existing_role,
-        }
-
     def _user_row(self, username: str):
         username = self._validate_identifier(username, "user")
         row = self.known_user(username)

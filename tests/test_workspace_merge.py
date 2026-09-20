@@ -5,7 +5,6 @@ import unittest
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, cast
-from unittest.mock import patch
 
 from app.service.platform.git_process import run_git
 from app.service.platform.fs.layout import StorageLayout
@@ -96,23 +95,16 @@ class TestWorkspaceMerge(unittest.TestCase):
             (self.workspace / "shared.txt").read_text(encoding="utf-8"),
             "latest\n",
         )
-        self.assertFalse(self.service.has_undo(self.workspace))
+        self.assertIsNone(self.service.undo_context(self.workspace))
         self.assertFalse(self.service.advance_clean_workspace(self.workspace))
 
-    def test_git_service_commit_is_quiet_and_keeps_head_and_empty_commit_behavior(self) -> None:
+    def test_git_service_commit_persists_changes_and_rejects_empty_commit(self) -> None:
         target = self.workspace / "quiet-commit.txt"
         target.write_text("quiet\n", encoding="utf-8")
 
-        with patch("app.service.repository.git.run_git", wraps=run_git) as mocked_run_git:
-            head = GitService().commit(self.workspace, "quiet commit", "Test User", "test@example.invalid")
-
-        commit_command = next(
-            call.args[0]
-            for call in mocked_run_git.call_args_list
-            if len(call.args[0]) >= 5 and call.args[0][3] == "commit"
-        )
-        self.assertEqual(commit_command[-3:], ["--quiet", "-m", "quiet commit"])
+        head = GitService().commit(self.workspace, "quiet commit", "Test User", "test@example.invalid")
         self.assertEqual(head, self._git(self.workspace, "rev-parse", "HEAD"))
+        self.assertEqual(self._git(self.workspace, "show", "HEAD:quiet-commit.txt"), "quiet")
 
         with self.assertRaisesRegex(RuntimeError, "nothing to commit"):
             GitService().commit(self.workspace, "empty commit", "Test User", "test@example.invalid")
@@ -131,37 +123,21 @@ class TestWorkspaceMerge(unittest.TestCase):
         self.assertFalse(self.service.advance_clean_workspace(self.workspace))
         self.assertEqual(self._git(self.workspace, "rev-parse", "HEAD"), diverged_head)
 
-    def test_suggested_manifest_lists_only_actual_result_changes(self) -> None:
-        (self.workspace / "local.txt").write_text("my edit\n", encoding="utf-8")
-        self._push_shared_file("suggested-manifest", "shared.txt", "latest\n")
-
-        preview = self.service.start_preview("alice", "alice/sample", self.workspace)
-
-        self.assertTrue(preview.suggested_available)
-        self.assertTrue(preview.fast_forward_possible)
-        self.assertEqual(
-            [entry.path for entry in preview.suggested_entries],
-            ["shared.txt"],
-        )
-
     def test_suggested_merge_is_atomic_and_undo_restores_current_files(self) -> None:
         old_head = self._git(self.workspace, "rev-parse", "HEAD")
         (self.workspace / "local.txt").write_text("my edit\n", encoding="utf-8")
-        shared = self._shared_clone("shared-update")
-        (shared / "shared.txt").write_text("latest\n", encoding="utf-8")
-        self._git(shared, "add", ".")
-        self._git(shared, "commit", "-m", "shared update")
-        self._git(shared, "push", "origin", "main")
+        self._push_shared_file("shared-update", "shared.txt", "latest\n")
 
         preview = self.service.start_preview("alice", "alice/sample", self.workspace)
         self.assertTrue(preview.suggested_available)
+        self.assertTrue(preview.fast_forward_possible)
+        self.assertEqual([entry.path for entry in preview.suggested_entries], ["shared.txt"])
         self.assertEqual((self.workspace / "local.txt").read_text(encoding="utf-8"), "my edit\n")
         self.assertFalse((self.workspace / "shared.txt").exists())
 
         self.service.apply_preview("alice", "alice/sample", preview.preview_id, "suggested", {})
         self.assertEqual((self.workspace / "local.txt").read_text(encoding="utf-8"), "my edit\n")
         self.assertEqual((self.workspace / "shared.txt").read_text(encoding="utf-8"), "latest\n")
-        self.assertTrue(self.service.has_undo(self.workspace))
         self.assertEqual(
             self.service.undo_context(self.workspace),
             {"mode": "suggested", "affected_count": 1},
@@ -171,7 +147,7 @@ class TestWorkspaceMerge(unittest.TestCase):
         self.assertEqual(self._git(self.workspace, "rev-parse", "HEAD"), old_head)
         self.assertEqual((self.workspace / "local.txt").read_text(encoding="utf-8"), "my edit\n")
         self.assertFalse((self.workspace / "shared.txt").exists())
-        self.assertFalse(self.service.has_undo(self.workspace))
+        self.assertIsNone(self.service.undo_context(self.workspace))
 
     def test_conflict_requires_complete_manual_choice(self) -> None:
         (self.workspace / "same.txt").write_text("mine\n", encoding="utf-8")

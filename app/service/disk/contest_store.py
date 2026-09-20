@@ -352,20 +352,6 @@ class ContestDiskStore:
             "problems": problems,
         }
 
-    def contest_context_by_id(self, contest_id: int) -> ContestContextRecord | None:
-        row = self.db.fetch_one(
-            """
-            SELECT c.id,c.slug,COALESCE(title_property.value, '') AS title,
-                   c.owner_user_id,c.status,c.source_generation,c.created_at
-            FROM contests c
-            LEFT JOIN contest_properties title_property
-              ON title_property.contest_id=c.id AND title_property.key='title'
-            WHERE c.id=?
-            """,
-            [int(contest_id)],
-        )
-        return None if row is None else _contest_context_record(dict(row))
-
     def owner_count(self, contest_id: int) -> int:
         row = self.db.fetch_one(
             "SELECT COUNT(*) AS c FROM contest_members WHERE contest_id=? AND role='owner'",

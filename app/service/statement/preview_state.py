@@ -58,26 +58,6 @@ class StatementPreviewRepository(Protocol):
         actor_user_id: int | None = None,
     ) -> StatementPreviewRow | None: ...
 
-    def latest_problem(
-        self,
-        problem_id: int,
-        *,
-        actor_user_id: int,
-        source_kind: StatementPreviewSource,
-        output_kind: StatementPreviewOutput,
-        language: str,
-    ) -> StatementPreviewRow | None: ...
-
-    def latest_contest(
-        self,
-        contest_id: int,
-        *,
-        actor_user_id: int,
-        source_kind: StatementPreviewSource,
-        output_kind: StatementPreviewOutput,
-        language: str,
-    ) -> StatementPreviewRow | None: ...
-
     def cached_problem(
         self,
         problem_id: int,

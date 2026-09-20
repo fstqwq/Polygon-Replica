@@ -689,13 +689,6 @@ class WorkspaceMergeService:
             raise RuntimeError("merge undo metadata is invalid")
         return rows
 
-    def has_undo(self, workspace: Path) -> bool:
-        try:
-            self._undo_metadata(workspace)
-            return True
-        except (OSError, RuntimeError, ValueError):
-            return False
-
     def undo_context(self, workspace: Path) -> dict[str, object] | None:
         try:
             metadata = self._undo_metadata(workspace)

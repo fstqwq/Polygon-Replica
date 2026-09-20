@@ -1,5 +1,6 @@
 import shutil
 import tempfile
+import unittest
 from html.parser import HTMLParser
 from pathlib import Path
 from unittest.mock import patch
@@ -223,26 +224,6 @@ class TestStatementHtmlRender(BackendE2ETestBase):
 
         self.assertEqual(error.exception.status_code, 404)
 
-    def test_workspace_preview_ignores_native_package_id(self) -> None:
-        with patch.object(
-            runtime.problem_package_service,
-            "native_package",
-            side_effect=AssertionError("Workspace resolved a Native Package"),
-        ):
-            preview_input = runtime.statement_preview_service.problem_input(
-                self.problem,
-                self.user,
-                source_kind="workspace",
-                output_kind="html",
-                language="english",
-                native_package_id="pm-ignored",
-            )
-
-        self.assertEqual(
-            preview_input.problem_id,
-            int(runtime.workspace_service.problem_row(self.problem)["id"]),
-        )
-
     def test_native_package_publication_busy_is_reported_as_conflict(self) -> None:
         with patch.object(
             runtime.statement_preview_service,
@@ -428,28 +409,6 @@ class TestStatementHtmlRender(BackendE2ETestBase):
                 source_kind="workspace",
                 language="english",
             )
-        current_pdf_input = runtime.statement_preview_service.problem_input(
-            self.problem,
-            self.user,
-            source_kind="workspace",
-            output_kind="pdf",
-            language="english",
-        )
-        expected_pdf_identity = (
-            runtime.contest_statement_preview_service._pdf_identity(
-                contest_id,
-                source_generation=int(
-                    runtime.contest_service.contest_context(contest_slug)[
-                        "source_generation"
-                    ]
-                ),
-                source_kind="workspace",
-                language="english",
-                rows=runtime.contest_service.contest_problems(contest_id),
-                source_identities=[current_pdf_input.source_identity],
-            )
-        )
-        self.assertEqual(first_pdf["input_identity"], expected_pdf_identity)
         with patch.object(
             runtime.statement_preview_service,
             "prepare_render_tree",
@@ -465,6 +424,48 @@ class TestStatementHtmlRender(BackendE2ETestBase):
             )
 
         self.assertEqual(first_pdf["id"], second_pdf["id"])
+
+    def test_html_preview_rebuilds_missing_and_unsafe_cached_payloads(self) -> None:
+        service = runtime.statement_preview_service
+        user_id = int(runtime.workspace_service.user_row(self.user)["id"])
+        row = service.build_problem(
+            self.problem,
+            self.user,
+            source_kind="workspace",
+            output_kind="html",
+            language="english",
+            native_package_id="pm-ignored-for-workspace",
+        )
+        fragment = service.html_fragment(row["id"], actor_user_id=user_id)
+        self.assertTrue(fragment)
+        outside = Path(tempfile.mkdtemp(prefix="preview-outside-", dir=suite_root()))
+        self.addCleanup(shutil.rmtree, outside, True)
+        (outside / "content.html").write_text("outside preview", encoding="utf-8")
+
+        for unavailable in ("missing", "symlink", "outside-parent"):
+            with self.subTest(payload=unavailable):
+                html_root = runtime.storage_layout.resolve_preview_root(row["id"]) / "html"
+                payload = html_root / "content.html"
+                payload.unlink()
+                if unavailable == "symlink":
+                    payload.symlink_to(outside / "content.html")
+                elif unavailable == "outside-parent":
+                    shutil.rmtree(html_root)
+                    html_root.symlink_to(outside, target_is_directory=True)
+                self.assertIsNone(service.html_fragment(row["id"], actor_user_id=user_id))
+                rebuilt = service.build_problem(
+                    self.problem,
+                    self.user,
+                    source_kind="workspace",
+                    output_kind="html",
+                    language="english",
+                )
+                self.assertEqual(rebuilt["status"], "ok")
+                self.assertEqual(
+                    service.html_fragment(rebuilt["id"], actor_user_id=user_id),
+                    fragment,
+                )
+                row = rebuilt
 
     def test_pdf_failure_returns_the_latex_error_as_plain_text(self) -> None:
         compile_log = (
@@ -556,19 +557,21 @@ class TestStatementHtmlRender(BackendE2ETestBase):
             )
             store.finish(preview_id, status="ok", summary={})
 
-        first = store.latest_problem(
+        first = store.cached_problem(
             problem_id,
             actor_user_id=first_user_id,
             source_kind="workspace",
             output_kind="html",
             language="english",
+            input_identity="same-content",
         )
-        second = store.latest_problem(
+        second = store.cached_problem(
             problem_id,
             actor_user_id=second_user_id,
             source_kind="workspace",
             output_kind="html",
             language="english",
+            input_identity="same-content",
         )
         self.assertEqual(first["id"] if first else None, "sp-user-one")
         self.assertEqual(second["id"] if second else None, "sp-user-two")
@@ -831,42 +834,8 @@ class TestStatementHtmlRender(BackendE2ETestBase):
         self.assertIn("nested input", result.fragment)
         self.assertIn("nested output", result.fragment)
 
-    def test_legacy_note_commands_keep_their_section_names(self) -> None:
-        root = Path(
-            tempfile.mkdtemp(prefix="statement-html-note-", dir=suite_root())
-        )
-        self.addCleanup(shutil.rmtree, root, True)
-        render_root = root / "render"
-        render_root.mkdir()
-        (render_root / "problem.tex").write_text(
-            "\\begin{problem}{Notes}{standard input}{standard output}"
-            "{1 second}{256 megabytes}\n"
-            "\\Note\n"
-            "A single note.\n"
-            "\\Notes\n"
-            "Several notes.\n"
-            "\\end{problem}\n",
-            encoding="utf-8",
-        )
-
-        result = runtime.statement_html_renderer.render(
-            render_root,
-            root / "html",
-            subject_token="html-preview-note",
-        )
-
-        self.assertEqual(result.warnings, ())
-        self.assertEqual(
-            [(tag, text) for tag, _, text in _headings(result.fragment)],
-            [("h2", "Notes"), ("h3", "Note"), ("h3", "Notes")],
-        )
-        self.assertIn("A single note.", result.fragment)
-        self.assertIn("Several notes.", result.fragment)
-
-    def test_legacy_note_guard_renders_one_section_heading(self) -> None:
-        root = Path(
-            tempfile.mkdtemp(prefix="statement-html-note-guard-", dir=suite_root())
-        )
+    def test_note_sections_preserve_commands_guards_and_content(self) -> None:
+        root = Path(tempfile.mkdtemp(prefix="statement-html-notes-", dir=suite_root()))
         self.addCleanup(shutil.rmtree, root, True)
         render_root = root / "render"
         render_root.mkdir()
@@ -881,91 +850,45 @@ class TestStatementHtmlRender(BackendE2ETestBase):
             "  \\subsection*{Notes}\n"
             "\\fi\n"
         )
-        (render_root / "problem.tex").write_text(
-            "\\begin{problem}{Legacy Notes}{standard input}{standard output}"
-            "{1 second}{256 megabytes}\n"
-            + guard
-            + "Actual note content.\n"
-            "\\end{problem}\n",
-            encoding="utf-8",
+        cases = (
+            (
+                "commands",
+                "\\Note\nA single note.\n\\Notes\nSeveral notes.\n",
+                [("h3", "Note"), ("h3", "Notes")],
+                ("A single note.", "Several notes."),
+                True,
+            ),
+            (
+                "guard-content", guard + "Actual note content.\n",
+                [("h3", "Note")], ("Actual note content.",), True,
+            ),
+            ("guard-empty", guard, [], (), True),
+            (
+                "unknown-condition", "\\ifdefined\\Note\nConditional content.\n\\fi\n",
+                [], (), False,
+            ),
         )
+        for name, source, headings, content, warning_free in cases:
+            with self.subTest(case=name):
+                (render_root / "problem.tex").write_text(
+                    "\\begin{problem}{Notes}{standard input}{standard output}"
+                    "{1 second}{256 megabytes}\n" + source + "\\end{problem}\n",
+                    encoding="utf-8",
+                )
+                result = runtime.statement_html_renderer.render(
+                    render_root, root / name, subject_token=f"html-preview-{name}",
+                )
+                self.assertEqual(
+                    [(tag, text) for tag, _, text in _headings(result.fragment)],
+                    [("h2", "Notes"), *headings],
+                )
+                for text in content:
+                    self.assertIn(text, result.fragment)
+                if warning_free:
+                    self.assertEqual(result.warnings, ())
 
-        result = runtime.statement_html_renderer.render(
-            render_root,
-            root / "html",
-            subject_token="html-preview-note-guard",
-        )
 
-        self.assertEqual(result.warnings, ())
-        self.assertEqual(
-            [(tag, text) for tag, _, text in _headings(result.fragment)],
-            [("h2", "Legacy Notes"), ("h3", "Note")],
-        )
-        self.assertIn("Actual note content.", result.fragment)
-
-    def test_legacy_note_guard_without_content_has_no_note_heading(self) -> None:
-        root = Path(
-            tempfile.mkdtemp(prefix="statement-html-empty-note-", dir=suite_root())
-        )
-        self.addCleanup(shutil.rmtree, root, True)
-        render_root = root / "render"
-        render_root.mkdir()
-        (render_root / "problem.tex").write_text(
-            "\\begin{problem}{Empty Notes}{standard input}{standard output}"
-            "{1 second}{256 megabytes}\n"
-            "\\ifdefined\\Note\n"
-            "  \\ifx\\Note\\empty\n"
-            "    \\subsection*{Notes}\n"
-            "  \\else\n"
-            "    \\Note\n"
-            "  \\fi\n"
-            "\\else\n"
-            "  \\subsection*{Notes}\n"
-            "\\fi\n"
-            "\\end{problem}\n",
-            encoding="utf-8",
-        )
-
-        result = runtime.statement_html_renderer.render(
-            render_root,
-            root / "html",
-            subject_token="html-preview-empty-note",
-        )
-
-        self.assertEqual(result.warnings, ())
-        self.assertEqual(
-            [(tag, text) for tag, _, text in _headings(result.fragment)],
-            [("h2", "Empty Notes")],
-        )
-
-    def test_note_token_inside_an_unknown_condition_is_not_a_section(self) -> None:
-        root = Path(
-            tempfile.mkdtemp(prefix="statement-html-note-token-", dir=suite_root())
-        )
-        self.addCleanup(shutil.rmtree, root, True)
-        render_root = root / "render"
-        render_root.mkdir()
-        (render_root / "problem.tex").write_text(
-            "\\begin{problem}{Conditional}{standard input}{standard output}"
-            "{1 second}{256 megabytes}\n"
-            "\\ifdefined\\Note\n"
-            "Conditional content.\n"
-            "\\fi\n"
-            "\\end{problem}\n",
-            encoding="utf-8",
-        )
-
-        result = runtime.statement_html_renderer.render(
-            render_root,
-            root / "html",
-            subject_token="html-preview-note-token",
-        )
-
-        self.assertEqual(
-            [(tag, text) for tag, _, text in _headings(result.fragment)],
-            [("h2", "Conditional")],
-        )
-
+class TestStatementNumbering(unittest.TestCase):
     def test_contest_numbering_preserves_statement_title_attributes(self) -> None:
         for fragment, expected_title, expected_attributes in (
             ("<section><h2>绝对多数</h2></section>", "D. 绝对多数", {}),

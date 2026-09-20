@@ -97,23 +97,6 @@ class StatementPreviewService:
         self._html = html_renderer
         self._pdf = pdf_compiler
 
-    def latest_problem(
-        self,
-        problem_id: int,
-        *,
-        actor_user_id: int,
-        source_kind: StatementPreviewSource,
-        output_kind: StatementPreviewOutput,
-        language: str,
-    ) -> StatementPreviewRow | None:
-        return self._store.latest_problem(
-            problem_id,
-            actor_user_id=actor_user_id,
-            source_kind=source_kind,
-            output_kind=output_kind,
-            language=self._language(language),
-        )
-
     def row(
         self,
         preview_id: str,
@@ -313,14 +296,12 @@ class StatementPreviewService:
         problem_id: int | None = None,
     ) -> str | None:
         row = self._store.row(preview_id, actor_user_id=actor_user_id)
-        if row is None or row["status"] != "ok" or row["output_kind"] != "html":
+        if row is None:
             return None
         if problem_id is not None and row["problem_id"] != int(problem_id):
             return None
-        path = self._preview_root(preview_id) / "html" / "content.html"
-        if not self._safe_file(self._preview_root(preview_id), path):
-            return None
-        return path.read_text(encoding="utf-8")
+        path = self._output_file(row, output_kind="html")
+        return path.read_text(encoding="utf-8") if path is not None else None
 
     def resource(
         self,
@@ -340,11 +321,7 @@ class StatementPreviewService:
 
     def pdf(self, preview_id: str, *, actor_user_id: int) -> Path | None:
         row = self._store.row(preview_id, actor_user_id=actor_user_id)
-        if row is None or row["status"] != "ok" or row["output_kind"] != "pdf":
-            return None
-        root = self._preview_root(preview_id)
-        path = root / "pdf" / "statement.pdf"
-        return path if self._safe_file(root, path) else None
+        return self._output_file(row, output_kind="pdf") if row is not None else None
 
     def latex_log(self, preview_id: str, *, actor_user_id: int) -> str:
         row = self._store.row(preview_id, actor_user_id=actor_user_id)
@@ -615,18 +592,20 @@ class StatementPreviewService:
         )
         if row is None:
             return None
-        if output_kind == "html":
-            return (
-                row
-                if self.html_fragment(
-                    row["id"],
-                    actor_user_id=actor_user_id,
-                    problem_id=problem_id,
-                )
-                is not None
-                else None
-            )
-        return row if self.pdf(row["id"], actor_user_id=actor_user_id) is not None else None
+        return row if self._output_file(row, output_kind=output_kind) is not None else None
+
+    def _output_file(
+        self,
+        row: StatementPreviewRow,
+        *,
+        output_kind: StatementPreviewOutput,
+    ) -> Path | None:
+        if row["status"] != "ok" or row["output_kind"] != output_kind:
+            return None
+        root = self._preview_root(row["id"])
+        name = "html/content.html" if output_kind == "html" else "pdf/statement.pdf"
+        path = root / name
+        return path if self._safe_file(root, path) else None
 
     def _workspace_source_identity(
         self,

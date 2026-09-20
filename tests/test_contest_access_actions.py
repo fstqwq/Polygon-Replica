@@ -395,12 +395,12 @@ class TestContestAccessActions(ContestActionBase):
                 runtime.contest_statement_preview_service,
                 "build_html",
                 return_value=preview,
-            ) as build_html,
+            ),
             patch.object(
                 runtime.contest_statement_preview_service,
                 "build_pdf",
                 return_value=preview,
-            ) as build_pdf,
+            ),
             patch.object(
                 runtime.statement_preview_service,
                 "pdf",
@@ -431,8 +431,7 @@ class TestContestAccessActions(ContestActionBase):
         self.assertEqual(review_page.status_code, 200)
         self.assertEqual(review_build.status_code, 303)
         self.assertEqual(pdf_page.status_code, 200)
-        self.assertEqual(build_html.call_count, 2)
-        self.assertEqual(build_pdf.call_count, 1)
+        self.assertEqual(Path(pdf_page.path).read_bytes(), b"%PDF-reader")
 
     def test_contest_reader_needs_direct_problem_read_for_review_and_download(self) -> None:
         contest_slug, contest_id, actor_user_id = self.create_contest(

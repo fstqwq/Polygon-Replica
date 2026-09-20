@@ -75,14 +75,6 @@ class PackageAdapter(Protocol):
         plan: PackageAdapterPlan | None = None,
     ) -> str: ...
 
-    def apply_contest_placement(
-        self,
-        target: Path,
-        *,
-        canonical_problem_slug: str,
-        placement: ContestPackagePlacement,
-    ) -> None: ...
-
 
 _LANGUAGE_CODES = {
     "english": "en",
@@ -344,17 +336,6 @@ class PackageAdapterSupport:
                 raise ValueError("package adapter target must be empty")
             return
         target.mkdir(parents=True)
-
-    def apply_contest_placement(
-        self,
-        target: Path,
-        *,
-        canonical_problem_slug: str,
-        placement: ContestPackagePlacement,
-    ) -> None:
-        """Apply the format-neutral no-op Contest placement."""
-
-        del self, target, canonical_problem_slug, placement
 
     def statement_compile_error(
         self,

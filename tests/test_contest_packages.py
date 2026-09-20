@@ -1,4 +1,5 @@
 import io
+import stat
 import tempfile
 import unittest
 import zipfile
@@ -7,16 +8,14 @@ from types import SimpleNamespace
 from typing import cast
 from unittest.mock import Mock, patch
 
+from app.config import ConfigValues
 from app.impl.contest.package import _prepare_external_packages
 from app.service.contest.package import (
     ContestPackageService,
     ContestPackageSnapshot,
 )
 from app.service.contest.service import ContestService
-from app.service.export.adapters import (
-    ContestPackagePlacement,
-    PackageAdapterRegistry,
-)
+from app.service.export.adapters import PackageAdapterRegistry
 from app.service.export.service import CachedExternalPackage
 from app.service.problem_package.service import ProblemPackageService
 
@@ -107,50 +106,6 @@ class _ProblemPackageService:
         return self.languages[native_package_id]
 
 
-class _Adapter:
-    def __init__(self, package_format: str) -> None:
-        self.format = package_format
-        self.placements: list[tuple[str, ContestPackagePlacement]] = []
-
-    def apply_contest_placement(
-        self,
-        target: Path,
-        *,
-        canonical_problem_slug: str,
-        placement: ContestPackagePlacement,
-    ) -> None:
-        self.placements.append((canonical_problem_slug, placement))
-        (target / "placement.txt").write_text(
-            f"{placement.idx}:{placement.ordinal}\n",
-            encoding="utf-8",
-        )
-
-
-class _Registry:
-    formats = (
-        "domjudge",
-        "icpc-2025-09",
-        "qoj",
-        "polygon-linux",
-        "nowcoder",
-    )
-
-    def __init__(self) -> None:
-        self.adapters = {
-            package_format: _Adapter(package_format)
-            for package_format in self.formats
-        }
-
-    @classmethod
-    def require_format(cls, package_format: str) -> str:
-        if package_format not in cls.formats:
-            raise ValueError(f"unsupported package format: {package_format}")
-        return package_format
-
-    def require(self, package_format: str) -> _Adapter:
-        return self.adapters[self.require_format(package_format)]
-
-
 class TestContestPackageDownload(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -158,10 +113,13 @@ class TestContestPackageDownload(unittest.TestCase):
         self.root = Path(self.temp_dir.name)
         self.contest = _ContestService(self.root)
         self.packages = _ProblemPackageService()
-        self.registry = _Registry()
+        self.registry = PackageAdapterRegistry(
+            ConfigValues({}, normalizer=lambda raw: raw),
+            Mock(),
+        )
         self.service = ContestPackageService(
             cast(ContestService, self.contest),
-            cast(PackageAdapterRegistry, self.registry),
+            self.registry,
             cast(ProblemPackageService, self.packages),
             problem_zip_max_expanded_bytes=4 * 1024 * 1024,
         )
@@ -186,6 +144,13 @@ class TestContestPackageDownload(unittest.TestCase):
                     f"format: {snapshot.package_format}\nname: {item.problem_slug}\n",
                 )
                 archive.writestr("tests/1", f"input-{item.problem_id}\n")
+                if snapshot.package_format == "domjudge":
+                    archive.writestr(
+                        "domjudge-problem.ini",
+                        f"externalid = {item.problem_slug}\n"
+                        "short-name = standalone\n"
+                        "color = #123456\n",
+                    )
             result[item.problem_id] = CachedExternalPackage(
                 export_id=f"e-{item.problem_id}",
                 native_package_id=item.native_package_id,
@@ -232,62 +197,63 @@ class TestContestPackageDownload(unittest.TestCase):
             self._snapshot()
 
     def test_download_assembles_cached_packages_and_common_statements(self) -> None:
-        snapshot = self._snapshot()
-        external_packages = self._external_packages(snapshot)
-        download = self.service.build_download(
-            snapshot,
-            external_packages=external_packages,
-            statement_pdfs=self._statement_pdfs(),
-        )
-
-        self.assertEqual(download.filename, "example-contest-domjudge-packages.zip")
-        with zipfile.ZipFile(download.path) as archive:
-            self.assertEqual(
-                archive.namelist(),
-                [
-                    "statements.en.pdf",
-                    "statements.zh.pdf",
-                    "packages/A-alice-alpha.zip",
-                    "packages/B-alice-beta.zip",
-                ],
-            )
-            self.assertEqual(archive.read("statements.en.pdf"), b"%PDF-english\n")
-            first_package = io.BytesIO(
-                archive.read("packages/A-alice-alpha.zip")
-            )
-            with zipfile.ZipFile(first_package) as package:
-                self.assertEqual(
-                    package.read("problem.yaml"),
-                    b"format: domjudge\nname: alice/alpha\n",
-                )
-                self.assertEqual(package.read("tests/1"), b"input-101\n")
-                self.assertEqual(package.read("placement.txt"), b"A:1\n")
-
-        adapter = self.registry.adapters["domjudge"]
-        self.assertEqual(
-            adapter.placements,
-            [
-                ("alice/alpha", ContestPackagePlacement(idx="A", ordinal=1)),
-                ("alice/beta", ContestPackagePlacement(idx="B", ordinal=2)),
-            ],
-        )
-        with zipfile.ZipFile(external_packages[101].path) as cached_package:
-            self.assertNotIn("placement.txt", cached_package.namelist())
-        cleanup_root = download.cleanup_root
-        download.close()
-        self.assertFalse(cleanup_root.exists())
-
-    def test_download_accepts_each_registered_adapter(self) -> None:
         for package_format in self.registry.formats:
             with self.subTest(package_format=package_format):
                 snapshot = self._snapshot(package_format)
+                external_packages = self._external_packages(snapshot)
+                cached_payloads = {
+                    problem_id: cached.path.read_bytes()
+                    for problem_id, cached in external_packages.items()
+                }
                 download = self.service.build_download(
                     snapshot,
-                    external_packages=self._external_packages(snapshot),
+                    external_packages=external_packages,
                     statement_pdfs=self._statement_pdfs(),
                 )
-                self.assertTrue(download.path.is_file())
+                self.assertEqual(
+                    download.filename,
+                    f"example-contest-{package_format}-packages.zip",
+                )
+                with zipfile.ZipFile(download.path) as archive:
+                    self.assertEqual(
+                        archive.namelist(),
+                        [
+                            "statements.en.pdf",
+                            "statements.zh.pdf",
+                            "packages/A-alice-alpha.zip",
+                            "packages/B-alice-beta.zip",
+                        ],
+                    )
+                    self.assertEqual(archive.read("statements.en.pdf"), b"%PDF-english\n")
+                    for item in snapshot.items:
+                        token = item.problem_slug.replace("/", "-")
+                        payload = archive.read(f"packages/{item.idx}-{token}.zip")
+                        if package_format != "domjudge":
+                            self.assertEqual(
+                                payload,
+                                cached_payloads[item.problem_id],
+                            )
+                        with zipfile.ZipFile(io.BytesIO(payload)) as package:
+                            self.assertEqual(
+                                package.read("tests/1"),
+                                f"input-{item.problem_id}\n".encode(),
+                            )
+                            self.assertEqual(
+                                package.read("problem.yaml"),
+                                f"format: {package_format}\nname: {item.problem_slug}\n".encode(),
+                            )
+                            if package_format == "domjudge":
+                                color = ("#e6194b", "#4363d8")[item.ordinal - 1]
+                                self.assertEqual(
+                                    package.read("domjudge-problem.ini").decode(),
+                                    f"externalid = {item.problem_slug}\n"
+                                    f"short-name = {item.idx}\n"
+                                    f"color = {color}\n",
+                                )
+                for problem_id, cached in external_packages.items():
+                    self.assertEqual(cached.path.read_bytes(), cached_payloads[problem_id])
                 download.close()
+                self.assertFalse(download.cleanup_root.exists())
 
     def test_download_rejects_incomplete_inputs(self) -> None:
         snapshot = self._snapshot()
@@ -301,43 +267,108 @@ class TestContestPackageDownload(unittest.TestCase):
             )
 
     def test_download_rejects_an_invalid_cached_external_archive(self) -> None:
-        snapshot = self._snapshot()
-        external_packages = self._external_packages(snapshot)
-        external_packages[101].path.write_bytes(b"not a zip")
+        for package_format in self.registry.formats:
+            with self.subTest(package_format=package_format):
+                snapshot = self._snapshot(package_format)
+                external_packages = self._external_packages(snapshot)
+                external_packages[101].path.write_bytes(b"not a zip")
 
-        with self.assertRaisesRegex(ValueError, "cached external package is invalid"):
-            self.service.build_download(
-                snapshot,
-                external_packages=external_packages,
-                statement_pdfs=self._statement_pdfs(),
-            )
+                with self.assertRaisesRegex(ValueError, "cached external package is invalid"):
+                    self.service.build_download(
+                        snapshot,
+                        external_packages=external_packages,
+                        statement_pdfs=self._statement_pdfs(),
+                    )
+
+    def test_download_rejects_corrupt_members_and_unsafe_paths(self) -> None:
+        for package_format in self.registry.formats:
+            for invalid_kind in ("crc", "path", "conflict"):
+                with self.subTest(package_format=package_format, invalid_kind=invalid_kind):
+                    snapshot = self._snapshot(package_format)
+                    external_packages = self._external_packages(snapshot)
+                    path = external_packages[101].path
+                    if invalid_kind == "crc":
+                        path.write_bytes(
+                            path.read_bytes().replace(b"input-101\n", b"input-109\n", 1)
+                        )
+                    else:
+                        with zipfile.ZipFile(path, "w") as archive:
+                            if invalid_kind == "path":
+                                archive.writestr("../outside", b"payload")
+                            else:
+                                archive.writestr("tests", b"payload")
+                                archive.writestr("tests/1", b"payload")
+                    with self.assertRaisesRegex(ValueError, "cached external package is invalid"):
+                        self.service.build_download(
+                            snapshot,
+                            external_packages=external_packages,
+                            statement_pdfs=self._statement_pdfs(),
+                        )
+
+    def test_unchanged_packages_validate_directory_entries(self) -> None:
+        for package_format in self.registry.formats:
+            if package_format == "domjudge":
+                continue
+            for invalid_kind in ("symlink", "crc", "expanded"):
+                with self.subTest(package_format=package_format, invalid_kind=invalid_kind):
+                    snapshot = self._snapshot(package_format)
+                    external_packages = self._external_packages(snapshot)
+                    path = external_packages[101].path
+                    directory = zipfile.ZipInfo("payload/")
+                    directory.external_attr = (
+                        stat.S_IFLNK if invalid_kind == "symlink" else stat.S_IFDIR
+                    ) << 16
+                    content = (
+                        b"x" * (4 * 1024 * 1024 + 1)
+                        if invalid_kind == "expanded"
+                        else b"directory payload"
+                    )
+                    with zipfile.ZipFile(path, "w") as archive:
+                        archive.writestr(directory, content)
+                    if invalid_kind == "crc":
+                        path.write_bytes(
+                            path.read_bytes().replace(content, b"Directory payload", 1)
+                        )
+                    with self.assertRaisesRegex(ValueError, "cached external package is invalid"):
+                        self.service.build_download(
+                            snapshot,
+                            external_packages=external_packages,
+                            statement_pdfs=self._statement_pdfs(),
+                        )
 
     def test_download_reports_the_expanded_limit_for_a_cached_archive(self) -> None:
-        snapshot = self._snapshot()
-        external_packages = self._external_packages(snapshot)
-        with zipfile.ZipFile(external_packages[101].path, "w") as archive:
-            archive.writestr("data/secret/020.ans", b"x" * (4 * 1024 * 1024 + 1))
+        for package_format in self.registry.formats:
+            with self.subTest(package_format=package_format):
+                snapshot = self._snapshot(package_format)
+                external_packages = self._external_packages(snapshot)
+                with zipfile.ZipFile(external_packages[101].path, "w") as archive:
+                    archive.writestr("data/secret/020.ans", b"x" * (4 * 1024 * 1024 + 1))
 
-        with self.assertRaises(ValueError) as raised:
-            self.service.build_download(
-                snapshot,
-                external_packages=external_packages,
-                statement_pdfs=self._statement_pdfs(),
-            )
+                with self.assertRaises(ValueError) as raised:
+                    self.service.build_download(
+                        snapshot,
+                        external_packages=external_packages,
+                        statement_pdfs=self._statement_pdfs(),
+                    )
 
-        self.assertEqual(
-            str(raised.exception),
-            "cached external package is invalid: external-101.zip: "
-            "expanded zip payload is too large at data/secret/020.ans; "
-            "increase PROBLEM_ZIP_MAX_EXPANDED_BYTES (currently 4194304 bytes)",
-        )
+                filename = (
+                    "external-101.zip"
+                    if package_format == "domjudge"
+                    else "A-alice-alpha.zip"
+                )
+                self.assertEqual(
+                    str(raised.exception),
+                    f"cached external package is invalid: {filename}: "
+                    "expanded zip payload is too large at data/secret/020.ans; "
+                    "increase PROBLEM_ZIP_MAX_EXPANDED_BYTES (currently 4194304 bytes)",
+                )
 
     def test_freeze_rejects_unregistered_format(self) -> None:
         with self.assertRaisesRegex(ValueError, "unsupported package format: custom"):
             self._snapshot("custom")
         self.assertEqual(self.contest.download_root_calls, 0)
 
-    def test_prepare_submits_every_missing_export_before_waiting(self) -> None:
+    def test_prepare_submits_missing_exports_together_and_reuses_completed_cache(self) -> None:
         snapshot = self._snapshot()
         ready: dict[int, CachedExternalPackage] = {}
         submitted: list[int] = []
@@ -398,35 +429,14 @@ class TestContestPackageDownload(unittest.TestCase):
             patch(
                 "app.impl.contest.package.start_ready_external_export_job",
                 side_effect=start_job,
-            ) as start,
+            ),
         ):
             result = _prepare_external_packages(snapshot, actor_user_id=9)
+            reused = _prepare_external_packages(snapshot, actor_user_id=9)
 
         self.assertEqual(submitted, [101, 102])
         self.assertEqual(set(result), {101, 102})
-        self.assertEqual(start.call_count, 2)
-
-    def test_prepare_reuses_complete_external_cache(self) -> None:
-        snapshot = self._snapshot()
-        cached = self._external_packages(snapshot)
-        fake_runtime = SimpleNamespace(
-            export_service=SimpleNamespace(
-                cached_external_package=Mock(
-                    side_effect=lambda *, problem_id, **_kwargs: cached[problem_id]
-                )
-            ),
-            config_values=SimpleNamespace(integer=lambda _key: 4096),
-        )
-        with (
-            patch("app.impl.contest.package.runtime", return_value=fake_runtime),
-            patch(
-                "app.impl.contest.package.start_ready_external_export_job"
-            ) as start,
-        ):
-            result = _prepare_external_packages(snapshot, actor_user_id=9)
-
-        self.assertEqual(result, cached)
-        start.assert_not_called()
+        self.assertEqual(reused, result)
 
     def test_prepare_reports_problem_identity_format_and_worker_error(self) -> None:
         snapshot = self._snapshot()

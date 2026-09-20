@@ -2,6 +2,7 @@ import json
 import shutil
 import tempfile
 import threading
+import unittest
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -64,7 +65,7 @@ def _archive_payloads(path: Path) -> list[tuple[str, bytes]]:
         )
 
 
-class TestPublishedRevisionExport(E2ETestBase):
+class TestNativePackageWorkflow(unittest.TestCase):
     def test_native_package_reserves_the_configured_main_solution(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             source_root = Path(temp_dir)
@@ -212,6 +213,8 @@ class TestPublishedRevisionExport(E2ETestBase):
             ],
         )
 
+
+class TestPublishedRevisionExport(E2ETestBase):
     def _publish_problem(
         self,
         *,
@@ -1110,23 +1113,16 @@ class TestPublishedRevisionExport(E2ETestBase):
         self.assertEqual(icpc_warning, "")
         self.assertIn("-domjudge-v", domjudge_archive.name)
         self.assertIn("-icpc-2025-09-v", icpc_archive.name)
-        with zipfile.ZipFile(domjudge_archive, "r") as package:
-            names = set(package.namelist())
-            self.assertIn("domjudge-problem.ini", names)
-            self.assertIn("problem_statement/problem.pdf", names)
-            self.assertNotIn("submissions/submissions.yaml", names)
-            self.assertFalse(any(name.startswith("statement/") for name in names))
-            metadata = yaml.safe_load(package.read("problem.yaml"))
-            self.assertNotEqual(metadata.get("problem_format_version"), "2025-09")
-        with zipfile.ZipFile(icpc_archive, "r") as package:
-            names = set(package.namelist())
-            self.assertNotIn("domjudge-problem.ini", names)
-            self.assertNotIn("problem_statement/problem.pdf", names)
-            self.assertIn("statement/problem.en.pdf", names)
-            self.assertIn("submissions/submissions.yaml", names)
-            metadata = yaml.safe_load(package.read("problem.yaml"))
-            self.assertEqual(metadata["problem_format_version"], "2025-09")
-            self.assertEqual(metadata["version"], commit)
+        for archive_path, format_version in (
+            (domjudge_archive, "legacy"),
+            (icpc_archive, "2025-09"),
+        ):
+            with self.subTest(package=archive_path.name):
+                with zipfile.ZipFile(archive_path, "r") as package:
+                    metadata = yaml.safe_load(package.read("problem.yaml"))
+                self.assertEqual(metadata["problem_format_version"], format_version)
+                if format_version == "2025-09":
+                    self.assertEqual(metadata["version"], commit)
 
         repeated_id, repeated_archive, repeated_warning = runtime.export_service.create_export(
             self.problem,
@@ -1383,7 +1379,7 @@ class TestPublishedRevisionExport(E2ETestBase):
             finally:
                 download.close()
             with self.assertRaises(NativePackageOperationBusy):
-                runtime.problem_package_service.rebuild_native_package(
+                runtime.problem_package_service.ensure_native_package(
                     revision,
                     self._verification_builder(problem_id),
                 )

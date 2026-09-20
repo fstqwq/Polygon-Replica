@@ -480,6 +480,7 @@ class TestAgentAPI(E2ETestBase):
         for label in ("B", "A", "C"):
             problem_slug = f"alice/{self.random_id(f'agent-contest-{label.lower()}')}"
             workspace_service.ensure_problem(problem_slug)
+            workspace_service.grant_repo_access(problem_slug, "alice", "owner")
             problem_id = workspace_service.known_problem_id(problem_slug)
             self.assertIsNotNone(problem_id)
             runtime.contest_service.add_problem(
@@ -605,9 +606,10 @@ class TestAgentAPI(E2ETestBase):
             self.assertEqual(ordinary_direct.status_code, 200, ordinary_direct.text)
             problem_id = workspace_service.known_problem_id(roster_items[0][2])
             self.assertIsNotNone(problem_id)
-            workspace_service.revoke_repo_access_for_problem_id(
-                int(problem_id),
-                username,
+            runtime.access_command.revoke_problem_access(
+                actor_user_id=int(owner_id),
+                problem_id=int(problem_id),
+                target_username=username,
             )
             ordinary_hidden = client.get(
                 "/agent/v1/workspace/status",

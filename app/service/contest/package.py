@@ -15,6 +15,7 @@ from app.service.export.adapters import (
     PackageAdapterRegistry,
     PackageFormat,
 )
+from app.service.export.adapters.domjudge import DOMjudgePackageAdapter
 from app.service.export.adapters.shared import statement_language_code
 from app.service.export.service import CachedExternalPackage
 from app.service.importing.archive import ArchiveView, problem_archive_policy
@@ -162,16 +163,21 @@ class ContestPackageService:
         if current != snapshot:
             raise ValueError("Contest or Published Packages changed; retry download")
 
-    def _extract_external_package(self, source: Path, target: Path) -> None:
+    def _read_external_package(self, source: Path, *, extract_to: Path | None) -> None:
         policy = problem_archive_policy(self._problem_zip_max_expanded_bytes)
         try:
             with ArchiveView(source, policy) as archive:
                 for relative, info in sorted(archive.entries.items()):
-                    destination = target.joinpath(*PurePosixPath(relative).parts)
-                    if info.is_dir():
-                        destination.mkdir(parents=True, exist_ok=True)
+                    if extract_to is not None:
+                        destination = extract_to.joinpath(*PurePosixPath(relative).parts)
+                        if info.is_dir():
+                            destination.mkdir(parents=True, exist_ok=True)
+                        else:
+                            archive.zip_file.copy_to(info, destination)
                     else:
-                        archive.zip_file.copy_to(info, destination)
+                        with archive.zip_file.open(info) as member:
+                            while member.read(1024 * 1024):
+                                pass
         except (OSError, ValueError, zipfile.BadZipFile) as exc:
             detail = str(exc)
             if detail.startswith("expanded zip payload is too large"):
@@ -203,6 +209,7 @@ class ContestPackageService:
             raise ValueError("Contest external package set is incomplete")
         if set(statement_pdfs) != set(snapshot.statement_languages):
             raise ValueError("Contest statement PDF set is incomplete")
+        self._package_adapters.require_format(snapshot.package_format)
 
         operation_id = f"download-{uuid.uuid4().hex[:12]}"
         operation_root = self._contest.package_download_root(
@@ -218,7 +225,6 @@ class ContestPackageService:
             f"{snapshot.contest_slug}-{snapshot.package_format}-packages.zip"
         )
         final_archive = operation_root / staged_archive.name
-        adapter = self._package_adapters.require(snapshot.package_format)
         package_archives: list[Path] = []
         try:
             for item in snapshot.items:
@@ -230,23 +236,26 @@ class ContestPackageService:
                     raise ValueError(
                         f"cached external package changed: {item.problem_slug}"
                     )
-                package_root = package_roots / str(item.contest_problem_id)
-                package_root.mkdir(parents=True, exist_ok=False)
-                self._extract_external_package(cached.path, package_root)
-                adapter.apply_contest_placement(
-                    package_root,
-                    canonical_problem_slug=item.problem_slug,
-                    placement=ContestPackagePlacement(
-                        idx=item.idx,
-                        ordinal=item.ordinal,
-                    ),
-                )
                 token = problem_slug_file_token(item.problem_slug)
                 filename = (
                     f"{item.idx}-{token}.zip" if item.idx else f"{token}.zip"
                 )
                 package_archive = packages_dir / filename
-                create_zip_archive(package_root, package_archive)
+                if snapshot.package_format == "domjudge":
+                    package_root = package_roots / str(item.contest_problem_id)
+                    package_root.mkdir(parents=True, exist_ok=False)
+                    self._read_external_package(cached.path, extract_to=package_root)
+                    DOMjudgePackageAdapter.apply_contest_placement(
+                        package_root,
+                        placement=ContestPackagePlacement(
+                            idx=item.idx,
+                            ordinal=item.ordinal,
+                        ),
+                    )
+                    create_zip_archive(package_root, package_archive)
+                else:
+                    shutil.copyfile(cached.path, package_archive)
+                    self._read_external_package(package_archive, extract_to=None)
                 package_archives.append(package_archive.resolve())
 
             language_files: list[tuple[str, Path]] = []

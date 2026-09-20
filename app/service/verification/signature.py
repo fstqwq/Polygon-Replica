@@ -40,7 +40,7 @@ def _stat_mtime_ns(stat_obj: os.stat_result) -> int:
     return int(getattr(stat_obj, "st_mtime_ns", int(float(stat_obj.st_mtime) * 1_000_000_000)))
 
 
-def _verification_source_entries(workspace: Path, *, hash_content: bool) -> list[dict[str, object]]:
+def _verification_source_entries(workspace: Path) -> list[dict[str, object]]:
     entries: list[dict[str, object]] = []
     try:
         workspace_resolved = workspace.resolve()
@@ -62,17 +62,13 @@ def _verification_source_entries(workspace: Path, *, hash_content: bool) -> list
             return None
         return target
 
-    def _file_entry(kind: str, path: Path, stat_obj: os.stat_result) -> dict[str, object]:
-        entry: dict[str, object] = {
+    def _file_entry(kind: str, stat_obj: os.stat_result) -> dict[str, object]:
+        return {
             "kind": kind,
             "state": "ok",
             "size": int(stat_obj.st_size),
+            "mtime_ns": _stat_mtime_ns(stat_obj),
         }
-        if hash_content:
-            entry["sha256"] = sha256_file(path)
-        else:
-            entry["mtime_ns"] = _stat_mtime_ns(stat_obj)
-        return entry
 
     def _hash_file(rel_path: str) -> None:
         target = _safe_file(rel_path)
@@ -81,7 +77,7 @@ def _verification_source_entries(workspace: Path, *, hash_content: bool) -> list
             return
         try:
             stat_obj = target.stat()
-            entry = _file_entry("file", target, stat_obj)
+            entry = _file_entry("file", stat_obj)
             entry["target"] = rel_path
             entries.append(entry)
         except OSError:
@@ -142,7 +138,7 @@ def _verification_source_entries(workspace: Path, *, hash_content: bool) -> list
         for rel, path in files:
             try:
                 stat_obj = path.stat()
-                entry = _file_entry("dir-file", path, stat_obj)
+                entry = _file_entry("dir-file", stat_obj)
                 entry["target"] = rel_dir
                 entry["path"] = rel
                 entries.append(entry)
@@ -156,15 +152,8 @@ def _verification_source_entries(workspace: Path, *, hash_content: bool) -> list
     return entries
 
 
-def verification_signature(workspace: Path) -> str:
-    return quick_fp_digest(
-        _verification_source_entries(workspace, hash_content=True),
-        schema="verification-signature",
-    )
-
-
 def verification_manifest(snapshot: Path) -> VerificationManifest:
-    raw_entries = _verification_source_entries(snapshot, hash_content=False)
+    raw_entries = _verification_source_entries(snapshot)
     manifest_entries: list[dict[str, object]] = []
     files: dict[str, PayloadFile] = {}
     for raw in raw_entries:
@@ -195,6 +184,6 @@ def verification_manifest(snapshot: Path) -> VerificationManifest:
 
 def verification_fingerprint(workspace: Path) -> str:
     return quick_fp_digest(
-        _verification_source_entries(workspace, hash_content=False),
+        _verification_source_entries(workspace),
         schema="verification-fingerprint",
     )

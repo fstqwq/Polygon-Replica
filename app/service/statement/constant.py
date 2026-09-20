@@ -1,4 +1,3 @@
-import re
 from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
@@ -30,11 +29,6 @@ WF_STYLE_PROBLEM_REL = WF_STYLE_DIR / "problem.tex"
 WF_STYLE_EXAMPLES_REL = WF_STYLE_DIR / "examples.tex"
 WF_STYLE_OLYMP_REL = WF_STYLE_DIR / "olymp.sty"
 DEFAULT_PROBLEM_TITLE = "Sample Problem"
-FTL_COMMENT_RE = re.compile(r"<#--.*?-->", re.DOTALL)
-FTL_LIST_RE = re.compile(r"^list\s+(.+?)\s+as\s+([A-Za-z_][A-Za-z0-9_]*)$", re.DOTALL)
-STANDALONE_OPEN_DIRECTIVE_PREFIXES = ("if ", "elseif ", "list ", "assign ")
-STANDALONE_OPEN_DIRECTIVE_EXACT = {"else"}
-STANDALONE_CLOSE_DIRECTIVES = {"if", "list"}
 
 STATEMENT_RENDERER_SIGNATURE_VERSION = "2026-08-17-statement-examples-legacy-projection"
 

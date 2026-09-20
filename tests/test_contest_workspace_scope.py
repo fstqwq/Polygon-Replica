@@ -1,5 +1,4 @@
 
-import json
 from html.parser import HTMLParser
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,12 +8,10 @@ from urllib.parse import parse_qs, unquote, urlencode, urlsplit
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from starlette.requests import Request
-from starlette.responses import JSONResponse
 
 from app.impl.contest.workspace_scope import (
     ContestWorkspaceScope,
     ProblemHrefBuilder,
-    apply_problem_contest_scope,
     build_contest_problem_href,
     problem_section_for_route,
     resolve_problem_contest_scope,
@@ -545,21 +542,35 @@ class TestContestWorkspaceScope(ContestActionBase):
     def test_json_redirect_and_route_contract(self) -> None:
         contest_slug, contest_id, actor_user_id = self.create_contest("contract")
         self._add_default_problem(contest_id, actor_user_id)
-        scope = self._resolve("alice/sample", contest_slug)
-        response = JSONResponse(
-            {
-                "ok": True,
-                "redirect": "/problems/alice/sample/solutions/editor?path=a%2Bb.cpp",
-            }
-        )
-        scoped_response = apply_problem_contest_scope(response, scope)
-        payload = json.loads(scoped_response.body)
-        redirect = urlsplit(payload["redirect"])
-        self.assertEqual(redirect.path, "/problems/alice/sample/solutions/editor")
-        self.assertEqual(
-            parse_qs(redirect.query),
-            {"contest": [contest_slug], "path": ["a+b.cpp"]},
-        )
+        cookie = self._session_cookie("alice")
+        workspace = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
+        from app.main import app
+
+        with TestClient(app, base_url="https://testserver") as client:
+            for section, source in (
+                ("checker", "checkers/scoped.cpp"),
+                ("validator", "validators/scoped.cpp"),
+                ("interactor", "interactors/scoped.cpp"),
+                ("generators", "generators/scoped+file.cpp"),
+                ("solutions", "solutions/scoped+file.cpp"),
+            ):
+                with self.subTest(section=section):
+                    content = "int main() { return 0; }\n"
+                    response = client.post(
+                        f"/problems/alice/sample/{section}/save-source?contest={contest_slug}",
+                        data={"path": source, "source_path": source, "content": content, "response_mode": "json"},
+                        headers={"cookie": cookie, "origin": "https://testserver", "accept": "application/json"},
+                        follow_redirects=False,
+                    )
+                    self.assertEqual(response.status_code, 200, response.text)
+                    self.assertTrue(response.json()["ok"])
+                    self.assertEqual((workspace / source).read_text(), content)
+                    redirect = urlsplit(response.json()["redirect"])
+                    suffix = "solutions/editor" if section == "solutions" else section
+                    self.assertEqual(redirect.path, f"/problems/alice/sample/{suffix}")
+                    self.assertEqual(parse_qs(redirect.query)["contest"], [contest_slug])
+                    if section in {"generators", "solutions"}:
+                        self.assertEqual(parse_qs(redirect.query)["path"], [source])
 
     def test_same_problem_can_be_scoped_by_multiple_contests(self) -> None:
         first_slug, first_id, actor_user_id = self.create_contest("first")

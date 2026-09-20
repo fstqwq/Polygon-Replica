@@ -459,17 +459,6 @@ class ContestService:
             language,
         )
 
-    def overview_properties_map(self, contest_id: int, contest_slug: str) -> dict[str, str]:
-        result = self.properties_map(int(contest_id))
-        if result.get(self._LOCATION_KEY) and result.get(self._DATE_KEY):
-            return result
-        inferred = self._infer_statement_header_fields_for_contest(int(contest_id), contest_slug)
-        if (not result.get(self._LOCATION_KEY)) and inferred["location"]:
-            result[self._LOCATION_KEY] = inferred["location"]
-        if (not result.get(self._DATE_KEY)) and inferred["date"]:
-            result[self._DATE_KEY] = inferred["date"]
-        return result
-
     def localized_overview_properties_map(
         self,
         contest_id: int,
@@ -631,13 +620,6 @@ class ContestService:
                 return inferred
         return {"title": "", "location": "", "date": ""}
 
-    def statement_problem_source_folders(self, contest_id: int) -> dict[int, str]:
-        return {
-            int(row["problem_id"]): str(row["statement_folder"])
-            for row in self._store.contest_problem_rows(int(contest_id))
-            if str(row["statement_folder"])
-        }
-
     def set_statement_problem_source_folders(
         self,
         contest_id: int,
@@ -665,19 +647,6 @@ class ContestService:
                     "problem_slug": str(row["problem_slug"]),
                     "slug_leaf": str(row["slug_leaf"]),
                     "created_at": str(row["created_at"]),
-                }
-            )
-        return result
-
-    def contest_problem_entries(self, contest_id: int) -> list[ContestProblemEntry]:
-        result: list[ContestProblemEntry] = []
-        for row in self.contest_problems(int(contest_id)):
-            result.append(
-                {
-                    "idx": row["idx"],
-                    "problem_id": row["problem_id"],
-                    "problem_slug": row["problem_slug"],
-                    "slug_leaf": row["slug_leaf"],
                 }
             )
         return result

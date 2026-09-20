@@ -176,15 +176,6 @@ class WorkspaceDiskStore:
             return 0
         return max(0, int(row["c"]))
 
-    def repo_access_row(self, problem_id: int, user_id: int) -> dict[str, object] | None:
-        row = self.db.fetch_one(
-            "SELECT role FROM repo_acl WHERE problem_id=? AND user_id=?",
-            [int(problem_id), int(user_id)],
-        )
-        if row is None:
-            return None
-        return {"role": str(row["role"])}
-
     def upsert_repo_access(self, problem_id: int, user_id: int, role: str) -> None:
         self.db.execute(
             """
@@ -193,12 +184,6 @@ class WorkspaceDiskStore:
             ON CONFLICT(problem_id,user_id) DO UPDATE SET role=excluded.role
             """,
             [int(problem_id), int(user_id), role, now_iso()],
-        )
-
-    def delete_repo_access(self, problem_id: int, user_id: int) -> None:
-        self.db.execute(
-            "DELETE FROM repo_acl WHERE problem_id=? AND user_id=?",
-            [int(problem_id), int(user_id)],
         )
 
     def problem_acl_entries(self, problem_id: int) -> list[ProblemAclEntry]:

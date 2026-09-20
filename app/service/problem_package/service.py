@@ -113,12 +113,6 @@ class VerificationTestOwner:
 
 
 @dataclass(frozen=True)
-class VerificationTestOwners:
-    by_source_id: dict[str, VerificationTestOwner]
-    by_test_name: dict[str, VerificationTestOwner]
-
-
-@dataclass(frozen=True)
 class NativePackageReader:
     native_package: NativePackage
     root: Path
@@ -805,7 +799,7 @@ class ProblemPackageService:
         self,
         verification_id: str,
         source_tree: ProblemSourceTree,
-    ) -> VerificationTestOwners:
+    ) -> dict[str, VerificationTestOwner]:
         rows = self.store.test_execution_rows(verification_id)
         expected = [
             (str(test["id"]), f"{ordinal:03d}.in", ordinal)
@@ -843,7 +837,6 @@ class ProblemPackageService:
             owner_by_input_ref[row["input_ref"]] = row
 
         by_source_id: dict[str, VerificationTestOwner] = {}
-        by_test_name: dict[str, VerificationTestOwner] = {}
         for row in rows:
             owner_row = owner_by_input_ref.get(row["input_ref"])
             if owner_row is None:
@@ -857,11 +850,7 @@ class ProblemPackageService:
                 input_ref=owner_row["input_ref"],
             )
             by_source_id[row["source_id"]] = owner
-            by_test_name[row["test_name"]] = owner
-        return VerificationTestOwners(
-            by_source_id=by_source_id,
-            by_test_name=by_test_name,
-        )
+        return by_source_id
 
     @staticmethod
     def _write_payload(source: Path, target: Path) -> None:
@@ -877,12 +866,11 @@ class ProblemPackageService:
     def _materialize_tests(
         self,
         *,
-        snapshot: Path,
         package_root: Path,
         verification_id: str,
         mode: str,
         source_tree: ProblemSourceTree,
-        test_owners: VerificationTestOwners,
+        test_owners: dict[str, VerificationTestOwner],
     ) -> list[NativePackageTestEntry]:
         tests = source_tree.tests
         if not tests:
@@ -892,7 +880,7 @@ class ProblemPackageService:
             test_id = str(row["id"])
             if Path(test_id).name != test_id or test_id in {"", ".", ".."}:
                 raise ValueError(f"test ID is not package-safe: {test_id}")
-            owner = test_owners.by_source_id.get(test_id)
+            owner = test_owners.get(test_id)
             if owner is None:
                 raise ValueError(f"verification test owner is missing: {test_id}")
             test_root = package_root / TEST_DATA_DIR / "tests" / test_id
@@ -952,7 +940,7 @@ class ProblemPackageService:
         package_root: Path,
         problem_title: str,
         verification_id: str,
-        test_owners: VerificationTestOwners,
+        test_owners: dict[str, VerificationTestOwner],
         tests_spec_max_bytes: int,
         statement_sample_max_bytes: int,
     ) -> None:
@@ -962,7 +950,7 @@ class ProblemPackageService:
             verification_id=verification_id,
             execution_test_name_by_source_id={
                 source_id: owner.test_name
-                for source_id, owner in test_owners.by_source_id.items()
+                for source_id, owner in test_owners.items()
             },
             tests_spec_max_bytes=tests_spec_max_bytes,
             statement_sample_max_bytes=statement_sample_max_bytes,
@@ -1026,7 +1014,6 @@ class ProblemPackageService:
                 source_tree,
             )
             tests = self._materialize_tests(
-                snapshot=snapshot,
                 package_root=package_root,
                 verification_id=verification_id,
                 mode=mode,
@@ -1214,7 +1201,7 @@ class ProblemPackageService:
         owners = self._verification_test_owners(verification_id, source_tree)
         for test in reader.manifest["tests"]:
             test_id = str(test["id"])
-            owner = owners.by_source_id.get(test_id)
+            owner = owners.get(test_id)
             if owner is None:
                 return f"test {test_id} has no full Verification evidence"
             input_payload = self._artifact_file_resolver(owner.input_ref)
@@ -1367,23 +1354,6 @@ class ProblemPackageService:
                             existing,
                             verification_builder,
                         )
-            return self._run_materialization_build(
-                revision,
-                verification_builder,
-                invalidate_exports=existing is not None,
-            )
-
-    def rebuild_native_package(
-        self,
-        revision: PublishedRevision,
-        verification_builder: VerificationBuilder,
-    ) -> MaterializationRow:
-        problem_id = int(revision.problem["id"])
-        with self._workflow_operation(problem_id, revision.source_commit):
-            existing = self.store.materialization_for_revision(
-                problem_id,
-                revision.source_commit,
-            )
             return self._run_materialization_build(
                 revision,
                 verification_builder,

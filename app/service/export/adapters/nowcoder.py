@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import cast
 
 from app.service.export.adapters.shared import (
-    ContestPackagePlacement,
     PackageAdapterPlan,
     PackageAdapterSupport,
     PackageFormat,
@@ -55,15 +54,6 @@ class NowcoderPackageAdapter:
         if checker is not None:
             shutil.copy2(checker, target / "checker.cc")
         return adapter_plan.warning
-
-    @staticmethod
-    def apply_contest_placement(
-        target: Path,
-        *,
-        canonical_problem_slug: str,
-        placement: ContestPackagePlacement,
-    ) -> None:
-        del target, canonical_problem_slug, placement
 
     @staticmethod
     def _require_supported_problem(reader: NativePackageReader) -> None:

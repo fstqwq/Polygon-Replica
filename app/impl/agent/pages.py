@@ -39,6 +39,7 @@ def agent_connect(request: Request):
     code = str(payload["code"])
     register_url = f"{_request_base_url(request)}/agent/v1/register/{code}"
     return json_redirect_response(
+        request,
         "/agent/sessions",
         payload={
             "register_url": register_url,

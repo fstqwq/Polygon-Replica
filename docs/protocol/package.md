@@ -175,7 +175,7 @@ The download resolves and verifies the selected external package cache for every
 | --- | --- |
 | Children | `packages/<idx>-<problem>.zip`, one per roster problem. |
 | Statements | Every statement language shared by all frozen native packages produces one complete contest PDF at `statements.<language-code>.pdf`. An empty language intersection or a failed PDF prevents the bundle. |
-| Placement | Assembly rewrites only DOMjudge `short-name` and balloon color from the contest `idx` and canonical ordinal. The reusable cached package remains unchanged. ICPC, QOJ, Polygon, and Nowcoder require no placement overlay. |
+| Placement | Assembly rewrites DOMjudge `short-name` and balloon color in an extracted copy from the contest `idx` and canonical ordinal. ICPC, QOJ, Polygon, and Nowcoder retain their cached archive bytes. Every child is validated for archive paths, entry types, expanded size, and payload integrity before inclusion. |
 | Outer archive | Contains the complete contest statement PDFs and child packages, with no manifest, Git commit, native package identity, or checksum metadata. |
 
 Statement compilation retains the established template contract and engine detection. The contest PDF path uses the frozen native package sources and the existing preview cache. External adapters project the first LaTeX `!` diagnostic from the generated log, then fall back to stdout and stderr. Export job and HTTP diagnostics use the configured display-text limit.

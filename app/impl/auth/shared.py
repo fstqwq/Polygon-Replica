@@ -16,9 +16,11 @@ from starlette.responses import Response
 
 import app.main_constant as _K
 from app.impl.contest.workspace_scope import (
+    problem_redirect_href,
     problem_template_navigation,
 )
 from app.impl.runtime.dependency import runtime
+from app.service.judgehost.host.public_status import PublicJudgehostStatus
 from app.service.platform.hashing import hmac_sha256_hex, sha256_hex_bytes
 
 
@@ -29,24 +31,23 @@ def install_template_filters(templates: Jinja2Templates) -> None:
     templates.env.filters["status_label"] = _format_status_label
 
 
-def _runtime_judgehost_health_profile() -> dict[str, str]:
+def _runtime_judgehost_status() -> PublicJudgehostStatus:
     try:
-        status = runtime().judgehost_task_service.public_status()
+        return runtime().judgehost_task_service.public_status()
     except Exception:
         return {
-            "runtime_judgehost_health_summary": "offline",
-            "runtime_judgehost_health_tone": "danger",
-            "runtime_judgehost_enabled": "0",
-            "runtime_judgehost_hosts_online": "0",
-            "runtime_judgehost_hosts_total": "0",
+            "enabled": False,
+            "hosts_online": 0,
+            "hosts_total": 0,
+            "queued": 0,
+            "busy_hosts": 0,
+            "summary": "offline",
+            "tone": "danger",
+            "hosts": [],
+            "compile_specs": [],
+            "toolchains": [],
+            "toolchain_mismatch": False,
         }
-    return {
-        "runtime_judgehost_health_summary": status["summary"],
-        "runtime_judgehost_health_tone": status["tone"],
-        "runtime_judgehost_enabled": "1" if status["enabled"] else "0",
-        "runtime_judgehost_hosts_online": str(status["hosts_online"]),
-        "runtime_judgehost_hosts_total": str(status["hosts_total"]),
-    }
 
 def parse_iso_utc(raw: str) -> datetime | None:
     text = str(raw or "").strip()
@@ -274,12 +275,13 @@ def redirect_response(url: str, status_code: int = 303, message: str = "") -> Re
 
 
 def json_redirect_response(
+    request: Request,
     url: str,
     message: str = "",
     *,
     payload: Mapping[str, object] | None = None,
 ) -> JSONResponse:
-    target = _sanitize_redirect_target(url)
+    target = problem_redirect_href(request, _sanitize_redirect_target(url))
     safe_message = _normalize_flash_message(message)
     body: dict[str, object] = {"ok": True, "redirect": target, "message": safe_message}
     if payload is not None:
@@ -333,40 +335,7 @@ def template_response(request: Request, template_name: str, context: dict | None
     payload.setdefault("ui_brand_name", str(runtime().config_values.UI_BRAND_NAME))
     payload.setdefault("ui_brand_tagline", str(runtime().config_values.UI_BRAND_TAGLINE))
     payload.setdefault("ui_browser_title", str(runtime().config_values.UI_BROWSER_TITLE))
-    runtime_judgehost = _runtime_judgehost_health_profile()
-    if "runtime_judgehost_health_summary" not in payload:
-        payload["runtime_judgehost_health_summary"] = runtime_judgehost.get(
-            "runtime_judgehost_health_summary",
-            "disabled",
-        )
-    if "runtime_judgehost_health_tone" not in payload:
-        payload["runtime_judgehost_health_tone"] = runtime_judgehost.get(
-            "runtime_judgehost_health_tone",
-            "danger",
-        )
-    if "runtime_judgehost_enabled" not in payload:
-        payload["runtime_judgehost_enabled"] = runtime_judgehost.get("runtime_judgehost_enabled", "0")
-    if "runtime_judgehost_hosts_online" not in payload:
-        payload["runtime_judgehost_hosts_online"] = runtime_judgehost.get("runtime_judgehost_hosts_online", "0")
-    if "runtime_judgehost_hosts_total" not in payload:
-        payload["runtime_judgehost_hosts_total"] = runtime_judgehost.get("runtime_judgehost_hosts_total", "0")
-    if "runtime_judgehost_status" not in payload:
-        try:
-            payload["runtime_judgehost_status"] = runtime().judgehost_task_service.public_status()
-        except Exception:
-            payload["runtime_judgehost_status"] = {
-                "enabled": False,
-                "hosts_online": 0,
-                "hosts_total": 0,
-                "queued": 0,
-                "busy_hosts": 0,
-                "summary": "offline",
-                "tone": "danger",
-                "hosts": [],
-                "compile_specs": [],
-                "toolchains": [],
-                "toolchain_mismatch": False,
-            }
+    payload["runtime_judgehost_status"] = _runtime_judgehost_status()
     raw_cookie = str(
         request.cookies.get(runtime().config_values.text("FLASH_COOKIE_NAME"), "")
         or ""

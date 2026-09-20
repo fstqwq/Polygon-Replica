@@ -31,7 +31,6 @@ from app.service.statement.signature import statement_sources_signature
 from app.service.verification.signature import (
     verification_fingerprint,
     verification_manifest,
-    verification_signature,
 )
 
 _TESTS_SPEC_MAX_BYTES = 256 * 1024
@@ -151,30 +150,6 @@ class TestPreviewUnit(unittest.TestCase):
         rendered = (target / "problem.tex").read_text(encoding="utf-8")
         self.assertIn("\\Note\n" + notes, rendered)
 
-    def test_offline_statement_tree_has_a_local_entrypoint_and_style(self) -> None:
-        target = self.workspace / "package-output" / "english"
-
-        entrypoint = render_statement_offline_tree(
-            self.workspace,
-            "english",
-            target,
-            problem_title="Fallback Title",
-            tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
-            statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
-            problem_limits=_PROBLEM_LIMITS,
-        )
-
-        self.assertEqual(entrypoint, target / "statements.tex")
-        rendered_main = entrypoint.read_text(encoding="utf-8")
-        self.assertIn(r"\input problem.tex", rendered_main)
-        self.assertNotIn("rendered/english", rendered_main)
-        for name in ("problem.tex", "examples.tex", "olymp.sty"):
-            self.assertTrue((target / name).is_file(), name)
-        self.assertEqual(
-            (target / "olymp.sty").read_bytes(),
-            (self.workspace / "statement/olymp.sty").read_bytes(),
-        )
-
     def test_preview_and_offline_renderers_write_the_same_example_bundle(self) -> None:
         bundle: StatementExamplesBundle = {
             "verification_id": "ver-shared",
@@ -209,7 +184,7 @@ class TestPreviewUnit(unittest.TestCase):
         )
         preview_root = self.workspace / "statement" / "rendered" / "english"
         offline_root = self.workspace / "offline" / "english"
-        render_statement_offline_tree(
+        entrypoint = render_statement_offline_tree(
             self.workspace,
             "english",
             offline_root,
@@ -219,7 +194,15 @@ class TestPreviewUnit(unittest.TestCase):
             statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
             problem_limits=_PROBLEM_LIMITS,
         )
-
+        self.assertEqual(entrypoint, offline_root / "statements.tex")
+        rendered_main = entrypoint.read_text(encoding="utf-8")
+        self.assertIn(r"\input problem.tex", rendered_main)
+        self.assertNotIn("rendered/english", rendered_main)
+        self.assertTrue((offline_root / "problem.tex").is_file())
+        self.assertEqual(
+            (offline_root / "olymp.sty").read_bytes(),
+            (self.workspace / "statement/olymp.sty").read_bytes(),
+        )
         for relative in (
             "examples.tex",
             "examples/sample-1/pass-1.in",
@@ -381,10 +364,6 @@ class TestPreviewUnit(unittest.TestCase):
             )
 
     def test_default_examples_template_consumes_structured_samples(self) -> None:
-        self.assertIn(
-            "<#if (problem.examples.samples?size > 0)>",
-            DEFAULT_STATEMENT_EXAMPLES_TEMPLATE,
-        )
         rendered = render_ftl_template(
             DEFAULT_STATEMENT_EXAMPLES_TEMPLATE,
             {
@@ -746,87 +725,46 @@ class TestPreviewUnit(unittest.TestCase):
                 sample_max_bytes=sample_limit,
             )
 
-    def test_statement_examples_require_verification_for_missing_or_validated_payloads(self) -> None:
-        (self.workspace / "tests/manual/001.in").write_text(
-            "base input\n",
-            encoding="utf-8",
-        )
-        (self.workspace / "tests/spec.json").write_text(
-            dumps_tests_spec(
-                [
-                    {
-                        "id": "001",
-                        "kind": "manual",
-                        "sample": True,
-                        "sample_output": "validate me\n",
-                    },
-                    {
-                        "id": "002",
-                        "kind": "manual",
-                        "sample": True,
-                        "sample_input": "display input\n",
-                    },
-                    {
-                        "id": "003",
-                        "kind": "manual",
-                        "sample": True,
-                        "sample_output": "display only\n",
-                        "sample_output_validate": False,
-                    },
-                ],
-                document_max_bytes=_TESTS_SPEC_MAX_BYTES,
-                sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
+    def test_statement_examples_request_only_required_verification(self) -> None:
+        (self.workspace / "tests/manual/001.in").write_text("base input\n", encoding="utf-8")
+        for mode, kind, overrides, required in (
+            ("pass-fail", "manual", {"sample_output": "validate me\n"}, True),
+            ("pass-fail", "manual", {"sample_input": "display input\n"}, True),
+            (
+                "pass-fail", "manual",
+                {"sample_output": "display only\n", "sample_output_validate": False}, False,
             ),
-            encoding="utf-8",
-        )
-        (self.workspace / "tests/manual/003.in").write_text(
-            "base input\n",
-            encoding="utf-8",
-        )
-
-        required = statement_examples_require_verification(
-            self.workspace,
-            tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
-            statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
-            problem_limits=_PROBLEM_LIMITS,
-        )
-
-        self.assertTrue(required)
-
-    def test_complete_interactive_pair_does_not_require_verification(self) -> None:
-        config_path = self.workspace / "config/problem.json"
-        interactive_config = default_problem_config(limits=_PROBLEM_LIMITS)
-        interactive_config["mode"] = "interactive"
-        config_path.write_text(
-            dumps_problem_config(interactive_config, limits=_PROBLEM_LIMITS),
-            encoding="utf-8",
-        )
-        (self.workspace / "tests/spec.json").write_text(
-            dumps_tests_spec(
-                [
-                    {
-                        "id": "001",
-                        "kind": "gen",
-                        "sample": True,
-                        "sample_input": "question\n",
-                        "sample_output": "answer\n",
-                        "sample_output_validate": False,
-                    }
-                ],
-                document_max_bytes=_TESTS_SPEC_MAX_BYTES,
-                sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
+            (
+                "interactive", "gen",
+                {
+                    "sample_input": "question\n", "sample_output": "answer\n",
+                    "sample_output_validate": False,
+                }, False,
             ),
-            encoding="utf-8",
-        )
-        self.assertEqual(
-            statement_examples_require_verification(
-                self.workspace,
-                tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
-                statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
-                problem_limits=_PROBLEM_LIMITS,
-            ),
-            False,
-        )
+        ):
+            with self.subTest(mode=mode, overrides=overrides):
+                config = default_problem_config(limits=_PROBLEM_LIMITS)
+                config["mode"] = mode
+                (self.workspace / "config/problem.json").write_text(
+                    dumps_problem_config(config, limits=_PROBLEM_LIMITS), encoding="utf-8",
+                )
+                (self.workspace / "tests/spec.json").write_text(
+                    dumps_tests_spec(
+                        [{"id": "001", "kind": kind, "sample": True, **overrides}],
+                        document_max_bytes=_TESTS_SPEC_MAX_BYTES,
+                        sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
+                    ),
+                    encoding="utf-8",
+                )
+                self.assertEqual(
+                    statement_examples_require_verification(
+                        self.workspace,
+                        tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES,
+                        statement_sample_max_bytes=_STATEMENT_SAMPLE_MAX_BYTES,
+                        problem_limits=_PROBLEM_LIMITS,
+                    ),
+                    required,
+                )
 
     def test_statement_examples_reject_invalid_test_kind(self) -> None:
         pass_fail_config = default_problem_config(limits=_PROBLEM_LIMITS)
@@ -846,33 +784,31 @@ class TestPreviewUnit(unittest.TestCase):
                 problem_limits=_PROBLEM_LIMITS,
             )
 
-    def test_verification_signature_tracks_content_but_not_mtime(self) -> None:
+    def test_verification_manifest_tracks_content_but_not_mtime(self) -> None:
         build = self.workspace / "config/build.json"
         build.write_text("{}\n", encoding="utf-8")
-        signature = verification_signature(self.workspace)
+        signature = verification_manifest(self.workspace).signature
         fingerprint = verification_fingerprint(self.workspace)
         stat_result = build.stat()
         os.utime(
             build,
             ns=(stat_result.st_atime_ns + 5_000_000_000, stat_result.st_mtime_ns + 5_000_000_000),
         )
-        self.assertEqual(signature, verification_signature(self.workspace))
+        self.assertEqual(signature, verification_manifest(self.workspace).signature)
         self.assertNotEqual(fingerprint, verification_fingerprint(self.workspace))
 
         (self.workspace / "validators/validator.cpp").write_text(
             "int main() { return 0; }\n",
             encoding="utf-8",
         )
-        self.assertNotEqual(signature, verification_signature(self.workspace))
+        self.assertNotEqual(signature, verification_manifest(self.workspace).signature)
 
     def test_verification_identity_ignores_empty_source_directories(self) -> None:
         empty = self.workspace / "interactors"
         empty.rmdir()
-        signature = verification_signature(self.workspace)
         manifest_signature = verification_manifest(self.workspace).signature
         fingerprint = verification_fingerprint(self.workspace)
         empty.mkdir()
-        self.assertEqual(signature, verification_signature(self.workspace))
         self.assertEqual(manifest_signature, verification_manifest(self.workspace).signature)
         self.assertEqual(fingerprint, verification_fingerprint(self.workspace))
 

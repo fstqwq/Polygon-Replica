@@ -231,22 +231,6 @@ class ContestStatementPreviewService:
             raise RuntimeError("Contest statement preview result disappeared")
         return result
 
-    def latest_html(
-        self,
-        contest_id: int,
-        *,
-        actor_user_id: int,
-        source_kind: StatementPreviewSource,
-        language: str,
-    ) -> StatementPreviewRow | None:
-        return self._store.latest_contest(
-            contest_id,
-            actor_user_id=actor_user_id,
-            source_kind=source_kind,
-            output_kind="html",
-            language=language,
-        )
-
     def build_pdf(
         self,
         contest_id: int,
@@ -468,22 +452,6 @@ class ContestStatementPreviewService:
                 ],
             },
             ensure_ascii=True,
-        )
-
-    def latest_pdf(
-        self,
-        contest_id: int,
-        *,
-        actor_user_id: int,
-        source_kind: StatementPreviewSource,
-        language: str,
-    ) -> StatementPreviewRow | None:
-        return self._store.latest_contest(
-            contest_id,
-            actor_user_id=actor_user_id,
-            source_kind=source_kind,
-            output_kind="pdf",
-            language=language,
         )
 
     @staticmethod

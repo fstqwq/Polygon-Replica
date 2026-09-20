@@ -84,46 +84,6 @@ class StatementPreviewStore:
         )
         return self._project(row) if row is not None else None
 
-    def latest_problem(
-        self,
-        problem_id: int,
-        *,
-        actor_user_id: int,
-        source_kind: StatementPreviewSource,
-        output_kind: StatementPreviewOutput,
-        language: str,
-    ) -> StatementPreviewRow | None:
-        row = self._db.fetch_one(
-            """
-            SELECT * FROM statement_previews
-            WHERE problem_id=? AND actor_user_id=?
-              AND source_kind=? AND output_kind=? AND language=?
-            ORDER BY created_at DESC,id DESC LIMIT 1
-            """,
-            [problem_id, actor_user_id, source_kind, output_kind, language],
-        )
-        return self._project(row) if row is not None else None
-
-    def latest_contest(
-        self,
-        contest_id: int,
-        *,
-        actor_user_id: int,
-        source_kind: StatementPreviewSource,
-        output_kind: StatementPreviewOutput,
-        language: str,
-    ) -> StatementPreviewRow | None:
-        row = self._db.fetch_one(
-            """
-            SELECT * FROM statement_previews
-            WHERE contest_id=? AND actor_user_id=?
-              AND source_kind=? AND output_kind=? AND language=?
-            ORDER BY created_at DESC,id DESC LIMIT 1
-            """,
-            [contest_id, actor_user_id, source_kind, output_kind, language],
-        )
-        return self._project(row) if row is not None else None
-
     def cached_problem(
         self,
         problem_id: int,

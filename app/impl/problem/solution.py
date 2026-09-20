@@ -8,7 +8,7 @@ from fastapi import Form, HTTPException, Request, Depends
 from fastapi.responses import JSONResponse
 
 from app.impl.auth.shared import redirect_response, set_flash_cookie, template_response
-from app.impl.contest.workspace_scope import contest_workspace_context_from_request
+from app.impl.contest.workspace_scope import contest_workspace_context_from_request, problem_redirect_href
 from app.impl.runtime.dependency import runtime
 from app.impl.problem.shared import MAIN_CORRECT_EXPECTED_LABEL, MAIN_CORRECT_EXPECTED_VALUE
 from app.impl.workspace.context_operation import (
@@ -193,7 +193,7 @@ def solutions_save_source(request: Request, problem: str, user: Annotated[str, D
     editor_url = f'/problems/{problem}/solutions/editor?path={quote_plus(selected_for_redirect)}'
     if json_requested:
         if save_ok:
-            response = JSONResponse({'ok': True, 'redirect': editor_url, 'message': msg})
+            response = JSONResponse({'ok': True, 'redirect': problem_redirect_href(request, editor_url), 'message': msg})
             set_flash_cookie(response, [msg])
             return response
         return JSONResponse({'ok': False, 'error': msg}, status_code=400)

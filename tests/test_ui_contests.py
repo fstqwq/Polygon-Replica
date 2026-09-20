@@ -8,8 +8,8 @@ from tests.db_helpers import (
 )
 
 from app.impl.contest.statement_source import contest_statement_source_context
+from app.service.contest.property import DEFAULT_CONTEST_BANNER
 from app.service.platform.git_process import run_git
-from starlette.requests import Request
 
 from tests.common import E2ETestBase
 from tests.ui_support import (
@@ -31,14 +31,6 @@ from tests.ui_support import (
     runtime,
     workspace_service,
 )
-
-
-def _app_request(path: str) -> Request:
-    from app.main import app
-
-    request = _request(path)
-    request.scope["app"] = app
-    return request
 
 
 class TestUIContests(UIHelpersMixin, E2ETestBase):
@@ -242,10 +234,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(len(runtime.contest_service.contest_problems(contest_id)), 2)
         self.assertEqual(
-            runtime.contest_service.overview_properties_map(
-                contest_id,
-                contest_slug,
-            )["location"],
+            runtime.contest_service.properties_map(contest_id)["location"],
             "Still editable",
         )
         with self.assertRaisesRegex(ValueError, "configured maximum"):
@@ -286,11 +275,8 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         }
         self.assertEqual(set(rows), {"statements.ftl", "olymp.sty"})
         for row in rows.values():
-            self.assertEqual(row["source_display"], "Default")
             self.assertFalse(row["stored"])
             self.assertGreater(int(row["size_bytes"]), 0)
-        self.assertEqual(context["contest_statement_selected_path"], "")
-        self.assertFalse(context["contest_statement_selected_is_text"])
 
         actor_id = workspace_service.known_user_id("alice")
         shared_key = runtime.contest_service.normalize_statement_source_key(
@@ -417,21 +403,6 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertIsNotNone(member_row)
         self.assertEqual(str(member_row["role"] or ""), "read")
 
-    def test_contest_create_assigns_owner_membership(self) -> None:
-        contest_slug = f"ui-contest-owner-{uuid.uuid4().hex[:8]}"
-        contest_id = self._create_contest(contest_slug)
-        owner_row = db_fetch_one(
-            """
-            SELECT role
-            FROM contest_members
-            WHERE contest_id=?
-              AND user_id=(SELECT id FROM users WHERE username='alice')
-            """,
-            [contest_id],
-        )
-        self.assertIsNotNone(owner_row)
-        self.assertEqual(str(owner_row["role"] or ""), "owner")
-
     def test_contest_problem_add_and_remove_flow(self) -> None:
         contest_slug = f"ui-contest-{uuid.uuid4().hex[:8]}"
         contest_id = self._create_contest(contest_slug)
@@ -500,46 +471,45 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             )
         )
 
-    def test_change_names_tl_ml_creates_per_problem_commit(self) -> None:
-        problem_slug = f"alice/ui-bulk-{uuid.uuid4().hex[:8]}"
-        workspace_service.ensure_problem(problem_slug)
-        workspace_service.grant_repo_access(problem_slug, "alice", "owner")
-        ws = Path(workspace_service.ensure_workspace(problem_slug, "alice"))
-        add = run_git(["git", "-C", str(ws), "add", "."])
-        self.assertEqual(add.returncode, 0, add.stderr)
-        commit = run_git(["git", "-C", str(ws), "commit", "-m", "init problem"])
-        self.assertEqual(commit.returncode, 0, commit.stderr or commit.stdout)
-        push = run_git(["git", "-C", str(ws), "push", "origin", "HEAD:main"])
-        self.assertEqual(push.returncode, 0, push.stderr or push.stdout)
+    def test_bulk_limits_commit_only_changed_problems_and_reorder_roster(self) -> None:
         contest_slug = f"ui-contest-bulk-{uuid.uuid4().hex[:8]}"
         contest_id = self._create_contest(contest_slug, "Bulk Contest")
+        problem_slugs = [f"alice/ui-bulk-{uuid.uuid4().hex[:8]}" for _ in range(2)]
+        workspaces: list[Path] = []
+        initial_heads: list[str] = []
+        for problem_slug in problem_slugs:
+            workspace_service.ensure_problem(problem_slug)
+            workspace_service.grant_repo_access(problem_slug, "alice", "owner")
+            workspace = Path(workspace_service.ensure_workspace(problem_slug, "alice"))
+            for arguments in (["add", "."], ["commit", "-m", "init problem"], ["push", "origin", "HEAD:main"]):
+                result = run_git(["git", "-C", str(workspace), *arguments])
+                self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            workspaces.append(workspace)
+            initial_heads.append(run_git(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip())
 
         add_resp = contest_problems_add(
             contest=contest_slug,
             user="alice",
-            problem_slugs=[problem_slug],
+            problem_slugs=problem_slugs,
             q="",
         )
         self.assertEqual(add_resp.status_code, 303)
-        problem_row = db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem_slug])
-        self.assertIsNotNone(problem_row)
-        pid = int(problem_row["id"])
-        contest_problem_row = db_fetch_one(
-            "SELECT id,idx FROM contest_problems WHERE contest_id=? AND problem_id=?",
-            [contest_id, pid],
+        rows = db_fetch_all(
+            "SELECT id,problem_id,idx FROM contest_problems WHERE contest_id=? ORDER BY idx",
+            [contest_id],
         )
-        self.assertIsNotNone(contest_problem_row)
+        self.assertEqual(len(rows), 2)
 
         update_resp = contest_problems_save(
             contest=contest_slug,
             user="alice",
-            contest_problem_ids=[str(contest_problem_row["id"])],
-            contest_problem_indices=[str(contest_problem_row["idx"])],
-            problem_ids=[str(pid)],
-            time_limit_ms_values=["3500"],
-            memory_limit_mb_values=["512"],
-            original_time_limit_ms_values=["2000"],
-            original_memory_limit_mb_values=["1024"],
+            contest_problem_ids=[str(row["id"]) for row in rows],
+            contest_problem_indices=["B", "A"],
+            problem_ids=[str(row["problem_id"]) for row in rows],
+            time_limit_ms_values=["2000", "3500"],
+            memory_limit_mb_values=["1024", "512"],
+            original_time_limit_ms_values=["2000", "2000"],
+            original_memory_limit_mb_values=["1024", "1024"],
         )
         self.assertEqual(update_resp.status_code, 303)
         self.assertTrue(
@@ -548,13 +518,22 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             )
         )
 
-        ws = Path(workspace_service.ensure_workspace(problem_slug, "alice"))
-        cfg = json.loads((ws / "config" / "problem.json").read_text(encoding="utf-8"))
-        self.assertEqual(int(cfg.get("time_limit_ms") or 0), 3500)
-        self.assertEqual(int(cfg.get("memory_limit_mb") or 0), 512)
-
-        last_subject = run_git(["git", "-C", str(ws), "log", "-1", "--pretty=%s"]).stdout.strip()
-        self.assertEqual(last_subject, f"contest {contest_slug}: bulk update TL/ML")
+        for index, (workspace, limits) in enumerate(zip(workspaces, ((2000, 1024), (3500, 512)), strict=True)):
+            cfg = json.loads((workspace / "config/problem.json").read_text(encoding="utf-8"))
+            self.assertEqual((cfg["time_limit_ms"], cfg["memory_limit_mb"]), limits)
+            head = run_git(["git", "-C", str(workspace), "rev-parse", "HEAD"]).stdout.strip()
+            if index == 0:
+                self.assertEqual(head, initial_heads[index])
+            else:
+                self.assertNotEqual(head, initial_heads[index])
+                committed = run_git(["git", "-C", str(workspace), "show", "HEAD:config/problem.json"])
+                self.assertEqual(committed.returncode, 0, committed.stderr)
+                self.assertEqual(json.loads(committed.stdout), cfg)
+        updated_rows = db_fetch_all("SELECT id,idx FROM contest_problems WHERE contest_id=?", [contest_id])
+        self.assertEqual(
+            {int(row["id"]): row["idx"] for row in updated_rows},
+            {int(rows[0]["id"]): "B", int(rows[1]["id"]): "A"},
+        )
 
     def test_system_admin_can_add_problem_without_explicit_repo_acl(self) -> None:
         contest_slug = f"admin-contest-problems-{uuid.uuid4().hex[:8]}"
@@ -619,10 +598,9 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             [],
         )
 
-    def test_contest_properties_and_access_flow(self) -> None:
+    def test_contest_properties_persist_updates_presets_and_language_fallback(self) -> None:
         contest_slug = f"ui-contest-props-{uuid.uuid4().hex[:8]}"
         contest_id = self._create_contest(contest_slug, "Props Contest")
-        workspace_service.ensure_user("bob")
         before = db_fetch_one(
             "SELECT source_generation FROM contests WHERE id=?",
             [contest_id],
@@ -768,25 +746,12 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             ),
             [],
         )
-        removed_blank_page = runtime.contest_service.set_properties(
+        removed_presets = runtime.contest_service.set_properties(
             contest_id,
             int(alice_row["id"]),
-            {"insertBlankPage": None},
+            {"insertBlankPage": None, "banner": None},
         )
-        self.assertTrue(removed_blank_page)
-
-        grant = contest_access_grant(contest=contest_slug, user="alice", target_user="bob", role="write")
-        self.assertEqual(grant.status_code, 303)
-        membership = db_fetch_one(
-            "SELECT role FROM contest_members WHERE contest_id=? AND user_id=(SELECT id FROM users WHERE username='bob')",
-            [contest_id],
-        )
-        self.assertIsNotNone(membership)
-        self.assertEqual(str(membership["role"]), "write")
-
-    def test_contest_property_presets_create_template_values(self) -> None:
-        contest_slug = f"ui-contest-property-presets-{uuid.uuid4().hex[:8]}"
-        contest_id = self._create_contest(contest_slug, "Preset Contest")
+        self.assertTrue(removed_presets)
 
         banner_response = contest_property_insert_preset(
             contest=contest_slug,
@@ -802,11 +767,10 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertEqual(banner_response.status_code, 303)
         self.assertEqual(blank_page_response.status_code, 303)
         properties = runtime.contest_service.properties_map(contest_id)
-        self.assertIn(r"\ifdefined\thecontestname", properties["banner"])
-        self.assertIn(r"\contestname", properties["banner"])
+        self.assertEqual(properties["banner"], DEFAULT_CONTEST_BANNER)
         self.assertEqual(properties["insertBlankPage"], "true")
 
-    def test_contest_overview_properties_map_infers_location_and_date_from_statements(self) -> None:
+    def test_contest_localized_properties_infer_location_and_date_from_statements(self) -> None:
         contest_slug = f"ui-contest-overview-{uuid.uuid4().hex[:8]}"
         contest_id = self._create_contest(contest_slug, "Overview Contest")
         alice_row = db_fetch_one("SELECT id FROM users WHERE username='alice'")
@@ -835,16 +799,23 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
                     }
                 ],
             )
-        properties = runtime.contest_service.overview_properties_map(
+        properties = runtime.contest_service.localized_overview_properties_map(
             contest_id,
             contest_slug,
+            "english",
         )
         self.assertEqual(properties["location"], "Hangzhou, China")
         self.assertEqual(properties["date"], "1 February, 2026")
 
-    def test_contest_access_cannot_transfer_owner_role(self) -> None:
+    def test_created_contest_owner_cannot_be_transferred_or_revoked(self) -> None:
         contest_slug = f"ui-contest-owner-transfer-{uuid.uuid4().hex[:8]}"
         contest_id = self._create_contest(contest_slug, "Owner Transfer Contest")
+        owner = db_fetch_one(
+            "SELECT role FROM contest_members WHERE contest_id=? AND user_id=(SELECT id FROM users WHERE username='alice')",
+            [contest_id],
+        )
+        self.assertIsNotNone(owner)
+        self.assertEqual(owner["role"], "owner")
         _register_with_password_envelope("bob", "StrongPass123", next_path="/")
 
         grant = contest_access_grant(contest=contest_slug, user="alice", target_user="bob", role="owner")

@@ -254,20 +254,19 @@ class DOMjudgePackageAdapter(PackageAdapterSupport):
                 shutil.copy2(source_file, target)
         return metadata
 
+    @classmethod
     def apply_contest_placement(
-        self,
+        cls,
         target: Path,
         *,
-        canonical_problem_slug: str,
         placement: ContestPackagePlacement,
     ) -> None:
-        del canonical_problem_slug
         ini_path = target / "domjudge-problem.ini"
         if ini_path.is_symlink() or not ini_path.is_file():
             raise ValueError("DOMjudge package is missing domjudge-problem.ini")
         lines = ini_path.read_text(encoding="utf-8").splitlines()
-        short_name = self.ini_value(self.short_name(placement.idx))
-        color = self.balloon_color(
+        short_name = cls.ini_value(cls.short_name(placement.idx))
+        color = cls.balloon_color(
             external_id="problem",
             placement=placement,
         )

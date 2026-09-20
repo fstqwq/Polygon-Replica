@@ -14,5 +14,9 @@ revocation. Public handlers can inspect identity when their own behavior needs i
 The middleware adds security and backend timing headers when the response starts
 and forwards response body messages directly.
 
+Full pages build one public judgehost status for both the footer and its details
+dialog. JSON redirect handlers apply Contest scope to the URL before encoding
+the response; scoped route wrappers only adjust HTTP redirect headers.
+
 [Run and export handlers](run_export/README.md) own verification page, fragment,
 sample download and export coordination.

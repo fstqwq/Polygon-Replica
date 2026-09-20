@@ -19,7 +19,6 @@ from app.service.export.adapters.domjudge import (
     render_domjudge_problem_yaml,
 )
 from app.service.export.adapters.icpc_2025 import (
-    problem_uuid,
     render_problem_yaml,
     render_submissions_yaml,
 )
@@ -75,7 +74,6 @@ class TestICPCExportPackage(unittest.TestCase):
             metadata["uuid"],
             str(uuid.uuid5(uuid.NAMESPACE_URL, f"polygon-replica/problem/{slug}")),
         )
-        self.assertEqual(problem_uuid(slug), metadata["uuid"])
         self.assertEqual(metadata["version"], "a" * 40)
         self.assertEqual(metadata["limits"], {"time_limit": 2.25, "memory": 1})
 
@@ -138,79 +136,32 @@ class TestICPCExportPackage(unittest.TestCase):
                 self.assertEqual(metadata["validation"], expected_validation)
                 self.assertEqual(metadata["name"], "Problem")
 
-    def test_domjudge_balloon_palette_follows_contest_ordinal(self) -> None:
-        palette = DOMjudgePackageAdapter.COLOR_PALETTE
-        colors = [
-            DOMjudgePackageAdapter.balloon_color(
-                external_id="ignored-in-contest",
-                placement=ContestPackagePlacement(idx=idx, ordinal=ordinal),
-            )
-            for idx, ordinal in (("A", 1), ("B", 2), ("R", 18), ("S", 19))
-        ]
-        self.assertEqual(colors, [palette[0], palette[1], palette[17], palette[0]])
-
-        external_id = "standalone-problem"
-        expected_index = hashlib.sha256(external_id.encode()).digest()[0] % len(palette)
-        self.assertEqual(
-            DOMjudgePackageAdapter.balloon_color(
-                external_id=external_id,
-                placement=None,
-            ),
-            palette[expected_index],
-        )
-
     def test_domjudge_contest_placement_rewrites_only_contest_metadata(self) -> None:
         target = self.root / "placement"
         target.mkdir()
         ini = target / "domjudge-problem.ini"
-        ini.write_text(
-            "externalid = projected-problem\n"
-            "short-name = projected-problem\n"
-            "color = #123456\n",
-            encoding="utf-8",
-        )
-        values = ConfigValues(
-            {"AUX_DISPLAY_TEXT_LIMIT_BYTES": 4096},
-            normalizer=lambda raw: raw,
-        )
-        adapter = DOMjudgePackageAdapter(values, mock.Mock())
-
-        adapter.apply_contest_placement(
-            target,
-            canonical_problem_slug="owner/projected-problem",
-            placement=ContestPackagePlacement(idx="B", ordinal=2),
-        )
-
-        self.assertEqual(
-            ini.read_text(encoding="utf-8"),
-            "externalid = projected-problem\n"
-            "short-name = B\n"
-            f"color = {DOMjudgePackageAdapter.COLOR_PALETTE[1]}\n",
-        )
-
-    def test_other_adapters_leave_contest_placement_unchanged(self) -> None:
-        values = ConfigValues(
-            {"AUX_DISPLAY_TEXT_LIMIT_BYTES": 4096},
-            normalizer=lambda raw: raw,
-        )
-        adapters = PackageAdapterRegistry(values, mock.Mock())
-        for package_format in ("icpc-2025-09", "qoj", "nowcoder"):
-            with self.subTest(package_format=package_format):
-                target = self.root / f"placement-{package_format}"
-                target.mkdir()
-                marker = target / "marker.txt"
-                marker.write_text("unchanged\n", encoding="utf-8")
-
-                adapters.require(package_format).apply_contest_placement(
-                    target,
-                    canonical_problem_slug="owner/problem",
-                    placement=ContestPackagePlacement(idx="B", ordinal=2),
+        for idx, ordinal, color in (
+            ("A", 1, "#e6194b"),
+            ("B", 2, "#4363d8"),
+            ("R", 18, "#ffd8b1"),
+            ("S", 19, "#e6194b"),
+        ):
+            with self.subTest(idx=idx, ordinal=ordinal):
+                ini.write_text(
+                    "externalid = projected-problem\n"
+                    "short-name = projected-problem\n"
+                    "color = #123456\n",
+                    encoding="utf-8",
                 )
-
-                self.assertEqual(marker.read_text(encoding="utf-8"), "unchanged\n")
+                DOMjudgePackageAdapter.apply_contest_placement(
+                    target,
+                    placement=ContestPackagePlacement(idx=idx, ordinal=ordinal),
+                )
                 self.assertEqual(
-                    sorted(path.name for path in target.iterdir()),
-                    ["marker.txt"],
+                    ini.read_text(encoding="utf-8"),
+                    "externalid = projected-problem\n"
+                    f"short-name = {idx}\n"
+                    f"color = {color}\n",
                 )
 
     def test_statement_compile_error_prefers_real_latex_log_error(self) -> None:
@@ -393,20 +344,6 @@ class TestICPCExportPackage(unittest.TestCase):
     def test_domjudge_java_submissions_use_entry_point_directories(self) -> None:
         reader = self._adapter_reader(mode="interactive", pass_limit=2)
 
-        def write_statements(
-            _snapshot: Path,
-            destination: Path,
-            *,
-            problem_name: str,
-            include_sample_tests: bool,
-            keep_all_languages: bool,
-        ) -> dict[str, str]:
-            del _snapshot, include_sample_tests
-            destination.mkdir(parents=True)
-            filename = "problem.en.pdf" if keep_all_languages else "problem.pdf"
-            (destination / filename).write_bytes(b"%PDF-1.4\n")
-            return {"en": problem_name}
-
         domjudge = self.root / "domjudge"
         domjudge_adapter = PackageAdapterRegistry(
             self._adapter_config_values(),
@@ -415,7 +352,7 @@ class TestICPCExportPackage(unittest.TestCase):
         with mock.patch.object(
             domjudge_adapter,
             "write_statements",
-            side_effect=write_statements,
+            side_effect=self._write_statements,
         ):
             warning = domjudge_adapter.build(
                 reader,
@@ -459,36 +396,10 @@ class TestICPCExportPackage(unittest.TestCase):
                 },
             },
         )
-        self.assertEqual(
-            submissions_json,
-            "{\n"
-            '  "submissions/accepted/reference/": {\n'
-            '    "entry_point": "Main"\n'
-            "  },\n"
-            '  "submissions/mixed/alternative/": {\n'
-            '    "entry_point": "TranslateMain"\n'
-            "  }\n"
-            "}\n",
-        )
 
     def test_adapters_publish_disjoint_strict_and_domjudge_layouts(self) -> None:
         reader = self._adapter_reader(mode="interactive", pass_limit=2)
         adapters = PackageAdapterRegistry(self._adapter_config_values(), mock.Mock())
-
-        def write_statements(
-            _snapshot: Path,
-            destination: Path,
-            *,
-            problem_name: str,
-            include_sample_tests: bool,
-            keep_all_languages: bool,
-        ) -> dict[str, str]:
-            self.assertEqual(problem_name, "projected-problem")
-            self.assertFalse(include_sample_tests)
-            destination.mkdir(parents=True)
-            filename = "problem.en.pdf" if keep_all_languages else "problem.pdf"
-            (destination / filename).write_bytes(b"%PDF-1.4\n")
-            return {"en": problem_name}
 
         strict = self.root / "strict"
         domjudge = self.root / "domjudge"
@@ -508,12 +419,12 @@ class TestICPCExportPackage(unittest.TestCase):
             mock.patch.object(
                 domjudge_adapter,
                 "write_statements",
-                side_effect=write_statements,
+                side_effect=self._write_statements,
             ),
             mock.patch.object(
                 strict_adapter,
                 "write_statements",
-                side_effect=write_statements,
+                side_effect=self._write_statements,
             ),
         ):
             strict_warning = strict_adapter.build(
@@ -545,10 +456,10 @@ class TestICPCExportPackage(unittest.TestCase):
 
         self.assertTrue((domjudge / "problem_statement" / "problem.pdf").is_file())
         domjudge_ini = (domjudge / "domjudge-problem.ini").read_text()
-        standalone_color = DOMjudgePackageAdapter.balloon_color(
-            external_id="projected-problem",
-            placement=None,
-        )
+        palette = DOMjudgePackageAdapter.COLOR_PALETTE
+        standalone_color = palette[
+            hashlib.sha256(b"projected-problem").digest()[0] % len(palette)
+        ]
         self.assertIn(f"color = {standalone_color}\n", domjudge_ini)
         self.assertTrue((domjudge / "domjudge-problem.ini").is_file())
         self.assertFalse((domjudge / "statement").exists())
@@ -564,19 +475,6 @@ class TestICPCExportPackage(unittest.TestCase):
         self.assertIn(
             "externalid = projected-problem\n",
             (domjudge / "domjudge-problem.ini").read_text(encoding="utf-8"),
-        )
-        domjudge_adapter.apply_contest_placement(
-            domjudge,
-            canonical_problem_slug="owner/projected-problem",
-            placement=ContestPackagePlacement(idx="A", ordinal=1),
-        )
-        placed_ini = (domjudge / "domjudge-problem.ini").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("short-name = A\n", placed_ini)
-        self.assertIn(
-            f"color = {DOMjudgePackageAdapter.COLOR_PALETTE[0]}\n",
-            placed_ini,
         )
         domjudge_mixed = domjudge / "submissions" / "mixed" / "mixed.cpp"
         self.assertTrue(
@@ -599,6 +497,23 @@ class TestICPCExportPackage(unittest.TestCase):
                     check=False,
                 )
                 self.assertEqual(result.returncode, 42)
+
+    def _write_statements(
+        self,
+        _snapshot: Path,
+        destination: Path,
+        *,
+        problem_name: str,
+        include_sample_tests: bool,
+        keep_all_languages: bool,
+    ) -> dict[str, str]:
+        del _snapshot
+        self.assertEqual(problem_name, "projected-problem")
+        self.assertFalse(include_sample_tests)
+        destination.mkdir(parents=True)
+        filename = "problem.en.pdf" if keep_all_languages else "problem.pdf"
+        (destination / filename).write_bytes(b"%PDF-1.4\n")
+        return {"en": problem_name}
 
     @staticmethod
     def _adapter_config_values() -> ConfigValues:

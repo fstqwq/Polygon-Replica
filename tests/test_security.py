@@ -625,6 +625,7 @@ class TestSecurity(E2ETestBase):
         marker.unlink(missing_ok=True)
         content = "int main(){return 0;}\n"
         resp = generator_save_source(
+            request=_request("/"),
             problem="alice/sample",
             user="alice",
             path="../../" + marker.name,
@@ -643,6 +644,7 @@ class TestSecurity(E2ETestBase):
         marker.unlink(missing_ok=True)
         content = "int main(){return 0;}\n"
         resp = validator_save_source(
+            request=_request("/"),
             problem="alice/sample",
             user="alice",
             path="../../" + marker.name,
@@ -660,6 +662,7 @@ class TestSecurity(E2ETestBase):
         marker.unlink(missing_ok=True)
         content = "int main(){return 0;}\n"
         resp = interactor_save_source(
+            request=_request("/"),
             problem="alice/sample",
             user="alice",
             path="../../" + marker.name,

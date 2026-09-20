@@ -1,11 +1,10 @@
-import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal, TypedDict, cast
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
 
 from fastapi import Depends, HTTPException, Request
-from starlette.responses import JSONResponse, RedirectResponse, Response
+from starlette.responses import RedirectResponse, Response
 
 from app.impl.auth.session import require_session_user
 from app.impl.runtime.dependency import runtime
@@ -462,6 +461,11 @@ def _problem_redirect_with_scope(url: str, scope: ContestWorkspaceScope) -> str:
     )
 
 
+def problem_redirect_href(request: Request, url: str) -> str:
+    scope = contest_workspace_scope_from_request(request)
+    return url if scope is None else _problem_redirect_with_scope(url, scope)
+
+
 def apply_problem_contest_scope(
     response: Response,
     scope: ContestWorkspaceScope | None,
@@ -473,20 +477,4 @@ def apply_problem_contest_scope(
         if location:
             response.headers["location"] = _problem_redirect_with_scope(location, scope)
         return response
-    if not isinstance(response, JSONResponse):
-        return response
-    try:
-        payload = json.loads(bytes(response.body))
-    except (TypeError, ValueError):
-        return response
-    if not isinstance(payload, dict) or not isinstance(payload.get("redirect"), str):
-        return response
-    payload["redirect"] = _problem_redirect_with_scope(payload["redirect"], scope)
-    response.body = json.dumps(
-        payload,
-        ensure_ascii=False,
-        allow_nan=False,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    response.headers["content-length"] = str(len(response.body))
     return response
