@@ -56,9 +56,7 @@ def _files_write_context(
     ctx = page_ctx(
         problem,
         user,
-        include_branches=False,
         refresh_status=False,
-        include_recent=False,
         contest_workspace=contest_workspace_context_from_request(request),
     )
     require_write_access(ctx)
@@ -428,7 +426,7 @@ def files_delete(
     )
 
 def files_download(problem: str, user: Annotated[str, Depends(require_session_user)], path: str):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     workspace = Path(ctx['workspace']['path'])
     try:
         file_path = runtime().workspace_file_service.download_path(workspace, path, require_allowed_root=False)

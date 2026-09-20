@@ -77,7 +77,7 @@ def checker_view_standard(request: Request, problem: str, user: Annotated[str, D
     return template_response(request, 'checker_standard_view.html', {'ctx': ctx, 'checker_name': canonical, 'checker_source': source_text})
 
 def checker_set_standard(problem: str, user: Annotated[str, Depends(require_session_user)], checker_name: str=Form(...)):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     if ctx['shell']['metadata']['mode'] == 'interactive':
         return redirect_response(f'/problems/{problem}/interactor', status_code=303, message='interactive problem uses an interactor; checker section hidden')
     require_write_access(ctx)
@@ -106,7 +106,7 @@ def checker_rename_source(
     old_path: str = Form(...),
     new_path: str = Form(...),
 ):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     if ctx['shell']['metadata']['mode'] == 'interactive':
         return redirect_response(f'/problems/{problem}/interactor', status_code=303, message='interactive problem uses an interactor; checker section hidden')
     return rename_component_source(
@@ -130,7 +130,7 @@ def checker_save_source(
     content: str = Form(''),
     response_mode: str = Form(''),
 ):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     if ctx['shell']['metadata']['mode'] == 'interactive':
         return redirect_response(f'/problems/{problem}/interactor', status_code=303, message='interactive problem uses an interactor; checker section hidden')
     require_write_access(ctx)

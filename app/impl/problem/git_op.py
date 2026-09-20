@@ -23,7 +23,7 @@ def revision_commit(
     user: Annotated[str, Depends(require_session_user)],
     message: Annotated[str, Form()],
 ):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     require_write_access(ctx)
     workspace = Path(ctx["workspace"]["path"])
     commit_head = ""
@@ -58,7 +58,7 @@ def git_discard_path(
     user: Annotated[str, Depends(require_session_user)],
     path: Annotated[str, Form()] = "",
 ):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     require_write_access(ctx)
     workspace = Path(ctx["workspace"]["path"])
     selected_path = path.strip()

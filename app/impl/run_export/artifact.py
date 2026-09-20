@@ -33,7 +33,7 @@ def _browser_blob_response(file_path: Path, filename: str) -> FileResponse:
 
 
 def artifact_file(problem: str, user: Annotated[str, Depends(require_session_user)], verification_id: str, rel_path: str):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     assert_workspace_artifact_access(ctx, verification_id)
     rel_norm = rel_path.lstrip('/')
     if ".." in Path(rel_norm).parts:

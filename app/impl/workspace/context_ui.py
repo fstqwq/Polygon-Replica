@@ -190,9 +190,7 @@ def _current_domjudge_download(
 def page_ctx(
     problem: str,
     user: str,
-    include_branches: bool = True,
     refresh_status: bool = True,
-    include_recent: bool = True,
     include_workspace_changes: bool = True,
     contest_workspace: ContestWorkspaceContext | None = None,
 ) -> ProblemPageContext:
@@ -206,7 +204,6 @@ def page_ctx(
         base_ctx = runtime().workspace_service.workspace_context(
             problem,
             user,
-            include_recent=include_recent,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -219,9 +216,6 @@ def page_ctx(
         actor_user_id=user_id,
         workspace_id=int(ctx['workspace']['id']),
     )
-    ctx['branches'] = ['main'] if include_branches else []
-    ctx['branches_truncated'] = False
-    ctx['branch_limit'] = 1 if include_branches else 0
     workspace_path = Path(ctx['workspace']['path'])
     auto_updated = False
     if refresh_status:
@@ -306,9 +300,7 @@ def page_ctx(
             'mode': 'not-applicable',
             'display': 'not used',
             'standard_checker': '',
-            'standard_expected_checker': '',
             'standard_warning': '',
-            'standard_valid': True,
             'repo_source': '',
             'repo_source_exists': False,
         }
@@ -316,7 +308,7 @@ def page_ctx(
         try:
             checker_status = checker_status_context(workspace_path, build_cfg)
         except Exception:
-            checker_status = {'mode': 'missing', 'display': 'unknown', 'standard_checker': '', 'standard_expected_checker': '', 'standard_warning': '', 'standard_valid': False, 'repo_source': 'checkers/checker.cpp', 'repo_source_exists': False}
+            checker_status = {'mode': 'missing', 'display': 'unknown', 'standard_checker': '', 'standard_warning': '', 'repo_source': 'checkers/checker.cpp', 'repo_source_exists': False}
     try:
         generator_status: GeneratorComponentContext = generator_status_context(
             workspace_path,
@@ -330,7 +322,6 @@ def page_ctx(
             'repo_source': 'generators/generator.cpp',
             'repo_source_exists': False,
             'source_rows': [],
-            'configured_sources': [],
             'source_rows_truncated': False,
         }
     if safe_mode == 'interactive':
@@ -459,7 +450,6 @@ def page_ctx(
         int(ctx['problem']['id']),
         readiness['package'],
     )
-    access_role = str(access['role'])
     shell: ProblemShellContext = {
         'metadata': metadata,
         'components': components,
@@ -469,8 +459,6 @@ def page_ctx(
             metadata=metadata,
             components=components,
             readiness=readiness,
-            workspace_changes=workspace_changes,
-            access_role=access_role,
             package_download=package_download,
         ),
         'workspace_changes': workspace_changes,
@@ -533,4 +521,4 @@ def render_workspace_page(request: Request, problem: str, user: Annotated[str, D
             elif line.startswith('-'):
                 kind = 'del'
             selected_diff_lines.append({'text': line, 'kind': kind})
-    return template_response(request, 'workspace.html', {'ctx': ctx, 'branches': ctx.get('branches', []), 'message': message, 'selected_path': selected_path, 'selected_diff': selected_diff, 'selected_diff_truncated': bool(selected_diff_truncated), 'selected_diff_lines': selected_diff_lines, 'change_rows': change_rows, 'has_destructive_sudo': bool(has_destructive_sudo)})
+    return template_response(request, 'workspace.html', {'ctx': ctx, 'message': message, 'selected_path': selected_path, 'selected_diff': selected_diff, 'selected_diff_truncated': bool(selected_diff_truncated), 'selected_diff_lines': selected_diff_lines, 'change_rows': change_rows, 'has_destructive_sudo': bool(has_destructive_sudo)})

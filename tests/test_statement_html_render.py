@@ -317,7 +317,6 @@ class TestStatementHtmlRender(BackendE2ETestBase):
             runtime.workspace_service.workspace_context(
                 self.problem,
                 self.user,
-                include_recent=False,
             )["workspace"]["path"]
         )
         manual_root = workspace / "tests" / "manual"
@@ -368,7 +367,6 @@ class TestStatementHtmlRender(BackendE2ETestBase):
             runtime.workspace_service.workspace_context(
                 self.problem,
                 self.user,
-                include_recent=False,
             )["workspace"]["path"]
         )
         (workspace / "statement/olymp.sty").unlink()
@@ -399,7 +397,6 @@ class TestStatementHtmlRender(BackendE2ETestBase):
             runtime.workspace_service.workspace_context(
                 self.problem,
                 self.user,
-                include_recent=False,
             )["workspace"]["path"]
         )
         (workspace / "statement-sections/english/legend.tex").write_text(
@@ -607,7 +604,6 @@ class TestStatementHtmlRender(BackendE2ETestBase):
             runtime.workspace_service.workspace_context(
                 self.problem,
                 self.user,
-                include_recent=False,
             )["workspace"]["path"]
         )
         (workspace / "statement-sections/english/legend.tex").write_text(
@@ -728,7 +724,6 @@ class TestStatementHtmlRender(BackendE2ETestBase):
             runtime.workspace_service.workspace_context(
                 self.problem,
                 self.user,
-                include_recent=False,
             )["workspace"]["path"]
         )
         (workspace / "statement/problem.tex").write_text(

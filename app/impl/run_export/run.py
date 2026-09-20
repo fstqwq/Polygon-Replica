@@ -97,9 +97,7 @@ def run_page(request: Request, problem: str, user: Annotated[str, Depends(requir
     ctx = page_ctx(
         problem,
         user,
-        include_branches=False,
         refresh_status=False,
-        include_recent=True,
         include_workspace_changes=True,
         contest_workspace=contest_workspace_context_from_request(request),
     )
@@ -115,9 +113,7 @@ def run_new_page(request: Request, problem: str, user: Annotated[str, Depends(re
     ctx = page_ctx(
         problem,
         user,
-        include_branches=False,
         refresh_status=False,
-        include_recent=True,
         include_workspace_changes=True,
         contest_workspace=contest_workspace_context_from_request(request),
     )
@@ -163,9 +159,7 @@ def run_details_page(request: Request, problem: str, user: Annotated[str, Depend
     ctx = page_ctx(
         problem,
         user,
-        include_branches=False,
         refresh_status=False,
-        include_recent=True,
         include_workspace_changes=True,
         contest_workspace=contest_workspace_context_from_request(request),
     )
@@ -180,7 +174,7 @@ def _selected_run_test_detail(
         problem_id, user_id = runtime().workspace_service.page_identity(problem, user)
         access = workspace_access_context(problem_id, user_id)
         require_read_access({"access": access})
-        ctx = runtime().workspace_service.workspace_context(problem, user, include_recent=False)
+        ctx = runtime().workspace_service.workspace_context(problem, user)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -357,7 +351,7 @@ def run_details_sample_json(
     )
 
 def run_cancel(problem: str, user: Annotated[str, Depends(require_session_user)], verification_id: Annotated[str, Form()] = ""):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False, include_workspace_changes=False)
+    ctx = page_ctx(problem, user, refresh_status=False, include_workspace_changes=False)
     safe_verification_id = normalize_run_id_token(verification_id)
     if not safe_verification_id:
         return redirect_response(
@@ -545,7 +539,7 @@ def run_rejudge(
     user: Annotated[str, Depends(require_session_user)],
     verification_id: Annotated[str, Form()] = "",
 ):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False, include_workspace_changes=False)
+    ctx = page_ctx(problem, user, refresh_status=False, include_workspace_changes=False)
     safe_verification_id = normalize_run_id_token(verification_id)
     if not safe_verification_id:
         return redirect_response(f"/problems/{problem}/run", status_code=303, message="verification id is required")
@@ -598,7 +592,7 @@ def run_execute(
     submission_upload: Annotated[UploadFile | None, File()] = None,
     bypass_case_result_cache: Annotated[str, Form()] = "",
 ):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False, include_workspace_changes=False)
+    ctx = page_ctx(problem, user, refresh_status=False, include_workspace_changes=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     upload_content = None

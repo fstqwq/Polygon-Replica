@@ -243,7 +243,6 @@ class TestAgentAPI(E2ETestBase):
             workspace = workspace_service.workspace_context(
                 problem,
                 username,
-                include_recent=False,
             )
             self.assertTrue(Path(str(workspace["workspace"]["path"])).is_dir())
 
@@ -1044,7 +1043,7 @@ class TestAgentAPI(E2ETestBase):
         _password, auth_cookie = self._issue_auth_cookie(username)
         workspace = self._grant_problem_owner(username)
         self.assertTrue(workspace.exists())
-        workspace_ctx = workspace_service.workspace_context(self.problem, username, include_recent=False)
+        workspace_ctx = workspace_service.workspace_context(self.problem, username)
         workspace_id = int(workspace_ctx["workspace"]["id"])
 
         with TestClient(app, raise_server_exceptions=False) as client:
@@ -1339,7 +1338,7 @@ class TestAgentAPI(E2ETestBase):
             accepted_solution_source="solutions/main.cpp",
         )
         stale_head = str(workspace_service.read_workspace_status(workspace).get("head_commit") or "")
-        workspace_ctx = workspace_service.workspace_context(self.problem, username, include_recent=False)
+        workspace_ctx = workspace_service.workspace_context(self.problem, username)
         workspace_id = int(workspace_ctx["workspace"]["id"])
 
         with TestClient(app, raise_server_exceptions=False) as client:

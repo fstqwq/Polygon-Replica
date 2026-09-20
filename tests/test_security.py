@@ -143,7 +143,7 @@ class TestSecurity(E2ETestBase):
         workspace_service.grant_repo_access("alice/sample", "bob", "read")
         workspace_service.ensure_workspace("alice/sample", "bob")
 
-        alice_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        alice_ctx = workspace_service.workspace_context("alice/sample", "alice")
         problem_id = int(alice_ctx["problem"]["id"])
         alice_workspace_id = int(alice_ctx["workspace"]["id"])
 
@@ -219,7 +219,7 @@ class TestSecurity(E2ETestBase):
         self.assertEqual(Path(response.path).read_bytes(), b"visible-output\n")
 
     def test_artifact_download_rejects_path_traversal(self) -> None:
-        alice_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        alice_ctx = workspace_service.workspace_context("alice/sample", "alice")
         problem_id = int(alice_ctx["problem"]["id"])
         alice_workspace_id = int(alice_ctx["workspace"]["id"])
 
@@ -253,7 +253,7 @@ class TestSecurity(E2ETestBase):
         workspace_service.grant_repo_access("alice/sample", "bob", "owner")
         workspace_service.ensure_workspace("alice/sample", "bob")
 
-        alice_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        alice_ctx = workspace_service.workspace_context("alice/sample", "alice")
         problem_id = int(alice_ctx["problem"]["id"])
         alice_workspace_id = int(alice_ctx["workspace"]["id"])
 
@@ -317,8 +317,8 @@ class TestSecurity(E2ETestBase):
         workspace_service.grant_repo_access("alice/sample", "bob", "owner")
         workspace_service.ensure_workspace("alice/sample", "bob")
 
-        alice_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        bob_ctx = workspace_service.workspace_context("alice/sample", "bob", include_recent=False)
+        alice_ctx = workspace_service.workspace_context("alice/sample", "alice")
+        bob_ctx = workspace_service.workspace_context("alice/sample", "bob")
         problem_id = int(alice_ctx["problem"]["id"])
         alice_workspace_id = int(alice_ctx["workspace"]["id"])
         bob_workspace_id = int(bob_ctx["workspace"]["id"])

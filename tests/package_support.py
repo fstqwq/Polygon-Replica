@@ -101,7 +101,6 @@ def publish_problem(
     context = runtime.workspace_service.workspace_context(
         problem_slug,
         actor_username,
-        include_recent=False,
     )
     return workspace, int(context["problem"]["id"]), commit
 

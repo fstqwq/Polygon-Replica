@@ -181,7 +181,6 @@ class VerificationServiceTestBase(DBTestBase):
         context = self.workspace_service.workspace_context(
             self.problem,
             self.user,
-            include_recent=False,
         )
         self.problem_id = int(context["problem"]["id"])
         self.workspace_id = int(context["workspace"]["id"])

@@ -864,7 +864,6 @@ class VerificationWorkflow:
         context = self._workspace_service.workspace_context(
             problem,
             username,
-            include_recent=False,
         )
         workspace = Path(str(context["workspace"]["path"])).resolve()
         problem_id = int(context["problem"]["id"])

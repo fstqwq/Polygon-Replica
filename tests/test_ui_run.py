@@ -797,7 +797,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertEqual(spec_path.read_bytes(), before)
 
     def test_tests_spec_manual_payload_upload_and_download_routes(self) -> None:
-        ws_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        ws_ctx = workspace_service.workspace_context("alice/sample", "alice")
         workspace = Path(str(ws_ctx["workspace"]["path"]))
         spec_path = workspace / "tests" / "spec.json"
         manual_dir = workspace / "tests" / "manual"
@@ -837,7 +837,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
 
     def test_tests_spec_manual_payload_upload_accepts_payloads_larger_than_textarea_limit(self) -> None:
         oversized = (b"8" * (TEXTAREA_MAX_BYTES + 32)) + b"\r\n"
-        ws_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        ws_ctx = workspace_service.workspace_context("alice/sample", "alice")
         workspace = Path(str(ws_ctx["workspace"]["path"]))
         spec_path = workspace / "tests" / "spec.json"
         manual_dir = workspace / "tests" / "manual"
@@ -874,7 +874,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertNotIn("\r", payload)
 
     def test_tests_spec_manual_payload_upload_rejects_non_utf8_payload(self) -> None:
-        ws_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        ws_ctx = workspace_service.workspace_context("alice/sample", "alice")
         workspace = Path(str(ws_ctx["workspace"]["path"]))
         spec_path = workspace / "tests" / "spec.json"
         manual_dir = workspace / "tests" / "manual"
@@ -907,7 +907,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertEqual((manual_dir / "001.in").read_text(encoding="utf-8"), "seed\n")
 
     def test_tests_spec_manual_payload_upload_uses_file_size_limit_not_textarea_limit(self) -> None:
-        ws_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        ws_ctx = workspace_service.workspace_context("alice/sample", "alice")
         workspace = Path(str(ws_ctx["workspace"]["path"]))
         spec_path = workspace / "tests" / "spec.json"
         manual_dir = workspace / "tests" / "manual"
@@ -941,7 +941,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertEqual((manual_dir / "001.in").read_text(encoding="utf-8"), "seed\n")
 
     def test_tests_spec_add_manual_upload_route(self) -> None:
-        ws_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        ws_ctx = workspace_service.workspace_context("alice/sample", "alice")
         workspace = Path(str(ws_ctx["workspace"]["path"]))
         spec_path = workspace / "tests" / "spec.json"
         manual_dir = workspace / "tests" / "manual"
@@ -981,7 +981,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
 
     def test_tests_spec_add_manual_upload_accepts_payloads_larger_than_textarea_limit(self) -> None:
         oversized = (b"9" * (TEXTAREA_MAX_BYTES + 32)) + b"\r\n"
-        ws_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        ws_ctx = workspace_service.workspace_context("alice/sample", "alice")
         workspace = Path(str(ws_ctx["workspace"]["path"]))
         spec_path = workspace / "tests" / "spec.json"
         manual_dir = workspace / "tests" / "manual"
@@ -1016,7 +1016,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertNotIn("\r", manual_text)
 
     def test_tests_spec_add_manual_upload_rejects_non_utf8_payload(self) -> None:
-        ws_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        ws_ctx = workspace_service.workspace_context("alice/sample", "alice")
         workspace = Path(str(ws_ctx["workspace"]["path"]))
         spec_path = workspace / "tests" / "spec.json"
         manual_dir = workspace / "tests" / "manual"
@@ -1042,7 +1042,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertFalse((manual_dir / "001.in").exists())
 
     def test_tests_spec_add_manual_upload_uses_file_size_limit_not_textarea_limit(self) -> None:
-        ws_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        ws_ctx = workspace_service.workspace_context("alice/sample", "alice")
         workspace = Path(str(ws_ctx["workspace"]["path"]))
         spec_path = workspace / "tests" / "spec.json"
         manual_dir = workspace / "tests" / "manual"
@@ -1163,7 +1163,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             workspace_service.workspace_context(
                 problem,
                 "alice",
-                include_recent=False,
             )["problem"]["id"]
         )
         before = db_fetch_one(
@@ -1205,7 +1204,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         context = workspace_service.workspace_context(
             problem,
             user,
-            include_recent=False,
         )
         problem_id = int(context["problem"]["id"])
         workspace_id = int(context["workspace"]["id"])
@@ -1258,7 +1256,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
     def test_verification_sidebar_prefers_current_workspace_signature_over_export_verification(self) -> None:
         problem = f"alice/verify-export-not-stale-{uuid.uuid4().hex[:8]}"
         ws = self._prepare_verification_workspace(problem)
-        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
+        ctx = workspace_service.workspace_context(problem, "alice")
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         current_signature = verification_sources_signature(ws)
@@ -1296,7 +1294,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
     def test_verification_sidebar_matches_clean_workspace_manifest_signature(self) -> None:
         problem = f"alice/verify-clean-manifest-{uuid.uuid4().hex[:8]}"
         ws = self._prepare_verification_workspace(problem)
-        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
+        ctx = workspace_service.workspace_context(problem, "alice")
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         verification_id = canonical_test_verification_id(f"ver-clean-manifest-{uuid.uuid4().hex[:8]}")
@@ -1327,7 +1325,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             message=f"verify-clean-source-{uuid.uuid4().hex[:6]}",
         )
         self.assertEqual(commit_resp.status_code, 303)
-        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
+        ctx = workspace_service.workspace_context(problem, "alice")
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         user_id = int(ctx["user"]["id"])
@@ -1362,7 +1360,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
     def test_verification_readiness_tracks_source_edits_and_restoration(self) -> None:
         problem = f"alice/verify-source-edits-{uuid.uuid4().hex[:8]}"
         ws = self._prepare_verification_workspace(problem)
-        ctx = workspace_service.workspace_context(problem, "alice", include_recent=False)
+        ctx = workspace_service.workspace_context(problem, "alice")
         problem_id = ctx["problem"]["id"]
         workspace_id = ctx["workspace"]["id"]
         verification_id = canonical_test_verification_id(f"ver-source-edits-{uuid.uuid4().hex[:8]}")
@@ -1438,7 +1436,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         workspace_service.ensure_user("bob")
         workspace_service.grant_repo_access("alice/sample", "bob", "read")
         workspace_service.ensure_workspace("alice/sample", "bob", refresh_status=False)
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        ctx = workspace_service.workspace_context("alice/sample", "alice")
         problem_id = int(ctx["problem"]["id"])
         published_id = canonical_test_verification_id(
             f"ver-published-visible-{uuid.uuid4().hex[:8]}"
@@ -1483,7 +1481,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 "SELECT id FROM verification_tasks WHERE verification_id=? LIMIT 1", [rejudge_id],
             )
             self.assertIsNotNone(activated, runtime.verification_service.verification_record(rejudge_id))
-            bob_context = workspace_service.workspace_context("alice/sample", "bob", include_recent=False)
+            bob_context = workspace_service.workspace_context("alice/sample", "bob")
             record = runtime.verification_service.verification_record(rejudge_id)
             self.assertEqual(record["workspace_id"], bob_context["workspace"]["id"])
         finally:
@@ -1506,8 +1504,8 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         workspace_service.ensure_user("bob")
         workspace_service.grant_repo_access("alice/sample", "bob", "owner")
         workspace_service.ensure_workspace("alice/sample", "bob", refresh_status=False)
-        alice_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
-        bob_ctx = workspace_service.workspace_context("alice/sample", "bob", include_recent=False)
+        alice_ctx = workspace_service.workspace_context("alice/sample", "alice")
+        bob_ctx = workspace_service.workspace_context("alice/sample", "bob")
         foreign_id = canonical_test_verification_id(
             f"ver-foreign-hidden-{uuid.uuid4().hex[:8]}"
         )
@@ -1551,7 +1549,6 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ctx = workspace_service.workspace_context(
             "alice/sample",
             "alice",
-            include_recent=False,
         )
         package_verification_id = canonical_test_verification_id(
             f"ver-package-visible-{uuid.uuid4().hex[:8]}"
@@ -1580,7 +1577,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         ws = Path(workspace_service.ensure_workspace("alice/sample", "alice"))
         (ws / "solutions").mkdir(parents=True, exist_ok=True)
         (ws / "solutions" / "accepted.cpp").write_text("int main(){return 0;}\n", encoding="utf-8")
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        ctx = workspace_service.workspace_context("alice/sample", "alice")
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         verification_id = canonical_test_verification_id(f"inv-cancel-{uuid.uuid4().hex[:8]}")
@@ -1664,7 +1661,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertEqual(details_after.status_code, 200)
 
     def test_run_cancel_cancels_not_started_rows_without_active_judgehost_work(self) -> None:
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        ctx = workspace_service.workspace_context("alice/sample", "alice")
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         verification_id = canonical_test_verification_id(f"inv-cancel-pending-{uuid.uuid4().hex[:8]}")
@@ -1729,7 +1726,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         )
 
     def test_run_cancel_cancels_queued_rows_when_domjudge_has_only_pending_cases(self) -> None:
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        ctx = workspace_service.workspace_context("alice/sample", "alice")
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
         verification_id = canonical_test_verification_id(f"inv-cancel-domjudge-pending-{uuid.uuid4().hex[:8]}")
@@ -1795,10 +1792,10 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
     def test_verification_waits_for_worker_capacity_and_rejection_is_durable(self) -> None:
         problem = f"alice/verify-queued-{uuid.uuid4().hex[:8]}"
         self._prepare_verification_workspace(problem)
-        context = workspace_service.workspace_context(problem, "alice", include_recent=False)
+        context = workspace_service.workspace_context(problem, "alice")
         rejected_problem = f"alice/verify-rejected-{uuid.uuid4().hex[:8]}"
         rejected_workspace = self._prepare_verification_workspace(rejected_problem)
-        rejected_context = workspace_service.workspace_context(rejected_problem, "alice", include_recent=False)
+        rejected_context = workspace_service.workspace_context(rejected_problem, "alice")
         rejected_id = canonical_test_verification_id(f"queue-rejection-{uuid.uuid4().hex}")
         override_config_values(self, runtime.config_values, JUDGEHOST_ENABLE=True)
         runtime.judgehost_task_service.domjudge_register_host(f"ui-queue-{self.test_id}")
@@ -1873,7 +1870,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         }), encoding="utf-8")
         published = revision_commit(problem=problem, user="alice", message="publish certification fixture")
         self.assertEqual(published.status_code, 303)
-        alice_context = workspace_service.workspace_context(problem, "alice", include_recent=False)
+        alice_context = workspace_service.workspace_context(problem, "alice")
         problem_id = alice_context["problem"]["id"]
         revision = runtime.problem_package_service.published_revision(problem_id)
         package = runtime.problem_package_service.ensure_native_package(
@@ -1893,7 +1890,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             with self.subTest(user=user):
                 response = verification_start(problem=problem, user=user, page="run")
                 self.assertEqual(response.status_code, 303)
-                context = workspace_service.workspace_context(problem, user, include_recent=False)
+                context = workspace_service.workspace_context(problem, user)
                 rows = runtime.verification_service.list_visible_verification_rows(
                     problem_id, context["workspace"]["id"], limit=1,
                 )
@@ -1908,7 +1905,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
 
     def test_pass_fail_sample_json_exposes_every_pass(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        ctx = workspace_service.workspace_context("alice/sample", "alice")
         workspace_id = int(ctx["workspace"]["id"])
         problem_id = int(ctx["problem"]["id"])
         workspace = Path(str(ctx["workspace"]["path"]))
@@ -2044,7 +2041,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
 
     def test_interactive_sample_json_isolated_by_program_id(self) -> None:
         workspace_service.ensure_workspace("alice/sample", "alice")
-        ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        ctx = workspace_service.workspace_context("alice/sample", "alice")
         workspace_id = int(ctx["workspace"]["id"])
         problem_id = int(ctx["problem"]["id"])
         workspace = Path(str(ctx["workspace"]["path"]))
@@ -2262,7 +2259,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         workspace_service.grant_repo_access("alice/sample", "bob", "owner")
         workspace_service.ensure_workspace("alice/sample", "bob")
 
-        alice_ctx = workspace_service.workspace_context("alice/sample", "alice", include_recent=False)
+        alice_ctx = workspace_service.workspace_context("alice/sample", "alice")
         problem_id = int(alice_ctx["problem"]["id"])
         alice_workspace_id = int(alice_ctx["workspace"]["id"])
         verification_id = canonical_test_verification_id(f"ver-collab-detail-{uuid.uuid4().hex[:8]}")
@@ -2368,7 +2365,7 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         self.assertEqual(sample_response.status_code, 200, sample_response.text)
         self.assertEqual(sample_response.json()["passes"][0]["output"], "6\n")
         workspace_service.grant_repo_access("alice/sample", "bob", "read")
-        bob_ctx = workspace_service.workspace_context("alice/sample", "bob", include_recent=False)
+        bob_ctx = workspace_service.workspace_context("alice/sample", "bob")
         config = Path(bob_ctx["workspace"]["path"]) / "config/problem.json"
         original = config.read_bytes()
         before = dict(db_fetch_one("SELECT * FROM workspaces WHERE id=?", [bob_ctx["workspace"]["id"]]))

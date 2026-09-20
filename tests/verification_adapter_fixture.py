@@ -81,7 +81,7 @@ class VerificationExecutionTestBase(E2ETestBase):
             source_file_by_path={"solutions/std.cpp": source},
             test_plan_by_name=plans, targets=[], test_names=list(test_names),
         )
-        context = runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        context = runtime.workspace_service.workspace_context(self.problem, self.user)
         admit_test_verification(
             verification_id=verification_id, problem_id=context["problem"]["id"],
             workspace_id=context["workspace"]["id"],

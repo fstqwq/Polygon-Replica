@@ -95,7 +95,6 @@ class TestArtifactCleanup(unittest.TestCase):
         context = self.workspace_service.workspace_context(
             "admin/sample",
             "admin",
-            include_recent=False,
         )
         self.problem_id = int(context["problem"]["id"])
         self.workspace_id = int(context["workspace"]["id"])

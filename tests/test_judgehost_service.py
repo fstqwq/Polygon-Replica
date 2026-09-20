@@ -138,7 +138,7 @@ class TestJudgehostService(E2ETestBase):
         service = self._fresh_judgehost_service()
         build_id = _canonical_verification_id(f"materialization-build-{uuid.uuid4().hex}")
         self._seed_build_verification(build_id)
-        ctx = runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        ctx = runtime.workspace_service.workspace_context(self.problem, self.user)
         verification_id = _canonical_verification_id(f"materialization-{uuid.uuid4().hex}")
         admit_test_verification(
             verification_id=verification_id,
@@ -269,7 +269,7 @@ class TestJudgehostService(E2ETestBase):
             self, runtime.config_values, JUDGEHOST_ENABLE=True,
             JUDGEHOST_API_TOKEN="test-token", JUDGEHOST_API_USERNAME="judgehost",
         )
-        ctx = runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        ctx = runtime.workspace_service.workspace_context(self.problem, self.user)
         headers = {"Authorization": "Bearer test-token"}
         with TestClient(app, raise_server_exceptions=False) as client:
             for outcome in ("committed", "retry", "cancelled"):
@@ -440,7 +440,7 @@ class TestJudgehostService(E2ETestBase):
         self._seed_build_verification(build_id)
         verification_id = _canonical_verification_id(f"cleanup-{uuid.uuid4().hex}")
         ctx = runtime.workspace_service.workspace_context(
-            self.problem, self.user, include_recent=False,
+            self.problem, self.user,
         )
         admit_test_verification(
             verification_id=verification_id,
@@ -519,7 +519,7 @@ class TestJudgehostService(E2ETestBase):
         )
 
         ctx = runtime.workspace_service.workspace_context(
-            self.problem, self.user, include_recent=False
+            self.problem, self.user
         )
         verification_id = _canonical_verification_id(str(uuid.uuid4()))
         build_verification_id = _canonical_verification_id(f"build-{uuid.uuid4()}")
@@ -755,7 +755,6 @@ class TestJudgehostService(E2ETestBase):
         ctx = runtime.workspace_service.workspace_context(
             self.problem,
             self.user,
-            include_recent=False,
         )
         verification_id = _canonical_verification_id(
             f"late-{failure_kind}-{uuid.uuid4().hex[:8]}"
@@ -945,7 +944,7 @@ class TestJudgehostService(E2ETestBase):
             encoding="utf-8",
         )
         ctx = runtime.workspace_service.workspace_context(
-            self.problem, self.user, include_recent=False
+            self.problem, self.user
         )
         problem_id = int(ctx["problem"]["id"])
         workspace_id = int(ctx["workspace"]["id"])
@@ -4732,7 +4731,7 @@ class TestJudgehostService(E2ETestBase):
                 "compare_metadata": "",
             })
         verification_id = _canonical_verification_id(f"cache-concurrent-{uuid.uuid4().hex}")
-        ctx = runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        ctx = runtime.workspace_service.workspace_context(self.problem, self.user)
         admit_test_verification(verification_id=verification_id, problem_id=int(ctx["problem"]["id"]), workspace_id=int(ctx["workspace"]["id"]))
         tasks = [PlannedTask(
             task_id=verification_task_id(verification_id, _SOLUTION_PROGRAM_ID, test),
@@ -6098,7 +6097,6 @@ class TestJudgehostService(E2ETestBase):
         ctx = runtime.workspace_service.workspace_context(
             self.problem,
             self.user,
-            include_recent=False,
         )
         admission = admit_test_verification(
             verification_id=verification_id,

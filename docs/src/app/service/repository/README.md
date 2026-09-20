@@ -9,3 +9,6 @@ the [problem-source protocol](../../../../protocol/problem-source.md).
 The bounded identity caches retain only database IDs. Each lookup reads the current
 user or problem row and rejects stale ID/name pairs. Permissions and user flags
 come from the current database row.
+
+Workspace context resolves the current problem, user and checkout. Verification
+history belongs to the verification read services.

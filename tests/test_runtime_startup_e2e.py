@@ -75,7 +75,6 @@ class TestRuntimeStartupE2E(BackendE2ETestBase):
         context = runtime.workspace_service.workspace_context(
             self.problem,
             self.user,
-            include_recent=False,
         )
         verification_id = canonical_test_verification_id(
             f"startup-recovery-failure:{self.test_id}"

@@ -29,12 +29,6 @@ class WorkspaceIdentityRow(TypedDict):
     path: str
 
 
-class WorkspaceRecentVerificationRow(TypedDict):
-    id: str
-    status: str
-    created_at: str
-
-
 class WorkspaceOwnerRow(TypedDict):
     id: int
     path: str
@@ -517,26 +511,6 @@ class WorkspaceDiskStore:
             """,
             [path, now_iso(), int(workspace_id)],
         )
-
-    def latest_workspace_artifact_verification(self, workspace_id: int) -> WorkspaceRecentVerificationRow | None:
-        row = self.db.fetch_one(
-            """
-            SELECT id,status,created_at
-            FROM verifications
-            WHERE workspace_id=?
-              AND kind IN ('all','custom')
-            ORDER BY created_at DESC
-            LIMIT 1
-            """,
-            [int(workspace_id)],
-        )
-        if row is None:
-            return None
-        return {
-            "id": str(row["id"] or ""),
-            "status": str(row["status"] or ""),
-            "created_at": str(row["created_at"] or ""),
-        }
 
     def latest_workspace_job_status(self, workspace_id: int, *, kind: str) -> str:
         if kind == "verification":

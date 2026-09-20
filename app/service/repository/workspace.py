@@ -28,7 +28,6 @@ from app.service.disk.workspace_store import (
     ProblemRow,
     UserRow,
     WorkspaceDiskStore,
-    WorkspaceRecentVerificationRow,
 )
 from app.service.platform.fs.layout import StorageLayout
 from app.service.platform.fs.op import copytree, ensure_dir, extract_git_archive, remove_symlinks
@@ -58,7 +57,6 @@ class WorkspaceContext(TypedDict):
     problem: ProblemRow
     user: UserRow
     workspace: WorkspaceState
-    latest_artifact_verification: WorkspaceRecentVerificationRow | None
 
 
 class WorkspaceDeleteResult(TypedDict):
@@ -718,7 +716,7 @@ class WorkspaceService:
         return branch, head, dirty
 
     def workspace_context(
-        self, problem: str, username: str, include_recent: bool = True
+        self, problem: str, username: str
     ) -> WorkspaceContext:
         p = self._problem_row(problem)
         u = self._user_row(username)
@@ -737,20 +735,10 @@ class WorkspaceService:
         git_dir = ws_path / ".git"
         if not git_dir.exists() or not git_dir.is_dir():
             raise RuntimeError(f"workspace git metadata missing for {problem}/{username}")
-        latest_artifact_verification: WorkspaceRecentVerificationRow | None = None
-        if include_recent:
-            recent_verification = self._store.latest_workspace_artifact_verification(int(ws["id"]))
-            if recent_verification is not None:
-                latest_artifact_verification = {
-                    "id": recent_verification["id"],
-                    "status": recent_verification["status"],
-                    "created_at": recent_verification["created_at"],
-                }
         return {
             "problem": p,
             "user": u,
             "workspace": ws,
-            "latest_artifact_verification": latest_artifact_verification,
         }
 
     def workspace_rows(

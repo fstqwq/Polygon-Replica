@@ -439,7 +439,7 @@ class WorkspaceTestBase(RuntimeDBTestBase):
         user = str(getattr(self, "user", "alice"))
         try:
             ctx = workspace_service.workspace_context(
-                problem, user, include_recent=False
+                problem, user
             )
         except Exception:
             return self._seed_workspace(problem, user)

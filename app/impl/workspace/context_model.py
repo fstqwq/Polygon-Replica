@@ -61,7 +61,6 @@ class NavigationStatusContext(StatusContext):
 
 
 class ProblemNavigationContext(TypedDict):
-    general: NavigationStatusContext
     statements: NavigationStatusContext
     checker: NavigationStatusContext
     interactor: NavigationStatusContext
@@ -69,11 +68,7 @@ class ProblemNavigationContext(TypedDict):
     generators: NavigationStatusContext
     solutions: NavigationStatusContext
     tests: NavigationStatusContext
-    verification: NavigationStatusContext
     packages: NavigationStatusContext
-    files: NavigationStatusContext
-    access: NavigationStatusContext
-    workspace: NavigationStatusContext
 
 
 class SourceComponentContext(TypedDict):
@@ -85,9 +80,7 @@ class SourceComponentContext(TypedDict):
 
 class CheckerComponentContext(SourceComponentContext):
     standard_checker: str
-    standard_expected_checker: str
     standard_warning: str
-    standard_valid: bool
 
 
 class GeneratorSourceContext(TypedDict):
@@ -103,7 +96,6 @@ class GeneratorComponentContext(TypedDict):
     repo_source: str
     repo_source_exists: bool
     source_rows: list[GeneratorSourceContext]
-    configured_sources: list[str]
     source_rows_truncated: bool
 
 
@@ -152,9 +144,6 @@ class ProblemShellContext(TypedDict):
 class ProblemPageContext(WorkspaceContext):
     access: ProblemAccessContext
     workspace_access: WorkspaceAccessContext
-    branches: list[str]
-    branches_truncated: bool
-    branch_limit: int
     workspace_auto_update_message: str
     workspace_merge_result: MergeUndoContext | None
     workspace_has_merge_undo: bool
@@ -347,19 +336,8 @@ def navigation_context(
     metadata: ProblemMetadataContext,
     components: ProblemComponentsContext,
     readiness: ProblemReadiness,
-    workspace_changes: StatusChangeSummary,
-    access_role: str,
     package_download: PackageDownloadContext | None,
 ) -> ProblemNavigationContext:
-    general_parts = [
-        metadata["time_limit_display"],
-        metadata["memory_limit_display"],
-    ]
-    if metadata["pass_limit"] > 1:
-        general_parts.append(f'{metadata["pass_limit"]} passes')
-    general_parts.append(metadata["mode"])
-    general = status_context(state="ready", text=", ".join(general_parts))
-
     checker = _component_status(
         components["checker"],
         not_applicable_text="uses interactor",
@@ -367,14 +345,6 @@ def navigation_context(
     standard_checker = str(components["checker"]["standard_checker"])
     if metadata["mode"] != "interactive" and standard_checker:
         checker["text"] = standard_checker
-
-    verification = readiness["verification"]
-    verification_status = status_context(
-        state=verification["result"],
-        text=verification["display"],
-        tone=verification["tone"],
-        hint=verification["reason_short"],
-    )
 
     package = readiness["package"]
     if package["state"] == "ready" and package["revision_number"] is not None:
@@ -397,14 +367,7 @@ def navigation_context(
         ),
     )
 
-    changes_total = int(workspace_changes["total"])
-    files = status_context(
-        state="dirty" if changes_total else "clean",
-        text=f"{changes_total} changed" if changes_total else "clean",
-    )
-    access = status_context(state=access_role, text=access_role)
     return {
-        "general": navigation_status(general),
         "statements": navigation_status(components["statements"]),
         "checker": navigation_status(checker),
         "interactor": navigation_status(_component_status(components["interactor"])),
@@ -412,9 +375,5 @@ def navigation_context(
         "generators": navigation_status(_generator_status(components["generators"])),
         "solutions": navigation_status(_solutions_status(components["solutions"])),
         "tests": navigation_status(_tests_status(components["tests"])),
-        "verification": navigation_status(verification_status),
         "packages": navigation_status(package_status, download=package_download),
-        "files": navigation_status(files),
-        "access": navigation_status(access),
-        "workspace": navigation_status(access),
     }

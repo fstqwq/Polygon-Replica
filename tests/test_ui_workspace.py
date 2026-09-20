@@ -369,7 +369,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         workspace = workspace_service.workspace_context(
             problem,
             "alice",
-            include_recent=False,
         )
         problem_id = int(workspace["problem"]["id"])
         workspace_id = int(workspace["workspace"]["id"])
@@ -396,7 +395,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         workspace = workspace_service.workspace_context(
             problem,
             "alice",
-            include_recent=False,
         )
         problem_id = int(workspace["problem"]["id"])
         workspace_id = int(workspace["workspace"]["id"])
@@ -480,7 +478,6 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         workspace = workspace_service.workspace_context(
             problem,
             "alice",
-            include_recent=False,
         )
         problem_id = int(workspace["problem"]["id"])
         workspace_id = int(workspace["workspace"]["id"])
@@ -816,7 +813,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text("dirty\n", encoding="utf-8")
 
-        ctx = workspace_service.workspace_context("alice/sample", username, include_recent=False)
+        ctx = workspace_service.workspace_context("alice/sample", username)
         workspace_id = int(ctx["workspace"]["id"])
         sentinel_updated_at = "2026-03-05T00:00:00Z"
         db_execute(

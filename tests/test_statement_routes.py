@@ -73,7 +73,7 @@ class TestStatementRoutes(BackendE2ETestBase):
         )
 
     def test_statement_language_add_creates_seed_files_and_redirects_to_language(self) -> None:
-        ws = Path(runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
+        ws = Path(runtime.workspace_service.workspace_context(self.problem, self.user)["workspace"]["path"])
         resp = statement_language_add(self.problem, self.user, language="japanese", page="statement")
         self.assertEqual(resp.status_code, 303)
         self.assertIn(
@@ -92,7 +92,7 @@ class TestStatementRoutes(BackendE2ETestBase):
         self.assertFalse((ws / "statement-sections" / "japanese" / "scoring.tex").exists())
 
     def test_statement_language_delete_redirects_to_remaining_language(self) -> None:
-        ws = Path(runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
+        ws = Path(runtime.workspace_service.workspace_context(self.problem, self.user)["workspace"]["path"])
         ensure_statement_language_sources(ws, "chinese")
 
         resp = statement_language_delete(self.problem, self.user, language="chinese", page="statement")
@@ -106,7 +106,7 @@ class TestStatementRoutes(BackendE2ETestBase):
         self.assertTrue((ws / "statement-sections" / "english").exists())
 
     def test_statement_language_delete_last_language_returns_to_missing_state(self) -> None:
-        ws = Path(runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
+        ws = Path(runtime.workspace_service.workspace_context(self.problem, self.user)["workspace"]["path"])
         shutil.rmtree(ws / "statement-sections", ignore_errors=True)
         ensure_statement_language_sources(ws, "japanese")
 
@@ -117,7 +117,7 @@ class TestStatementRoutes(BackendE2ETestBase):
         self.assertFalse((ws / "statement-sections" / "japanese").exists())
 
     def test_statement_compile_asset_upload_stores_file_under_shared_root(self) -> None:
-        ws = Path(runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
+        ws = Path(runtime.workspace_service.workspace_context(self.problem, self.user)["workspace"]["path"])
         upload = UploadFile(io.BytesIO(b"PNG"), filename="diagram.png")
 
         resp = asyncio.run(
@@ -136,7 +136,7 @@ class TestStatementRoutes(BackendE2ETestBase):
         self.assertEqual((ws / "statement-assets" / "figures" / "diagram.png").read_bytes(), b"PNG")
 
     def test_statement_attachment_upload_stores_file_under_attachments_root(self) -> None:
-        ws = Path(runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
+        ws = Path(runtime.workspace_service.workspace_context(self.problem, self.user)["workspace"]["path"])
         upload = UploadFile(
             io.BytesIO(b"print('ok')\n"), filename="guess_number_testing_tool.py"
         )
@@ -164,7 +164,6 @@ class TestStatementRoutes(BackendE2ETestBase):
             runtime.workspace_service.workspace_context(
                 self.problem,
                 self.user,
-                include_recent=False,
             )["workspace"]["path"]
         )
         legend_path = ws / "statement-sections" / "english" / "legend.tex"
@@ -185,7 +184,7 @@ class TestStatementRoutes(BackendE2ETestBase):
         self.assertEqual(legend_path.read_bytes(), before)
 
     def test_preview_save_normalizes_textarea_newlines_to_lf(self) -> None:
-        ws = Path(runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
+        ws = Path(runtime.workspace_service.workspace_context(self.problem, self.user)["workspace"]["path"])
         resp = preview_save(
             self.problem,
             self.user,
@@ -204,7 +203,7 @@ class TestStatementRoutes(BackendE2ETestBase):
         self.assertEqual((ws / "statement-sections" / "english" / "notes.tex").read_bytes(), b"Notes\nSection\n")
 
     def test_statement_attachment_delete_removes_file_under_attachments_root(self) -> None:
-        ws = Path(runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)["workspace"]["path"])
+        ws = Path(runtime.workspace_service.workspace_context(self.problem, self.user)["workspace"]["path"])
         attachment = ws / "attachments" / "guess_number_testing_tool.py"
         attachment.parent.mkdir(parents=True, exist_ok=True)
         attachment.write_text("print('ok')\n", encoding="utf-8")
@@ -221,7 +220,7 @@ class TestStatementRoutes(BackendE2ETestBase):
         self.assertFalse(attachment.exists())
 
     def test_statement_tex_source_returns_problem_tex(self) -> None:
-        ctx = runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        ctx = runtime.workspace_service.workspace_context(self.problem, self.user)
         ws = Path(str(ctx["workspace"]["path"]))
         ensure_statement_language_sources(ws, "english")
         (ws / "statement-sections" / "english" / "legend.tex").write_text("Rendered legend for LLM.\n", encoding="utf-8")

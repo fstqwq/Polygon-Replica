@@ -133,7 +133,7 @@ def solutions_editor_page(request: Request, problem: str, user: Annotated[str, D
     return template_response(request, 'solutions_editor.html', {'ctx': ctx, 'entries': entries, 'entries_truncated': entries_truncated, 'entries_limit': runtime().config_values.SOLUTION_LIST_LIMIT, 'selected': selected, 'selected_entry': selected_entry, 'selected_exists': selected_exists, 'content': content, 'content_truncated': content_truncated, 'content_char_limit': runtime().config_values.WORKSPACE_FILE_VIEW_CHAR_LIMIT, 'expected_behavior_options': solution_behavior_options(), 'selected_expected_behavior_class': _expected_behavior_tag_class(selected_expected_behavior)})
 
 def solutions_save_source(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)], source_path: str=Form(...), content: str=Form(''), expected_behavior: str=Form('unknown')):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     selected = 'solutions/accepted.cpp'
@@ -200,7 +200,7 @@ def solutions_save_source(request: Request, problem: str, user: Annotated[str, D
     return redirect_response(editor_url, status_code=303, message=msg)
 
 def solutions_set_tag(problem: str, user: Annotated[str, Depends(require_session_user)], source_path: str=Form(...), expected_behavior: str=Form('unknown')):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     selected = 'solutions/accepted.cpp'
@@ -259,7 +259,7 @@ def solutions_set_tag(problem: str, user: Annotated[str, Depends(require_session
     return redirect_response(f'/problems/{problem}/solutions?path={quote_plus(selected)}', status_code=303, message=msg)
 
 def solutions_rename(problem: str, user: Annotated[str, Depends(require_session_user)], old_path: str=Form(...), new_path: str=Form(...)):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     selected = normalize_workspace_rel_path(old_path)
@@ -303,7 +303,7 @@ def solutions_rename(problem: str, user: Annotated[str, Depends(require_session_
     return redirect_response(f'/problems/{problem}/solutions?path={quote_plus(selected)}', status_code=303, message=msg)
 
 def solutions_delete(problem: str, user: Annotated[str, Depends(require_session_user)], source_path: str=Form(...)):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     selected = normalize_workspace_rel_path(source_path)

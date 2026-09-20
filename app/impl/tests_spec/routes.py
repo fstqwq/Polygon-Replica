@@ -148,7 +148,7 @@ def add_manual_test(
     sample_output_validate: Annotated[list[str] | None, Form()] = None,
     sample_json: Annotated[str | None, Form()] = None,
 ):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     msg = 'manual test added'
@@ -198,7 +198,7 @@ async def upload_manual_test(
     sample_output_validate: Annotated[list[str] | None, Form()] = None,
     sample_json: Annotated[str | None, Form()] = None,
 ):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     msg = 'manual test added'
@@ -259,7 +259,7 @@ def add_generator_test(
     sample_output_validate: Annotated[list[str] | None, Form()] = None,
     sample_json: Annotated[str | None, Form()] = None,
 ):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     msg = 'generator test added'
@@ -306,7 +306,7 @@ async def edit_spec_test(
     payload: Annotated[str, Form()] = '',
     sample_output_validate: Annotated[list[str] | None, Form()] = None,
 ):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     msg = 'test updated'
@@ -382,7 +382,7 @@ async def edit_spec_test(
     return redirect_response(f'/problems/{problem}/tests', status_code=303, message=msg)
 
 def delete_spec_test(problem: str, user: Annotated[str, Depends(require_session_user)], index: Annotated[str, Form(...)]):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     msg = 'test deleted'
@@ -406,7 +406,7 @@ def reindex_spec_test(
     source_index: Annotated[str, Form()] = '',
     target_index: Annotated[str, Form()] = '',
 ):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     msg = 'test reindexed'
@@ -451,7 +451,7 @@ def reindex_spec_test(
     return redirect_response(url, status_code=303, message=msg)
 
 def save_gen_script(problem: str, user: Annotated[str, Depends(require_session_user)], gen_script_text: Annotated[str, Form()] = ''):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     msg = 'gen script updated'
@@ -571,7 +571,7 @@ def save_gen_script(problem: str, user: Annotated[str, Depends(require_session_u
     return redirect_response(f'/problems/{problem}/tests{redirect_query}', status_code=303, message=msg)
 
 def download_test_payload(problem: str, user: Annotated[str, Depends(require_session_user)], index: str):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     workspace = Path(ctx['workspace']['path'])
     with runtime().workspace_service.workspace_lock(workspace):
         entries, _spec_path = _read_tests_spec(workspace)
@@ -603,7 +603,7 @@ async def upload_test_payload(
     index: Annotated[str, Form(...)],
     payload_upload: Annotated[UploadFile, File(...)],
 ):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     msg = 'test payload uploaded'

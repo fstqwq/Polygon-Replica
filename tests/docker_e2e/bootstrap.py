@@ -138,7 +138,6 @@ def _seed_workspace() -> tuple[Path, int, int, int, str]:
     context = runtime.workspace_service.workspace_context(
         PROBLEM,
         USERNAME,
-        include_recent=False,
     )
     problem_id = int(context["problem"]["id"])
     workspace_id = int(context["workspace"]["id"])

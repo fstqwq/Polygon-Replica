@@ -12,7 +12,7 @@ from app.impl.workspace.context_ui import page_ctx
 
 
 def workspace_access_grant(problem: str, user: Annotated[str, Depends(require_session_user)], target_user: str = Form(...), role: str = Form("read")):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     require_problem_access_management(ctx)
     msg = "access updated"
     try:
@@ -34,7 +34,7 @@ def workspace_access_grant(problem: str, user: Annotated[str, Depends(require_se
 
 
 def workspace_access_revoke(problem: str, user: Annotated[str, Depends(require_session_user)], target_user: str = Form(...)):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     require_problem_access_management(ctx)
     msg = "access removed"
     try:

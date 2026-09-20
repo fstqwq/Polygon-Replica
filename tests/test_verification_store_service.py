@@ -26,7 +26,6 @@ class TestVerificationStoreService(VerificationServiceTestBase):
         bob_context = self.workspace_service.workspace_context(
             self.problem,
             "bob",
-            include_recent=False,
         )
         bob_workspace_id = int(bob_context["workspace"]["id"])
         verification_ids = {
@@ -75,7 +74,7 @@ class TestVerificationStoreService(VerificationServiceTestBase):
 
     def test_verification_detail_lives_in_db_without_sidecar_file(self) -> None:
         self.workspace_service.ensure_workspace(self.problem, self.user)
-        ctx = self.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        ctx = self.workspace_service.workspace_context(self.problem, self.user)
         verification_id = canonical_test_verification_id(self.random_id("ver-detail-db"))
         self._activate_verification(
             verification_id=verification_id,
@@ -137,7 +136,7 @@ class TestVerificationStoreService(VerificationServiceTestBase):
 
     def test_verification_detail_partial_tests_meta_uses_index_not_selected_position(self) -> None:
         self.workspace_service.ensure_workspace(self.problem, self.user)
-        ctx = self.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        ctx = self.workspace_service.workspace_context(self.problem, self.user)
         verification_id = canonical_test_verification_id(
             self.random_id("ver-detail-partial-meta")
         )
@@ -165,7 +164,7 @@ class TestVerificationStoreService(VerificationServiceTestBase):
 
     def test_verification_detail_skips_duplicate_tests_meta_names(self) -> None:
         self.workspace_service.ensure_workspace(self.problem, self.user)
-        ctx = self.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        ctx = self.workspace_service.workspace_context(self.problem, self.user)
         verification_id = canonical_test_verification_id(
             self.random_id("ver-detail-dup-meta")
         )
@@ -191,7 +190,7 @@ class TestVerificationStoreService(VerificationServiceTestBase):
 
     def test_verification_artifact_ownership_lives_in_db_not_metadata(self) -> None:
         self.workspace_service.ensure_workspace(self.problem, self.user)
-        ctx = self.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        ctx = self.workspace_service.workspace_context(self.problem, self.user)
         verification_id = canonical_test_verification_id(
             self.random_id("ver-artifact-refs-db")
         )
@@ -322,7 +321,7 @@ class TestVerificationStoreService(VerificationServiceTestBase):
         self.assertEqual(str(owner["artifact_ref"]), artifact_ref)
 
     def test_repeated_admission_preserves_active_verification(self) -> None:
-        ctx = self.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        ctx = self.workspace_service.workspace_context(self.problem, self.user)
         verification_id = canonical_test_verification_id(
             self.random_id("ver-artifact-path")
         )

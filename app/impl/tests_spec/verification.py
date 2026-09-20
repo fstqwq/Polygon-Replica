@@ -19,7 +19,7 @@ from app.service.verification.types import VerificationTarget
 
 def verification_start(problem: str, user: Annotated[str, Depends(require_session_user)], page: str=Form('statement')):
     target_page = normalize_verification_target_page(page)
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=True, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=True)
     require_read_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     workspace_head = ctx['workspace']['head_commit']

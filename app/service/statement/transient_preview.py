@@ -222,7 +222,6 @@ class StatementPreviewService:
             ctx = self._workspaces.workspace_context(
                 problem,
                 username,
-                include_recent=False,
             )
             workspace = Path(ctx["workspace"]["path"])
             problem_id = int(ctx["problem"]["id"])
@@ -352,7 +351,7 @@ class StatementPreviewService:
         *,
         language: str,
     ) -> Iterator[PreparedStatementRender]:
-        ctx = self._workspaces.workspace_context(problem, username, include_recent=False)
+        ctx = self._workspaces.workspace_context(problem, username)
         workspace = Path(ctx["workspace"]["path"])
         problem_id = int(ctx["problem"]["id"])
         tests_spec_limit = self._db.config_values.integer("TEXTAREA_MAX_BYTES")

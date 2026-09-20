@@ -136,7 +136,6 @@ def generator_status_context(
         'repo_source': repo_source,
         'repo_source_exists': bool(repo_exists),
         'source_rows': source_rows,
-        'configured_sources': list(configured_sources),
         'source_rows_truncated': bool(generator_candidates_truncated),
     }
 
@@ -209,9 +208,7 @@ def checker_status_context(
         'mode': 'repository' if repo_exists else 'missing',
         'display': _source_basename_label(repo_source) if repo_exists else 'missing',
         'standard_checker': standard_name,
-        'standard_expected_checker': expected_standard_name,
         'standard_warning': standard_warning,
-        'standard_valid': True,
         'repo_source': repo_source,
         'repo_source_exists': bool(repo_exists),
     }

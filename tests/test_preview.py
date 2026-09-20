@@ -62,7 +62,7 @@ class TestPreview(BackendE2ETestBase):
             dumps_build_config({"generator_sources": [], "accepted_solution_source": "solutions/std.py"}),
             encoding="utf-8",
         )
-        context = runtime.workspace_service.workspace_context(self.problem, self.user, include_recent=False)
+        context = runtime.workspace_service.workspace_context(self.problem, self.user)
         admit_test_verification(
             verification_id=verification_id, problem_id=context["problem"]["id"],
             workspace_id=context["workspace"]["id"],

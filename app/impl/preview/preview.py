@@ -354,7 +354,7 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
     )
 
 def statement_tex_source(problem: str, user: Annotated[str, Depends(require_session_user)], language: str = ""):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     workspace = Path(ctx['workspace']['path'])
     try:
         current_language = selected_statement_language(workspace, language)
@@ -401,7 +401,7 @@ def preview_save(
     language: Annotated[str, Form()] = '',
 ):
     target_page = normalize_statement_target_page(page)
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     try:
@@ -454,7 +454,7 @@ def statement_templates_reset(
     language: Annotated[str, Form()] = '',
 ):
     target_page = normalize_statement_target_page(page)
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     current_language = resolve_statement_page_language(workspace, language)
@@ -510,9 +510,7 @@ def statement_examples_template_toggle(
     ctx = page_ctx(
         problem,
         user,
-        include_branches=False,
         refresh_status=False,
-        include_recent=False,
     )
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
@@ -574,9 +572,7 @@ def statement_examples_template_save(
     ctx = page_ctx(
         problem,
         user,
-        include_branches=False,
         refresh_status=False,
-        include_recent=False,
     )
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
@@ -617,7 +613,7 @@ def statement_compile_asset_delete(
     language: Annotated[str, Form()] = '',
 ):
     target_page = normalize_statement_target_page(page)
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     try:
@@ -656,7 +652,7 @@ async def statement_compile_asset_upload(
     language: Annotated[str, Form()] = '',
 ):
     target_page = normalize_statement_target_page(page)
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     try:
@@ -717,7 +713,7 @@ async def statement_attachment_upload(
     language: Annotated[str, Form()] = '',
 ):
     target_page = normalize_statement_target_page(page)
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     try:
@@ -779,7 +775,7 @@ def statement_attachment_delete(
     language: Annotated[str, Form()] = '',
 ):
     target_page = normalize_statement_target_page(page)
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     try:
@@ -816,7 +812,7 @@ def statement_language_add(
     page: Annotated[str, Form()] = 'statement',
 ):
     target_page = normalize_statement_target_page(page)
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     message = 'statement language created'
@@ -843,7 +839,7 @@ def statement_language_delete(
     page: Annotated[str, Form()] = 'statement',
 ):
     target_page = normalize_statement_target_page(page)
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     next_language = resolve_statement_page_language(workspace, language)

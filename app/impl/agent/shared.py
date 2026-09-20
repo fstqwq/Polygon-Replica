@@ -132,7 +132,6 @@ def workspace_context_for_identity(
     ctx = runtime().workspace_service.workspace_context(
         identity.problem_slug,
         identity.username,
-        include_recent=False,
     )
     if int(ctx["problem"]["id"]) != identity.problem_id:
         raise HTTPException(status_code=403, detail="problem context mismatch")

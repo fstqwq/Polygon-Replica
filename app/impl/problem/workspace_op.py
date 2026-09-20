@@ -72,7 +72,7 @@ def switch_workspace(
 
 def workspace_delete(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)]):
     enforce_same_origin_state_change(request)
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     workspace_access = ctx["workspace_access"]
     if not workspace_access["can_manage"]:
         raise HTTPException(
@@ -94,7 +94,7 @@ def workspace_delete(request: Request, problem: str, user: Annotated[str, Depend
     return redirect_response("/problems", status_code=303, message=msg)
 
 def problem_delete(request: Request, problem: str, user: Annotated[str, Depends(require_session_user)], confirm_problem: str=Form('')):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     require_manage_access(ctx)
     next_path = f'/problems/{problem}/workspace'
     if not _has_destructive_sudo_for_ctx(request, ctx):

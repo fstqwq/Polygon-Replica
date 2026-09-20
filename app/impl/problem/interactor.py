@@ -63,7 +63,7 @@ def interactor_save_source(
     content: str = Form(''),
     response_mode: str = Form(''),
 ):
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     target = 'interactors/interactor.cpp'

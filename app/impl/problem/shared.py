@@ -134,7 +134,7 @@ def rename_component_source(
     source_for_redirect = f"{folder}/{default_filename}"
     active_ctx = ctx
     if active_ctx is None:
-        active_ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+        active_ctx = page_ctx(problem, user, refresh_status=False)
     require_write_access(active_ctx)
     workspace = Path(active_ctx["workspace"]["path"])
     msg = f"{component_label} source renamed"

@@ -143,8 +143,6 @@ def history_snapshot(
     ctx = page_ctx(
         problem,
         user,
-        include_branches=False,
-        include_recent=False,
         include_workspace_changes=False,
     )
     source_commit: str | None = None
@@ -180,9 +178,7 @@ def history_import(
     ctx = page_ctx(
         problem,
         user,
-        include_branches=False,
         refresh_status=False,
-        include_recent=False,
     )
     require_write_access(ctx)
     try:

@@ -309,7 +309,7 @@ class JudgehostPayloadPreparation:
             upload_content is None and upload_file is None
         ) or (verification_payload_override is None and not compile_only_flag):
             ctx = self._workspace_service.workspace_context(
-                problem, username, include_recent=False
+                problem, username
             )
             workspace = Path(ctx["workspace"]["path"])
 

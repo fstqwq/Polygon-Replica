@@ -58,7 +58,7 @@ def _workspace_context(
     problem: str,
     user: str,
 ) -> tuple[ProblemPageContext, Path]:
-    ctx = page_ctx(problem, user, include_branches=False, refresh_status=False, include_recent=False)
+    ctx = page_ctx(problem, user, refresh_status=False)
     require_write_access(ctx)
     return ctx, Path(ctx["workspace"]["path"])
 
@@ -160,7 +160,6 @@ def _render_merge(
         problem,
         user,
         refresh_status=False,
-        include_recent=False,
         contest_workspace=contest_workspace_context_from_request(request),
     )
     require_write_access(ctx)
