@@ -177,30 +177,56 @@ class TestAccessService(DBTestBase):
         self.workspace_service.grant_repo_access(self.problem, reader, "read")
         owner_workspace_id = self._workspace_id(problem_id, self.user)
         reader_workspace_id = self._workspace_id(problem_id, reader)
+        admin_user_id = self._user_id(f"admin-{self.user}")
+        isolated_db_execute(
+            self.db,
+            "UPDATE users SET is_system_admin=1 WHERE id=?",
+            [admin_user_id],
+        )
 
-        own = self.access_query.workspace_context(
-            problem_id=problem_id,
-            actor_user_id=reader_user_id,
-            workspace_id=reader_workspace_id,
-        )
-        foreign = self.access_query.workspace_context(
-            problem_id=problem_id,
-            actor_user_id=reader_user_id,
-            workspace_id=owner_workspace_id,
-        )
-        owner = self.access_query.workspace_context(
-            problem_id=problem_id,
+        for supplied in (False, True):
+            for actor_user_id, workspace_id, expected in (
+                (reader_user_id, reader_workspace_id, (True, False, True)),
+                (reader_user_id, owner_workspace_id, (False, False, False)),
+                (owner_user_id, owner_workspace_id, (True, True, True)),
+                (admin_user_id, owner_workspace_id, (True, True, True)),
+            ):
+                with self.subTest(
+                    supplied=supplied, actor=actor_user_id, workspace=workspace_id,
+                ):
+                    access = self.access_query.workspace_context(
+                        problem_id=problem_id,
+                        actor_user_id=actor_user_id,
+                        workspace_id=workspace_id,
+                        problem_access=(
+                            self.access_query.problem_context(problem_id, actor_user_id)
+                            if supplied else None
+                        ),
+                    )
+                    self.assertEqual(
+                        (access["can_read"], access["can_write"], access["can_manage"]),
+                        expected,
+                    )
+
+        self.access_command.revoke_problem_access(
             actor_user_id=owner_user_id,
-            workspace_id=owner_workspace_id,
+            problem_id=problem_id,
+            target_username=reader,
         )
-
-        self.assertTrue(own["can_read"])
-        self.assertFalse(own["can_write"])
-        self.assertTrue(own["can_manage"])
-        self.assertFalse(foreign["can_read"])
-        self.assertFalse(foreign["can_manage"])
-        self.assertTrue(owner["can_write"])
-        self.assertTrue(owner["can_manage"])
+        for supplied in (False, True):
+            with self.subTest(supplied=supplied, revoked=True):
+                access = self.access_query.workspace_context(
+                    problem_id=problem_id,
+                    actor_user_id=reader_user_id,
+                    workspace_id=reader_workspace_id,
+                    problem_access=(
+                        self.access_query.problem_context(problem_id, reader_user_id)
+                        if supplied else None
+                    ),
+                )
+                self.assertFalse(access["can_read"])
+                self.assertFalse(access["can_write"])
+                self.assertFalse(access["can_manage"])
 
     def test_problem_listing_uses_only_direct_acl(self) -> None:
         problem_id, owner_user_id = self._problem()

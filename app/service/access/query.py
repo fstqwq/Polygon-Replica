@@ -110,8 +110,15 @@ class AccessQuery:
         problem_id: int,
         actor_user_id: int,
         workspace_id: int,
+        problem_access: ProblemAccessContext | None = None,
     ) -> WorkspaceAccessContext:
-        problem = self.problem_context(problem_id, actor_user_id)
+        """Use this read operation's problem decision and current workspace facts."""
+
+        problem = (
+            problem_access
+            if problem_access is not None
+            else self.problem_context(problem_id, actor_user_id)
+        )
         owns_workspace = self._store.workspace_belongs_to_user(
             workspace_id,
             actor_user_id,

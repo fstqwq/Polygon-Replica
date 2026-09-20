@@ -215,6 +215,7 @@ def page_ctx(
         problem_id=problem_id,
         actor_user_id=user_id,
         workspace_id=int(ctx['workspace']['id']),
+        problem_access=access,
     )
     workspace_path = Path(ctx['workspace']['path'])
     auto_updated = False
