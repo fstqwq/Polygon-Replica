@@ -212,10 +212,7 @@ class ContestProblemQueryService:
                     "dirty": bool(state["dirty"]),
                     "local_revision": state["revision_local"],
                     "upstream_revision": state["revision_upstream"],
-                    "needs_update": bool(
-                        state["revision_upstream_higher"]
-                        or (state["revision_behind_count"] or 0) > 0
-                    ),
+                    "needs_update": bool(state["revision_upstream_higher"]),
                 }
             )
         return (

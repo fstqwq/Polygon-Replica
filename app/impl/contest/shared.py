@@ -267,7 +267,7 @@ def _run_problem_general_update(
                 f"{actor_username}@polygonlike.local",
             )
             try:
-                runtime().git_service.push(workspace, "main")
+                runtime().workspace_service.publish(workspace, git_service=runtime().git_service)
             except Exception as exc:
                 try:
                     runtime().git_service.rollback_last_commit(workspace, expected_head=commit_id)

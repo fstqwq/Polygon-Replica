@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+import logging
 import re
 from collections.abc import Iterator
 from pathlib import Path
@@ -26,6 +27,7 @@ from app.service.problem.naming import (
 )
 from app.service.platform.git_process import run_git
 
+logger = logging.getLogger(__name__)
 _POLYGON_IMPORTER = PolygonPackageImportService()
 _ICPC_IMPORTER = ICPCPackageImportService()
 _POLYGON_REPLICA_IMPORTER = PolygonReplicaPackageImportService()
@@ -216,6 +218,7 @@ def import_package_as_new_problem(
         if existing_bare_head:
             raise ValueError(f"import target already has revision history: {target_problem}")
         created_problem = False
+        published = False
         try:
             runtime().workspace_service.ensure_problem(target_problem)
             created_problem = True
@@ -242,19 +245,22 @@ def import_package_as_new_problem(
                     safe_actor_user,
                     f"{safe_actor_user}@polygonlike.local",
                 )
-                runtime().git_service.push(target_workspace, "main")
-            runtime().workspace_service.ensure_workspace(target_problem, safe_actor_user, refresh_status=True)
-            result["commit"] = imported_commit
-            tests_info = result.get("tests")
-            total_tests = tests_info.get("total", 0) if tests_info is not None else 0
-            return {"target_problem": target_problem, "total_tests": total_tests, "result": result, "package_format": package_format}
+                runtime().workspace_service.publish(target_workspace, git_service=runtime().git_service)
+                published = True
         except Exception:
-            if created_problem:
-                try:
-                    runtime().workspace_service.delete_problem(target_problem)
-                except Exception:
-                    pass
-            raise
+            if not published:
+                if created_problem:
+                    try:
+                        runtime().workspace_service.delete_problem(target_problem)
+                    except Exception:
+                        pass
+                raise
+            logger.exception("Imported problem was published; retaining it after metadata refresh failure: %s", target_problem)
+            result.setdefault("warnings", []).append("Published successfully; workspace list refresh failed. Repeat publication to repair it.")
+        result["commit"] = imported_commit
+        tests_info = result.get("tests")
+        total_tests = tests_info.get("total", 0) if tests_info is not None else 0
+        return {"target_problem": target_problem, "total_tests": total_tests, "result": result, "package_format": package_format}
 
 def import_package_warnings(import_result: ImportOperationResult | None) -> list[str]:
     if import_result is None:

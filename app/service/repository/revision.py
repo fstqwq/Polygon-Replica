@@ -154,20 +154,12 @@ def workspace_origin_local_repo(workspace: Path) -> Path | None:
 
 
 def workspace_upstream_revision_info(workspace: Path, branch: str) -> tuple[int | None, str | None]:
-    upstream_ref = f"origin/{branch}"
     origin_repo = workspace_origin_local_repo(workspace)
     if origin_repo is not None:
-        upstream_branch_ref = f"refs/heads/{branch}"
-        version = git_commit_count(origin_repo, upstream_branch_ref)
-        if version is not None:
-            return (version, None)
-        commit = git_commit_sha(origin_repo, upstream_branch_ref)
-        if commit is not None:
-            return (None, commit)
-    version = git_commit_count(workspace, upstream_ref)
-    if version is not None:
-        return (version, None)
-    return (None, git_commit_sha(workspace, upstream_ref))
+        commit = git_commit_sha(origin_repo, f"refs/heads/{branch}")
+        return (git_commit_count(origin_repo, commit), commit) if commit else (None, None)
+    commit = git_commit_sha(workspace, f"origin/{branch}")
+    return (git_commit_count(workspace, commit), commit) if commit else (None, None)
 
 
 def workspace_revision_info(
@@ -181,38 +173,36 @@ def workspace_revision_info(
     if any((ch.isspace() for ch in safe_branch)):
         safe_branch = "main"
     safe_head = str(workspace_head or "").strip()
-    upstream_ref = f"origin/{safe_branch}"
-    local_version = git_commit_count(workspace, "HEAD")
     local_commit = safe_head or git_commit_sha(workspace, "HEAD")
+    local_version = git_commit_count(workspace, local_commit) if local_commit else None
     upstream_version, upstream_commit = workspace_upstream_revision_info(workspace, safe_branch)
     if local_version is None and local_commit is None:
         local_version = 0
     ahead_count: int | None = None
     behind_count: int | None = None
-    try:
-        proc = run_git(["git", "-C", str(workspace), "rev-list", "--left-right", "--count", f"HEAD...{upstream_ref}"], timeout=30)
-        if proc.returncode == 0:
-            parts = str(proc.stdout or "").strip().split()
-            if len(parts) >= 2:
-                ahead_count = max(0, int(parts[0]))
-                behind_count = max(0, int(parts[1]))
-    except Exception:
-        ahead_count = None
-        behind_count = None
-    if ahead_count is None or behind_count is None:
-        if local_commit is not None and upstream_commit is not None and (local_commit == upstream_commit):
-            ahead_count = 0
-            behind_count = 0
-        elif local_version == 0 and upstream_version == 0:
-            ahead_count = 0
-            behind_count = 0
+    if local_commit == upstream_commit:
+        ahead_count = 0
+        behind_count = 0
+    elif local_commit is not None and upstream_commit is not None:
+        try:
+            proc = run_git([
+                "git", "-C", str(workspace), "rev-list", "--left-right", "--count",
+                f"{local_commit}...{upstream_commit}",
+            ], timeout=30)
+            if proc.returncode == 0:
+                parts = str(proc.stdout or "").strip().split()
+                if len(parts) == 2:
+                    ahead_count, behind_count = (max(0, int(part)) for part in parts)
+        except Exception:
+            ahead_count = None
+            behind_count = None
     if upstream_version is None and upstream_commit is None and local_version == 0:
         upstream_version = 0
-    upstream_higher = False
-    if local_version is not None and upstream_version is not None:
-        upstream_higher = upstream_version > local_version
-    elif behind_count is not None:
-        upstream_higher = behind_count > 0
+    upstream_higher = (
+        local_version is not None
+        and upstream_version is not None
+        and upstream_version > local_version
+    )
     missing = local_version is None or upstream_version is None
     display = workspace_upstream_revision_display(local_version, upstream_version)
     highlight = bool(upstream_higher or missing)

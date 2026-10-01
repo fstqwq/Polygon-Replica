@@ -996,9 +996,11 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertEqual(run_git(["git", "reset", "--hard", "origin/main"], cwd=bob_ws).returncode, 0)
         marker = f"upstream-{uuid.uuid4().hex[:8]}.txt"
         (bob_ws / marker).write_text("upstream update\n", encoding="utf-8")
-        self.assertEqual(run_git(["git", "add", marker], cwd=bob_ws).returncode, 0)
-        self.assertEqual(run_git(["git", "commit", "-m", "upstream update"], cwd=bob_ws).returncode, 0)
-        self.assertEqual(run_git(["git", "push", "origin", "main"], cwd=bob_ws).returncode, 0)
+        published = revision_commit(problem="alice/sample", user="bob", message="upstream update")
+        self.assertEqual(published.status_code, 303)
+        alice_id = workspace_service.known_user_id("alice")
+        listed = next(row for row in runtime.access_query.participating_problem_rows(alice_id, limit=100) if row["slug"] == "alice/sample")
+        self.assertEqual(listed["revision_upstream_higher"], 1)
 
         refreshed = general_page(_request("/problems/alice/sample/general"), "alice/sample", "alice")
         self.assertEqual(refreshed.status_code, 200)
@@ -1008,6 +1010,8 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             run_git(["git", "rev-parse", "HEAD"], cwd=alice_ws).stdout.strip(),
             bob_head,
         )
+        listed = next(row for row in runtime.access_query.participating_problem_rows(alice_id, limit=100) if row["slug"] == "alice/sample")
+        self.assertEqual(listed["revision_upstream_higher"], 0)
         repeated = general_page(_request("/problems/alice/sample/general"), "alice/sample", "alice")
         self.assertEqual(repeated.status_code, 200)
         self.assertEqual(
@@ -1028,15 +1032,17 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertEqual(run_git(["git", "config", "user.email", "bob@example.com"], cwd=bob_ws).returncode, 0)
         shared_marker = f"notes/shared-{uuid.uuid4().hex[:8]}.txt"
         (bob_ws / shared_marker).write_text("shared edit\n", encoding="utf-8")
-        self.assertEqual(run_git(["git", "add", shared_marker], cwd=bob_ws).returncode, 0)
-        self.assertEqual(run_git(["git", "commit", "-m", "shared update"], cwd=bob_ws).returncode, 0)
-        self.assertEqual(run_git(["git", "push", "origin", "main"], cwd=bob_ws).returncode, 0)
+        published = revision_commit(problem="alice/sample", user="bob", message="shared update")
+        self.assertEqual(published.status_code, 303)
 
         response = general_page(_request("/problems/alice/sample/general"), "alice/sample", "alice")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(run_git(["git", "rev-parse", "HEAD"], cwd=alice_ws).stdout.strip(), old_head)
         self.assertTrue((alice_ws / local_marker).is_file())
         self.assertFalse((alice_ws / shared_marker).exists())
+        listed = next(row for row in runtime.access_query.participating_problem_rows(workspace_service.known_user_id("alice"), limit=100) if row["slug"] == "alice/sample")
+        self.assertEqual(listed["revision_upstream_higher"], 1)
+        self.assertEqual(listed["dirty"], 1)
 
         preview = runtime.workspace_merge_service.start_preview("alice", "alice/sample", alice_ws)
         self.assertTrue(preview.suggested_available)
@@ -1508,6 +1514,38 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertRegex(head.stdout.strip(), r"^[0-9a-f]{40}$")
         self.assertEqual(run_git(["git", "-C", str(ws), "status", "--short"]).stdout.strip(), "")
 
+    def test_import_retains_published_problem_when_database_refresh_fails(self) -> None:
+        target_slug = f"published-import-{uuid.uuid4().hex[:8]}"
+        problem = f"alice/{target_slug}"
+        db_execute("""
+            CREATE TRIGGER fail_published_refresh BEFORE UPDATE ON workspaces
+            WHEN NEW.revision_upstream > 0
+            BEGIN SELECT RAISE(ABORT, 'injected metadata failure'); END
+        """)
+        try:
+            with self.assertLogs(level="ERROR"):
+                response = problems_root_import(
+                    _post_request("/problems/import"), user="alice",
+                    package_upload=UploadFile(filename="problem.zip", file=io.BytesIO(polygon_problem_package())),
+                    problem_slug=target_slug,
+                )
+            self.assertEqual(response.status_code, 303)
+            self.assertEqual(response.headers["location"], f"/problems/{problem}/statement")
+            self.assertIsNotNone(db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem]))
+            bare = runtime.storage_layout.bare_repository(f"{problem}.git")
+            published = run_git(["git", "--git-dir", str(bare), "rev-parse", "main"])
+            self.assertEqual(published.returncode, 0, published.stderr)
+        finally:
+            db_execute("DROP TRIGGER fail_published_refresh")
+        ws = runtime.storage_layout.workspace("alice", problem)
+        with workspace_service.workspace_lock(ws):
+            workspace_service.publish(ws, git_service=git_service)
+        row = db_fetch_one("SELECT revision_upstream,revision_upstream_higher,head_commit FROM workspaces WHERE path=?", [str(ws)])
+        self.assertIsNotNone(row)
+        self.assertEqual(row["revision_upstream"], 1)
+        self.assertEqual(row["revision_upstream_higher"], 0)
+        self.assertEqual(row["head_commit"], published.stdout.strip())
+
     def test_problems_root_icpc_import_rolls_back_invalid_metadata_and_can_retry(self) -> None:
         def package_bytes(submission_path: str) -> bytes:
             payload = io.BytesIO()
@@ -1687,12 +1725,23 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
             "problem_slug_3": custom_problem_slugs[3],
             "problem_slug_4": custom_problem_slugs[4],
         }
-        confirm_resp = asyncio.run(
-            contests_root_import_confirm(
-                _post_form_request("/contests/import/confirm", confirm_form),
-                user="alice",
+        db_execute(f"""
+            CREATE TRIGGER fail_contest_publication_refresh BEFORE UPDATE ON workspaces
+            WHEN NEW.revision_upstream > 0 AND NEW.problem_id=(
+                SELECT id FROM problems WHERE slug='alice/{custom_problem_slugs[2]}'
             )
-        )
+            BEGIN SELECT RAISE(ABORT, 'injected contest metadata failure'); END
+        """)
+        try:
+            with self.assertLogs(level="ERROR"):
+                confirm_resp = asyncio.run(
+                    contests_root_import_confirm(
+                        _post_form_request("/contests/import/confirm", confirm_form),
+                        user="alice",
+                    )
+                )
+        finally:
+            db_execute("DROP TRIGGER fail_contest_publication_refresh")
         self.assertEqual(confirm_resp.status_code, 303)
         self.assertIn(f"/contests/{target_slug}/overview", str(confirm_resp.headers.get("location", "")))
         contest_row = db_fetch_one("SELECT id FROM contests WHERE slug=?", [target_slug])

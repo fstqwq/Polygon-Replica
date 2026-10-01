@@ -1120,7 +1120,7 @@ async def agent_commit(request: Request):
                 if "nothing to commit" not in commit_err_lower and "no changes added to commit" not in commit_err_lower:
                     raise
             try:
-                runtime().git_service.push(workspace, "main")
+                runtime().workspace_service.publish(workspace, git_service=runtime().git_service)
             except Exception as push_exc:
                 if commit_created:
                     runtime().git_service.rollback_last_commit(workspace, expected_head=commit_head)

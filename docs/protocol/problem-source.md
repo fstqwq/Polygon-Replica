@@ -4,6 +4,30 @@
 
 Committed problem source is owned by Git. A published problem is the commit at the problem repository's `main` reference. A workspace is a mutable per-user checkout; SQLite stores its identity, owner, base revision, and status, but not committed file contents.
 
+Application publication updates every existing workspace row for the problem with
+the published revision and a synchronization flag indicating that its recorded
+local version is below the published version. Versions are commit counts along
+the problem's linear history. Publication
+preserves other users' checkout contents, local HEAD and dirty state; ahead/behind
+counts are cleared when the recorded version differs, and recalculated on workspace
+refresh. Clean workspaces fast-forward when opened if their HEAD is an ancestor
+of the published commit.
+
+The Problems list reads these rows through the current ACL. Its Updated time is
+recent activity: workspace status changes and publication by any user both update
+it. Advancing published HEAD assigns the same activity time to all existing
+workspaces. Users without a workspace keep the existing empty workspace display.
+A failed push broadcasts nothing; repeating the same successful push preserves
+activity times for rows already up to date and repairs stale rows after a database
+failure.
+
+Publication and persisted workspace status refresh share a problem lock, inside
+the caller's workspace lock when held. Broadcasting acquires no other workspace
+locks. A database refresh failure after successful publication is logged and
+retains the published Git result, including imported problems. Repeating
+publication repairs list metadata. Direct writes to the bare repository outside
+the application become visible as workspaces refresh; they do not broadcast.
+
 | Source category | Location or rule |
 | --- | --- |
 | Authored roots | `attachments/`, `checkers/`, `config/`, `generators/`, `interactors/`, `solutions/`, `statement/`, `statement-assets/`, `statement-sections/`, `tests/`, `third_party/`, and `validators/` |

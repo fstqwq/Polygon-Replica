@@ -1,6 +1,7 @@
 import errno
 import fcntl
 import json
+import logging
 import os
 import shutil
 import sqlite3
@@ -41,10 +42,19 @@ from app.service.problem.runtime_config import (
     problem_config_limits,
 )
 from app.service.problem.test_spec import dumps_default_tests_spec
-from app.service.repository.revision import workspace_revision_info
+from app.service.repository.git import GitService
+from app.service.repository.revision import (
+    git_commit_count,
+    git_commit_sha,
+    workspace_origin_local_repo,
+    workspace_revision_info,
+)
 from app.service.statement.constant import STATEMENT_DEFAULT_FILES
 from app.service.verification.task_store import VerificationTaskStore
 from app.service.workspace.state import WorkspaceState, WorkspaceStatus
+
+
+logger = logging.getLogger(__name__)
 
 
 class GlobalUserContext(TypedDict):
@@ -613,6 +623,51 @@ class WorkspaceService:
         run_git(["git", "-C", str(workspace), "symbolic-ref", "HEAD", "refs/heads/main"])
 
     def _refresh_workspace_status_with_ids(self, workspace: Path, problem_id: int, user_id: int) -> WorkspaceStatus:
+        with self._publication_lock(problem_id):
+            return self._read_and_store_workspace_status(workspace, problem_id, user_id)
+
+    def _publication_lock(self, problem_id: int) -> ContextManager[None]:
+        return self._exclusive_lock_file(
+            self.storage_layout.bare_root / f".publication-{problem_id}.lock",
+            "problem publication",
+            remove_after=False,
+        )
+
+    def publish(self, workspace: Path, *, git_service: GitService) -> str:
+        """Publish under the caller's workspace lock, then broadcast list state.
+
+        Post-push metadata failures are logged instead of reaching commit rollback
+        handlers. Repeating publication repairs stale rows and preserves current
+        rows' activity times.
+        """
+        identity = self._store.workspace_identity_by_path(str(workspace.resolve()))
+        origin = workspace_origin_local_repo(workspace)
+        if identity is None or origin is None:
+            raise RuntimeError("published workspace has no registered local repository")
+        problem_id = identity["problem_id"]
+        with self._publication_lock(problem_id):
+            previous = git_commit_sha(origin, "refs/heads/main")
+            output = git_service.push(workspace, "main")
+            try:
+                published = git_commit_sha(origin, "refs/heads/main")
+                revision = git_commit_count(origin, published) if published else None
+                if published is None or revision is None:
+                    raise RuntimeError("cannot read the published commit")
+                self._read_and_store_workspace_status(
+                    workspace, problem_id, identity["user_id"],
+                )
+                self._store.record_publication(
+                    problem_id, revision, advanced=previous != published,
+                )
+            except Exception:
+                logger.exception(
+                    "Git publication succeeded but workspace list refresh failed: problem_id=%s; "
+                    "repeat publication to repair the list state",
+                    problem_id,
+                )
+            return output
+
+    def _read_and_store_workspace_status(self, workspace: Path, problem_id: int, user_id: int) -> WorkspaceStatus:
         status = self.read_workspace_status(workspace)
         branch = status["branch"]
         head = status["head_commit"]

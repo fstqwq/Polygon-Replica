@@ -499,6 +499,9 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         )
         self.assertEqual(len(rows), 2)
 
+        for problem_slug in problem_slugs:
+            workspace_service.grant_repo_access(problem_slug, "observer", "read")
+            workspace_service.ensure_workspace(problem_slug, "observer")
         update_resp = contest_problems_save(
             contest=contest_slug,
             user="alice",
@@ -525,6 +528,13 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
                 self.assertEqual(head, initial_heads[index])
             else:
                 self.assertNotEqual(head, initial_heads[index])
+                observer = db_fetch_one(
+                    "SELECT w.revision_upstream_higher,w.head_commit FROM workspaces w JOIN problems p ON p.id=w.problem_id JOIN users u ON u.id=w.user_id WHERE p.slug=? AND u.username=?",
+                    [problem_slugs[index], "observer"],
+                )
+                self.assertIsNotNone(observer)
+                self.assertEqual(observer["revision_upstream_higher"], 1)
+                self.assertEqual(observer["head_commit"], initial_heads[index])
                 committed = run_git(["git", "-C", str(workspace), "show", "HEAD:config/problem.json"])
                 self.assertEqual(committed.returncode, 0, committed.stderr)
                 self.assertEqual(json.loads(committed.stdout), cfg)

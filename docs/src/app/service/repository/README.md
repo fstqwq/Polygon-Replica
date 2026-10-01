@@ -12,3 +12,12 @@ come from the current database row.
 
 Workspace context resolves the current problem, user and checkout. Verification
 history belongs to the verification read services.
+
+`WorkspaceService.publish()` coordinates browser, Agent, package import and
+Contest publication under the problem lock. `GitService` performs the push;
+the workspace store broadcasts the resulting revision to existing list rows in
+one database update. Workspace status refresh uses the same problem lock so a
+stale read cannot overwrite a newer publication. The caller holds its workspace
+lock before entering publication. Post-push metadata failures are logged for
+repair without undoing the published commit. Activity timestamps and sync
+semantics belong to the [problem-source protocol](../../../../protocol/problem-source.md).

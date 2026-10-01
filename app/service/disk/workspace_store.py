@@ -491,6 +491,29 @@ class WorkspaceDiskStore:
             ],
         )
 
+    def record_publication(
+        self, problem_id: int, revision: int, *, advanced: bool,
+    ) -> None:
+        """Broadcast published facts without changing anyone's local checkout facts."""
+        self.db.execute(
+            """
+            UPDATE workspaces
+            SET revision_upstream=?,
+                revision_missing=CASE WHEN revision_local IS NULL THEN 1 ELSE 0 END,
+                revision_upstream_higher=CASE WHEN revision_local < ? THEN 1 ELSE 0 END,
+                revision_highlight=CASE
+                    WHEN revision_local IS NULL OR revision_local < ? THEN 1 ELSE 0 END,
+                revision_ahead_count=CASE WHEN revision_local IS ? THEN 0 ELSE NULL END,
+                revision_behind_count=CASE WHEN revision_local IS ? THEN 0 ELSE NULL END,
+                updated_at=CASE
+                    WHEN ? OR revision_upstream IS NOT ?
+                        OR revision_upstream_higher IS NOT (CASE WHEN revision_local < ? THEN 1 ELSE 0 END)
+                    THEN ? ELSE updated_at END
+            WHERE problem_id=?
+            """,
+            [revision, revision, revision, revision, revision, int(advanced), revision, revision, now_iso(), problem_id],
+        )
+
     def reset_workspace_row(self, workspace_id: int, path: str) -> None:
         self.db.execute(
             """

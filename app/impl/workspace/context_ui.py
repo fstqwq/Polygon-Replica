@@ -293,10 +293,7 @@ def page_ctx(
         workspace_head=workspace_head,
         workspace_dirty=workspace_dirty,
     )
-    behind_count = workspace_revision['behind_count'] or 0
-    workspace_needs_update = bool(
-        workspace_revision['upstream_higher'] or behind_count > 0
-    )
+    workspace_needs_update = workspace_revision['upstream_higher']
     if safe_mode == 'interactive':
         checker_status: CheckerComponentContext = {
             'mode': 'not-applicable',

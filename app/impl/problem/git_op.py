@@ -35,7 +35,7 @@ def revision_commit(
                 workspace, message, user, f"{user}@polygon-replica.local"
             )
             try:
-                runtime().git_service.push(workspace, "main")
+                runtime().workspace_service.publish(workspace, git_service=runtime().git_service)
             except Exception as push_exc:
                 try:
                     runtime().git_service.rollback_last_commit(workspace, expected_head=commit_head)

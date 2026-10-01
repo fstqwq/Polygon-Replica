@@ -1,3 +1,4 @@
+import logging
 import os
 import shutil
 from pathlib import Path, PurePosixPath
@@ -6,6 +7,7 @@ from typing import Literal, TypedDict
 from app.service.platform.git_process import run_git
 from app.service.platform.workspace_path import contains_symlink_component, is_hidden_workspace_path
 
+logger = logging.getLogger(__name__)
 
 class StatusChangeCounts(TypedDict):
     added: int
@@ -400,7 +402,10 @@ class GitService:
         proc = run_git(["git", "-C", str(workspace), "push", "origin", "HEAD:main"])
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr or proc.stdout)
-        self._sync_local_origin_head(workspace, branch)
+        try:
+            self._sync_local_origin_head(workspace, branch)
+        except Exception:
+            logger.exception("Git push succeeded but updating origin HEAD failed: %s", workspace)
         return proc.stdout + proc.stderr
 
     def _status_entries(self, workspace: Path) -> list[dict[str, str]]:

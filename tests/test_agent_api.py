@@ -1459,6 +1459,8 @@ class TestAgentAPI(E2ETestBase):
             )
             self.assertEqual(missing_message.status_code, 400)
 
+            workspace_service.grant_repo_access(self.problem, "observer", "read")
+            observer_ws = Path(workspace_service.ensure_workspace(self.problem, "observer"))
             commit_resp = client.post(
                 "/agent/v1/commit",
                 params={"problem": self.problem},
@@ -1474,6 +1476,14 @@ class TestAgentAPI(E2ETestBase):
             self.assertIsNotNone(commit_row)
             self.assertEqual(str(commit_row["head_commit"] or ""), head)
             self.assertEqual(int(commit_row["dirty"] or 0), 0)
+            observer_row = db_fetch_one(
+                "SELECT head_commit,revision_upstream,revision_upstream_higher FROM workspaces WHERE path=?",
+                [str(observer_ws)],
+            )
+            self.assertIsNotNone(observer_row)
+            self.assertEqual(observer_row["revision_upstream_higher"], 1)
+            self.assertNotEqual(observer_row["head_commit"], head)
+            self.assertGreater(observer_row["revision_upstream"], 0)
 
             commit_status = client.get(
                 f"/agent/v1/commit/{head}/status",
