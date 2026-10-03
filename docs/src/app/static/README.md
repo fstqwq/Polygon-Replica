@@ -35,3 +35,7 @@ the URL restores that site default.
 focus leaving the editor saves through the property endpoint; Escape cancels.
 Emoji choices preserve trailing text. Pending writes are serialized, and failed
 writes preserve the draft for retry. Displayed values use plain text.
+
+Contest marks share the limits row and align with the problem name using the
+owner-prefix grid width. Empty marks use a tag icon; the inline editor overlays
+the available mark width while its hidden trigger preserves table geometry.

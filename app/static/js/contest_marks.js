@@ -53,8 +53,7 @@ onReady(() => {
       finished = true;
       if (active === state) active = null;
       button.dataset.markValue = value;
-      button.textContent = value || "Add mark";
-      button.classList.toggle("empty", !value);
+      button.firstElementChild.textContent = value;
       editor.remove();
       button.hidden = false;
       if (focus) button.focus();
