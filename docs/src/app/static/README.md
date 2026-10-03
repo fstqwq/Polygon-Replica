@@ -28,3 +28,10 @@ display `n/a`.
 The admin judgehost command generator starts with the request's current site
 URL and retains explicit operator overrides for private proxy endpoints. Clearing
 the URL restores that site default.
+
+## Contest marks
+
+`contest_marks.js` owns one inline editor on the Contest Problems page. Enter or
+focus leaving the editor saves through the property endpoint; Escape cancels.
+Emoji choices preserve trailing text. Pending writes are serialized, and failed
+writes preserve the draft for retry. Displayed values use plain text.

@@ -3,6 +3,7 @@
 import re
 from collections.abc import Mapping
 
+from app.main_constant import PROBLEM_IDENT_RE, PROBLEM_ID_MAX_LEN
 from app.service.statement.context import normalize_statement_language
 
 
@@ -33,6 +34,15 @@ RESERVED_CONTEST_TEMPLATE_KEYS = (
 _PROPERTY_NAME_RE = re.compile(r"[a-z][A-Za-z0-9_]{0,63}")
 
 
+def is_contest_problem_mark(key: str) -> bool:
+    """Distinguish the problem-mark namespace from localized properties."""
+    return key.startswith("mark.") and "/" in key
+
+
+def contest_property_base_key(key: str) -> str:
+    return key if is_contest_problem_mark(key) else key.partition(".")[0]
+
+
 def localized_contest_property_key(base_key: str, language: str) -> str:
     """Return the canonical ``base.language`` override key."""
 
@@ -58,6 +68,11 @@ def normalize_contest_property_key(key: str) -> str:
     """Validate a user-provided Contest FTL context key."""
 
     raw_key = str(key).strip()
+    if is_contest_problem_mark(raw_key):
+        problem = raw_key.removeprefix("mark.")
+        if len(problem) > PROBLEM_ID_MAX_LEN or not PROBLEM_IDENT_RE.fullmatch(problem):
+            raise ValueError(f"invalid contest problem mark: {raw_key}")
+        return raw_key
     if raw_key.count(".") > 1:
         raise ValueError(f"invalid contest property key: {raw_key}")
     base_key, separator, language = raw_key.partition(".")
@@ -71,6 +86,8 @@ def contest_property_language(key: str) -> str:
     """Return a property's explicit override language, or an empty string."""
 
     safe_key = normalize_contest_property_key(key)
+    if is_contest_problem_mark(safe_key):
+        return ""
     _base_key, separator, language = safe_key.partition(".")
     return language if separator else ""
 
@@ -99,7 +116,7 @@ def localized_contest_properties(
         return result
     suffix = f".{safe_language}"
     for key, value in properties.items():
-        if key.endswith(suffix):
+        if not is_contest_problem_mark(key) and key.endswith(suffix):
             result[key.removesuffix(suffix)] = value
     return result
 
@@ -110,7 +127,7 @@ def contest_template_properties(
     """Project effective property strings into their FTL runtime values."""
 
     result: dict[str, str | bool] = dict(CONTEST_TEMPLATE_PROPERTY_DEFAULTS)
-    result.update(properties)
+    result.update((key, value) for key, value in properties.items() if not is_contest_problem_mark(key))
     result[INSERT_BLANK_PAGE_PROPERTY] = (
         result[INSERT_BLANK_PAGE_PROPERTY] == "true"
     )

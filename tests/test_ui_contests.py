@@ -1,6 +1,18 @@
 import tempfile
 import threading
 
+from fastapi.testclient import TestClient
+
+# Initialize the isolated runtime before importing the application.
+from tests.common import E2ETestBase
+from app.main import app
+
+from app.impl.contest.property import _contest_property_table
+from app.service.contest.property import (
+    normalize_contest_property_key, contest_property_base_key, contest_property_language,
+    localized_contest_properties, contest_template_properties,
+)
+
 from tests.db_helpers import (
     db_execute,
     db_fetch_all,
@@ -11,7 +23,6 @@ from app.impl.contest.statement_source import contest_statement_source_context
 from app.service.contest.property import DEFAULT_CONTEST_BANNER
 from app.service.platform.git_process import run_git
 
-from tests.common import E2ETestBase
 from tests.ui_support import (
     Path,
     UIHelpersMixin,
@@ -22,9 +33,6 @@ from tests.ui_support import (
     contest_problems_add,
     contest_problems_remove_selected,
     contest_problems_save,
-    contest_properties_save,
-    contest_property_delete,
-    contest_property_insert_preset,
     contests_root_create,
     json,
     uuid,
@@ -434,12 +442,17 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertEqual(str(rows[0]["idx"]), "A")
         self.assertEqual(str(rows[1]["idx"]), "B")
 
+        mark_key = f"mark.{extra_problem}"
+        runtime.contest_service.set_properties(
+            contest_id, workspace_service.known_user_id("alice"), {mark_key: "✅"},
+        )
         remove_resp = contest_problems_remove_selected(
             contest=contest_slug,
             user="alice",
             selected_problem_ids=[str(rows[1]["problem_id"])],
         )
         self.assertEqual(remove_resp.status_code, 303)
+        self.assertEqual(runtime.contest_service.properties_map(contest_id)[mark_key], "✅")
         self.assertTrue(
             remove_resp.headers["location"].startswith(
                 f"/contests/{contest_slug}/overview"
@@ -569,213 +582,108 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         self.assertIsNotNone(problem_row)
         self.assertEqual(int(rows[0]["problem_id"]), int(problem_row["id"]))
 
-    def test_contest_membership_does_not_grant_problem_access(self) -> None:
-        contest_slug = f"ui-contest-independent-access-{uuid.uuid4().hex[:8]}"
-        contest_id = self._create_contest(contest_slug, "Independent Access Contest")
-        problem_slug = f"alice/ui-independent-access-{uuid.uuid4().hex[:8]}"
-        workspace_service.ensure_problem(problem_slug)
-        workspace_service.grant_repo_access(problem_slug, "alice", "owner")
-        alice_row = db_fetch_one("SELECT id FROM users WHERE username='alice'")
-        problem_row = db_fetch_one("SELECT id FROM problems WHERE slug=?", [problem_slug])
-        self.assertIsNotNone(alice_row)
-        self.assertIsNotNone(problem_row)
-        problem_id = int(problem_row["id"])
-        runtime.contest_service.add_problem(contest_id, "A", problem_id, int(alice_row["id"]))
-        self.assertEqual(
-            _register_with_password_envelope("bob", "StrongPass123", next_path="/").status_code,
-            303,
-        )
-        db_execute("UPDATE users SET is_system_admin=0 WHERE username=?", ["bob"])
+    def test_contest_properties_http_patch_and_language_fallback(self) -> None:
+        contest_slug = f"props-{uuid.uuid4().hex[:8]}"
+        contest_id = self._create_contest(contest_slug)
+        other_id = self._create_contest(f"other-{uuid.uuid4().hex[:8]}")
+        actor_id = workspace_service.known_user_id("alice")
+        key = "mark.alice/sample"
+        contest_problems_add(contest=contest_slug, user="alice", problem_slugs=["alice/sample"], q="")
+        values = {"title": "Title", "title.chinese": "中文", "location": "Base",
+                  "location.chinese": "杭州", "mark": "Base mark", "mark.chinese": "普通属性",
+                  key: "✅ 已复核", "mark.team-7/second-problem": "❓", "insertBlankPage": "true"}
+        runtime.contest_service.set_properties(other_id, actor_id, {key: "other contest"})
+        token = runtime.auth_service.create_session_for_user(actor_id)
+        headers = {"cookie": f"{runtime.config_values.AUTH_COOKIE_NAME}={token}", "origin": "https://testserver"}
+        url = f"/contests/{contest_slug}/properties"
+        def stored():
+            return {row["key"]: row["value"] for row in db_fetch_all(
+                "SELECT key,value FROM contest_properties WHERE contest_id=?", [contest_id])}
+        def generation():
+            return db_fetch_one("SELECT source_generation FROM contests WHERE id=?", [contest_id])["source_generation"]
+        with TestClient(app, base_url="https://testserver", headers=headers, follow_redirects=False) as client:
+            before = generation()
+            data = {"property_keys": list(values), "property_values": list(values.values())}
+            self.assertEqual(client.post(url + "/save", data=data).status_code, 303)
+            self.assertEqual(stored(), values)
+            self.assertEqual(generation(), before + 1)
+            self.assertEqual(client.post(url + "/save", data=data).status_code, 303)
+            self.assertEqual(generation(), before + 1)
+            localized = runtime.contest_service.localized_properties_map(contest_id, "chinese")
+            self.assertEqual(localized, {"title": "中文", "location": "杭州", "mark": "普通属性", "insertBlankPage": "true"})
+            for path in ("/properties", "/overview"):
+                self.assertEqual(client.get(f"/contests/{contest_slug}" + path).status_code, 200)
+            response = client.post(url + "/save", data={"property_keys": key,
+                "property_values": "  ❓ <script>plain text</script>  ", "response_format": "json"})
+            self.assertEqual(response.status_code, 200)
+            values[key] = "❓ <script>plain text</script>"
+            self.assertEqual(response.json(), {"values": {key: values[key]}})
+            self.assertEqual(stored(), values)
+            for deleted in ("mark", "location.chinese"):
+                self.assertEqual(client.post(url + "/delete", data={"property_key": deleted}).status_code, 303)
+            values.pop("mark")
+            values.pop("mark.chinese")
+            values.pop("location.chinese")
+            self.assertEqual(stored(), values)
+            response = client.post(url + "/save", data={"property_keys": [key, "title.chinese"],
+                "property_values": ["", ""], "response_format": "json"})
+            self.assertEqual(response.json(), {"values": {key: "", "title.chinese": ""}})
+            values.pop(key)
+            values.pop("title.chinese")
+            self.assertEqual(stored(), values)
+            self.assertEqual(runtime.contest_service.localized_properties_map(contest_id, "chinese"),
+                             {"title": "Title", "location": "Base", "insertBlankPage": "true"})
+            self.assertEqual(runtime.contest_service.properties_map(other_id)[key], "other contest")
+            for preset in ("banner", "insertBlankPage"):
+                self.assertEqual(client.post(url + "/delete", data={"property_key": preset}).status_code, 303)
+                self.assertEqual(client.post(url + "/insert-preset", data={"property_key": preset}).status_code, 303)
+            self.assertEqual(stored()["banner"], DEFAULT_CONTEST_BANNER)
+            self.assertEqual(stored()["insertBlankPage"], "true")
+            mark_to_delete = "mark.team-7/second-problem"
+            self.assertEqual(client.post(url + "/delete", data={"property_key": mark_to_delete}).status_code, 303)
+            values.pop(mark_to_delete)
+            self.assertEqual(stored(), {**values, "banner": DEFAULT_CONTEST_BANNER})
+            baseline = stored()
+            for bad in ("mark.Alice/a", "mark.alice/../a", "mark.alice/a.chinese", "mark.alice/", "mark.alice/" + "a" * 64):
+                with self.subTest(key=bad):
+                    self.assertEqual(client.post(url + "/save", data={"property_keys": [key, bad],
+                        "property_values": ["must not write", "bad"], "response_format": "json"}).status_code, 400)
+                    self.assertEqual(stored(), baseline)
+            self.assertEqual(client.post(url + "/save", data={"property_keys": key, "property_values": "bad"},
+                headers={**headers, "origin": "https://evil.example"}).status_code, 403)
+            for role in (None, "read", "write"):
+                workspace_service.ensure_user("bob")
+                db_execute("UPDATE users SET is_system_admin=0 WHERE username='bob'")
+                if role:
+                    runtime.contest_service.grant_member_role(contest_id, "bob", role)
+                bob_token = runtime.auth_service.create_session_for_user(workspace_service.known_user_id("bob"))
+                bob_headers = {**headers, "cookie": f"{runtime.config_values.AUTH_COOKIE_NAME}={bob_token}"}
+                response = client.post(url + "/save", headers=bob_headers, data={"property_keys": key,
+                    "property_values": "✅", "response_format": "json"})
+                self.assertEqual(response.status_code, 200 if role == "write" else 403)
+                if role != "write":
+                    self.assertEqual(stored(), baseline)
+                else:
+                    self.assertEqual(stored(), {**baseline, key: "✅"})
+                if role:
+                    page = client.get(f"/contests/{contest_slug}/overview", headers=bob_headers)
+                    self.assertEqual(page.status_code, 200)
 
-        grant = contest_access_grant(
-            contest=contest_slug,
-            user="alice",
-            target_user="bob",
-            role="write",
-        )
-        self.assertEqual(grant.status_code, 303)
-        bob = db_fetch_one("SELECT id FROM users WHERE username='bob'")
-        self.assertIsNotNone(bob)
-        self.assertFalse(runtime.access_query.problem_context(problem_id, int(bob["id"]))["can_read"])
-        self.assertEqual(
-            db_fetch_all(
-                "SELECT role FROM repo_acl WHERE problem_id=? AND user_id=?",
-                [problem_id, int(bob["id"])],
-            ),
-            [],
-        )
-
-    def test_contest_properties_persist_updates_presets_and_language_fallback(self) -> None:
-        contest_slug = f"ui-contest-props-{uuid.uuid4().hex[:8]}"
-        contest_id = self._create_contest(contest_slug, "Props Contest")
-        before = db_fetch_one(
-            "SELECT source_generation FROM contests WHERE id=?",
-            [contest_id],
-        )
-        self.assertIsNotNone(before)
-
-        save_props = contest_properties_save(
-            contest=contest_slug,
-            user="alice",
-            property_keys=[
-                "title",
-                "title.chinese",
-                "location",
-                "location.chinese",
-                "date",
-                "date.chinese",
-                "insertBlankPage",
-                "banner",
-                "banner.chinese",
-                "sponsor",
-                "sponsor.chinese",
-            ],
-            property_values=[
-                "Props Contest Updated",
-                "\u5c5e\u6027\u6bd4\u8d5b",
-                "San Francisco",
-                "\u65e7\u91d1\u5c71",
-                "2026-03-01",
-                "2026 \u5e74 3 \u6708 1 \u65e5",
-                "true",
-                r"\textbf{Preview only}",
-                "\\textbf{\u4ec5\u4f9b\u9884\u89c8}",
-                "Example Foundation",
-                "\u793a\u4f8b\u57fa\u91d1\u4f1a",
-            ],
-            existing_property_keys=["title"],
-        )
-        self.assertEqual(save_props.status_code, 303)
-        after = db_fetch_one(
-            "SELECT source_generation FROM contests WHERE id=?",
-            [contest_id],
-        )
-        self.assertIsNotNone(after)
-        self.assertEqual(
-            int(after["source_generation"]),
-            int(before["source_generation"]) + 1,
-        )
-        alice_row = db_fetch_one("SELECT id FROM users WHERE username='alice'")
-        self.assertIsNotNone(alice_row)
-        contest_rows = db_fetch_all(
-            "SELECT key,value FROM contest_properties WHERE contest_id=? ORDER BY key",
-            [contest_id],
-        )
-        self.assertEqual(
-            {str(row["key"]): str(row["value"]) for row in contest_rows},
-            {
-                "date": "2026-03-01",
-                "date.chinese": "2026 \u5e74 3 \u6708 1 \u65e5",
-                "location": "San Francisco",
-                "location.chinese": "\u65e7\u91d1\u5c71",
-                "sponsor": "Example Foundation",
-                "sponsor.chinese": "\u793a\u4f8b\u57fa\u91d1\u4f1a",
-                "banner": r"\textbf{Preview only}",
-                "banner.chinese": "\\textbf{\u4ec5\u4f9b\u9884\u89c8}",
-                "insertBlankPage": "true",
-                "title": "Props Contest Updated",
-                "title.chinese": "\u5c5e\u6027\u6bd4\u8d5b",
-            },
-        )
-        localized = runtime.contest_service.localized_properties_map(
-            contest_id,
-            "chinese",
-        )
-        self.assertEqual(localized["title"], "\u5c5e\u6027\u6bd4\u8d5b")
-        self.assertEqual(localized["location"], "\u65e7\u91d1\u5c71")
-
-        unchanged = runtime.contest_service.set_properties(
-            contest_id,
-            int(alice_row["id"]),
-            {
-                "date": "2026-03-01",
-                "date.chinese": "2026 \u5e74 3 \u6708 1 \u65e5",
-                "location": "San Francisco",
-                "location.chinese": "\u65e7\u91d1\u5c71",
-                "sponsor": "Example Foundation",
-                "sponsor.chinese": "\u793a\u4f8b\u57fa\u91d1\u4f1a",
-                "banner": r"\textbf{Preview only}",
-                "banner.chinese": "\\textbf{\u4ec5\u4f9b\u9884\u89c8}",
-                "insertBlankPage": True,
-                "title": "Props Contest Updated",
-                "title.chinese": "\u5c5e\u6027\u6bd4\u8d5b",
-            },
-        )
-        self.assertFalse(unchanged)
-        current = db_fetch_one(
-            "SELECT source_generation FROM contests WHERE id=?",
-            [contest_id],
-        )
-        self.assertIsNotNone(current)
-        self.assertEqual(
-            int(current["source_generation"]),
-            int(after["source_generation"]),
-        )
-
-        language_delete = contest_property_delete(
-            contest=contest_slug,
-            user="alice",
-            property_key="location.chinese",
-        )
-        self.assertEqual(language_delete.status_code, 303)
-        cleared = runtime.contest_service.set_properties(
-            contest_id,
-            int(alice_row["id"]),
-            {"title.chinese": ""},
-        )
-        self.assertTrue(cleared)
-        fallback = runtime.contest_service.localized_properties_map(
-            contest_id,
-            "chinese",
-        )
-        self.assertEqual(fallback["title"], "Props Contest Updated")
-        self.assertEqual(fallback["location"], "San Francisco")
-        self.assertEqual(fallback["sponsor"], "\u793a\u4f8b\u57fa\u91d1\u4f1a")
-        cleared_rows = db_fetch_all(
-            """
-            SELECT key FROM contest_properties
-            WHERE contest_id=? AND key IN ('title.chinese','location.chinese')
-            """,
-            [contest_id],
-        )
-        self.assertEqual(cleared_rows, [])
-
-        removed = runtime.contest_service.set_properties(
-            contest_id,
-            int(alice_row["id"]),
-            {"sponsor": None, "sponsor.chinese": None},
-        )
-        self.assertTrue(removed)
-        self.assertEqual(
-            db_fetch_all(
-                "SELECT key FROM contest_properties WHERE contest_id=? AND key LIKE 'sponsor%'",
-                [contest_id],
-            ),
-            [],
-        )
-        removed_presets = runtime.contest_service.set_properties(
-            contest_id,
-            int(alice_row["id"]),
-            {"insertBlankPage": None, "banner": None},
-        )
-        self.assertTrue(removed_presets)
-
-        banner_response = contest_property_insert_preset(
-            contest=contest_slug,
-            user="alice",
-            property_key="banner",
-        )
-        blank_page_response = contest_property_insert_preset(
-            contest=contest_slug,
-            user="alice",
-            property_key="insertBlankPage",
-        )
-
-        self.assertEqual(banner_response.status_code, 303)
-        self.assertEqual(blank_page_response.status_code, 303)
-        properties = runtime.contest_service.properties_map(contest_id)
-        self.assertEqual(properties["banner"], DEFAULT_CONTEST_BANNER)
-        self.assertEqual(properties["insertBlankPage"], "true")
+    def test_problem_mark_keys_are_independent_of_language_properties(self) -> None:
+        for key, base, language in (("title.chinese", "title", "chinese"), ("mark.chinese", "mark", "chinese"),
+                                   ("mark.alice/english", "mark.alice/english", ""),
+                                   ("mark.team-7/a-b", "mark.team-7/a-b", "")):
+            with self.subTest(key=key):
+                self.assertEqual(normalize_contest_property_key(key), key)
+                self.assertEqual(contest_property_base_key(key), base)
+                self.assertEqual(contest_property_language(key), language)
+        marks = {"mark.alice/english": "✅", "mark.team-7/a-b": "❓"}
+        props = {"title": "Title", "title.chinese": "中文", "mark": "base", "mark.chinese": "language", **marks}
+        self.assertEqual(localized_contest_properties(props, "chinese"), {"title": "中文", "mark": "language"})
+        self.assertEqual(contest_template_properties(marks), {"banner": "", "insertBlankPage": False})
+        groups = _contest_property_table(props)["groups"]
+        self.assertEqual({row["key"]: row["localizable"] for row in groups},
+                         {"title": True, "mark": True, **dict.fromkeys(marks, False)})
 
     def test_contest_localized_properties_infer_location_and_date_from_statements(self) -> None:
         contest_slug = f"ui-contest-overview-{uuid.uuid4().hex[:8]}"

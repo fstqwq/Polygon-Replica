@@ -1,6 +1,7 @@
 from typing import Annotated, TypedDict
 
 from fastapi import Depends, Form, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from app.impl.auth.session import require_session_user
 from app.impl.auth.shared import template_response
@@ -21,6 +22,8 @@ from app.service.contest.property import (
     INSERT_BLANK_PAGE_PROPERTY,
     REQUIRED_CONTEST_PROPERTY_KEYS,
     contest_property_language,
+    contest_property_base_key,
+    is_contest_problem_mark,
     contest_property_is_deletable,
     localized_contest_property_key,
     normalize_contest_property_key,
@@ -69,18 +72,19 @@ def _contest_property_table(
     }
 
     def property_sort_key(key: str) -> tuple[int, str, int, str]:
-        base_key, separator, language = key.partition(".")
+        base_key = contest_property_base_key(key)
+        language = contest_property_language(key)
         return (
             preferred_bases.get(base_key, len(preferred_bases)),
             base_key,
-            1 if separator else 0,
+            1 if language else 0,
             language,
         )
 
     grouped: dict[str, list[ContestPropertyValue]] = {}
     for key in sorted(displayed_properties, key=property_sort_key):
         language = contest_property_language(key)
-        base_key = key.partition(".")[0]
+        base_key = contest_property_base_key(key)
         grouped.setdefault(base_key, []).append(
             {
                 "key": key,
@@ -122,7 +126,7 @@ def _contest_property_table(
                 ],
                 "boolean": base_key == INSERT_BLANK_PAGE_PROPERTY,
                 "deletable": contest_property_is_deletable(base_key),
-                "localizable": base_key != INSERT_BLANK_PAGE_PROPERTY,
+                "localizable": base_key != INSERT_BLANK_PAGE_PROPERTY and not is_contest_problem_mark(base_key),
                 "persisted": any(bool(row["persisted"]) for row in values),
                 "kind_label": (
                     "Required"
@@ -175,15 +179,14 @@ def contest_properties_save(
     property_keys: list[str] = Form([]),
     property_values: list[str] = Form([]),
     existing_property_keys: list[str] = Form([]),
+    response_format: Annotated[str, Form()] = "html",
 ):
     ctx = _contest_ctx(contest, user, "properties")
-    if not bool(ctx["access"].get("can_write")):
-        reason = ctx["access"].get("write_block_reason")
-        if not isinstance(reason, str) or not reason:
-            reason = "write access required"
-        raise HTTPException(status_code=403, detail=reason)
+    _require_contest_property_write(ctx)
     contest_id = int(ctx["contest"]["id"])
     actor_user_id = int(ctx["user"]["id"])
+    if response_format not in {"html", "json"}:
+        raise HTTPException(status_code=400, detail="invalid response format")
     if len(property_keys) != len(property_values):
         raise HTTPException(status_code=400, detail="invalid contest property form")
     values: dict[str, str | None] = {}
@@ -219,6 +222,9 @@ def contest_properties_save(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if response_format == "json":
+        saved = runtime().contest_service.properties_map(contest_id)
+        return JSONResponse({"values": {key: saved.get(key, "") for key in values}})
     return _contest_redirect(
         ctx["contest"]["slug"],
         "properties",
@@ -236,7 +242,7 @@ def contest_property_add(
     _require_contest_property_write(ctx)
     try:
         safe_key = normalize_contest_property_key(property_key)
-        if "." in safe_key:
+        if contest_property_language(safe_key):
             raise ValueError("add a base property before adding language overrides")
         safe_value = property_value.strip()
         if not safe_value:
@@ -299,16 +305,15 @@ def contest_property_delete(
     try:
         safe_key = normalize_contest_property_key(property_key)
         properties = runtime().contest_service.properties_map(int(ctx["contest"]["id"]))
-        if "." in safe_key:
+        if contest_property_language(safe_key):
             removals = {safe_key: None}
         else:
             if not contest_property_is_deletable(safe_key):
                 raise ValueError(f"contest property cannot be deleted: {safe_key}")
-            prefix = f"{safe_key}."
             removals = {
                 key: None
                 for key in properties
-                if key == safe_key or key.startswith(prefix)
+                if contest_property_base_key(key) == safe_key
             }
         runtime().contest_service.set_properties(
             int(ctx["contest"]["id"]),
@@ -322,7 +327,7 @@ def contest_property_delete(
         "properties",
         message=(
             "contest property language deleted"
-            if "." in safe_key
+            if contest_property_language(safe_key)
             else "contest property deleted"
         ),
     )

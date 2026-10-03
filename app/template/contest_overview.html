@@ -3,6 +3,7 @@
 {% from "_contest_problem_status.html" import contest_problem_status %}
 {% from "_revision_pair.html" import fact_row %}
 {% from "_component_dialogs.html" import ui_popup %}
+{% block page_scripts %}<script type="module" src="{{ static_asset_url('js/contest_marks.js') }}"></script>{% endblock %}
 {% block content %}
 <div class="page-title-inline contest-problems-title">
   <div class="contest-problems-heading">
@@ -29,7 +30,7 @@
 
 {% include "_flash_message.html" %}
 
-<section class="content-section-plain" aria-label="Contest problem list">
+<section class="content-section-plain" aria-label="Contest problem list" data-mark-save-url="/contests/{{ ctx.contest.slug }}/properties/save">
   {% if problem_rows %}
   <table class="table-base problem-list-table contest-problem-list-table">
     <tr>
@@ -63,6 +64,14 @@
           <span>{{ metadata.pass_limit }} passes</span>
           {% endif %}
         </span>
+        {% endif %}
+        {% if row.mark or ctx.access.can_write %}
+        <span class="contest-mark-divider" aria-hidden="true"></span>
+        {% if ctx.access.can_write %}
+        <button type="button" class="contest-mark{% if not row.mark %} empty{% endif %}" data-mark-key="{{ row.mark_key }}" data-mark-value="{{ row.mark }}" aria-label="Edit mark: {{ row.problem_slug }}">{{ row.mark or 'Add mark' }}</button>
+        {% else %}
+        <span class="contest-mark">{{ row.mark }}</span>
+        {% endif %}
         {% endif %}
       </td>
       <td class="contest-problem-details-cell">

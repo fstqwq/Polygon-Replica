@@ -16,12 +16,15 @@ from app.impl.contest.shared import _contest_ctx, _contest_redirect
 
 class ContestOverviewProblemRow(ContestProblemHrefRow):
     status: ContestProblemStatusView | None
+    mark_key: str
+    mark: str
 
 
 def contest_overview_page(request: Request, contest: str, user: Annotated[str, Depends(require_session_user)]):
     ctx = _contest_ctx(contest, user, "overview", request=request)
     contest_id = int(ctx["contest"]["id"])
     user_id = int(ctx["user"]["id"])
+    properties = runtime().contest_service.properties_map(contest_id)
     source_rows = add_contest_problem_hrefs(
         request,
         contest_slug=str(ctx["contest"]["slug"]),
@@ -35,9 +38,12 @@ def contest_overview_page(request: Request, contest: str, user: Annotated[str, D
     rows: list[ContestOverviewProblemRow] = []
     for source_row in source_rows:
         readiness = source_row["readiness"]
+        mark_key = f"mark.{source_row['problem_slug']}"
         rows.append(ContestOverviewProblemRow(
             **source_row,
             status=contest_problem_status(readiness) if readiness is not None else None,
+            mark_key=mark_key,
+            mark=properties.get(mark_key, ""),
         ))
     owner_prefix_chars = max(
         (len(str(row["slug_owner"])) + 1 for row in rows),

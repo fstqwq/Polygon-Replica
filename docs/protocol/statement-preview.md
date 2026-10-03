@@ -63,6 +63,18 @@ Contest review builds or reuses problem previews in canonical `idx` order and re
 
 Effective properties are injected as FTL variables and through the `properties` mapping. `statements.ftl` and `olymp.sty` are language-specific entry files. Polygon contest import maps authored `statements.tex` to the internal `statements.ftl`; derived output keeps the `statements.tex` name.
 
+Contest problem marks use `mark.<owner>/<slug>` keys in `contest_properties`.
+The suffix follows the full problem ID rules; each key is an independent,
+non-localizable plain-text string. Marks are excluded from effective statement
+properties and FTL variables. Ordinary `mark` and `mark.<language>` properties
+retain their language semantics, including when their group is deleted.
+Contest readers see marks; contest writers edit them through the property save
+endpoint. Blank values delete the key, and removing a roster entry preserves its
+mark. Changes retain the normal property source-generation behavior.
+`POST /contests/{contest}/properties/save` accepts `response_format=json` to
+return `{"values": {"<submitted-key>": "<saved-value>"}}`, using an empty string
+for deleted values. The default HTML response remains a redirect.
+
 ## Contest PDF
 
 Contest PDF preview renders `statements.ftl` with effective properties and ordered problem entries, then compiles the resulting `statements.tex` as one TeX document. `insertBlankPage=true` enables the template's blank-page signal, and `banner` fills the `\StatementBanner` slot. The build includes contest resources, all problem render trees, MetaPost preparation, and two XeLaTeX passes.

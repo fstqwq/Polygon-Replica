@@ -23,7 +23,6 @@ import app.impl.contest.access as contest_access_module
 import app.impl.contest.overview as contest_overview_module
 import app.impl.contest.package as contest_package_module
 import app.impl.contest.problem as contest_problem_module
-import app.impl.contest.property as contest_property_module
 import app.impl.preview.preview as preview_module
 import app.impl.problem.access as problem_access_module
 import app.impl.problem.checker as problem_checker_module
@@ -119,9 +118,6 @@ contest_packages_download = contest_package_module.contest_packages_download
 contest_problems_add = contest_problem_module.contest_problems_add
 contest_problems_remove_selected = contest_problem_module.contest_problems_remove_selected
 contest_problems_save = contest_problem_module.contest_problems_save
-contest_properties_save = contest_property_module.contest_properties_save
-contest_property_delete = contest_property_module.contest_property_delete
-contest_property_insert_preset = contest_property_module.contest_property_insert_preset
 solutions_editor_page = problem_solution_module.solutions_editor_page
 solutions_save_source = problem_solution_module.solutions_save_source
 solutions_rename = problem_solution_module.solutions_rename

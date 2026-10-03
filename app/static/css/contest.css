@@ -686,3 +686,90 @@
   margin-top: 0.7rem;
   padding-top: 0.7rem;
 }
+.contest-mark {
+  display: block;
+  margin: 4px 0 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.35;
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  text-decoration: none;
+}
+.contest-mark.empty {
+  color: var(--muted);
+  font-style: italic;
+}
+.contest-mark-divider {
+  display: block;
+  width: 32px;
+  border-top: 1px solid var(--line);
+  margin: 6px 0 5px;
+}
+button.contest-mark {
+  cursor: pointer;
+}
+button.contest-mark:hover {
+  color: var(--text);
+  text-decoration: none;
+}
+.contest-mark[hidden] {
+  display: none;
+}
+.contest-mark-editor {
+  display: block;
+  position: relative;
+  margin-top: 4px;
+  width: min(100%, 270px);
+}
+.contest-mark-editor .contest-mark-input {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 2px 4px;
+  min-height: 0;
+  font: inherit;
+  font-size: var(--font-size-ui-xs);
+  line-height: 1.35;
+  border: 1px solid var(--field-border);
+  background: var(--surface);
+}
+.contest-mark-editor .contest-mark-input:focus {
+  border-color: var(--accent);
+  outline: 1px solid var(--focus-ring);
+}
+.contest-mark-choices {
+  display: none;
+  position: absolute;
+  top: calc(100% + 3px);
+  left: 0;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--surface);
+  box-shadow: 0 3px 10px #17203318;
+  z-index: 20;
+}
+.contest-mark-editor:focus-within .contest-mark-choices {
+  display: flex;
+}
+.contest-mark-choices button {
+  padding: 3px 6px;
+  border: 0;
+  background: transparent;
+  border-radius: 2px;
+  font: inherit;
+  font-size: 16px;
+  line-height: 1.3;
+  cursor: pointer;
+}
+.contest-mark-choices button:hover, .contest-mark-choices button:focus-visible {
+  background: var(--surface-hover);
+}
