@@ -36,3 +36,7 @@ sample download and export coordination.
 The Problems and Contests root lists accept `q` as a literal substring search.
 Problems match owner/slug; Contests match slug or title. Database queries apply
 access and search filters before the display limit, retaining the existing order.
+
+Contest HTML review (GET and POST) and PDF preview return HTTP 422 with a
+plain-text validation message when the requested source or language is unavailable.
+Authorization checks precede preview construction.

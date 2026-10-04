@@ -137,13 +137,16 @@ def contest_statement_review_page(
         contest_id,
         safe_language,
     )
-    preview = runtime().contest_statement_preview_service.build_html(
-        contest_id,
-        user_id=int(ctx["user"]["id"]),
-        username=user,
-        source_kind=source_kind,
-        language=safe_language,
-    )
+    try:
+        preview = runtime().contest_statement_preview_service.build_html(
+            contest_id,
+            user_id=int(ctx["user"]["id"]),
+            username=user,
+            source_kind=source_kind,
+            language=safe_language,
+        )
+    except ValueError as exc:
+        return PlainTextResponse(str(exc), status_code=422)
     ctx["page_single_column"] = True
     return template_response(
         request,
@@ -178,13 +181,16 @@ def contest_statement_review_build(
     _require_roster_problem_read(ctx)
     source_kind = _source(source)
     safe_language = _language(int(ctx["contest"]["id"]), language)
-    runtime().contest_statement_preview_service.build_html(
-        int(ctx["contest"]["id"]),
-        user_id=int(ctx["user"]["id"]),
-        username=user,
-        source_kind=source_kind,
-        language=safe_language,
-    )
+    try:
+        runtime().contest_statement_preview_service.build_html(
+            int(ctx["contest"]["id"]),
+            user_id=int(ctx["user"]["id"]),
+            username=user,
+            source_kind=source_kind,
+            language=safe_language,
+        )
+    except ValueError as exc:
+        return PlainTextResponse(str(exc), status_code=422)
     target = (
         f"/contests/{ctx['contest']['slug']}/statements/review"
         f"?source={source_kind}&language={quote(safe_language)}"
@@ -241,14 +247,17 @@ def contest_statement_pdf_page(
     contest_id = int(ctx["contest"]["id"])
     source_kind = _source(source)
     safe_language = _language(contest_id, language)
-    preview = runtime().contest_statement_preview_service.build_pdf(
-        contest_id,
-        contest_slug=str(ctx["contest"]["slug"]),
-        user_id=int(ctx["user"]["id"]),
-        username=user,
-        source_kind=source_kind,
-        language=safe_language,
-    )
+    try:
+        preview = runtime().contest_statement_preview_service.build_pdf(
+            contest_id,
+            contest_slug=str(ctx["contest"]["slug"]),
+            user_id=int(ctx["user"]["id"]),
+            username=user,
+            source_kind=source_kind,
+            language=safe_language,
+        )
+    except ValueError as exc:
+        return PlainTextResponse(str(exc), status_code=422)
     if preview["status"] != "ok":
         error = preview["summary"].get("error")
         detail = (

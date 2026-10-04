@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
 from app.impl.contest.statement_review import (
     contest_statement_pdf_page,
@@ -12,6 +13,7 @@ from app.impl.contest.statement_review import (
 from app.impl.contest.package import contest_packages_download
 from app.service.sandbox.base import ExecResult, ExecSpec
 from tests.contest_support import ContestActionBase
+from app.main import app
 from tests.db_helpers import db_fetch_one
 from tests.ui_support import (
     _request,
@@ -354,6 +356,24 @@ class TestContestAccessActions(ContestActionBase):
                     [problem_id, target_user_id],
                 )
             )
+
+    def test_statement_preview_reports_unavailable_package_language(self) -> None:
+        slug, contest_id, actor_id = self.create_contest("missing-package-preview")
+        self.add_owned_problem(contest_id, actor_id, "A", "missing-package-preview")
+        token = runtime.auth_service.create_session_for_user(actor_id)
+        headers = {"cookie": f"{runtime.config_values.AUTH_COOKIE_NAME}={token}",
+                   "origin": "https://testserver"}
+        with TestClient(app, base_url="https://testserver", headers=headers) as client:
+            for method, suffix in (("GET", "review"), ("POST", "review"), ("GET", "pdf")):
+                with self.subTest(method=method, suffix=suffix):
+                    response = client.request(
+                        method, f"/contests/{slug}/statements/{suffix}",
+                        params={"source": "native_package", "language": "chinese"},
+                    )
+                    self.assertEqual(response.status_code, 422)
+                    self.assertEqual(response.text,
+                                     "chinese is not available for every accessible Contest problem")
+                    self.assertTrue(response.headers["content-type"].startswith("text/plain"))
 
     def test_contest_reader_can_render_statement_review_and_pdf(self) -> None:
         contest_slug, contest_id, actor_user_id = self.create_contest(
