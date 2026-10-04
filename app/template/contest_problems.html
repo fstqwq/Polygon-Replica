@@ -82,11 +82,10 @@
 
 {% if ctx.access.can_write %}
 <section class="content-section-plain contest-manage-section" aria-labelledby="contest-add-problems-heading">
-  <div class="workspace-section-head contest-add-problems-head">
+  <div class="title-search">
     <h2 id="contest-add-problems-heading">Add problems</h2>
-    <form class="contest-problem-search" method="get" action="/contests/{{ ctx.contest.slug }}/problems">
-      <label for="contest-problem-search">Search problems</label>
-      <input id="contest-problem-search" name="q" value="{{ query }}" placeholder="Search by slug or title" />
+    <form role="search" method="get" action="/contests/{{ ctx.contest.slug }}/problems">
+      <input type="search" aria-label="Search problems" name="q" value="{{ query }}" placeholder="Search by owner or slug" />
       <button class="btn" type="submit">Search</button>
     </form>
   </div>

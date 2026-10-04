@@ -55,10 +55,10 @@ class ParticipatingProblemView(TypedDict):
     last_updated_at: str
 
 
-def user_participating_problems(user_id: int, limit: int) -> list[ParticipatingProblemView]:
+def user_participating_problems(user_id: int, limit: int, query: str = "") -> list[ParticipatingProblemView]:
     uid = int(user_id)
     cap = max(1, int(limit))
-    rows = runtime().workspace_service.participating_problem_rows(uid, limit=cap)
+    rows = runtime().workspace_service.participating_problem_rows(uid, limit=cap, query=query)
     items: list[ParticipatingProblemView] = []
     for row in rows:
         role = access_role(row['role'])
@@ -96,10 +96,10 @@ def normalize_contest_title_required(value: str) -> str:
         raise ValueError(f'contest title is too long (max {max_length})')
     return title
 
-def user_contests_overview(user_id: int, limit: int) -> list[ContestOverview]:
+def user_contests_overview(user_id: int, limit: int, query: str = "") -> list[ContestOverview]:
     uid = int(user_id)
     cap = max(1, int(limit))
-    return runtime().contest_service.user_contests_overview(uid, limit=cap)
+    return runtime().contest_service.user_contests_overview(uid, limit=cap, query=query)
 
 def normalize_page_target(page: str) -> str:
     raw = page.strip().lower()

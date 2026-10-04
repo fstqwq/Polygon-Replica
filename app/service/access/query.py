@@ -229,11 +229,13 @@ class AccessQuery:
         user_id: int,
         *,
         limit: int,
+        query: str,
     ) -> list[WritableProblemRow]:
         return self._store.directly_writable_problem_rows_excluding_contest(
             contest_id,
             user_id,
             limit=limit,
+            query=query,
         )
 
     def accessible_problem_slugs(self, user_id: int, *, limit: int) -> list[str]:
@@ -261,8 +263,9 @@ class AccessQuery:
         user_id: int,
         *,
         limit: int,
+        query: str = "",
     ) -> list[ProblemParticipationRow]:
-        return self._store.participating_problem_rows(user_id, limit=limit)
+        return self._store.participating_problem_rows(user_id, limit=limit, query=query)
 
     def verification_context(
         self,

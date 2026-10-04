@@ -215,6 +215,7 @@ class AccessStore:
         user_id: int,
         *,
         limit: int,
+        query: str = "",
     ) -> list[ProblemParticipationRow]:
         if self.is_system_admin(user_id):
             rows = self._db.fetch_all(
@@ -230,10 +231,11 @@ class AccessStore:
                 FROM problems p
                 LEFT JOIN workspaces w
                   ON w.problem_id=p.id AND w.user_id=?
+                WHERE instr(lower(p.slug), ?) > 0
                 ORDER BY last_updated_at DESC, p.slug ASC
                 LIMIT ?
                 """,
-                [int(user_id), max(1, int(limit))],
+                [int(user_id), query, max(1, int(limit))],
             )
         else:
             rows = self._db.fetch_all(
@@ -250,11 +252,11 @@ class AccessStore:
                 JOIN problems p ON p.id=a.problem_id
                 LEFT JOIN workspaces w
                   ON w.problem_id=p.id AND w.user_id=?
-                WHERE a.user_id=?
+                WHERE a.user_id=? AND instr(lower(p.slug), ?) > 0
                 ORDER BY last_updated_at DESC, p.slug ASC
                 LIMIT ?
                 """,
-                [int(user_id), int(user_id), max(1, int(limit))],
+                [int(user_id), int(user_id), query, max(1, int(limit))],
             )
         result: list[ProblemParticipationRow] = []
         for row in rows:
@@ -291,6 +293,7 @@ class AccessStore:
         user_id: int,
         *,
         limit: int,
+        query: str,
     ) -> list[WritableProblemRow]:
         if self.is_system_admin(user_id):
             rows = self._db.fetch_all(
@@ -301,9 +304,10 @@ class AccessStore:
                     SELECT 1 FROM contest_problems cp
                     WHERE cp.contest_id=? AND cp.problem_id=p.id
                 )
+                  AND instr(lower(p.slug), ?) > 0
                 ORDER BY p.slug ASC LIMIT ?
                 """,
-                [int(contest_id), max(1, int(limit))],
+                [int(contest_id), query, max(1, int(limit))],
             )
         else:
             rows = self._db.fetch_all(
@@ -316,9 +320,10 @@ class AccessStore:
                       SELECT 1 FROM contest_problems cp
                       WHERE cp.contest_id=? AND cp.problem_id=p.id
                   )
+                  AND instr(lower(p.slug), ?) > 0
                 ORDER BY p.slug ASC LIMIT ?
                 """,
-                [int(user_id), int(contest_id), max(1, int(limit))],
+                [int(user_id), int(contest_id), query, max(1, int(limit))],
             )
         return [
             {"problem_id": int(row["problem_id"]), "problem_slug": str(row["problem_slug"]),

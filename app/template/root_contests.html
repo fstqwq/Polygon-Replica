@@ -2,7 +2,13 @@
 {% from "_component_dialogs.html" import ui_popup %}
 {% block content %}
 <div class="page-title-inline root-page-title-inline">
-  <h1 class="page-title">My Contests</h1>
+  <div class="title-search">
+    <h1 class="page-title">My Contests</h1>
+    <form method="get" action="/contests" role="search">
+      <input type="search" name="q" value="{{ query }}" aria-label="Search contests" placeholder="Search by title or slug" />
+      <button class="btn" type="submit">Search</button>
+    </form>
+  </div>
   <div class="root-title-links" aria-label="Contests actions">
     <a class="linkish" href="#contest-create-popup" data-popup-open="contest-create-popup">Create Contest</a>
     <a class="linkish" href="#contest-import-popup" data-popup-open="contest-import-popup">Import Polygon Contest Package</a>

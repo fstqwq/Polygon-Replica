@@ -198,6 +198,27 @@ pre {
   margin-bottom: var(--space-4);
 }
 
+.title-search,
+.title-search form {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.title-search {
+  flex-wrap: wrap;
+}
+
+.title-search > h2 {
+  margin: 0;
+}
+
+.title-search input {
+  width: 15rem;
+  min-width: 0;
+}
+
 .root-title-links {
   display: inline-flex;
   align-items: center;

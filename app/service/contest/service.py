@@ -328,12 +328,12 @@ class ContestService:
         root.mkdir(parents=True, exist_ok=True)
         return root
 
-    def user_contests_overview(self, user_id: int, *, limit: int) -> list[ContestOverview]:
+    def user_contests_overview(self, user_id: int, *, limit: int, query: str = "") -> list[ContestOverview]:
         items: list[ContestOverview] = []
         if self.access_query.is_system_admin(user_id):
-            rows = self._store.all_contest_rows(int(user_id), limit=max(1, int(limit)))
+            rows = self._store.all_contest_rows(int(user_id), limit=max(1, int(limit)), query=query.strip().lower())
         else:
-            rows = self._store.user_contest_rows(int(user_id), limit=max(1, int(limit)))
+            rows = self._store.user_contest_rows(int(user_id), limit=max(1, int(limit)), query=query.strip().lower())
         for row in rows:
             problem_count = max(0, int(row["problem_count"]))
             dirty_problem_count = max(0, int(row["dirty_problem_count"]))
@@ -660,11 +660,10 @@ class ContestService:
             contest_id,
             user_id,
             limit=max(1, int(limit)),
+            query=filter_text,
         ):
             slug = str(row["problem_slug"])
             slug_leaf = slug.rsplit("/", 1)[-1]
-            if filter_text and filter_text not in f"{slug} {slug_leaf}".lower():
-                continue
             result.append(
                 {
                     "problem_id": row["problem_id"],

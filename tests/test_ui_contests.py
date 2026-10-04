@@ -45,6 +45,63 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
     seed_primary_workspace = False
     seed_default_workspace = True
 
+    def test_list_search_filters_before_limit_and_preserves_access(self) -> None:
+        contest_slug = f"search-{uuid.uuid4().hex[:8]}"
+        self._create_contest(contest_slug)
+        actor_id = workspace_service.known_user_id("alice")
+        db_execute("UPDATE users SET is_system_admin=0 WHERE id=?", [actor_id])
+        with runtime.db.writer_connection() as connection:
+            for index in range(205):
+                slug = f"search-owner/problem-{index:03d}"
+                problem_id = connection.execute(
+                    "INSERT INTO problems(slug,repo_name,created_at) VALUES(?,?,?)",
+                    (slug, f"{slug}.git", "2026-01-01"),
+                ).lastrowid
+                if index != 203:
+                    connection.execute(
+                        "INSERT INTO repo_acl(problem_id,user_id,role,created_at) VALUES(?,?,?,?)",
+                        (problem_id, actor_id, "write", "2026-01-01"),
+                    )
+                contest_id = connection.execute(
+                    "INSERT INTO contests(slug,owner_user_id,created_at) VALUES(?,?,?)",
+                    (f"search-contest-{index:03d}", actor_id, "2026-01-01"),
+                ).lastrowid
+                connection.execute(
+                    "INSERT INTO contest_properties(contest_id,key,value) VALUES(?,?,?)",
+                    (contest_id, "title", f"比赛 Search Title {index:03d}"),
+                )
+                if index != 203:
+                    connection.execute(
+                        "INSERT INTO contest_members(contest_id,user_id,role,created_at) VALUES(?,?,?,?)",
+                        (contest_id, actor_id, "write", "2026-01-01"),
+                    )
+            connection.commit()
+        token = runtime.auth_service.create_session_for_user(actor_id)
+        headers = {"cookie": f"{runtime.config_values.AUTH_COOKIE_NAME}={token}"}
+        paths = (
+            ("/problems", "entries", "slug", "search-owner/problem-204", " PROBLEM-204 "),
+            (f"/contests/{contest_slug}/problems", "available_rows", "problem_slug", "search-owner/problem-204", " PROBLEM-204 "),
+            ("/contests", "entries", "slug", "search-contest-204", " TITLE 204 "),
+        )
+        with TestClient(app, base_url="https://testserver", headers=headers) as client:
+            for admin in (0, 1):
+                db_execute("UPDATE users SET is_system_admin=? WHERE id=?", [admin, actor_id])
+                for path, key, slug_key, expected, query in paths:
+                    with self.subTest(admin=admin, path=path):
+                        response = client.get(path, params={"q": query})
+                        self.assertEqual(response.status_code, 200)
+                        self.assertEqual([row[slug_key] for row in response.context[key]], [expected])
+                        for literal in ("%", "_"):
+                            self.assertEqual(client.get(path, params={"q": literal}).context[key], [])
+                        response = client.get(path, params={"q": query.replace("204", "203")})
+                        self.assertEqual(len(response.context[key]), admin)
+                        response = client.get(path, params={"q": "search-"})
+                        self.assertEqual(len(response.context[key]), 200)
+            target = db_fetch_one("SELECT id FROM problems WHERE slug=?", ["search-owner/problem-204"])
+            contest = db_fetch_one("SELECT id FROM contests WHERE slug=?", [contest_slug])
+            runtime.contest_service.add_problem(int(contest["id"]), "A", int(target["id"]), actor_id)
+            self.assertEqual(client.get(paths[1][0], params={"q": "204"}).context["available_rows"], [])
+
     def _insert_problem_row(self, suffix: str) -> int:
         slug = f"alice/{suffix}"
         db_execute(

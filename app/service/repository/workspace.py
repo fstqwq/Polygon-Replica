@@ -421,11 +421,13 @@ class WorkspaceService:
         user_id: int,
         *,
         limit: int,
+        query: str = "",
     ) -> list[ProblemParticipationRow]:
         return list(
             self.access_query.participating_problem_rows(
                 user_id,
                 limit=max(1, int(limit)),
+                query=query.strip().lower(),
             )
         )
 

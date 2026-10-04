@@ -12,3 +12,7 @@ defines their key and save semantics.
 Statement review produces blocking HTML or transient PDF previews from workspace or native package source. Package download freezes the ready native packages, prepares or reuses the selected external format, and returns an all-or-nothing temporary bundle with complete common-language statements. DOMjudge placement changes an extracted copy; other formats retain the cached archive bytes after validating an isolated copy.
 
 The [package](../../../../protocol/package.md), [statement preview](../../../../protocol/statement-preview.md), and [storage](../../../../protocol/storage.md) protocols define the corresponding lifecycles.
+
+Add-problem search matches the full problem slug as a case-insensitive literal
+substring. Direct write access, roster exclusion, and search filtering precede
+the result limit in the database query.

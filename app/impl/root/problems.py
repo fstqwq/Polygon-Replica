@@ -25,13 +25,14 @@ class ProblemListEntry(ParticipatingProblemView):
 
 
 
-def problems_root_page(request: Request, user: str = ""):
+def problems_root_page(request: Request, user: str = "", q: str = ""):
     active_user = _active_root_user(request, user)
     gctx = global_user_ctx(active_user)
     entries_limit = runtime().config_values.integer("API_PROBLEMS_LIST_LIMIT")
     raw_entries = user_participating_problems(
         int(gctx['user']['id']),
         limit=entries_limit,
+        query=q,
     )
     entries: list[ProblemListEntry] = []
     owner_prefix_chars = 0
@@ -46,7 +47,7 @@ def problems_root_page(request: Request, user: str = ""):
             'user': gctx['user'],
             'default_problem': gctx['default_problem'],
             'entries': entries,
-            'entries_limit': entries_limit,
+            'entries_limit': entries_limit, 'query': q.strip(),
             'active_main': 'problems',
             'owner_prefix_chars': owner_prefix_chars,
         },

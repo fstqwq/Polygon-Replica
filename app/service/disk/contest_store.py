@@ -136,7 +136,7 @@ class ContestDiskStore:
     def __init__(self, db: DB):
         self.db = db
 
-    def user_contest_rows(self, user_id: int, *, limit: int) -> list[ContestOverviewRecord]:
+    def user_contest_rows(self, user_id: int, *, limit: int, query: str = "") -> list[ContestOverviewRecord]:
         rows = self.db.fetch_all(
             """
             SELECT c.id,c.slug,COALESCE(title_property.value, '') AS title,
@@ -167,15 +167,15 @@ class ContestDiskStore:
             JOIN contest_members m ON m.contest_id=c.id
             LEFT JOIN contest_properties title_property
               ON title_property.contest_id=c.id AND title_property.key='title'
-            WHERE m.user_id=?
+            WHERE m.user_id=? AND (instr(lower(c.slug), ?) > 0 OR instr(lower(COALESCE(title_property.value, '')), ?) > 0)
             ORDER BY last_updated_at DESC, c.slug ASC
             LIMIT ?
             """,
-            [int(user_id), int(user_id), int(user_id), max(1, int(limit))],
+            [int(user_id), int(user_id), int(user_id), query, query, max(1, int(limit))],
         )
         return [_contest_overview_record(row) for row in rows]
 
-    def all_contest_rows(self, user_id: int, *, limit: int) -> list[ContestOverviewRecord]:
+    def all_contest_rows(self, user_id: int, *, limit: int, query: str = "") -> list[ContestOverviewRecord]:
         rows = self.db.fetch_all(
             """
             SELECT c.id,c.slug,COALESCE(title_property.value, '') AS title,
@@ -205,10 +205,11 @@ class ContestDiskStore:
             FROM contests c
             LEFT JOIN contest_properties title_property
               ON title_property.contest_id=c.id AND title_property.key='title'
+            WHERE (instr(lower(c.slug), ?) > 0 OR instr(lower(COALESCE(title_property.value, '')), ?) > 0)
             ORDER BY last_updated_at DESC, c.slug ASC
             LIMIT ?
             """,
-            [int(user_id), int(user_id), max(1, int(limit))],
+            [int(user_id), int(user_id), query, query, max(1, int(limit))],
         )
         return [_contest_overview_record(row) for row in rows]
 

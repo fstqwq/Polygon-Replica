@@ -5,7 +5,13 @@
 {% from "_revision_pair.html" import revision_pair %}
 {% block content %}
 <div class="page-title-inline root-page-title-inline">
-  <h1 class="page-title">My Problems</h1>
+  <div class="title-search">
+    <h1 class="page-title">My Problems</h1>
+    <form method="get" action="/problems" role="search">
+      <input type="search" name="q" value="{{ query }}" aria-label="Search problems" placeholder="Search by owner or slug" />
+      <button class="btn" type="submit">Search</button>
+    </form>
+  </div>
   <div class="root-title-links" aria-label="Problems actions">
     <a class="linkish" href="#problem-open-popup" data-popup-open="problem-open-popup">Open/Create</a>
     <a class="linkish" href="#problem-import-popup" data-popup-open="problem-import-popup">Import Problem Package</a>

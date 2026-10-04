@@ -32,3 +32,7 @@ the response; scoped route wrappers only adjust HTTP redirect headers.
 
 [Run and export handlers](run_export/README.md) own verification page, fragment,
 sample download and export coordination.
+
+The Problems and Contests root lists accept `q` as a literal substring search.
+Problems match owner/slug; Contests match slug or title. Database queries apply
+access and search filters before the display limit, retaining the existing order.

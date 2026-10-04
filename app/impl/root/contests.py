@@ -130,15 +130,16 @@ def _render_contest_import_review_page(
     )
 
 
-def contests_root_page(request: Request, user: str = ""):
+def contests_root_page(request: Request, user: str = "", q: str = ""):
     active_user = _active_root_user(request, user)
     gctx = global_user_ctx(active_user)
     entries_limit = runtime().config_values.integer("API_PROBLEMS_LIST_LIMIT")
     entries = user_contests_overview(
         int(gctx['user']['id']),
         limit=entries_limit,
+        query=q,
     )
-    return template_response(request, 'root_contests.html', {'user': gctx['user'], 'default_problem': gctx['default_problem'], 'entries': entries, 'entries_limit': entries_limit, 'active_main': 'contests'})
+    return template_response(request, 'root_contests.html', {'user': gctx['user'], 'default_problem': gctx['default_problem'], 'entries': entries, 'entries_limit': entries_limit, 'query': q.strip(), 'active_main': 'contests'})
 
 def contests_root_create(request: Request, user: str = "", contest_slug: str = Form(...), contest_title: str = Form(...)):
     active_user = _active_root_user(request, user)
