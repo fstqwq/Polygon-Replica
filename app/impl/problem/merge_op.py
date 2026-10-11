@@ -273,7 +273,13 @@ async def merge_apply(
         preview = runtime().workspace_merge_service.get_preview(user, problem, preview_id)
         form = await request.form()
         mode = str(form.get("mode") or "")
-        choices = _form_choices(preview, form)
+        bulk_side = str(form.get("bulk_side") or "")
+        if bulk_side:
+            if mode != "manual" or bulk_side not in {"workspace", "published"}:
+                raise ValueError("select a valid side for all files")
+            choices = {group_id: bulk_side for group_id, _paths in preview.groups}
+        else:
+            choices = _form_choices(preview, form)
         if mode == "suggested":
             if not preview.suggested_available:
                 raise ValueError("a proposed merged version is not available")

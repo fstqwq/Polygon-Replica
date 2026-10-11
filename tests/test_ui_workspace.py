@@ -1124,6 +1124,39 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertEqual(applied.status_code, 303)
         self.assertEqual((alice_ws / conflict_path).read_text(encoding="utf-8"), "theirs & shared\n")
 
+    def test_merge_bulk_sides_preserve_selected_tree_and_support_undo(self) -> None:
+        workspace, original_head = self._ensure_committed_head("alice/sample", "alice")
+        workspace_service.grant_repo_access("alice/sample", "bob", "owner")
+        publisher = workspace_service.ensure_workspace("alice/sample", "bob")
+        (publisher / "notes/published-only.txt").write_text("published", encoding="utf-8")
+        published_head = git_service.commit(publisher, "Published update", "bob", "bob@example.com")
+        workspace_service.publish(publisher, git_service=git_service)
+        (workspace / "notes/local-only.txt").write_text("local", encoding="utf-8")
+        actor_id = workspace_service.known_user_id("alice")
+        self.assertIsNotNone(actor_id)
+        token = runtime.auth_service.create_session_for_user(int(actor_id))
+        with TestClient(app, base_url="https://testserver", headers={
+            "cookie": f"{AUTH_COOKIE_NAME}={token}", "origin": "https://testserver",
+        }) as client:
+            for side in ("workspace", "published"):
+                with self.subTest(side=side):
+                    preview = runtime.workspace_merge_service.start_preview("alice", "alice/sample", workspace)
+                    response = client.post(
+                        f"/problems/alice/sample/merge/{preview.preview_id}/apply",
+                        data={"mode": "manual", "bulk_side": side}, follow_redirects=False,
+                    )
+                    self.assertEqual(response.status_code, 303)
+                    self.assertEqual(runtime.workspace_merge_service.workspace_base_head(workspace), published_head)
+                    self.assertEqual((workspace / "notes/local-only.txt").exists(), side == "workspace")
+                    self.assertEqual((workspace / "notes/published-only.txt").exists(), side == "published")
+                    selected = "local-only.txt" if side == "workspace" else "published-only.txt"
+                    self.assertEqual((workspace / "notes" / selected).read_text(), "local" if side == "workspace" else "published")
+                    restored = client.post("/problems/alice/sample/merge/undo", follow_redirects=False)
+                    self.assertEqual(restored.status_code, 303)
+                    self.assertEqual(runtime.workspace_merge_service.workspace_base_head(workspace), original_head)
+                    self.assertEqual((workspace / "notes/local-only.txt").read_text(), "local")
+                    self.assertFalse((workspace / "notes/published-only.txt").exists())
+
     def test_merge_raw_files_are_attachment_downloads(self) -> None:
         alice_ws, _head = self._ensure_committed_head("alice/sample", "alice")
         html_path = f"notes/payload-{uuid.uuid4().hex[:8]}.html"

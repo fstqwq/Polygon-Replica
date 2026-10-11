@@ -10,7 +10,7 @@
       <h2>{{ 'Review Proposed Update' if review_mode == 'suggested' else 'Choose Which Version to Keep' }}</h2>
       {% if review_mode == 'suggested' %}
       {% if preview.fast_forward_possible %}
-      <p><strong>Fast-forward possible.</strong> You can also <a href="{{ problem_href('merge_page', preview_id=preview.id, query={'mode': 'manual'}) }}">choose files one by one</a>.</p>
+      <p><strong>Fast-forward possible.</strong></p>
       {% else %}
       <p>The proposed result combines the published revision with your workspace. Review every changed file before continuing.</p>
       {% endif %}
@@ -21,6 +21,17 @@
       file{% if (preview.suggested_affected_count if review_mode == 'suggested' else preview.manual_affected_count) != 1 %}s{% endif %}
     </strong>
   </div>
+
+  {% if review_mode == 'manual' %}
+  <form class="merge-actions" method="post" action="{{ problem_href('merge_apply', preview_id=preview.id) }}">
+    <input type="hidden" name="mode" value="manual" />
+    <button class="btn" type="submit" name="bulk_side" value="workspace" data-confirm-message="Keep your entire source tree and use the published revision as its new base? Published-only files will not be added. Nothing is published. You can Undo until the workspace is edited or published.">Keep all my files (Left)</button>
+    <button class="btn danger-link" type="submit" name="bulk_side" value="published" data-confirm-message="Replace your source tree with the published revision, including removing workspace-only files? Nothing is published. You can Undo until the workspace is edited or published.">Drop all my edits (Right)</button>
+  </form>
+  <p class="muted">Or choose files one by one</p>
+  {% else %}
+  <p><a href="{{ problem_href('merge_page', preview_id=preview.id, query={'mode': 'manual'}) }}">Or choose files one by one</a></p>
+  {% endif %}
 
   <form method="post" action="{{ problem_href('merge_apply', preview_id=preview.id) }}" data-merge-form>
     <input type="hidden" name="mode" value="{{ review_mode }}" />
