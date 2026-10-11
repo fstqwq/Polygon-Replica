@@ -54,7 +54,7 @@ local function presentation_environment(text, cursor)
   local opening = text:find('%S',cursor)
   if not opening or text:sub(opening,opening) ~= '{' then return nil,cursor end
   -- Unknown names must not scan an arbitrarily long, possibly unclosed argument.
-  for _,name in ipairs({'verbatim','Verbatim','lstlisting','minted','minipage','tabular'}) do
+  for _,name in ipairs({'verbatim','Verbatim','lstlisting','minted','minipage','tabular','wrapfigure'}) do
     local finish = opening+#name+1
     if text:sub(opening+1,finish) == name..'}' then return name,finish+1 end
   end
@@ -82,8 +82,8 @@ function M.prepare(text)
         local _,finish=text:find('\\end{'..name..'}',after,true)
         if not finish then error('unterminated verbatim environment') end
         table.insert(output,text:sub(cursor,finish)); cursor=finish+1
-      elseif name == 'minipage' or name == 'tabular' then
-        local replacement = name == 'minipage' and 'StatementMinipage' or 'StatementTabular'
+      elseif name == 'minipage' or name == 'tabular' or name == 'wrapfigure' then
+        local replacement = ({minipage='StatementMinipage',tabular='StatementTabular',wrapfigure='StatementWrapfigure'})[name]
         table.insert(output,'\\'..command..'{'..replacement..'}')
         cursor=after
         if name == 'minipage' and command == 'begin' then
@@ -322,6 +322,24 @@ local function minipage(text, state)
   return pandoc.Div(content,pandoc.Attr('',{'statement-minipage'},{style='width:'..size..';vertical-align:'..align}))
 end
 
+local function wrapfigure(text, state)
+  local opening = text:match('^\\begin{StatementWrapfigure}')
+  if not opening then return nil end
+  local _,cursor = argument(text,#opening+1,'[',']')
+  local placement,next_cursor = argument(text,cursor,'{','}')
+  local _,width_cursor = argument(text,next_cursor,'[',']')
+  local width,body_start = argument(text,width_cursor,'{','}')
+  if not placement or not width then error('incomplete wrapfigure') end
+  local side = ({r='right',R='right',l='left',L='left'})[placement]
+  if not side then error('unsupported wrapfigure placement: '..placement) end
+  local size = dimension(width,'pt')
+  if not size then error('unsupported wrapfigure width: '..width) end
+  local body = text:sub(body_start):match('^(.*)\\end{StatementWrapfigure}%s*$')
+  if not body then error('unterminated wrapfigure') end
+  local content = blocks(pandoc.read(M.prepare(body),'latex+raw_tex+latex_macros').blocks,copy(state))
+  return pandoc.Div(content,pandoc.Attr('',{'statement-wrapfigure','statement-wrapfigure-'..side},{style='width:'..size}))
+end
+
 local function is_minipage(item)
   return item.t == 'Div' and item.classes:includes('statement-minipage')
 end
@@ -352,7 +370,7 @@ blocks = function(content, state)
     local handled = false
     local prepared = false
     if item.t == 'RawBlock' and item.format == 'latex' then
-      local page = minipage(item.text,state)
+      local page = minipage(item.text,state) or wrapfigure(item.text,state)
       local table_block = tabular(item.text)
       local vertical = item.text:match('^\\vspace%*?%s*(%b{})%s*$')
       local font, body, ending = item.text:match('^\\begin%s*{([A-Za-z]+)}(.*)\\end%s*{([A-Za-z]+)}%s*$')

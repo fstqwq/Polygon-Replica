@@ -29,6 +29,13 @@ Presentation conversion preserves standard TeX size declarations and size
 environments (`tiny` through `Huge`), explicit `fontsize`/`selectfont`, nested
 groups, paragraph alignment, and caption font sizes. Minipages retain their
 width and vertical alignment in wrapping rows, with horizontal separators.
+Wrapfigure environments with `r`/`R` or `l`/`L` placement retain their width,
+images and scoped caption formatting as right or left floats. Browser text
+flow determines the wrapped line count; optional TeX line-count and overhang
+arguments do not control HTML layout. Narrow containers stack the figure above
+its following text. Section headings and statement boundaries clear floats.
+Dimensions use CSS units; the Polygon-specific `htmlPixelsInCm` macro does not
+change their scale. HTML renderer revisions participate in preview cache identity.
 Parboxes preserve their content and width within individual table cells.
 Tables in centered environments are centered as a whole, while cell alignment
 remains independent. Explicit `@{}` column spacing supports empty separators,

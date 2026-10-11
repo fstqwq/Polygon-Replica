@@ -702,17 +702,18 @@ class StatementPreviewService:
         language: str,
         source_identity: str,
     ) -> str:
-        return sha256_hex_json(
-            {
-                "subject": "problem",
-                "problem_id": problem_id,
-                "source": source_kind,
-                "output": output_kind,
-                "language": language,
-                "source_identity": source_identity,
-            },
-            ensure_ascii=True,
-        )
+        identity: dict[str, str | int] = {
+            "subject": "problem",
+            "problem_id": problem_id,
+            "source": source_kind,
+            "output": output_kind,
+            "language": language,
+            "source_identity": source_identity,
+        }
+        if output_kind == "html":
+            identity["html_renderer"] = "2026-10-11-wrapfigure"
+        return sha256_hex_json(identity, ensure_ascii=True)
+
 
     def _insert_problem(
         self,

@@ -107,6 +107,33 @@ class TestStatementHtmlRender(BackendE2ETestBase):
         source.with_suffix(".pdf").write_bytes(b"%PDF-1.4\n% compiled fixture\n")
         return ExecResult(backend="fixture", status="ok", returncode=0, elapsed_ms=1)
 
+    def test_wrapfigure_preserves_image_caption_and_following_text(self) -> None:
+        root = Path(tempfile.mkdtemp(prefix="statement-wrap-", dir=suite_root()))
+        self.addCleanup(shutil.rmtree, root, True)
+        render_root = root / "render"
+        render_root.mkdir()
+        (render_root / "schedule.png").write_bytes(b"PNG fixture")
+        for side in ("r", "l"):
+            with self.subTest(side=side):
+                source = r"""\begin{problem}{Wrapped image}{stdin}{stdout}{1 second}{256 megabytes}
+\begin{wrapfigure}{SIDE}{7cm}
+\centering
+\def\htmlPixelsInCm{45}
+\includegraphics[width=6.3cm]{schedule.png}
+\par\small One execution of Sample 1.
+\end{wrapfigure}
+Following paragraph beside the image.
+\end{problem}
+"""
+                (render_root / "problem.tex").write_text(source.replace("SIDE", side), encoding="utf-8")
+                result = runtime.statement_html_renderer.render(
+                    render_root, root / side, subject_token=f"wrap-{side}",
+                )
+                self.assertIn("One execution of Sample 1.", " ".join(result.fragment.split()))
+                self.assertIn("Following paragraph beside the image.", result.fragment)
+                self.assertEqual(len(result.resources), 1)
+                self.assertEqual(result.warnings, ())
+
     def test_parbox_captions_stay_in_their_table_cells_with_inline_images(self) -> None:
         root = Path(tempfile.mkdtemp(prefix="statement-table-", dir=suite_root()))
         self.addCleanup(shutil.rmtree, root, True)
