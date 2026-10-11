@@ -79,6 +79,18 @@ def contest_overview_page(request: Request, contest: str, user: Annotated[str, D
         {
             "ctx": ctx,
             "problem_rows": rows,
+            "sync_available": any(
+                row["readiness"] is not None
+                and row["readiness"]["workspace"]["needs_update"]
+                and not row["dirty"]
+                for row in rows
+            ),
+            "sync_blocked": any(
+                row["readiness"] is not None
+                and row["readiness"]["workspace"]["needs_update"]
+                and row["dirty"]
+                for row in rows
+            ),
             "owner_prefix_chars": owner_prefix_chars,
             "package_ready_count": package_ready_count,
             "package_queued_count": package_queued_count,
@@ -150,3 +162,36 @@ def contest_build_all_packages(
             f"{current} current, {unavailable} unavailable"
         ),
     )
+
+
+def contest_sync_all_problems(
+    contest: str,
+    user: Annotated[str, Depends(require_session_user)],
+):
+    ctx = _contest_ctx(contest, user, "overview")
+    actor_id = int(ctx["user"]["id"])
+    rows = runtime().contest_service.contest_problems(int(ctx["contest"]["id"]))
+    access = runtime().access_query.problem_contexts(
+        [row["problem_id"] for row in rows], actor_id,
+    )
+    synced = 0
+    failed: list[str] = []
+    for row in rows:
+        if not access[row["problem_id"]]["can_read"]:
+            continue
+        try:
+            workspace = runtime().workspace_service.ensure_workspace(
+                row["problem_slug"], user, refresh_status=False,
+            )
+            synced += int(runtime().workspace_merge_service.advance_clean_workspace(workspace))
+        except (OSError, RuntimeError, ValueError) as exc:
+            failed.append(f"{row['problem_slug']}: {exc}")
+    states = runtime().workspace_service.workspace_rows(
+        [row["problem_id"] for row in rows if access[row["problem_id"]]["can_read"]],
+        actor_id,
+    )
+    blocked = sum(bool(state["revision_upstream_higher"]) for state in states.values())
+    message = f"Synced {synced} problems; {blocked} require manual review."
+    if failed:
+        message += " Failed: " + "; ".join(failed)
+    return _contest_redirect(contest, "overview", message=message)

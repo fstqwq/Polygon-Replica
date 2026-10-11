@@ -757,3 +757,8 @@ button.contest-mark:hover,
 .contest-mark-choices button:is(:hover, :focus-visible) {
   background: var(--surface-hover);
 }
+
+.contest-sync-action {
+  display: inline;
+  margin-left: .75em;
+}

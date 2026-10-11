@@ -1,11 +1,14 @@
 from pathlib import Path
 
+from fastapi.testclient import TestClient
+
 from fastapi import HTTPException
 
 from app.service.problem.build_config import dumps_build_config, load_build_config
 
 from tests.contest_support import ContestActionBase
 from tests.db_helpers import db_fetch_all
+from app.main import app
 from tests.package_support import blocked_export_queue
 from tests.ui_support import (
     contest_build_all_packages,
@@ -26,6 +29,43 @@ class TestContestProblemActions(ContestActionBase):
         problem_id = workspace_service.known_problem_id(problem_slug)
         self.assertIsNotNone(problem_id)
         return int(problem_id), problem_slug
+
+    def test_sync_all_updates_clean_workspace_and_preserves_local_edits(self) -> None:
+        contest, contest_id, actor_id = self.create_contest("sync-all")
+        cases = []
+        for index, dirty in enumerate((False, True)):
+            _, problem_id, slug = self.add_owned_problem(contest_id, actor_id, str(index), "sync")
+            workspace = workspace_service.ensure_workspace(slug, "alice")
+            initial = runtime.git_service.commit(workspace, "Initial", "alice", "alice@example.com")
+            runtime.git_service.push(workspace, "main")
+            workspace_service.grant_repo_access(slug, "bob", "owner")
+            publisher = workspace_service.ensure_workspace(slug, "bob")
+            (publisher / "notes").mkdir(exist_ok=True)
+            (publisher / "notes/published.txt").write_text("published", encoding="utf-8")
+            head = runtime.git_service.commit(publisher, "Update", "bob", "bob@example.com")
+            workspace_service.publish(publisher, git_service=runtime.git_service)
+            if dirty:
+                (workspace / "notes").mkdir(exist_ok=True)
+                (workspace / "notes/local.txt").write_text("keep me", encoding="utf-8")
+            cases.append((problem_id, workspace, initial if dirty else head, dirty))
+        token = runtime.auth_service.create_session_for_user(actor_id)
+        with TestClient(app, base_url="https://testserver", headers={
+            "cookie": f"{runtime.config_values.AUTH_COOKIE_NAME}={token}",
+            "origin": "https://testserver",
+        }) as client:
+            url = f"/contests/{contest}/problems/sync"
+            self.assertEqual(client.post(url, headers={"origin": "https://evil.example"}).status_code, 403)
+            for _ in range(2):
+                self.assertEqual(client.post(url, follow_redirects=False).status_code, 303)
+                states = workspace_service.workspace_rows([case[0] for case in cases], actor_id)
+                for problem_id, workspace, head, dirty in cases:
+                    self.assertEqual(states[problem_id]["head_commit"], head)
+                    self.assertEqual(bool(states[problem_id]["dirty"]), dirty)
+                    self.assertEqual(bool(states[problem_id]["revision_upstream_higher"]), dirty)
+                    if dirty:
+                        self.assertEqual((workspace / "notes/local.txt").read_text(), "keep me")
+                    else:
+                        self.assertEqual((workspace / "notes/published.txt").read_text(), "published")
 
     def test_contest_review_reports_deleted_main_solution_without_changing_source(self) -> None:
         _contest_slug, contest_id, actor_user_id = self.create_contest("missing-main")

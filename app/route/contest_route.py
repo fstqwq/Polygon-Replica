@@ -10,6 +10,7 @@ from app.impl.contest.access import (
 from app.impl.contest.overview import (
     contest_build_all_packages,
     contest_overview_page,
+    contest_sync_all_problems,
 )
 from app.impl.contest.package import contest_packages_download
 from app.impl.contest.problem import (
@@ -211,4 +212,12 @@ router.add_api_route(
     "/contests/{contest}/properties/statement/language/remove",
     contest_statement_language_remove,
     methods=["POST"],
+)
+
+
+router.add_api_route(
+    "/contests/{contest}/problems/sync",
+    contest_sync_all_problems,
+    methods=["POST"],
+    name="contest_sync_all_problems",
 )

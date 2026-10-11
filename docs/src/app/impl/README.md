@@ -40,3 +40,11 @@ access and search filters before the display limit, retaining the existing order
 Contest HTML review (GET and POST) and PDF preview return HTTP 422 with a
 plain-text validation message when the requested source or language is unavailable.
 Authorization checks precede preview construction.
+
+Contest bulk sync resolves the current roster and problem read access, then
+fast-forwards only the caller's clean workspaces using the same locked operation
+as workspace entry. Each operation refreshes persisted list state. Local edits
+and non-fast-forward histories require manual review; per-problem failures are
+reported while other problems continue. The Status header offers bulk sync when
+persisted state includes clean outdated workspaces, or requests conflict
+resolution when only dirty outdated workspaces remain.

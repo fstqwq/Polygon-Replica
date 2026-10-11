@@ -37,7 +37,15 @@
       <th>#</th>
       <th class="problem-list-head">Title</th>
       <th>Details</th>
-      <th>Status</th>
+      <th>Status
+        {% if sync_available %}
+        <form class="contest-sync-action" method="post" action="/contests/{{ ctx.contest.slug }}/problems/sync">
+          <button class="linkish-button danger-link" type="submit">Sync all problems</button>
+        </form>
+        {% elif sync_blocked %}
+        <span class="danger">Please resolve conflicts</span>
+        {% endif %}
+      </th>
     </tr>
     {% for row in problem_rows %}
     <tr class="{% if row.dirty %}table-row-dirty{% endif %}">
