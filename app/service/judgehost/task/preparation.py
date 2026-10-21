@@ -763,6 +763,16 @@ class JudgehostPayloadPreparation:
                 f"{name}\0".encode("utf-8") + blob for name, blob in extra_source_items
             )
             source_hash = blob_set_hash(hash_blobs)
+        sample_markup = (
+            verification_payload.get("sample_markup") is True
+            and verification_payload.get("problem_mode") == "pass-fail"
+            and pass_limit == 1 and not compile_only
+        )
+        if sample_markup:
+            compare_files.append(("sample-markup", b"1\n", False))
+            if not any(name == "pass-capture" for name, _, _ in compare_files):
+                compare_files.append(("pass-capture", pass_capture_script, True))
+
         compile_hash = executable_hash(compile_files)
         run_hash = executable_hash(run_files)
         compare_hash = executable_hash(compare_files)
@@ -915,6 +925,7 @@ class JudgehostPayloadPreparation:
         source_label_override: str | None = None,
         extra_source_files_override: dict[str, object] | None = None,
         manual_validate_only: bool = False,
+        sample_markup: bool = False,
         execution_template: ExecutionTemplate | None = None,
     ) -> TaskPayload:
         settings = self._configuration.snapshot()
@@ -960,6 +971,10 @@ class JudgehostPayloadPreparation:
                     ) from exc
                 materialized_extra_sources[name] = materialized.to_payload()
             payload["extra_source_files"] = materialized_extra_sources
+        if sample_markup:
+            payload["verification_payload"] = {
+                **payload["verification_payload"], "sample_markup": True,
+            }
         if manual_validate_only:
             payload["manual_validate_only"] = True
         if execution_template is None:

@@ -574,6 +574,7 @@ class JudgehostCallbackIngestion:
             ),
         )
         callback_pass = max(0, parse_int(payload.get("pass"), 0))
+        batch_spec = self._batch_runtime.batch_spec(batch_id)
         prepared_artifacts = self._artifact_capture.prepare(
             CaseArtifactRequest(
                 payload=payload,
@@ -582,6 +583,7 @@ class JudgehostCallbackIngestion:
                 pass_limit=pass_limit,
                 callback_pass=callback_pass,
                 bundle_limit_bytes=bundle_limit_bytes,
+                sample_markup=batch_spec is not None and batch_spec.sample_markup,
             )
         )
 

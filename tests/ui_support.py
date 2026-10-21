@@ -93,7 +93,6 @@ setup_submit = root_auth_pages_module.setup_submit
 problems_root_import = root_problems_module.problems_root_import
 problems_root_import_slug_hint = root_problems_module.problems_root_import_slug_hint
 preview_save = preview_module.preview_save
-statement_templates_reset = preview_module.statement_templates_reset
 statement_examples_template_save = preview_module.statement_examples_template_save
 statement_examples_template_toggle = preview_module.statement_examples_template_toggle
 register_submit = root_auth_pages_module.register_submit

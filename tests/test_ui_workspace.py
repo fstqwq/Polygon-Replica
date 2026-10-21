@@ -40,7 +40,6 @@ from app.service.statement.constant import (
 )
 from app.service.statement.render import (
     ensure_statement_language_sources,
-    statement_templates_are_default,
 )
 from app.impl.problem.merge_op import merge_apply, merge_compare, merge_file, merge_page
 from tests.package_builders import polygon_contest_package, polygon_problem_package
@@ -75,7 +74,6 @@ from tests.ui_support import (
     problems_root_import,
     problems_root_import_slug_hint,
     revision_commit,
-    statement_templates_reset,
     statement_examples_template_save,
     statement_examples_template_toggle,
     switch_workspace,
@@ -1474,7 +1472,7 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertEqual(disabled.status_code, 303)
         self.assertFalse(examples_path.exists())
 
-    def test_statement_templates_reset_restores_defaults_and_disables_examples_override(self) -> None:
+    def test_statement_template_restore_changes_only_the_selected_file(self) -> None:
         problem = f"alice/stmtreset-{uuid.uuid4().hex[:8]}"
         workspace_service.ensure_problem(problem)
         workspace_service.grant_repo_access(problem, "alice", "owner")
@@ -1488,17 +1486,29 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         legend_path = ws / "statement-sections" / "english" / "legend.tex"
         legend_path.write_text("custom legend section\n", encoding="utf-8")
 
-        resp = statement_templates_reset(problem=problem, user="alice", page="statement", language="english")
-
-        self.assertEqual(resp.status_code, 303)
-        self.assertEqual(f"/problems/{problem}/statement?language=english", resp.headers.get("location", ""))
-        self.assertEqual((ws / "statement" / "statements.ftl").read_text(encoding="utf-8"), DEFAULT_STATEMENT_TEMPLATE)
-        self.assertEqual((ws / "statement" / "problem.tex").read_text(encoding="utf-8"), DEFAULT_STATEMENT_PROBLEM_TEMPLATE)
-        self.assertEqual((ws / "statement" / "olymp.sty").read_text(encoding="utf-8"), DEFAULT_OLYMP_STY)
-        self.assertFalse(examples_path.exists())
-        self.assertEqual(legend_path.read_text(encoding="utf-8"), "custom legend section\n")
-
-        self.assertTrue(statement_templates_are_default(ws))
+        expected = {name: (ws / "statement" / name).read_text(encoding="utf-8")
+                    for name in ("statements.ftl", "problem.tex", "olymp.sty", "examples.tex")}
+        actor_id = workspace_service.known_user_id("alice")
+        token = runtime.auth_service.create_session_for_user(actor_id)
+        url = f"/problems/{problem}/statement/templates/reset"
+        with TestClient(app, base_url="https://testserver", follow_redirects=False, headers={
+            "cookie": f"{AUTH_COOKIE_NAME}={token}", "origin": "https://testserver",
+        }) as client:
+            for name, content in (("olymp.sty", DEFAULT_OLYMP_STY), ("statements.ftl", DEFAULT_STATEMENT_TEMPLATE),
+                                  ("problem.tex", DEFAULT_STATEMENT_PROBLEM_TEMPLATE), ("examples.tex", None)):
+                resp = client.post(url, data={"path": "statement/" + name, "page": "statement", "language": "english"})
+                self.assertEqual(resp.status_code, 303)
+                self.assertEqual(f"/problems/{problem}/statement?language=english", resp.headers.get("location", ""))
+                if content is None:
+                    del expected[name]
+                    self.assertFalse(examples_path.exists())
+                else:
+                    expected[name] = content
+                for filename, text in expected.items():
+                    self.assertEqual((ws / "statement" / filename).read_text(encoding="utf-8"), text)
+                self.assertEqual(legend_path.read_text(encoding="utf-8"), "custom legend section\n")
+            client.post(url, data={"path": "statement/../statement-sections/english/legend.tex", "language": "english"})
+            self.assertEqual(legend_path.read_text(encoding="utf-8"), "custom legend section\n")
 
     def test_problems_root_import_slug_hint_uses_filename_and_avoids_duplicates(self) -> None:
         token = uuid.uuid4().hex[:8]

@@ -32,6 +32,9 @@ class PassArtifacts:
     team_message_ref: str = ""
     metadata_ref: str = ""
     compare_metadata_ref: str = ""
+    input_markup_ref: str = ""
+    output_markup_ref: str = ""
+    sample_output_markup_ref: str = ""
 
     def refs(self) -> tuple[str, ...]:
         return tuple(
@@ -46,6 +49,9 @@ class PassArtifacts:
                 self.team_message_ref,
                 self.metadata_ref,
                 self.compare_metadata_ref,
+                self.input_markup_ref,
+                self.output_markup_ref,
+                self.sample_output_markup_ref,
             )
             if ref
         )

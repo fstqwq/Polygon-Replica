@@ -16,3 +16,7 @@ The [package](../../../../protocol/package.md), [statement preview](../../../../
 Add-problem search matches the full problem slug as a case-insensitive literal
 substring. Direct write access, roster exclusion, and search filtering precede
 the result limit in the database query.
+
+Contest rendering resolves the sample-shading default from properties. HTML
+passes it to each independent Problem preview; PDF projects it into the Contest
+template context. Property mutations retain the source-generation lifecycle.

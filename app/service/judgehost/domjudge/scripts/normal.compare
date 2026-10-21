@@ -6,6 +6,16 @@ FEEDBACK="$3"
 
 HERE="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 mkdir -p "$FEEDBACK"
+unset POLYGON_SAMPLE_MARKUP_FILE
+if [ -f "$HERE/sample-markup" ]; then
+  POLYGON_SAMPLE_MARKUP_FILE="$FEEDBACK/output.markup"
+  if rm -f -- "$POLYGON_SAMPLE_MARKUP_FILE"; then
+    export POLYGON_SAMPLE_MARKUP_FILE
+  else
+    unset POLYGON_SAMPLE_MARKUP_FILE
+  fi
+  "$HERE/pass-capture" prepare "$TESTIN" >/dev/null 2>&1 || true
+fi
 capture_on_exit() {
   RC=$?
   trap - EXIT
@@ -60,6 +70,9 @@ compile_checker() {
 }
 
 run_checker() {
+  if [ -n "${POLYGON_SAMPLE_MARKUP_FILE:-}" ]; then
+    rm -f -- "$POLYGON_SAMPLE_MARKUP_FILE" || unset POLYGON_SAMPLE_MARKUP_FILE
+  fi
   set +e
   # DOMjudge checker ABI: in, ans, feedback with contestant output on stdin.
   FEEDBACK_DIR="$FEEDBACK" "$CHECKER_BIN" "$TESTIN" "$TESTANS" "$FEEDBACK" <"$TEAMOUT" >"$FEEDBACK/checker.log" 2>&1

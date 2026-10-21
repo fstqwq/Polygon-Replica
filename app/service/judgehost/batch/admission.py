@@ -81,20 +81,21 @@ class BatchAdmission:
             for program_id in dict.fromkeys(verification_program_ids):
                 key = (token, program_id)
                 self._state._closed_program_keys.add(key)
-                batch_id = self._state._batch_id_by_verification_program.get(key)
-                if batch_id is None:
-                    continue
-                batch = self._state._batches[batch_id]
-                counts = self._state._batch_counts[batch_id]
-                if (
-                    batch.status == "open"
-                    and counts.total > 0
-                    and counts.terminal == counts.total
-                    and batch.materialization_state != "materializing"
-                ):
-                    self._state._close_batch_locked(batch, updated_at=now_text)
-                if batch.status == "finalize-pending":
-                    ready.append(batch_id)
+                for sample_markup in (False, True):
+                    batch_id = self._state._batch_id_by_verification_program.get((*key, sample_markup))
+                    if batch_id is None:
+                        continue
+                    batch = self._state._batches[batch_id]
+                    counts = self._state._batch_counts[batch_id]
+                    if (
+                        batch.status == "open"
+                        and counts.total > 0
+                        and counts.terminal == counts.total
+                        and batch.materialization_state != "materializing"
+                    ):
+                        self._state._close_batch_locked(batch, updated_at=now_text)
+                    if batch.status == "finalize-pending":
+                        ready.append(batch_id)
             return ready
 
     def create_batch_with_cases(
@@ -156,11 +157,24 @@ class BatchAdmission:
             program_key = (verification_id, verification_program_id)
             if program_key in self._state._closed_program_keys:
                 raise RuntimeError("judgehost verification program is closed")
-            existing_batch_id = self._state._batch_id_by_verification_program.get(program_key)
+            existing_batch_id = self._state._batch_id_by_verification_program.get((*program_key, batch_spec.sample_markup))
+            same_variant = existing_batch_id is not None
+            if existing_batch_id is None:
+                existing_batch_id = self._state._batch_id_by_verification_program.get((*program_key, not batch_spec.sample_markup))
             if existing_batch_id is not None:
                 existing_batch = self._state._batches[existing_batch_id]
+                existing_spec = self._state._batch_specs[existing_batch_id]
+                requested_spec = batch_spec
+                if not same_variant:
+                    # Only optional capture resources differ between sample and ordinary cases.
+                    existing_spec = replace(existing_spec, compare_files=tuple(
+                        item for item in existing_spec.compare_files if item[0] not in {"sample-markup", "pass-capture"}
+                    ))
+                    requested_spec = replace(requested_spec, compare_files=tuple(
+                        item for item in requested_spec.compare_files if item[0] not in {"sample-markup", "pass-capture"}
+                    ))
                 identity = (
-                    existing_batch.execution_signature,
+                    existing_batch.execution_signature if same_variant else "",
                     existing_batch.task_kind,
                     existing_batch.compile_key,
                     existing_batch.contest_id,
@@ -168,7 +182,7 @@ class BatchAdmission:
                     existing_batch.source_name,
                     existing_batch.compile_hash,
                     existing_batch.run_hash,
-                    existing_batch.compare_hash,
+                    existing_batch.compare_hash if same_variant else "",
                     existing_batch.source_hash,
                     existing_batch.compile_config_json,
                     existing_batch.run_config_json,
@@ -177,13 +191,13 @@ class BatchAdmission:
                     existing_batch.verification_source,
                     existing_batch.bypass_case_result_cache,
                     existing_batch.service_class,
-                    self._state._batch_specs[existing_batch_id],
+                    existing_spec,
                     self._state._compile_submission_identity(
                         self._state._compile_submissions_by_key[existing_batch.compile_key]
                     ),
                 )
                 requested_identity = (
-                    execution_signature,
+                    execution_signature if same_variant else "",
                     task_kind,
                     compile_key,
                     contest_id,
@@ -191,7 +205,7 @@ class BatchAdmission:
                     source_name,
                     compile_hash,
                     run_hash,
-                    compare_hash,
+                    compare_hash if same_variant else "",
                     source_hash,
                     compile_config_json,
                     run_config_json,
@@ -200,19 +214,20 @@ class BatchAdmission:
                     verification_source,
                     int(bypass_case_result_cache),
                     service_class,
-                    batch_spec,
+                    requested_spec,
                     self._state._compile_submission_identity(compile_submission),
                 )
                 if identity != requested_identity:
                     raise RuntimeError("judgehost verification program identity changed")
                 if existing_batch.status != "open":
                     raise RuntimeError("judgehost verification program is closed")
-                self._append_cases_to_batch_locked(
-                    batch=existing_batch,
-                    cases=cases,
-                    now_text=created_at,
-                )
-                return existing_batch_id
+                if same_variant:
+                    self._append_cases_to_batch_locked(
+                        batch=existing_batch,
+                        cases=cases,
+                        now_text=created_at,
+                    )
+                    return existing_batch_id
             protocol_job_id = job_id(verification_id)
             existing_verification_id = self._state._verification_by_job_id.get(protocol_job_id)
             if existing_verification_id not in {None, verification_id}:
@@ -289,7 +304,7 @@ class BatchAdmission:
             self._state._batch_ids_by_verification[verification_id].add(batch_id)
             self._state._verification_by_job_id[protocol_job_id] = verification_id
             self._state._batch_counts[batch_id] = StatusCounts()
-            self._state._batch_id_by_verification_program[program_key] = batch_id
+            self._state._batch_id_by_verification_program[(*program_key, batch_spec.sample_markup)] = batch_id
             self._state._index_batch_scripts_locked(batch, 1)
             self._state._empty_batch_ids.add(batch_id)
             for case_id, case in zip(entity_ids[1:], cases, strict=True):

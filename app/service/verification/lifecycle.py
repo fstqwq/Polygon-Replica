@@ -293,6 +293,7 @@ class VerificationTransitionCommit:
 class SanityFinish:
     verification_id: str
     detail: VerificationDetail
+    sample_output_markup: tuple[tuple[str, str], ...] = ()
 
     @classmethod
     def build(
@@ -300,10 +301,12 @@ class SanityFinish:
         verification_id: str,
         *,
         detail: VerificationDetail,
+        sample_output_markup: tuple[tuple[str, str], ...] = (),
     ) -> "SanityFinish":
         return cls(
             verification_id=verification_id,
             detail=deepcopy(detail),
+            sample_output_markup=sample_output_markup,
         )
 
 

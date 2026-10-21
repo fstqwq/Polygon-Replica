@@ -22,6 +22,10 @@ class ExecutionBatchSpec:
     run_files: tuple[tuple[str, bytes, bool], ...] = ()
     compare_files: tuple[tuple[str, bytes, bool], ...] = ()
 
+    @property
+    def sample_markup(self) -> bool:
+        return any(name == "sample-markup" for name, _content, _executable in self.compare_files)
+
 
 @dataclass(frozen=True, slots=True)
 class CaseSpec:

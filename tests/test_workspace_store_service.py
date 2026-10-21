@@ -15,7 +15,6 @@ from app.service.problem.runtime_config import problem_config_limits
 from app.service.repository.git import GitService
 from app.service.repository.revision import git_commit_sha, workspace_revision_info
 from app.service.statement.constant import STATEMENT_DEFAULT_FILES
-from app.service.statement.render import statement_templates_are_default
 
 from tests.db_fixture import DBTestBase
 from tests.isolated_db_helpers import isolated_db_execute, isolated_db_fetch_one
@@ -231,7 +230,6 @@ class TestWorkspaceStoreService(DBTestBase):
                     (workspace / rel).read_text(encoding="utf-8"),
                     expected,
                 )
-        self.assertTrue(statement_templates_are_default(workspace))
 
     def test_published_source_preflight_reports_without_mutating_git(self) -> None:
         self.workspace_service.ensure_problem(self.problem)

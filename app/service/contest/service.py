@@ -11,7 +11,7 @@ from app.service.access.query import AccessQuery
 from app.service.contest.model import AgentContestRoster
 from app.service.contest.problem_index import normalize_contest_problem_idx
 from app.service.contest.property import (
-    INSERT_BLANK_PAGE_PROPERTY,
+    BOOLEAN_CONTEST_PROPERTY_KEYS,
     REQUIRED_CONTEST_PROPERTY_KEYS,
     localized_contest_properties,
     normalize_contest_property_key,
@@ -497,14 +497,14 @@ class ContestService:
                     raise ValueError(f"contest property cannot be deleted: {safe_key}")
                 normalized[safe_key] = None
                 continue
-            if safe_key == INSERT_BLANK_PAGE_PROPERTY:
+            if safe_key in BOOLEAN_CONTEST_PROPERTY_KEYS:
                 if isinstance(value, bool):
                     normalized[safe_key] = "true" if value else "false"
                     continue
                 safe_boolean = str(value).strip().lower()
                 if safe_boolean not in {"true", "false"}:
                     raise ValueError(
-                        "insertBlankPage must be true or false"
+                        f"{safe_key} must be true or false"
                     )
                 normalized[safe_key] = safe_boolean
                 continue

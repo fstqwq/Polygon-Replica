@@ -103,7 +103,7 @@ class BatchState:
         self._latest_case_id_by_task_test: dict[tuple[str, str], int] = {}
         self._batch_id_by_task: dict[str, int] = {}
         self._batch_ids_by_run: dict[str, set[int]] = defaultdict(set)
-        self._batch_id_by_verification_program: dict[tuple[str, str], int] = {}
+        self._batch_id_by_verification_program: dict[tuple[str, str, bool], int] = {}
         self._closed_program_keys: set[tuple[str, str]] = set()
         self._closed_verification_ids: set[str] = set()
         self._cancelled_verification_ids: set[str] = set()
@@ -939,8 +939,11 @@ class BatchState:
             batch.verification_id,
             batch.verification_program_id,
         )
-        self._batch_id_by_verification_program.pop(program_key, None)
-        self._closed_program_keys.discard(program_key)
+        self._batch_id_by_verification_program.pop(
+            (*program_key, self._batch_specs[batch_id].sample_markup), None
+        )
+        if not any((*program_key, variant) in self._batch_id_by_verification_program for variant in (False, True)):
+            self._closed_program_keys.discard(program_key)
         self._case_ids_by_batch.pop(batch_id, None)
         self._batch_counts.pop(batch_id, None)
         self._batch_specs.pop(batch_id, None)

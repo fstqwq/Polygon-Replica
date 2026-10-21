@@ -115,6 +115,7 @@ class StatementPreviewService:
         output_kind: StatementPreviewOutput,
         language: str,
         native_package_id: str = "",
+        html_sample_shading: bool = True,
     ) -> StatementPreviewRow:
         safe_language = self._language(language)
         actor_user_id = int(self._workspaces.user_row(username)["id"])
@@ -125,6 +126,7 @@ class StatementPreviewService:
             output_kind=output_kind,
             language=safe_language,
             native_package_id=native_package_id,
+            html_sample_shading=html_sample_shading,
         )
         cached = self._cached_problem(
             preview_input.problem_id,
@@ -152,6 +154,7 @@ class StatementPreviewService:
                     output_kind=output_kind,
                     language=safe_language,
                     source_identity=prepared.source_identity,
+                    html_sample_shading=html_sample_shading,
                 )
                 cached = self._cached_problem(
                     prepared.problem_id,
@@ -178,6 +181,7 @@ class StatementPreviewService:
                         output_kind=output_kind,
                         subject_token=f"problem-{prepared.problem_id}",
                         sample_count=prepared.sample_count,
+                        html_sample_shading=html_sample_shading,
                     )
                 except Exception as exc:
                     self._store.finish(
@@ -214,6 +218,7 @@ class StatementPreviewService:
         output_kind: StatementPreviewOutput,
         language: str,
         native_package_id: str = "",
+        html_sample_shading: bool = True,
     ) -> StatementPreviewInput:
         """Return the cache identity without materializing a render tree."""
 
@@ -254,6 +259,7 @@ class StatementPreviewService:
                 output_kind=output_kind,
                 language=safe_language,
                 source_identity=source_identity,
+                html_sample_shading=html_sample_shading,
             ),
         )
 
@@ -481,6 +487,7 @@ class StatementPreviewService:
         output_kind: StatementPreviewOutput,
         subject_token: str,
         sample_count: int | None,
+        html_sample_shading: bool = True,
     ) -> StatementPreviewRow:
         preview_root = self._preview_root(preview_id)
         preview_root.mkdir(parents=True, exist_ok=True)
@@ -494,6 +501,7 @@ class StatementPreviewService:
                     render_root,
                     html_root,
                     subject_token=subject_token,
+                    shade_samples=html_sample_shading,
                 )
             except StatementHtmlRenderError as exc:
                 if exc.log_text:
@@ -701,6 +709,7 @@ class StatementPreviewService:
         output_kind: StatementPreviewOutput,
         language: str,
         source_identity: str,
+        html_sample_shading: bool = True,
     ) -> str:
         identity: dict[str, str | int] = {
             "subject": "problem",
@@ -709,9 +718,9 @@ class StatementPreviewService:
             "output": output_kind,
             "language": language,
             "source_identity": source_identity,
+            "html_sample_shading": html_sample_shading,
         }
-        if output_kind == "html":
-            identity["html_renderer"] = "2026-10-11-wrapfigure"
+        identity["renderer"] = "2026-10-22-sample-shading"
         return sha256_hex_json(identity, ensure_ascii=True)
 
 

@@ -17,6 +17,12 @@
       <button class="linkish-button" type="submit">Insert Blank Page After Odd Statements</button>
     </form>
     {% endif %}
+    {% if contest_property_table["can_remove_sample_shading"] %}
+    <form class="inline-form" method="post" action="/contests/{{ ctx.contest.slug }}/properties/insert-preset">
+      <input type="hidden" name="property_key" value="shadeSamples" />
+      <button class="linkish-button" type="submit">Remove sample shading</button>
+    </form>
+    {% endif %}
     <a class="linkish" href="#contest-property-add-popup" data-popup-open="contest-property-add-popup">Add property</a>
   </div>
   {% endif %}

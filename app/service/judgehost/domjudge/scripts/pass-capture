@@ -280,6 +280,14 @@ finish_capture() {
       ;;
   esac
   select_bundle_profile || return 1
+  if [ "$EXIT_STATUS" -eq 42 ] && [ "$CURRENT_PASS" -eq 1 ] && [ -n "${POLYGON_SAMPLE_MARKUP_FILE:-}" ]; then
+    for MARKUP in input.markup output.markup; do
+      SIZE=$(regular_readable_size "$FEEDBACK_DIR/$MARKUP") || continue
+      NEEDED=$((512 + ((SIZE + 511) / 512) * 512))
+      [ $((ESTIMATED_BYTES + NEEDED)) -le "$BUNDLE_MAX_BYTES" ] || continue
+      add_source_member "$CURRENT_PASS/feedback/$MARKUP" "passes/$CURRENT_PASS/$MARKUP" || true
+    done
+  fi
   create_selected_bundle
 }
 

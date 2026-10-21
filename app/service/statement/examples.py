@@ -1,5 +1,6 @@
 """Project canonical verification evidence into statement example resources."""
 
+import logging
 from pathlib import Path, PurePosixPath
 from typing import Literal, NotRequired, Protocol, TypedDict
 
@@ -14,6 +15,7 @@ from app.service.problem.test_spec import (
     payload_rel_path_for_test,
     read_statement_sample_text,
 )
+from app.service.statement.sample_markup import sample_shaded_lines
 from app.service.statement.sample_transcript import statement_sample_events_from_transcript
 from app.service.verification.types import VerificationTaskRow
 from app.service.verification.types import VerificationStatus, VerificationTaskStatus
@@ -31,6 +33,7 @@ class StatementExamplesVerification(Protocol):
 class StatementExampleResource(TypedDict):
     path: str
     content: str
+    shaded_lines: NotRequired[tuple[int, ...]]
 
 
 class StatementExampleEvent(TypedDict):
@@ -557,10 +560,36 @@ class StatementExamplesProducer:
         verification_mode = mode
         test_by_id: dict[str, tuple[int, str]] = {}
         tasks: dict[str, VerificationTaskRow] = {}
+        markup_by_test: dict[str, tuple[str, str]] = {}
+        custom_output_markup: dict[str, str] = {}
         if verification_id:
             read_model, test_by_id, tasks = _verification_evidence(
                 self._verification_service, verification_id
             )
+            markup_by_input: dict[str, str] = {}
+            for evidence in read_model["tasks"]:
+                evidence_passes = evidence["result"].passes
+                if len(evidence_passes) != 1:
+                    continue
+                artifacts = evidence_passes[0].artifacts
+                name = evidence["test_name"]
+                input_ref, output_ref = markup_by_test.get(name, ("", ""))
+                if evidence["task_kind"] == "generate-input":
+                    input_ref = artifacts.input_markup_ref
+                    if input_ref:
+                        markup_by_input[evidence["output_ref"]] = input_ref
+                elif evidence["task_kind"] == "main-correct":
+                    output_ref = artifacts.output_markup_ref
+                    if artifacts.sample_output_markup_ref:
+                        custom_output_markup[name] = artifacts.sample_output_markup_ref
+                markup_by_test[name] = (input_ref, output_ref)
+            for name, main_task in tasks.items():
+                if len(main_task["result"].passes) == 1:
+                    input_blob = main_task["result"].passes[0].artifacts.input_ref
+                    markup_by_test[name] = (
+                        markup_by_input.get(input_blob, markup_by_test.get(name, ("", ""))[0]),
+                        markup_by_test.get(name, ("", ""))[1],
+                    )
             read_model_mode = read_model["mode"]
             if read_model_mode == "pass-fail":
                 verification_mode = "pass-fail"
@@ -643,6 +672,29 @@ class StatementExamplesProducer:
                         verification_service=self._verification_service,
                         max_bytes=statement_sample_max_bytes,
                     )
+            if verification_id and verification_mode == "pass-fail" and len(passes) == 1 and len(sample["passes"]) == 1:
+                input_ref, output_ref = markup_by_test.get(execution_test_name, ("", ""))
+                if row["sample_output"]:
+                    output_ref = custom_output_markup.get(test_name, output_ref)
+                displayed_pass = sample["passes"][0]
+                refs = {displayed_pass.get("inputFile", ""): input_ref,
+                        displayed_pass.get("outputFile", ""): output_ref}
+                for resource in resources:
+                    ref = refs.get(resource["path"], "")
+                    if not ref:
+                        continue
+                    descriptor = self._verification_service.artifact_descriptor(ref)
+                    if descriptor is None or descriptor.size > 32 * (statement_sample_max_bytes + 1):
+                        logging.getLogger(__name__).warning("Sample markup is unavailable or oversized")
+                        continue
+                    try:
+                        markup = descriptor.path.read_bytes()
+                    except OSError:
+                        logging.getLogger(__name__).warning("Sample markup cannot be read")
+                        continue
+                    lines = sample_shaded_lines(markup, resource["content"].encode("utf-8"))
+                    if lines:
+                        resource["shaded_lines"] = lines
             samples.append(sample)
             for resource in resources:
                 if resource["path"] in resource_paths:

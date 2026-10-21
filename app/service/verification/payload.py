@@ -41,9 +41,11 @@ def prepared_payload_for_uploaded_source(
     verification_payload_base: VerificationPayloadBase,
     extra_source_files: dict[str, PayloadFile] | None = None,
     manual_validate_only: bool = False,
+    sample_markup: bool = False,
     prepared_test: PreparedTest | None = None,
 ) -> dict[str, object]:
     verification_payload = dict(verification_payload_base)
+    verification_payload["sample_markup"] = sample_markup
     verification_payload["tests"] = [
         prepared_test if prepared_test is not None else
         test_payload_entry(test_name=test_name, input_file=input_file, answer_file=answer_file)

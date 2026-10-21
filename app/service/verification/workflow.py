@@ -72,7 +72,7 @@ class TaskExecutionContext:
     snapshot_root: Path
     artifact_file_by_test_ref: dict[tuple[str, str], PayloadFile]
     program_by_id: dict[str, VerificationProgram]
-    execution_template_by_program_id: dict[str, ExecutionTemplate]
+    execution_template_by_program_id: dict[tuple[str, bool], ExecutionTemplate]
     test_plan_by_name: dict[str, VerificationTestPlan]
     run_verification_payload_base: VerificationPayloadBase
     generate_verification_payload_base: VerificationPayloadBase
@@ -82,6 +82,7 @@ class TaskExecutionContext:
     runtime_blob_store: RuntimeBlobStore
     verification_service: VerificationService
     task_store: VerificationTaskStore
+    markup_generator_tests: frozenset[str] = frozenset()
     prepared_test_by_files: dict[tuple[str, PayloadFile, PayloadFile], PreparedTest] = field(default_factory=dict)
 
 
@@ -191,12 +192,21 @@ def _prepared_test(
     return cached
 
 
+def _sample_markup_enabled(execution: TaskExecutionContext, test_name: str) -> bool:
+    return (
+        execution.problem_mode == "pass-fail" and execution.pass_limit == 1
+        and execution.test_plan_by_name[test_name].sample
+    )
+
+
 def _execution_template(
     execution: TaskExecutionContext,
     *,
     program: VerificationProgram,
+    sample_markup: bool = False,
 ) -> ExecutionTemplate:
-    cached = execution.execution_template_by_program_id.get(program.program_id)
+    key = (program.program_id, sample_markup)
+    cached = execution.execution_template_by_program_id.get(key)
     if cached is not None:
         return cached
     compile_spec = program.compile_spec
@@ -208,7 +218,7 @@ def _execution_template(
     prepared = execution.judgehost.prepare_execution_template(
         upload_file=compile_spec.source_file,
         upload_filename=compile_spec.source_name,
-        verification_payload=verification_payload_base,
+        verification_payload={**verification_payload_base, "sample_markup": sample_markup},
         expected_behavior=program.expected_behavior,
         verification_source=program.kind,
         task_kind=program.kind,
@@ -217,7 +227,7 @@ def _execution_template(
         compile_only=False,
         bypass_case_result_cache=execution.bypass_case_result_cache,
     )
-    execution.execution_template_by_program_id[program.program_id] = prepared
+    execution.execution_template_by_program_id[key] = prepared
     return prepared
 
 
@@ -322,6 +332,10 @@ def _publish_generate_task(task_row: VerificationTaskRow, *, execution: TaskExec
                     input_ref=owner_output_ref,
                 ),
             )
+        sample_markup = (
+            execution.problem_mode == "pass-fail" and execution.pass_limit == 1
+            and test_name in execution.markup_generator_tests
+        )
         empty_answer = execution.runtime_blob_store.put_bytes(b"")
         prepared = prepared_payload_for_uploaded_source(
             source_label=compile_spec.source_name,
@@ -336,10 +350,12 @@ def _publish_generate_task(task_row: VerificationTaskRow, *, execution: TaskExec
             verification_payload_base=execution.generate_verification_payload_base,
             extra_source_files=dict(compile_spec.extra_source_files),
             manual_validate_only=compile_spec.manual_validate_only,
+            sample_markup=sample_markup,
         )
         execution_template = _execution_template(
             execution,
             program=program,
+            sample_markup=sample_markup,
         )
         task_run_id = str(prepared.get("run_id") or run_id)
         judgehost_task_id = execution.judgehost.enqueue_task(
@@ -432,6 +448,7 @@ def _publish_run_task(task_row: VerificationTaskRow, *, execution: TaskExecution
             )
             verification_source = TASK_SOLUTION_RUN
             expected_behavior = normalize_expected_behavior(task_row["expected_behavior"])
+        sample_markup = task_kind == TASK_MAIN_CORRECT and _sample_markup_enabled(execution, test_name)
         prepared = prepared_payload_for_uploaded_source(
             source_label=source_path,
             run_id=run_id,
@@ -442,10 +459,12 @@ def _publish_run_task(task_row: VerificationTaskRow, *, execution: TaskExecution
                 execution, test_name=test_name, input_file=input_file, answer_file=answer_file,
             ),
             verification_payload_base=execution.run_verification_payload_base,
+            sample_markup=sample_markup,
         )
         execution_template = _execution_template(
             execution,
             program=program,
+            sample_markup=sample_markup,
         )
         judgehost_task_id = execution.judgehost.enqueue_task(
             verification_task_id=task_id,
@@ -675,12 +694,20 @@ def run_workspace_verification_dag(
             if activation.outcome == "missing":
                 raise RuntimeError("verification was not admitted")
             return
+        markup_generator_tests = {
+            name for name in test_names if execution_plan.test_plan_by_name[name].sample
+        }
+        graph_by_id = {task.task_id: task for task in graph.tasks}
+        for task in graph.tasks:
+            if task.task_kind == TASK_GENERATE_INPUT and task.test_name in markup_generator_tests and task.predecessor_task_id:
+                markup_generator_tests.add(graph_by_id[task.predecessor_task_id].test_name)
         execution = TaskExecutionContext(
             problem=problem,
             user=user,
             verification_id=verification_id,
             problem_mode=verification_mode,
             pass_limit=verification_pass_limit,
+            markup_generator_tests=frozenset(markup_generator_tests),
             snapshot_root=execution_plan.snapshot_root,
             artifact_file_by_test_ref={},
             program_by_id={
@@ -793,6 +820,7 @@ def run_workspace_verification_dag(
                 SanityFinish.build(
                     verification_id,
                     detail=updated_detail,
+                    sample_output_markup=sanity_result.output_markup,
                 )
             )
             snapshot = verification_service.verification_snapshot(

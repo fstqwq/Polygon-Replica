@@ -1,5 +1,5 @@
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from app.config import build_config_values
@@ -18,6 +18,7 @@ from app.service.problem.runtime_config import (
     problem_config_limits,
 )
 from app.service.problem.test_spec import TestSpecDocumentEntry, dumps_tests_spec
+from app.service.statement.sample_markup import sample_shaded_lines
 from app.service.statement.examples import (
     StatementExamplesBundle,
     StatementExamplesProducer,
@@ -58,6 +59,7 @@ class _VerificationEvidence:
     mode: str
     tests_meta_rows: list[VerificationTestMetadata]
     tasks: list[_SampleTask]
+    output_markup: dict[str, str] | None = None
 
     def put(self, payload: bytes) -> str:
         return self.blobs.put_bytes(payload).blob_ref
@@ -151,7 +153,8 @@ class TestStatementExamplesProducer(VerificationServiceTestBase):
             ) for task in evidence.tasks
         ))
         self.verification_service.finish_sanity(SanityFinish.build(
-            verification_id, detail={**detail, "sanity_status": "passed"}
+            verification_id, detail={**detail, "sanity_status": "passed"},
+            sample_output_markup=tuple((evidence.output_markup or {}).items()),
         ))
         return verification_id
 
@@ -169,6 +172,66 @@ class TestStatementExamplesProducer(VerificationServiceTestBase):
             statement_sample_max_bytes=sample_max_bytes,
             problem_limits=_PROBLEM_LIMITS,
         )
+
+    def test_markup_requires_exact_sample_and_whole_line_boundaries(self) -> None:
+        cases = (
+            (b"2\n!c1;10\n!c2;20\n", b"2\n10\n20\n", (2,)),
+            (b"!c1;10!c2;\n20\n", b"10\n20\n", (1,)),
+            (b"!c1;10!c2; 20\n", b"10 20\n", ()),
+            (b"!c1;\\!\\\\\n!c2;end", b"!\\\nend", (1,)),
+            (b"!c1;old\n", b"new\n", ()),
+            (b"!c2;a\n!c1;b\n", b"a\nb\n", ()),
+            (b"!c1;a\n!c2;", b"a\n", ()),
+            (b"unchanged\n", b"unchanged\n", ()),
+        )
+        for encoded, content, expected in cases:
+            with self.subTest(encoded=encoded):
+                self.assertEqual(sample_shaded_lines(b"MU\xf3\x01" + encoded, content), expected)
+
+    def test_output_markup_follows_exact_display_content(self) -> None:
+        self._write_spec([{"id": "901", "kind": "manual", "sample": True}])
+        evidence = _VerificationEvidence(
+            self.runtime_blob_store, mode="pass-fail",
+            tests_meta_rows=[{"index": 1, "test_name": "001.in", "id": "901", "sample": True}], tasks=[],
+        )
+        original = evidence.pass_result(1, input_ref=evidence.put(b"input\n"), output_ref=evidence.put(b"one\ntwo\n"))
+        marked = replace(original, artifacts=replace(
+            original.artifacts, output_markup_ref=evidence.put(b"MU\xf3\x01!c1;one!c2;\ntwo\n"),
+        ))
+        evidence.tasks = [_SampleTask("001.in", (marked,))]
+        bundle = self._produce(evidence)
+        output = next(resource for resource in bundle["resources"] if resource["path"].endswith(".ans"))
+        self.assertEqual(output["shaded_lines"], (1,))
+        self._write_spec([{"id": "901", "kind": "manual", "sample": True, "sample_output": "changed\n", "sample_output_validate": False}])
+        bundle = self._produce(evidence)
+        output = next(resource for resource in bundle["resources"] if resource["path"].endswith(".ans"))
+        self.assertEqual(output["content"], "changed\n")
+        self.assertEqual(output.get("shaded_lines", ()), ())
+
+    def test_custom_output_markup_uses_display_test_when_generation_has_another_owner(self) -> None:
+        self._write_spec([
+            {"id": "901", "kind": "manual", "sample": True},
+            {"id": "902", "kind": "manual", "sample": True, "sample_output": "custom\n"},
+        ])
+        evidence = _VerificationEvidence(
+            self.runtime_blob_store, mode="pass-fail",
+            tests_meta_rows=[
+                {"index": 1, "test_name": "001.in", "id": "901", "sample": True},
+                {"index": 2, "test_name": "002.in", "id": "902", "sample": True},
+            ], tasks=[],
+        )
+        result = evidence.pass_result(1, input_ref=evidence.put(b"input\n"), output_ref=evidence.put(b"original\n"))
+        evidence.tasks = [_SampleTask(name, (result,)) for name in ("001.in", "002.in")]
+        evidence.output_markup = {"002.in": evidence.put(b"MU\xf3\x01!c1;custom\n")}
+        bundle = StatementExamplesProducer(self.verification_service).produce(
+            self.workspace, verification_id=self._persist_evidence(evidence),
+            execution_test_name_by_source_id={"901": "001.in", "902": "001.in"},
+            tests_spec_max_bytes=_TESTS_SPEC_MAX_BYTES, statement_sample_max_bytes=_SAMPLE_MAX_BYTES,
+            problem_limits=_PROBLEM_LIMITS,
+        )
+        resource = next(row for row in bundle["resources"] if row["path"] == "examples/sample-2/display.ans")
+        self.assertEqual(resource["content"], "custom\n")
+        self.assertEqual(resource["shaded_lines"], (1,))
 
     def test_authored_structured_pair_needs_no_verification(self) -> None:
         self._write_spec(

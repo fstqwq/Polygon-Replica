@@ -8,11 +8,14 @@ from app.service.statement.context import normalize_statement_language
 
 
 INSERT_BLANK_PAGE_PROPERTY = "insertBlankPage"
+SHADE_SAMPLES_PROPERTY = "shadeSamples"
+BOOLEAN_CONTEST_PROPERTY_KEYS = (INSERT_BLANK_PAGE_PROPERTY, SHADE_SAMPLES_PROPERTY)
 BANNER_PROPERTY = "banner"
 REQUIRED_CONTEST_PROPERTY_KEYS = ("title",)
 CONTEST_TEMPLATE_PROPERTY_DEFAULTS = {
     BANNER_PROPERTY: "",
     INSERT_BLANK_PAGE_PROPERTY: "false",
+    SHADE_SAMPLES_PROPERTY: "true",
 }
 DEFAULT_CONTEST_BANNER = r"""\ifdefined\thecontestname
     \parbox{\textwidth}{
@@ -22,7 +25,7 @@ DEFAULT_CONTEST_BANNER = r"""\ifdefined\thecontestname
         \end{center}
     }
 \fi"""
-NON_LOCALIZABLE_CONTEST_PROPERTY_KEYS = (INSERT_BLANK_PAGE_PROPERTY,)
+NON_LOCALIZABLE_CONTEST_PROPERTY_KEYS = BOOLEAN_CONTEST_PROPERTY_KEYS
 RESERVED_CONTEST_TEMPLATE_KEYS = (
     "contest",
     "language",
@@ -128,7 +131,6 @@ def contest_template_properties(
 
     result: dict[str, str | bool] = dict(CONTEST_TEMPLATE_PROPERTY_DEFAULTS)
     result.update((key, value) for key, value in properties.items() if not is_contest_problem_mark(key))
-    result[INSERT_BLANK_PAGE_PROPERTY] = (
-        result[INSERT_BLANK_PAGE_PROPERTY] == "true"
-    )
+    for key in BOOLEAN_CONTEST_PROPERTY_KEYS:
+        result[key] = result[key] == "true"
     return result

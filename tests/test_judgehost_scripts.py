@@ -6,6 +6,7 @@ from pathlib import Path
 
 from app.config import build_config_values
 from app.service.judgehost.callback.pass_bundle import parse_pass_bundle
+from app.service.judgehost.callback.artifact_capture import CaseArtifactCapture, CaseArtifactRequest
 from app.service.judgehost.configuration import (
     JudgehostConfiguration,
     JudgehostSettings,
@@ -15,6 +16,81 @@ from app.service.judgehost.domjudge.scripts import DomjudgeScriptCatalog
 from app.service.platform.hashing import compile_command_digest
 
 class TestJudgehostScripts(unittest.TestCase):
+    def test_testlib_optional_sample_markup_preserves_checker_verdict(self) -> None:
+        header = Path(__file__).resolve().parents[1] / "third_party/testlib/testlib.h"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "checker.cpp"
+            source.write_text(
+                '#include "testlib.h"\n'
+                'int main(int argc,char**argv){registerTestlibCmd(argc,argv);'
+                'if(std::getenv("USE_FILE_OUTPUT"))ouf.init(argv[2],_output);'
+                'for(int i=1;i<=2;i++){setTestCase(i);'
+                'if(ouf.readInt()!=ans.readInt())quitf(_wa,"wrong");}'
+                'quitf(_ok,"ok");}\n', encoding="utf-8",
+            )
+            subprocess.run(
+                ["g++", "-std=c++17", "-DDOMJUDGE", "-I" + str(header.parent),
+                 str(source), "-o", str(root / "checker")], check=True, capture_output=True,
+            )
+            (root / "input").write_bytes(b"")
+            (root / "answer").write_bytes(b"10 20\n")
+            feedback = root / "feedback"
+            feedback.mkdir()
+            for output, expected in ((b"10 20\n", 42), (b"10 21\n", 43), (b"10 20 extra\n", 43)):
+                for destination in (None, root / "markup", root / "missing/markup"):
+                    with self.subTest(output=output, destination=destination):
+                        markup = root / "markup"
+                        markup.unlink(missing_ok=True)
+                        env = dict(os.environ)
+                        env.pop("POLYGON_SAMPLE_MARKUP_FILE", None)
+                        if destination is not None:
+                            env["POLYGON_SAMPLE_MARKUP_FILE"] = str(destination)
+                        result = subprocess.run(
+                            [str(root / "checker"), str(root / "input"), str(root / "answer"), str(feedback)],
+                            input=output, env=env, capture_output=True,
+                        )
+                        self.assertEqual(result.returncode, expected, result.stderr)
+                        if expected == 42 and destination == markup:
+                            self.assertEqual(markup.read_bytes(), b"MU\xf3\x01!c1;10!c2; 20\n")
+                        else:
+                            self.assertFalse(markup.exists())
+
+            markup.unlink(missing_ok=True)
+            result = subprocess.run(
+                [str(root / "checker"), str(root / "input"), str(root / "answer"), str(feedback)],
+                input=b"ignored\n", env={**os.environ, "USE_FILE_OUTPUT": "1", "POLYGON_SAMPLE_MARKUP_FILE": str(markup)},
+                capture_output=True,
+            )
+            self.assertEqual(result.returncode, 42, result.stderr)
+            self.assertFalse(markup.exists())
+
+    def test_validator_markup_cli_remains_strict_and_overrides_optional_environment(self) -> None:
+        header = Path(__file__).resolve().parents[1] / "third_party/testlib/testlib.h"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "validator.cpp"
+            source.write_text(
+                '#include "testlib.h"\n'
+                'int main(int argc,char**argv){registerValidation(argc,argv);'
+                'setTestCase(1);inf.readInt();inf.readEoln();inf.readEof();}\n',
+                encoding="utf-8",
+            )
+            executable = root / "validator"
+            subprocess.run(["g++", "-std=c++17", "-I" + str(header.parent), str(source), "-o", str(executable)], check=True, capture_output=True)
+            env = {**os.environ, "POLYGON_SAMPLE_MARKUP_FILE": str(root / "optional")}
+            for arguments, expected in (([], 0), (["--testMarkupFileName", str(root / "explicit")], 0),
+                                        (["--testMarkupFileName", str(root / "missing/explicit")], 3)):
+                with self.subTest(arguments=arguments):
+                    (root / "optional").unlink(missing_ok=True)
+                    result = subprocess.run([str(executable), *arguments], input=b"10\n", env=env, capture_output=True)
+                    self.assertEqual(result.returncode, expected, result.stderr)
+                    if not arguments:
+                        self.assertEqual((root / "optional").read_bytes(), b"MU\xf3\x01!c1;10\n")
+                    elif expected == 0:
+                        self.assertEqual((root / "explicit").read_bytes(), b"MU\xf3\x01!c1;10\n")
+                        self.assertFalse((root / "optional").exists())
+
     def test_configuration_replacement_updates_settings_and_preserves_old_snapshot(self) -> None:
         values = build_config_values()
         configuration = JudgehostConfiguration(values)
@@ -714,6 +790,32 @@ class TestJudgehostScripts(unittest.TestCase):
                 ),
                 [".polygon-pass-1-input"],
             )
+
+    def test_pass_capture_keeps_optional_markup_only_for_successful_single_pass(self) -> None:
+        for status in (42, 43):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                capture = self._write_pass_capture(root, max_bytes=1024 * 1024)
+                current = self._write_domjudge_pass(root / "testcase", "1")
+                markup = b"MU\xf3\x01!c1;output 1\n"
+                (current / "feedback/output.markup").write_bytes(markup)
+                result = self._run_pass_capture(capture, current, status, env={
+                    **os.environ, "POLYGON_SAMPLE_MARKUP_FILE": str(current / "feedback/output.markup"),
+                })
+                self.assertEqual(result.returncode, 0, result.stderr)
+                bundle = parse_pass_bundle(
+                    (current / "feedback/teammessage.txt").read_bytes(),
+                    max_bundle_bytes=1024 * 1024, max_member_bytes=1024 * 1024,
+                )
+                self.assertIsNotNone(bundle)
+                self.assertEqual(bundle.pass_files(1).get("output.markup"), markup if status == 42 else None)
+                captured = CaseArtifactCapture.prepare(CaseArtifactRequest(
+                    payload={"team_message": (current / "feedback/teammessage.txt").read_bytes()},
+                    task_kind="main-correct", interactive=False, pass_limit=1,
+                    callback_pass=1, bundle_limit_bytes=1024 * 1024, sample_markup=True,
+                ))
+                self.assertEqual(captured.files.get("pass-1-output-markup"), markup if status == 42 else None)
+                self.assertEqual(captured.warning, "")
 
     def test_pass_capture_preserves_cumulative_feedback_snapshots(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

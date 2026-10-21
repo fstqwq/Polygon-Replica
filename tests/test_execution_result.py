@@ -92,6 +92,20 @@ def _complete_pass_entries(number: int) -> list[tuple[str, bytes]]:
 
 
 class TestExecutionResult(unittest.TestCase):
+    def test_optional_markup_artifacts_roundtrip_and_legacy_results_decode(self) -> None:
+        result = normalize_execution_result(passes=(_pass(1, usage=ExecutionUsage()),))
+        legacy = execution_result_dict(result)
+        for item in legacy["passes"]:
+            item["artifacts"].pop("input_markup_ref", None)
+            item["artifacts"].pop("output_markup_ref", None)
+            item["artifacts"].pop("sample_output_markup_ref", None)
+        self.assertEqual(execution_result_from_dict(legacy), result)
+        marked = replace(result, passes=(replace(result.passes[0], artifacts=replace(
+            result.passes[0].artifacts, input_markup_ref="blob://input-markup", output_markup_ref="blob://output-markup",
+        )),))
+        self.assertEqual(execution_result_from_json(execution_result_json(marked)), marked)
+        self.assertIn("blob://output-markup", marked.passes[0].artifacts.refs())
+
     def test_overview_omits_pass_details_and_preserves_final_usage(self) -> None:
         for interactive in (False, True):
             with self.subTest(interactive=interactive):

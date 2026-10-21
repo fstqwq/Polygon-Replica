@@ -18,6 +18,8 @@ from app.impl.runtime.dependency import runtime
 from app.impl.workspace.context_operation import normalize_contest_title_required
 from app.service.contest.property import (
     BANNER_PROPERTY,
+    BOOLEAN_CONTEST_PROPERTY_KEYS,
+    SHADE_SAMPLES_PROPERTY,
     DEFAULT_CONTEST_BANNER,
     INSERT_BLANK_PAGE_PROPERTY,
     REQUIRED_CONTEST_PROPERTY_KEYS,
@@ -56,6 +58,7 @@ class ContestPropertyTable(TypedDict):
     groups: list[ContestPropertyGroup]
     can_insert_banner: bool
     can_insert_blank_page: bool
+    can_remove_sample_shading: bool
 
 
 def _contest_property_table(
@@ -124,9 +127,9 @@ def _contest_property_table(
                     for row in values
                     if bool(row["persisted"])
                 ],
-                "boolean": base_key == INSERT_BLANK_PAGE_PROPERTY,
+                "boolean": base_key in BOOLEAN_CONTEST_PROPERTY_KEYS,
                 "deletable": contest_property_is_deletable(base_key),
-                "localizable": base_key != INSERT_BLANK_PAGE_PROPERTY and not is_contest_problem_mark(base_key),
+                "localizable": base_key not in BOOLEAN_CONTEST_PROPERTY_KEYS and not is_contest_problem_mark(base_key),
                 "persisted": any(bool(row["persisted"]) for row in values),
                 "kind_label": (
                     "Required"
@@ -140,6 +143,7 @@ def _contest_property_table(
         "groups": groups,
         "can_insert_banner": BANNER_PROPERTY not in properties,
         "can_insert_blank_page": INSERT_BLANK_PAGE_PROPERTY not in properties,
+        "can_remove_sample_shading": SHADE_SAMPLES_PROPERTY not in properties,
     }
 
 
@@ -343,13 +347,14 @@ def contest_property_insert_preset(
     presets: dict[str, str | bool] = {
         BANNER_PROPERTY: DEFAULT_CONTEST_BANNER,
         INSERT_BLANK_PAGE_PROPERTY: True,
+        SHADE_SAMPLES_PROPERTY: False,
     }
     if property_key not in presets:
         raise HTTPException(status_code=400, detail="unknown contest property preset")
     contest_id = int(ctx["contest"]["id"])
     properties = runtime().contest_service.properties_map(contest_id)
-    if property_key == BANNER_PROPERTY and BANNER_PROPERTY in properties:
-        raise HTTPException(status_code=409, detail="contest banner already exists")
+    if property_key in {BANNER_PROPERTY, SHADE_SAMPLES_PROPERTY} and property_key in properties:
+        raise HTTPException(status_code=409, detail="contest property already exists")
     runtime().contest_service.set_properties(
         contest_id,
         int(ctx["user"]["id"]),

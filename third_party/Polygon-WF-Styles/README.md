@@ -186,3 +186,9 @@ banner slot:
 ## License
 
 See the original `olymp.sty` project: <https://github.com/GassaFM/olymp.sty>.
+
+Sample shading defaults to enabled when numeric markup sidecars are present.
+Place `\StatementSampleShading{false}` or `\StatementSampleShading{true}` before
+the sample environment to set the current Problem presentation. The assignment
+is local to the `problem` environment. The default Contest template inherits
+`shadeSamples` (default `true`) before importing Problems.

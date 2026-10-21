@@ -19,7 +19,7 @@ from app.service.problem.runtime_config import problem_config_limits
 from app.service.sandbox.base import ExecResult, ExecSpec
 from app.service.statement.constant import DEFAULT_STATEMENT_PROBLEM_TEMPLATE
 from app.service.statement.examples import StatementExamplesBundle
-from app.service.statement.html_render import number_statement_fragment
+from app.service.statement.html_render import StatementHtmlRenderError, number_statement_fragment
 from app.service.statement.render import render_statement_offline_tree
 
 from tests.backend_e2e_fixture import BackendE2ETestBase
@@ -106,6 +106,53 @@ class TestStatementHtmlRender(BackendE2ETestBase):
         source = spec.cwd / spec.command[-1]
         source.with_suffix(".pdf").write_bytes(b"%PDF-1.4\n% compiled fixture\n")
         return ExecResult(backend="fixture", status="ok", returncode=0, elapsed_ms=1)
+
+    def test_sample_shading_preserves_literal_text_and_legacy_plain_samples(self) -> None:
+        root = Path(tempfile.mkdtemp(prefix="statement-shading-", dir=suite_root()))
+        self.addCleanup(shutil.rmtree, root, True)
+        render_root = root / "render"
+        render_root.mkdir()
+        (render_root / "problem.tex").write_text(
+            r"\begin{problem}{Shading}{stdin}{stdout}{1 second}{256 megabytes}" "\n"
+            r"\begin{example}" "\n" r"\exmpfile{sample.in}{sample.out}" "\n"
+            r"\end{example}" "\n" r"\end{problem}" "\n",
+            encoding="utf-8",
+        )
+        (render_root / "sample.in").write_text("header\n<case>&\nnext\n", encoding="utf-8")
+        (render_root / "sample.in.shade").write_text("2", encoding="ascii")
+        (render_root / "sample.out").write_text("plain output\n", encoding="utf-8")
+        result = runtime.statement_html_renderer.render(render_root, root / "html", subject_token="shading")
+        self.assertIn('<span class="sample-case-shaded">&lt;case&gt;&amp;</span>', result.fragment)
+        self.assertIn("plain output", result.fragment)
+        self.assertEqual(result.warnings, ())
+
+    def test_sample_shading_controls_override_each_render_default(self) -> None:
+        root = Path(tempfile.mkdtemp(prefix="shade-controls-", dir=suite_root()))
+        self.addCleanup(shutil.rmtree, root, True)
+        (root / "sample.in").write_text("case\n", encoding="utf-8")
+        (root / "sample.out").write_text("answer\n", encoding="utf-8")
+        (root / "sample.in.shade").write_text("1", encoding="ascii")
+        sample = "\n".join((r"\begin{StatementSamples}", r"\StatementSampleFile{1}{sample.in}{sample.out}", r"\end{StatementSamples}"))
+        for default in (True, False):
+            for index, command in enumerate(("", r"\StatementSampleShading{false}", "", r"\StatementSampleShading{true}", "",
+                                           "% " + r"\StatementSampleShading{false}",
+                                           "\n".join((r"\begin{verbatim}", r"\StatementSampleShading{false}", r"\end{verbatim}")),
+                                           r"\verb|\StatementSampleShading{false}|")):
+                with self.subTest(default=default, command=command):
+                    (root / "examples.tex").write_text(command + "\n" + sample, encoding="utf-8")
+                    (root / "problem.tex").write_text(
+                        r"\begin{problem}{Shading}{stdin}{stdout}{1 second}{256 megabytes}" "\n"
+                        r"\input{examples.tex}" "\n" r"\end{problem}" "\n", encoding="utf-8")
+                    result = runtime.statement_html_renderer.render(
+                        root, root / f"html-{default}-{index}", subject_token="shading", shade_samples=default)
+                    expected = default
+                    if command.startswith(r"\StatementSampleShading"):
+                        expected = command.endswith("{true}")
+                    self.assertEqual('class="sample-case-shaded"' in result.fragment, expected)
+                    self.assertIn("answer", result.fragment)
+            (root / "examples.tex").write_text(r"\StatementSampleShading{yes}" + "\n" + sample, encoding="utf-8")
+            with self.assertRaisesRegex(StatementHtmlRenderError, "StatementSampleShading must be true or false"):
+                runtime.statement_html_renderer.render(root, root / f"invalid-{default}", subject_token="shading")
 
     def test_wrapfigure_preserves_image_caption_and_following_text(self) -> None:
         root = Path(tempfile.mkdtemp(prefix="statement-wrap-", dir=suite_root()))
@@ -466,6 +513,19 @@ Following paragraph beside the image.
             "Cache identity fixture.",
             runtime.statement_preview_service.html_fragment(item["preview_id"], actor_user_id=user_id),
         )
+        runtime.contest_service.set_properties(contest_id, user_id, {"shadeSamples": False})
+        disabled = runtime.contest_statement_preview_service.build_html(
+            contest_id, user_id=user_id, username=self.user, source_kind="workspace", language="english")
+        self.assertNotEqual(disabled["id"], second["id"])
+        disabled_item = runtime.contest_statement_preview_service.items(disabled)[0]
+        self.assertNotEqual(disabled_item["preview_id"], item["preview_id"])
+        standalone = runtime.statement_preview_service.build_problem(
+            self.problem, self.user, source_kind="workspace", output_kind="html", language="english")
+        self.assertEqual(standalone["id"], item["preview_id"])
+        runtime.contest_service.set_properties(contest_id, user_id, {"shadeSamples": None})
+        restored = runtime.contest_statement_preview_service.build_html(
+            contest_id, user_id=user_id, username=self.user, source_kind="workspace", language="english")
+        self.assertEqual(restored["id"], first["id"])
         with patch.object(
             runtime.tex_sandbox_backend,
             "run",

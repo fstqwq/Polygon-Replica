@@ -27,6 +27,7 @@ class CaseArtifactRequest:
     pass_limit: int
     callback_pass: int
     bundle_limit_bytes: int
+    sample_markup: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,7 +140,7 @@ class CaseArtifactCapture:
         pass_bundle: PassBundle | None = None
         warning = ""
         rejected_bundle = False
-        if capture_expected:
+        if capture_expected or request.sample_markup:
             try:
                 pass_bundle = parse_pass_bundle(
                     team_message,

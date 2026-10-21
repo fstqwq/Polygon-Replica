@@ -1,7 +1,7 @@
 import json
 import math
 from collections.abc import Iterable
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 from app.service.execution.model import (
     CompileResult,
@@ -52,6 +52,9 @@ class PassArtifactsPayload(TypedDict):
     team_message_ref: str
     metadata_ref: str
     compare_metadata_ref: str
+    input_markup_ref: NotRequired[str]
+    output_markup_ref: NotRequired[str]
+    sample_output_markup_ref: NotRequired[str]
 
 
 class ExecutionPassPayload(TypedDict):
@@ -103,6 +106,9 @@ _ARTIFACT_KEYS = frozenset(
         "team_message_ref",
         "metadata_ref",
         "compare_metadata_ref",
+        "input_markup_ref",
+        "output_markup_ref",
+        "sample_output_markup_ref",
     )
 )
 
@@ -224,6 +230,27 @@ def compile_diagnostics_payload(
     ]
 
 
+def _artifacts_dict(artifacts: PassArtifacts) -> PassArtifactsPayload:
+    payload: PassArtifactsPayload = {
+        "input_ref": artifacts.input_ref,
+        "output_ref": artifacts.output_ref,
+        "transcript_ref": artifacts.transcript_ref,
+        "stderr_ref": artifacts.stderr_ref,
+        "system_ref": artifacts.system_ref,
+        "judge_message_ref": artifacts.judge_message_ref,
+        "team_message_ref": artifacts.team_message_ref,
+        "metadata_ref": artifacts.metadata_ref,
+        "compare_metadata_ref": artifacts.compare_metadata_ref,
+    }
+    if artifacts.input_markup_ref:
+        payload["input_markup_ref"] = artifacts.input_markup_ref
+    if artifacts.output_markup_ref:
+        payload["output_markup_ref"] = artifacts.output_markup_ref
+    if artifacts.sample_output_markup_ref:
+        payload["sample_output_markup_ref"] = artifacts.sample_output_markup_ref
+    return payload
+
+
 def execution_result_dict(result: ExecutionResult) -> ExecutionResultPayload:
     canonical_execution_result(result)
     return {
@@ -251,17 +278,7 @@ def execution_result_dict(result: ExecutionResult) -> ExecutionResultPayload:
                 "answer_correct": pass_result.answer_correct,
                 "usage": _usage_dict(pass_result.usage),
                 "feedback": pass_result.feedback,
-                "artifacts": {
-                    "input_ref": pass_result.artifacts.input_ref,
-                    "output_ref": pass_result.artifacts.output_ref,
-                    "transcript_ref": pass_result.artifacts.transcript_ref,
-                    "stderr_ref": pass_result.artifacts.stderr_ref,
-                    "system_ref": pass_result.artifacts.system_ref,
-                    "judge_message_ref": pass_result.artifacts.judge_message_ref,
-                    "team_message_ref": pass_result.artifacts.team_message_ref,
-                    "metadata_ref": pass_result.artifacts.metadata_ref,
-                    "compare_metadata_ref": pass_result.artifacts.compare_metadata_ref,
-                },
+                "artifacts": _artifacts_dict(pass_result.artifacts),
             }
             for pass_result in result.passes
         ],
@@ -281,6 +298,7 @@ def _pass_from_object(value: object, *, index: int) -> ExecutionPassResult:
     if type(number) is not int or number <= 0:
         raise ValueError(f"{label}.number must be a positive integer")
     artifacts_raw = _object(raw["artifacts"], label=f"{label}.artifacts")
+    artifacts_raw = {"input_markup_ref": "", "output_markup_ref": "", "sample_output_markup_ref": "", **artifacts_raw}
     _exact_keys(artifacts_raw, _ARTIFACT_KEYS, label=f"{label}.artifacts")
     return ExecutionPassResult(
         number=number,

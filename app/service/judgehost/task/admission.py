@@ -105,6 +105,7 @@ class JudgehostTaskAdmission:
         source_label_override: str | None = None
         extra_source_files_override: dict[str, object] | None = None
         manual_validate_only = False
+        sample_markup = False
         if prepared_payload is not None and "verification_payload" in prepared_payload:
             raw_verification_payload = prepared_payload["verification_payload"]
             if not isinstance(raw_verification_payload, dict) or any(
@@ -129,6 +130,11 @@ class JudgehostTaskAdmission:
             if not isinstance(raw_manual_validate_only, bool):
                 raise RuntimeError("manual validate flag must be a boolean")
             manual_validate_only = raw_manual_validate_only
+        if prepared_payload is not None and "sample_markup" in prepared_payload:
+            raw_sample_markup = prepared_payload["sample_markup"]
+            if not isinstance(raw_sample_markup, bool):
+                raise RuntimeError("sample markup flag must be a boolean")
+            sample_markup = raw_sample_markup
         payload = self._preparation.prepare_enqueue_payload(
             problem=problem,
             username=username,
@@ -151,6 +157,7 @@ class JudgehostTaskAdmission:
             source_label_override=source_label_override,
             extra_source_files_override=extra_source_files_override,
             manual_validate_only=manual_validate_only,
+            sample_markup=sample_markup,
             execution_template=execution_template,
         )
         safe_task_kind = task_plan.task_kind(payload)

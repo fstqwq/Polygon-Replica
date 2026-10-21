@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 from app.service.platform.runtime_blob_store import PayloadFile, PayloadFileDescriptor
 from app.service.problem.runtime_config import ProblemMode
@@ -14,6 +14,7 @@ class VerificationProblemLimits(TypedDict):
 
 
 class VerificationPayloadBase(TypedDict):
+    sample_markup: NotRequired[bool]
     problem_mode: ProblemMode
     run_config_json: str
     problem_limits: VerificationProblemLimits

@@ -1,6 +1,6 @@
 import base64
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from app.service.execution.test_rows import ExecutionTestRow
@@ -22,6 +22,7 @@ class SampleOutputValidationResult:
     validated_count: int
     failed_test: str
     error: str
+    output_markup: tuple[tuple[str, str], ...] = ()
 
 
 def _write_log(log_path: Path, lines: list[str]) -> None:
@@ -178,6 +179,7 @@ def validate_custom_sample_outputs(
         if plan.sample and plan.sample_output_text and plan.sample_output_validate
     ]
     opened_program_ids: list[str] = []
+    output_markup: dict[str, str] = {}
 
     def _close_programs() -> None:
         if not opened_program_ids:
@@ -189,7 +191,7 @@ def validate_custom_sample_outputs(
 
     def _finish(result: SampleOutputValidationResult) -> SampleOutputValidationResult:
         _close_programs()
-        return result
+        return replace(result, output_markup=tuple(output_markup.items()))
 
     for plan_index, plan in enumerate(candidate_plans):
         run_id = _validation_run_id(
@@ -234,6 +236,7 @@ def validate_custom_sample_outputs(
             validation_source_file = runtime_blob_store.put_bytes(
                 _validation_source_bytes(plan.sample_output_text)
             )
+            prepared_payload = {**(prepared_payload or {}), "sample_markup": True}
             task_id = judgehost.enqueue_task(
                 problem=problem,
                 username=user,
@@ -276,6 +279,9 @@ def validate_custom_sample_outputs(
             )
         verdict, message = _result_verdict(case_result)
         if verdict == "OK":
+            passes = case_result["execution_result"].passes
+            if len(passes) == 1 and passes[0].artifacts.output_markup_ref:
+                output_markup[plan.test_name] = passes[0].artifacts.output_markup_ref
             validated_count += 1
             lines.append(f"{plan.test_name}: ok")
             continue

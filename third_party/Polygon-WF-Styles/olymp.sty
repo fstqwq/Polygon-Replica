@@ -19,7 +19,8 @@
 
 \makeatletter
 \usepackage{verbatim}
-\RequirePackage{fancyvrb}
+\RequirePackage{xcolor}
+\RequirePackage{fvextra}
 \RequirePackage{xparse}
 \RequirePackage{ifxetex}
 \ifxetex
@@ -589,6 +590,47 @@
 % This is magic, which delete space after verbatiminput
 \addto@hook{\every@verbatim}{\topsep=0pt\relax}
 
+
+% Assignments are local to the surrounding problem environment.
+\newif\ifstatement@sample@shading
+\statement@sample@shadingtrue
+\newcommand{\StatementSampleShading}[1]{%
+    \def\statement@sample@value{#1}%
+    \def\statement@sample@true{true}%
+    \def\statement@sample@false{false}%
+    \ifx\statement@sample@value\statement@sample@true
+        \statement@sample@shadingtrue
+    \else\ifx\statement@sample@value\statement@sample@false
+        \statement@sample@shadingfalse
+    \else
+        \PackageError{olymp}{StatementSampleShading must be true or false}{}%
+    \fi\fi
+}
+
+% Enabled samples consume a generated numeric sidecar.
+\newcommand{\statement@sample@paddedline}[1]{%
+    \setbox0=\hbox{\strut#1}%
+    \ifnum\value{FancyVerbLine}=1 \ht0=\dimexpr\ht0+2.25pt\relax\fi
+    \ifnum\value{FancyVerbLine}=\statementSampleLines \dp0=\dimexpr\dp0+2.25pt\relax\fi
+    \box0
+}
+\newcommand{\statement@sample@shade}{%
+    \fvset{highlightcolor=black!6,breaklines=true,breakanywhere=true,
+        breaksymbolleft={},breaksymbolright={},breakanywheresymbolpre={},
+        breakanywheresymbolpost={},breakindent=0pt}%
+    \let\FancyVerbHighlightLineNormal\statement@sample@paddedline
+    \def\FancyVerbHighlightLineFirst##1{%
+        \begingroup\fboxsep=0pt
+        \kern-\tabcolsep
+        \colorbox{\FancyVerbHighlightColor}{%
+            \kern\tabcolsep\rlap{\statement@sample@paddedline{##1}}\hspace{\linewidth}\kern\tabcolsep}%
+        \kern-\tabcolsep\endgroup\hss
+    }%
+    \let\FancyVerbHighlightLineMiddle\FancyVerbHighlightLineFirst
+    \let\FancyVerbHighlightLineLast\FancyVerbHighlightLineFirst
+    \let\FancyVerbHighlightLineSingle\FancyVerbHighlightLineFirst
+}
+
 % File-backed sample content uses FancyVerb so that leading empty lines are
 % represented as real lines instead of being discarded by verbatim.sty.
 \newcommand{\statement@sample@textfile}[1]{%
@@ -604,6 +646,12 @@
     \def\FancyVerbFormatLine##1{%
         \strut\statement@sample@original@formatline{##1}\strut
     }%
+    \ifstatement@sample@shading
+    \IfFileExists{\statement@sample@resolvedfile.shade.tex}{%
+        \input{\statement@sample@resolvedfile.shade.tex}%
+        \statement@sample@shade
+    }{}%
+    \fi
     \VerbatimInput[
         vspace=0pt,
         listparameters={\topsep=0pt\partopsep=0pt\parsep=0pt\itemsep=0pt}
@@ -747,18 +795,27 @@
             \end{tabular*}%
             \par
         \fi
+        \def\statement@sample@shaded{0}%
+        \edef\statement@sample@prefix{\ifdefined\import@path\import@path\fi}%
+        \ifstatement@sample@shading
+        \IfFileExists{\statement@sample@prefix#4.shade.tex}{\def\statement@sample@shaded{1}}{}%
+        \IfFileExists{\statement@sample@prefix#5.shade.tex}{\def\statement@sample@shaded{1}}{}%
+        \fi
         \setlength{\extrarowheight}{1mm}%
+        \ifnum\statement@sample@shaded=1
+            \extrarowheight=\dimexpr2.25pt+\arrayrulewidth\relax
+        \fi
         \begin{tabular}{|p{\exmpwidinf}|p{\exmpwidouf}|}
             \hline
             \begin{minipage}[t]{\exmpwidinf}%
                 \rightskip=0pt plus 1fill\relax
                 \statement@sample@textfile{#4}%
-                \smallskip
+                \ifnum\statement@sample@shaded=0 \smallskip\fi
             \end{minipage}&
             \begin{minipage}[t]{\exmpwidouf}%
                 \rightskip=0pt plus 1fill\relax
                 \statement@sample@textfile{#5}%
-                \smallskip
+                \ifnum\statement@sample@shaded=0 \smallskip\fi
             \end{minipage}\\
             \hline
         \end{tabular}

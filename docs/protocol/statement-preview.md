@@ -108,3 +108,65 @@ All preview records and payloads are disposable cache. Startup and renderer depl
 ## Sandbox limits
 
 Pandoc, Lua, Poppler, librsvg, and TeX run through bubblewrap without network access. Source mounts are read-only, output is isolated, and CPU, memory, process, file-output, timeout, image, AST, HTML, and sample limits apply.
+
+## Optional sample shading
+
+Traditional single-pass samples use validator input markup and checker output
+markup from successful execution evidence. The parser restores the marked bytes
+and requires an exact match with the displayed UTF-8 sample. Case numbers are
+positive and increasing; boundaries must identify whole lines (a token reader's
+unread trailing line whitespace belongs to the preceding case). Odd case numbers
+are shaded, and text before the first case stays plain. Invalid, missing,
+oversized, or mismatched optional markup falls back to an unshaded sample.
+
+The shared producer creates numeric `.shade` and `.shade.tex` sidecars beside
+sample resources. HTML and PDF consume the same line selection, with colored
+padding on the first and last line. Shaded PDF samples wrap long lines within
+their cells. Native Package `statement-build` preserves these resources for
+problem and Contest previews. Existing packages without sidecars render plain
+samples. Renderer revisions participate in both HTML and PDF preview identity.
+
+### Shading controls
+
+Sample shading defaults to enabled. Contest property `shadeSamples` accepts
+`true` or `false`, is non-localizable, and supplies the default for each Problem.
+The Properties page offers **Remove sample shading** to writers when the property
+is absent. The existing preset endpoint inserts `shadeSamples=false`; Edit changes
+the value and Delete restores the enabled default. An existing value is preserved
+when a stale preset request is rejected.
+
+An authored `statement/examples.tex` can override the inherited value with a
+literal top-level command before the sample environment:
+
+```tex
+\StatementSampleShading{false}
+```
+
+`true` enables shading. Other arguments produce a rendering error. Comments and
+verbatim text do not set the control. Each Problem has independent state; its
+setting ends with that Problem. Disabled samples use ordinary presentation while
+retaining their markup artifacts and numeric sidecars. Preview identities include
+the inherited HTML setting; Contest PDF identities include property generation.
+
+Authored styles and templates remain unchanged during rendering. PDF controls
+require the current `olymp.sty`. To upgrade a customized Contest template, retain
+its layout and add this before the Problem import loop:
+
+```tex
+\ifdefined\StatementSampleShading
+\StatementSampleShading{<#if shadeSamples??><#if shadeSamples>true<#else>false</#if><#else>true</#if>}
+\fi
+```
+
+The current default template includes this block. Older PDF styles retain their
+existing presentation. HTML controls are interpreted by the renderer independently
+of the authored PDF style.
+
+### Restoring Problem templates
+
+The Statement page offers **Restore templates:** with individual actions for
+`statements.ftl`, `problem.tex`, `olymp.sty`, and `examples.tex`. Each POST to
+`/problems/{problem}/statement/templates/reset` requires an allowlisted `path`
+and restores only that file. Restoring `examples.tex` removes the optional override
+and selects the built-in default. Each action confirms the selected replacement;
+statement sections, attachments, and other templates are preserved.

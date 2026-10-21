@@ -1570,6 +1570,24 @@ class VerificationTaskStore:
                 ],
             )
             if int(cursor.rowcount or 0) == 1:
+                for test_name, markup_ref in finish.sample_output_markup:
+                    task = conn.execute(
+                        "SELECT id,result_json FROM verification_tasks "
+                        "WHERE verification_id=? AND test_name=? AND task_kind='main-correct' AND final_status='done'",
+                        [finish.verification_id, test_name],
+                    ).fetchone()
+                    if task is None:
+                        continue
+                    result = execution_result_from_json(str(task["result_json"]))
+                    if len(result.passes) != 1:
+                        continue
+                    marked_pass = replace(result.passes[0], artifacts=replace(
+                        result.passes[0].artifacts, sample_output_markup_ref=markup_ref,
+                    ))
+                    conn.execute(
+                        "UPDATE verification_tasks SET result_json=? WHERE id=?",
+                        [execution_result_json(replace(result, passes=(marked_pass,))), task["id"]],
+                    )
                 write_detail(conn, finish.verification_id, detail)
                 return VerificationTransitionCommit(
                     verification_id=finish.verification_id,

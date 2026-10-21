@@ -2,7 +2,7 @@ import base64
 import hashlib
 from collections.abc import Mapping, Sequence
 from contextlib import ExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from app.service.judgehost.api import Judgehost
@@ -58,6 +58,7 @@ class VerificationSanityResult:
     failed_test: str
     error: str
     check_results: tuple[VerificationSanityCheckResult, ...] = ()
+    output_markup: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -320,6 +321,7 @@ def run_verification_sanity_checks(
     probe_plan = next((plan for plan in test_plans if plan.test_name), None)
     probes: list[_PendingStabilityProbe] = []
     check_results: list[VerificationSanityCheckResult] = []
+    output_markup: tuple[tuple[str, str], ...] = ()
     with ExitStack() as cleanup:
         if probe_plan is not None:
             for probe in _stability_probes():
@@ -424,6 +426,7 @@ def run_verification_sanity_checks(
                 bypass_case_result_cache=bypass_case_result_cache,
                 service_class=service_class,
             )
+            output_markup = result.output_markup
             messages: tuple[VerificationSanityMessage, ...] = ()
             if result.status == SANITY_FAILED:
                 messages = (
@@ -455,7 +458,7 @@ def run_verification_sanity_checks(
     check_results[:0] = _stability_check_results(
         logs_dir=logs_dir, probe_plan=probe_plan, probes=probes,
     )
-    return _aggregate_sanity_results(check_results)
+    return replace(_aggregate_sanity_results(check_results), output_markup=output_markup)
 
 
 class VerificationSanityService:

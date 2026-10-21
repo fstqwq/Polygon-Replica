@@ -60,6 +60,10 @@ ${banner}
   \def\ShortProblemTitle{}
 </#if>
 
+\ifdefined\StatementSampleShading
+\StatementSampleShading{<#if shadeSamples??><#if shadeSamples>true<#else>false</#if><#else>true</#if>}
+\fi
+
 <#list statements as statement>
 <#if statement.path??>
 \graphicspath{{${statement.path}}}

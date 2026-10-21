@@ -20,7 +20,6 @@ from app.service.statement.constant import (
     DEFAULT_STATEMENT_TEMPLATE,
     STATEMENT_ASSETS_DIR,
     STATEMENT_CANONICAL_SECTION_FILES,
-    STATEMENT_DEFAULT_FILES,
     STATEMENT_DIR,
     STATEMENT_EXAMPLES_REL,
     STATEMENT_MAIN_REL,
@@ -89,25 +88,6 @@ def normalize_problem_title(raw: object, *, fallback_title: str) -> str:
 
 def default_olymp_sty_text() -> str:
     return DEFAULT_OLYMP_STY
-
-
-def statement_templates_are_default(workspace: Path) -> bool:
-    """Return whether the Workspace uses the canonical Statement templates."""
-
-    for rel, expected in STATEMENT_DEFAULT_FILES.items():
-        path = workspace / rel
-        try:
-            if path.is_symlink() or not path.is_file():
-                return False
-            if path.read_text(encoding="utf-8") != expected:
-                return False
-        except OSError:
-            return False
-    examples_path = workspace / STATEMENT_EXAMPLES_REL
-    try:
-        return not examples_path.exists()
-    except OSError:
-        return False
 
 
 def _safe_read_text(path: Path, fallback: str) -> str:
@@ -326,6 +306,17 @@ def _write_statement_example_resources(
             raise RuntimeError("statement example resource escapes compile tree")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(resource["content"], encoding="utf-8", newline="\n")
+        shaded = resource.get("shaded_lines", ())
+        if shaded:
+            line_count = len(resource["content"].removesuffix("\n").split("\n"))
+            if any(type(line) is not int or not 1 <= line <= line_count for line in shaded):
+                raise RuntimeError("invalid sample shaded lines")
+            numbers = ",".join(map(str, shaded))
+            Path(str(target) + ".shade").write_text(numbers, encoding="ascii")
+            Path(str(target) + ".shade.tex").write_text(
+                "\\def\\statementSampleLines{" + str(line_count) + "}"
+                "\\fvset{highlightlines={" + numbers + "}}", encoding="ascii",
+            )
 
 
 def _statement_problem_template_context(

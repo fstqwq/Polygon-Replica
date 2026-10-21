@@ -4,6 +4,7 @@ local max_include_count = 64
 local max_include_bytes = 2 * 1024 * 1024
 local include_count = 0
 local include_bytes = 0
+local shade_samples = true
 local presentation = dofile(PANDOC_SCRIPT_FILE:match('^(.*[/\\])') .. 'pandoc_presentation.lua')
 
 
@@ -197,10 +198,23 @@ end
 
 
 local function code_file(path)
-  return pandoc.CodeBlock(
-    trim_final_newline(read_text(path)),
-    attr({"sample-content"})
-  )
+  local text = trim_final_newline(read_text(path))
+  local sidecar = shade_samples and io.open(resource_path(path .. ".shade"), "rb")
+  if not sidecar then
+    return pandoc.CodeBlock(text, attr({"sample-content"}))
+  end
+  local shaded = {}
+  for number in sidecar:read("*a"):gmatch("%d+") do
+    shaded[tonumber(number)] = true
+  end
+  sidecar:close()
+  local lines = {}
+  for line in (text .. "\n"):gmatch("(.-)\n") do
+    local escaped = line:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")
+    local class = shaded[#lines + 1] and ' class="sample-case-shaded"' or ""
+    table.insert(lines, "<span" .. class .. ">" .. escaped .. "</span>")
+  end
+  return pandoc.RawBlock("html", '<pre class="sample-content sample-shaded"><code>' .. table.concat(lines, "\n") .. '</code></pre>')
 end
 
 
@@ -412,23 +426,89 @@ local function next_sample_environment(text, cursor)
 end
 
 
+-- Read literal controls outside comments and verbatim; leave their positions
+-- intact so each control applies only to subsequent sample environments.
+local function sample_shading_controls(body)
+  local controls = {}
+  local cursor = 1
+  local depth = 0
+  while cursor <= #body do
+    local char = body:sub(cursor, cursor)
+    if char == "%" then
+      cursor = (body:find("\n", cursor, true) or #body) + 1
+    elseif char == "\\" then
+      local finish = cursor + 1
+      while body:sub(finish, finish):match("[A-Za-z@]") do
+        finish = finish + 1
+      end
+      local command = body:sub(cursor + 1, finish - 1)
+      if command == "begin" then
+        local name, after = include_argument(body, cursor, command)
+        if name == "verbatim" or name == "verbatim*" or name == "Verbatim" or name == "lstlisting" then
+          local _, closing = body:find("\\end{" .. name .. "}", after, true)
+          cursor = (closing or #body) + 1
+        else
+          cursor = after
+        end
+      elseif command == "verb" then
+        if body:sub(finish, finish) == "*" then finish = finish + 1 end
+        local delimiter = body:sub(finish, finish)
+        cursor = (body:find(delimiter, finish + 1, true) or #body) + 1
+      elseif command == "StatementSampleShading" and depth == 0 then
+        local argument = finish
+        while body:sub(argument, argument):match("%s") do argument = argument + 1 end
+        if body:sub(argument, argument) ~= "{" then
+          error("StatementSampleShading requires {true} or {false}")
+        end
+        local value, after = include_argument(body, cursor, command)
+        if value ~= "true" and value ~= "false" then
+          error("StatementSampleShading must be true or false")
+        end
+        table.insert(controls, {start_at = cursor, end_at = after - 1, enabled = value == "true"})
+        cursor = after
+      else
+        cursor = math.max(finish, cursor + 2)
+      end
+    elseif char == "{" or char == "}" then
+      depth = depth + (char == "{" and 1 or -1)
+      cursor = cursor + 1
+    else
+      cursor = body:find("[\\%%{}]", cursor + 1) or (#body + 1)
+    end
+  end
+  return controls
+end
+
+
 local function render_body(body)
   local output = pandoc.Blocks({})
   local cursor = 1
+  local controls = sample_shading_controls(body)
+  local control_index = 1
   while cursor <= #body do
     local sample = next_sample_environment(body, cursor)
-    if not sample then
+    local control = controls[control_index]
+    if control and (not sample or control.start_at < sample.start_at) then
+      append_all(output, prefix_headers(parse_latex(body:sub(cursor, control.start_at - 1))))
+      shade_samples = control.enabled
+      cursor = control.end_at + 1
+      control_index = control_index + 1
+    elseif not sample then
       append_all(output, prefix_headers(parse_latex(body:sub(cursor))))
       break
+    else
+      if control and control.start_at <= sample.end_at then
+        error("StatementSampleShading must precede the sample environment")
+      end
+      if sample.start_at > cursor then
+        append_all(
+          output,
+          prefix_headers(parse_latex(body:sub(cursor, sample.start_at - 1)))
+        )
+      end
+      append_all(output, render_examples(sample.text))
+      cursor = sample.end_at + 1
     end
-    if sample.start_at > cursor then
-      append_all(
-        output,
-        prefix_headers(parse_latex(body:sub(cursor, sample.start_at - 1)))
-      )
-    end
-    append_all(output, render_examples(sample.text))
-    cursor = sample.end_at + 1
   end
   return output
 end
@@ -481,6 +561,7 @@ function RawBlock(element)
   end
   include_count = 0
   include_bytes = 0
+  shade_samples = os.getenv("STATEMENT_SAMPLE_SHADING") ~= "false"
   local rendered_problem = read_text("problem.tex"):gsub("\r\n", "\n")
   rendered_problem = expand_includes(
     rendered_problem,

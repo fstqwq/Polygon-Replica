@@ -50,7 +50,6 @@ from app.service.statement.context import (
 from app.service.statement.render import (
     ensure_statement_language_sources,
     render_statement_problem_assets_for_language,
-    statement_templates_are_default,
     statement_title_for_language,
 )
 from app.service.problem.runtime_config import problem_config_limits
@@ -323,7 +322,6 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
     statement_compile_assets = statement_compile_asset_rows(workspace)
     contestant_attachments = contestant_attachment_rows(workspace)
     statement_examples_template = _statement_examples_template_editor(workspace)
-    statement_templates_customized = not statement_templates_are_default(workspace)
     return template_response(
         request,
         'preview.html',
@@ -335,7 +333,7 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
             'statement_template_path': STATEMENT_TEMPLATE_REL.as_posix(),
             'statement_problem_path': STATEMENT_PROBLEM_REL.as_posix(),
             'statement_examples_template': statement_examples_template,
-            'statement_templates_customized': statement_templates_customized,
+            'statement_restore_paths': [*STATEMENT_DEFAULT_FILES, STATEMENT_EXAMPLES_REL.as_posix()],
             'statement_style_path': STATEMENT_STYLE_REL.as_posix(),
             'statement_compile_assets': statement_compile_assets,
             'contestant_attachments': contestant_attachments,
@@ -450,6 +448,7 @@ def preview_save(
 def statement_templates_reset(
     problem: str,
     user: Annotated[str, Depends(require_session_user)],
+    path: Annotated[str, Form()],
     page: Annotated[str, Form()] = 'statement',
     language: Annotated[str, Form()] = '',
 ):
@@ -458,38 +457,21 @@ def statement_templates_reset(
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     current_language = resolve_statement_page_language(workspace, language)
-    message = 'default statement templates restored'
+    message = 'default statement template restored'
     try:
+        if path not in STATEMENT_DEFAULT_FILES and path != STATEMENT_EXAMPLES_REL.as_posix():
+            raise ValueError('default restore is not available for this path')
         with runtime().workspace_service.workspace_lock(workspace):
-            targets: list[tuple[str, Path, str]] = []
-            for rel, content in STATEMENT_DEFAULT_FILES.items():
-                target = _statement_template_target(workspace, Path(rel))
-                if (
-                    target.exists()
-                    and (not target.is_file())
-                    and (not target.is_symlink())
-                ):
-                    raise ValueError(f'{rel} must be a regular file')
-                targets.append((rel, target, content))
-            examples_target = _statement_template_target(
-                workspace,
-                STATEMENT_EXAMPLES_REL,
-            )
-            if (
-                examples_target.exists()
-                and (not examples_target.is_file())
-                and (not examples_target.is_symlink())
-            ):
-                raise ValueError(
-                    f'{STATEMENT_EXAMPLES_REL.as_posix()} must be a regular file'
-                )
-            for _, target, content in targets:
-                if target.is_symlink():
-                    target.unlink()
+            target = _statement_template_target(workspace, Path(path))
+            if target.exists() and not target.is_file() and not target.is_symlink():
+                raise ValueError(f'{path} must be a regular file')
+            if target.is_symlink():
+                target.unlink()
+            if path == STATEMENT_EXAMPLES_REL.as_posix():
+                target.unlink(missing_ok=True)
+            else:
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(content, encoding='utf-8')
-            if examples_target.is_symlink() or examples_target.is_file():
-                examples_target.unlink()
+                target.write_text(STATEMENT_DEFAULT_FILES[path], encoding='utf-8')
     except (ValueError, OSError, HTTPException) as exc:
         message = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
     return redirect_response(

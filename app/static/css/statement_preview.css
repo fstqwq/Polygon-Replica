@@ -201,3 +201,20 @@
     margin-inline: auto;
   }
 }
+
+.statement-preview-document pre.sample-content.sample-shaded { padding: 0; }
+.statement-preview-document .sample-shaded > code { display: block; font: inherit; white-space: inherit; }
+.statement-preview-document .sample-shaded > code > span {
+    display: inline-block;
+    box-sizing: border-box;
+    width: 100%;
+    padding-inline: 7px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    vertical-align: top;
+    min-height: 1em;
+    line-height: inherit;
+}
+.statement-preview-document .sample-shaded > code > span:first-child { padding-top: 3px; }
+.statement-preview-document .sample-shaded > code > span:last-child { padding-bottom: 3px; }
+.statement-preview-document .sample-case-shaded { background: #f0f0f0; }

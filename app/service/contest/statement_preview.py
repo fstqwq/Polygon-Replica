@@ -12,6 +12,7 @@ from typing import TypedDict
 
 from app.service.access.query import AccessQuery
 from app.service.access.model import ProblemAccessContext
+from app.service.contest.property import SHADE_SAMPLES_PROPERTY
 from app.service.contest.service import ContestProblem, ContestService
 from app.service.contest.snapshot import ContestSourceSnapshotService
 from app.service.contest.statement import ContestStatementService
@@ -132,6 +133,10 @@ class ContestStatementPreviewService:
             user_id,
         )
 
+        shade_samples = self._contests.properties_map(contest_id).get(
+            SHADE_SAMPLES_PROPERTY, "true",
+        ) == "true"
+
         def build(row: ContestProblem) -> ContestStatementPreviewItem:
             problem_access = access[row["problem_id"]]
             if not problem_access["can_read"]:
@@ -148,6 +153,7 @@ class ContestStatementPreviewService:
                     username,
                     source_kind=source_kind,
                     output_kind="html",
+                    html_sample_shading=shade_samples,
                     language=language,
                 )
             except Exception as exc:  # one Problem must not hide the remaining review

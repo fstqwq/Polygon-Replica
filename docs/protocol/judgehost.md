@@ -132,3 +132,25 @@ Administrative cleanup and backup close a service-level callback gate after acti
 | `internal-error` | `0` |
 
 Runtime cleanup waits for terminal work, released callback receipts, and flushed diagnostics.
+
+## Optional sample markup
+
+Sample generator/validator and main-correct tasks for traditional single-pass
+problems include a `sample-markup` compare resource. Existing custom sample output
+validation enables it for the same mode. The compare script sets
+`POLYGON_SAMPLE_MARKUP_FILE` to a fresh task-local feedback path. Validator
+`setTestCase()` marks input; checker `setTestCase()` marks the contestant output
+stream. Authors call `setTestCase(n)` before reading that case from the marked
+stream. Checker arguments and verdicts remain unchanged. Older headers ignore
+the variable. Optional export errors retain the execution verdict; the validator
+`--testMarkupFileName` option takes precedence and retains strict error handling.
+
+Successful single-pass capture may include `input.markup` and `output.markup`.
+They use the existing bounded pass bundle and artifact storage. Optional malformed
+members are ignored. The result stores `input_markup_ref` and `output_markup_ref`;
+older persisted results default these fields to empty. Custom sample output
+validation retains its reference in the main-correct result
+(`sample_output_markup_ref`) in the sanity completion transaction. Temporary
+task cleanup leaves these blob-backed references available. Ordinary runs, interactive tasks, and multi-pass tasks do not enable
+markup. Sample and ordinary batches retain the same durable program identity and
+close together while using distinct compare configurations and cache keys.

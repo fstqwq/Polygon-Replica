@@ -19,3 +19,13 @@ only consumed source spans. Pandoc owns the subsequent LaTeX parsing.
 Problem and contest rendering share one sample model for pair, multi-pass, interactive, and multi-pass interactive examples. The optional authored `statement/examples.tex` overrides the canonical fallback and is rendered beside `problem.tex`.
 
 The [problem source protocol](../../../../protocol/problem-source.md) owns authored layout. The [statement preview protocol](../../../../protocol/statement-preview.md) owns rendering, identity, sandbox, and cache behavior.
+
+`sample_markup.py` validates optional testcase annotations against displayed
+bytes and projects one shared line selection for HTML and PDF. `examples.py`
+selects execution evidence, including custom display output, and render-tree
+writing emits numeric sidecars. The statement preview protocol owns fallback
+and coloring semantics.
+
+PDF sample controls use Problem-local TeX state. The HTML converter initializes
+each Problem from its preview default and applies literal source controls before
+sample rendering. Both retain execution markup when presentation is disabled.

@@ -2664,14 +2664,18 @@ public:
         }
     }
 
-    void writeTestMarkup() {
-        if (!_testMarkupFileName.empty()) {
-            std::vector<int> readChars = inf.getReadChars();
+    void writeTestMarkup(InStream &stream = inf) {
+        const char *environmentPath = std::getenv("POLYGON_SAMPLE_MARKUP_FILE");
+        bool optional = _testMarkupFileName.empty();
+        std::string path = optional ? (environmentPath == NULL ? "" : environmentPath) : _testMarkupFileName;
+        if (!path.empty()) {
+            if (optional && !stream.stdfile) return;
+            std::vector<int> readChars = stream.getReadChars();
             if (!readChars.empty()) {
                 std::string markup(TEST_MARKUP_HEADER);
                 for (size_t i = 0; i < readChars.size(); i++) {
                     int c = readChars[i];
-                    if (i + 1 == readChars.size() && c == -1)
+                    if (c == EOF)
                         continue;
                     if (c <= 256) {
                         char cc = char(c);
@@ -2686,20 +2690,31 @@ public:
                 }
                 FILE* f;
                 bool standard_file = false;
-                if (_testMarkupFileName == "stdout")
+                if (path == "stdout")
                     f = stdout, standard_file = true;
-                else if (_testMarkupFileName == "stderr")
+                else if (path == "stderr")
                     f = stderr, standard_file = true;
                 else {
-                    f = testlib_fopen_(_testMarkupFileName.c_str(), "wb");
-                    if (NULL == f)
-                        __testlib_fail("Validator::writeTestMarkup: can't write test markup to (" + _testMarkupFileName + ")");
+                    f = testlib_fopen_(path.c_str(), "wb");
+                    if (NULL == f) {
+                        if (optional) {
+                            std::fprintf(stderr, "Warning: sample markup could not be written\n");
+                            return;
+                        }
+                        __testlib_fail("Validator::writeTestMarkup: can't write test markup to (" + path + ")");
+                    }
                 }
-                std::fprintf(f, "%s", markup.c_str());
-                std::fflush(f);
+                bool failed = std::fwrite(markup.data(), 1, markup.size(), f) != markup.size();
+                failed = std::fflush(f) != 0 || failed;
                 if (!standard_file)
-                    if (std::fclose(f))
-                        __testlib_fail("Validator::writeTestMarkup: can't close test markup file (" + _testCaseFileName + ")");
+                    failed = std::fclose(f) != 0 || failed;
+                if (failed) {
+                    if (optional) {
+                        if (!standard_file) std::remove(path.c_str());
+                        std::fprintf(stderr, "Warning: sample markup could not be written\n");
+                    } else
+                        __testlib_fail("Validator::writeTestMarkup: can't write test markup to (" + path + ")");
+                }
             }
         }
     }
@@ -2872,15 +2887,15 @@ InStream::~InStream() {
 }
 
 void InStream::setTestCase(int testCase) {
-    if (testlibMode != _validator || mode != _input || !stdfile || this != &inf)
-        __testlib_fail("InStream::setTestCase can be used only for inf in validator-mode."
+    if (!stdfile || !((testlibMode == _validator && this == &inf) || (testlibMode == _checker && this == &ouf)))
+        __testlib_fail("InStream::setTestCase can be used only for validator input or checker output."
             " Actually, prefer setTestCase function instead of InStream member");
     reader->setTestCase(testCase);
 }
 
 std::vector<int> InStream::getReadChars() {
-    if (testlibMode != _validator || mode != _input || !stdfile || this != &inf)
-        __testlib_fail("InStream::getReadChars can be used only for inf in validator-mode.");
+    if (!stdfile || !((testlibMode == _validator && this == &inf) || (testlibMode == _checker && this == &ouf)))
+        __testlib_fail("InStream::getReadChars can be used only for validator input or checker output.");
     return reader == NULL ? std::vector<int>() : reader->getReadChars();
 }
 
@@ -2899,6 +2914,10 @@ void setTestCase(int testCase) {
 
     if (testlibMode == _validator)
         inf.setTestCase(testCase);
+    else if (testlibMode == _checker) {
+        const char *path = std::getenv("POLYGON_SAMPLE_MARKUP_FILE");
+        if (path != NULL && *path && ouf.stdfile) ouf.setTestCase(testCase);
+    }
 
     first_run = false;
 }
@@ -3098,6 +3117,11 @@ NORETURN void InStream::quit(TResult result, const char *msg) {
     if (__testlib_shouldCheckDirt(result)) {
         if (testlibMode != _interactor && !ouf.seekEof())
             quit(_dirt, "Extra information in the output file");
+    }
+
+    if (testlibMode == _checker && result == _ok) {
+        const char *path = std::getenv("POLYGON_SAMPLE_MARKUP_FILE");
+        if (path != NULL && *path) validator.writeTestMarkup(ouf);
     }
 
     int pctype = result - _partially;

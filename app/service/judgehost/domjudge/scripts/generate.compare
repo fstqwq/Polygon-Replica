@@ -6,6 +6,25 @@ FEEDBACK="$3"
 shift 3
 HERE="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 mkdir -p "$FEEDBACK"
+unset POLYGON_SAMPLE_MARKUP_FILE
+if [ -f "$HERE/sample-markup" ]; then
+  POLYGON_SAMPLE_MARKUP_FILE="$FEEDBACK/input.markup"
+  if rm -f -- "$POLYGON_SAMPLE_MARKUP_FILE"; then
+    export POLYGON_SAMPLE_MARKUP_FILE
+  else
+    unset POLYGON_SAMPLE_MARKUP_FILE
+  fi
+  "$HERE/pass-capture" prepare "$TESTIN" >/dev/null 2>&1 || true
+fi
+capture_on_exit() {
+  RC=$?
+  trap - EXIT
+  if [ -x "$HERE/pass-capture" ]; then
+    "$HERE/pass-capture" finish "$TESTIN" "$FEEDBACK" "$RC" >/dev/null 2>&1 || true
+  fi
+  exit "$RC"
+}
+trap capture_on_exit EXIT
 TEAMOUT="$FEEDBACK/team.out"
 OVERVIEW_LOG="$FEEDBACK/testlib-overview.log"
 VALIDATE_INPUT=0

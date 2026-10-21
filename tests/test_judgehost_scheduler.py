@@ -214,6 +214,7 @@ def _create_staged_batch(
     task_id: str,
     run_id: str,
     ordinals: list[int],
+    batch_spec: ExecutionBatchSpec = ExecutionBatchSpec(),
     service_class: str = "background",
     scope: int = 1,
     case_rows: list[dict[str, object]] | None = None,
@@ -256,7 +257,7 @@ def _create_staged_batch(
         verification_source="solution-run",
         bypass_case_result_cache=0,
         service_class=service_class,
-        batch_spec=ExecutionBatchSpec(),
+        batch_spec=batch_spec,
         created_at=now_text,
         case_rows=(
             [_case_row(task_id, run_id, ordinal, scope) for ordinal in ordinals]
@@ -349,6 +350,34 @@ class TestJudgehostScheduler(unittest.TestCase):
         blob_store = RuntimeBlobStore(temp_root / "blobs")
         cache_index = RuntimeCacheIndex(blob_store)
         return (ExecutableCache(cache_index), blob_store, cache_index)
+
+    def test_sample_and_ordinary_batches_share_program_identity_and_close_together(self) -> None:
+        scheduler = JudgehostBatchRuntime(id_base=100)
+        batches = []
+        for ordinal, sample in enumerate((False, True), 1):
+            if sample:
+                with self.assertRaisesRegex(RuntimeError, "program identity changed"):
+                    _create_staged_batch(
+                        scheduler, task_id="changed-source", run_id="changed-source-run", ordinals=[5],
+                        verification_program_id="accepted", compile_hash="f" * 32,
+                        batch_spec=ExecutionBatchSpec(compare_files=(("sample-markup", b"1\n", False),)),
+                    )
+            batch, _ = _create_staged_batch(
+                scheduler, task_id=f"variant-{ordinal}", run_id=f"variant-run-{ordinal}",
+                ordinals=[ordinal], verification_program_id="accepted",
+                batch_spec=ExecutionBatchSpec(compare_files=(("sample-markup", b"1\n", False),) if sample else ()),
+            )
+            batches.append(batch)
+            self.assertEqual(scheduler.fetch_batch(batch)["verification_program_id"], "accepted")
+        self.assertNotEqual(*batches)
+        scheduler.finish_programs("ver-1", ["accepted"], now_text=datetime.now(timezone.utc).isoformat())
+        for ordinal, sample in enumerate((False, True), 3):
+            with self.subTest(sample=sample), self.assertRaisesRegex(RuntimeError, "program is closed"):
+                _create_staged_batch(
+                    scheduler, task_id=f"closed-{ordinal}", run_id=f"closed-run-{ordinal}",
+                    ordinals=[ordinal], verification_program_id="accepted",
+                    batch_spec=ExecutionBatchSpec(compare_files=(("sample-markup", b"1\n", False),) if sample else ()),
+                )
 
     def test_program_cache_configuration_survives_append_and_rejects_changes(self) -> None:
         scheduler = JudgehostBatchRuntime(id_base=100)

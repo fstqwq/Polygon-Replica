@@ -22,6 +22,8 @@ from app.service.execution.model import (
 
 _PASS_CACHE_FILE_NAMES = {
     "input": "input",
+    "input.markup": "input-markup",
+    "output.markup": "output-markup",
     "program.out": "program-out",
     "program.err": "program-err",
     "system.out": "system-out",
@@ -343,6 +345,8 @@ def normalize_captured_case(
         feedback_text=feedback_text,
         answer_correct=_answer_correct_from_compare_exit_code(compare_exit_code),
         input_ref=final_input_ref,
+        input_markup_ref=_bundled_ref(final_pass_number, "input.markup") if verdict == "OK" and final_pass_number == 1 else "",
+        output_markup_ref=_bundled_ref(final_pass_number, "output.markup") if verdict == "OK" and final_pass_number == 1 else "",
         interactive=captured.interactive,
         pass_number=final_pass_number,
         historical_passes=tuple(historical_passes),

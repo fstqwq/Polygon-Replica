@@ -700,6 +700,24 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
             self.assertEqual(client.post(url + "/delete", data={"property_key": mark_to_delete}).status_code, 303)
             values.pop(mark_to_delete)
             self.assertEqual(stored(), {**values, "banner": DEFAULT_CONTEST_BANNER})
+            before_shading = stored()
+            for _ in range(2):
+                before = generation()
+                response = client.post(url + "/insert-preset", data={"property_key": "shadeSamples"})
+                self.assertEqual(response.status_code, 303)
+                self.assertEqual(stored(), {**before_shading, "shadeSamples": "false"})
+                self.assertEqual(generation(), before + 1)
+                self.assertEqual(client.post(url + "/insert-preset", data={"property_key": "shadeSamples"}).status_code, 409)
+                self.assertEqual(client.post(url + "/save", data={"property_keys": "shadeSamples", "property_values": "true"}).status_code, 303)
+                self.assertEqual(stored()["shadeSamples"], "true")
+                for key_name, value in (("shadeSamples", "invalid"), ("shadeSamples.chinese", "false")):
+                    self.assertEqual(client.post(url + "/save", data={"property_keys": key_name, "property_values": value}).status_code, 400)
+                    self.assertEqual(stored()["shadeSamples"], "true")
+                self.assertEqual(client.post(url + "/delete", data={"property_key": "shadeSamples"}).status_code, 303)
+                self.assertEqual(stored(), before_shading)
+                self.assertTrue(contest_template_properties(stored())["shadeSamples"])
+            self.assertEqual(client.post(url + "/insert-preset", data={"property_key": "shadeSamples"},
+                headers={**headers, "origin": "https://evil.example"}).status_code, 403)
             baseline = stored()
             for bad in ("mark.Alice/a", "mark.alice/../a", "mark.alice/a.chinese", "mark.alice/", "mark.alice/" + "a" * 64):
                 with self.subTest(key=bad):
@@ -719,6 +737,8 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
                     "property_values": "✅", "response_format": "json"})
                 self.assertEqual(response.status_code, 200 if role == "write" else 403)
                 if role != "write":
+                    self.assertEqual(client.post(url + "/insert-preset", headers=bob_headers,
+                        data={"property_key": "shadeSamples"}).status_code, 403)
                     self.assertEqual(stored(), baseline)
                 else:
                     self.assertEqual(stored(), {**baseline, key: "✅"})
@@ -737,7 +757,7 @@ class TestUIContests(UIHelpersMixin, E2ETestBase):
         marks = {"mark.alice/english": "✅", "mark.team-7/a-b": "❓"}
         props = {"title": "Title", "title.chinese": "中文", "mark": "base", "mark.chinese": "language", **marks}
         self.assertEqual(localized_contest_properties(props, "chinese"), {"title": "中文", "mark": "language"})
-        self.assertEqual(contest_template_properties(marks), {"banner": "", "insertBlankPage": False})
+        self.assertEqual(contest_template_properties(marks), {"banner": "", "insertBlankPage": False, "shadeSamples": True})
         groups = _contest_property_table(props)["groups"]
         self.assertEqual({row["key"]: row["localizable"] for row in groups},
                          {"title": True, "mark": True, **dict.fromkeys(marks, False)})

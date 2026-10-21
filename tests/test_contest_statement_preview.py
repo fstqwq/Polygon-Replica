@@ -101,6 +101,15 @@ class TestContestStatementPreview(ContestActionBase):
             self.assertIn("Problem " + row["idx"], compiled_sources[row["source_folder"]])
         self.assertNotIn("<#", document)
 
+        runtime.contest_service.set_properties(contest_id, owner_id, {"shadeSamples": False})
+        with patch.object(runtime.tex_sandbox_backend, "run", side_effect=compile_pdf):
+            disabled = runtime.contest_statement_preview_service.build_pdf(
+                contest_id, contest_slug=slug, user_id=owner_id, username="alice",
+                source_kind="workspace", language="english")
+        self.assertEqual(disabled["status"], "ok", disabled["summary"])
+        self.assertNotEqual(disabled["id"], first["id"])
+        self.assertIn(r"\StatementSampleShading{false}", compiled_sources["entrypoint"])
+
     def test_pdf_failure_preserves_error_context_and_complete_latex_log(self) -> None:
         slug, contest_id, owner_id = self.create_contest("broken-contest")
         _, _, problem_slug = self.add_owned_problem(contest_id, owner_id, "A", "broken-preview")

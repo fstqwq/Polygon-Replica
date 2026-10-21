@@ -114,6 +114,8 @@ def build_case_result(
     feedback_text: str,
     answer_correct: bool,
     input_ref: str = "",
+    input_markup_ref: str = "",
+    output_markup_ref: str = "",
     interactive: bool = False,
     pass_number: int = 1,
     historical_passes: tuple[ExecutionPassResult, ...] = (),
@@ -158,6 +160,8 @@ def build_case_result(
         feedback=feedback_text,
         artifacts=PassArtifacts(
             input_ref=input_ref,
+            input_markup_ref=input_markup_ref,
+            output_markup_ref=output_markup_ref,
             output_ref="" if interactive else output_run_ref,
             transcript_ref=output_run_ref if interactive else "",
             stderr_ref=output_error_ref,

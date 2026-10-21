@@ -69,6 +69,7 @@ class StatementHtmlRenderer:
         output_root: Path,
         *,
         subject_token: str,
+        shade_samples: bool = True,
     ) -> StatementHtmlRenderResult:
         source_root = render_root.resolve()
         output = output_root.resolve()
@@ -87,6 +88,7 @@ class StatementHtmlRenderer:
             "HOME": "/tmp",
             "STATEMENT_PREVIEW_ID": self._safe_subject_token(subject_token),
             "STATEMENT_RENDER_ROOT": str(source_root),
+            "STATEMENT_SAMPLE_SHADING": "true" if shade_samples else "false",
         }
         parse_result = self._run(
             [

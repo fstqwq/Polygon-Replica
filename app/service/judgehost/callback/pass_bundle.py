@@ -1,4 +1,5 @@
 import io
+import logging
 import re
 import tarfile
 from dataclasses import dataclass
@@ -22,6 +23,7 @@ PASS_FILE_NAMES = frozenset(
 _PASS_PATH_RE = re.compile(r"^passes/([1-9][0-9]*)/([^/]+)$")
 _CANONICAL_NUMBER_RE = re.compile(rb"^[1-9][0-9]*$")
 _CANONICAL_BYTE_COUNT_RE = re.compile(rb"^(0|[1-9][0-9]*)$")
+_MARKUP_FILES = frozenset({"input.markup", "output.markup"})
 _FULL_FILES = frozenset(PASS_FILE_NAMES)
 _METADATA_FILES = frozenset({"program.meta", "compare.meta"})
 _FINAL_SUPPLEMENT_FILES = frozenset({"input", "teammessage.txt"})
@@ -116,6 +118,7 @@ def _capture_status(
     final_pass_number: int,
     names: frozenset[str],
 ) -> str:
+    names = names - _MARKUP_FILES
     if number == final_pass_number:
         if names != _FINAL_SUPPLEMENT_FILES:
             raise InvalidPassBundle("final pass bundle supplement is incomplete")
@@ -174,13 +177,19 @@ def parse_pass_bundle(
                 HISTORICAL_FEEDBACK_BYTES_NAME,
             }:
                 match = _PASS_PATH_RE.fullmatch(name)
-                if match is None or match.group(2) not in PASS_FILE_NAMES:
+                if match is None or match.group(2) not in PASS_FILE_NAMES | _MARKUP_FILES:
                     raise InvalidPassBundle("pass bundle contains an unknown entry")
-            item = _read_member(
-                archive,
-                member,
-                max_member_bytes=max_member_bytes,
-            )
+            try:
+                item = _read_member(
+                    archive,
+                    member,
+                    max_member_bytes=max_member_bytes,
+                )
+            except InvalidPassBundle:
+                if name.rsplit("/", 1)[-1] not in _MARKUP_FILES:
+                    raise
+                logging.getLogger(__name__).warning("Ignoring invalid optional sample markup")
+                continue
             total_bytes += len(item)
             if total_bytes > max_bundle_bytes:
                 raise InvalidPassBundle("pass bundle contents exceed the byte limit")
