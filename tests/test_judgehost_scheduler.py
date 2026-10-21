@@ -356,15 +356,18 @@ class TestJudgehostScheduler(unittest.TestCase):
         batches = []
         for ordinal, sample in enumerate((False, True), 1):
             if sample:
-                with self.assertRaisesRegex(RuntimeError, "program identity changed"):
-                    _create_staged_batch(
-                        scheduler, task_id="changed-source", run_id="changed-source-run", ordinals=[5],
-                        verification_program_id="accepted", compile_hash="f" * 32,
-                        batch_spec=ExecutionBatchSpec(compare_files=(("sample-markup", b"1\n", False),)),
-                    )
+                for compile_hash, compare_limit in (("f" * 32, 30), ("1" * 32, 60)):
+                    with self.subTest(compile_hash=compile_hash, compare_limit=compare_limit), self.assertRaisesRegex(RuntimeError, "program identity changed"):
+                        _create_staged_batch(
+                            scheduler, task_id="changed-source", run_id="changed-source-run", ordinals=[5],
+                            verification_program_id="accepted", compile_hash=compile_hash,
+                            compare_config={"hash": "b" * 32, "script_timelimit": compare_limit},
+                            batch_spec=ExecutionBatchSpec(compare_files=(("sample-markup", b"1\n", False),)),
+                        )
             batch, _ = _create_staged_batch(
                 scheduler, task_id=f"variant-{ordinal}", run_id=f"variant-run-{ordinal}",
                 ordinals=[ordinal], verification_program_id="accepted",
+                compare_config={"hash": ("b" if sample else "a") * 32, "script_timelimit": 30},
                 batch_spec=ExecutionBatchSpec(compare_files=(("sample-markup", b"1\n", False),) if sample else ()),
             )
             batches.append(batch)

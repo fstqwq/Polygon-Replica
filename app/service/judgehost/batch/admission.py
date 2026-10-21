@@ -1,3 +1,4 @@
+import json
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
@@ -166,7 +167,7 @@ class BatchAdmission:
                 existing_spec = self._state._batch_specs[existing_batch_id]
                 requested_spec = batch_spec
                 if not same_variant:
-                    # Only optional capture resources differ between sample and ordinary cases.
+                    # Only optional capture resources and their derived compare hash differ.
                     existing_spec = replace(existing_spec, compare_files=tuple(
                         item for item in existing_spec.compare_files if item[0] not in {"sample-markup", "pass-capture"}
                     ))
@@ -186,7 +187,10 @@ class BatchAdmission:
                     existing_batch.source_hash,
                     existing_batch.compile_config_json,
                     existing_batch.run_config_json,
-                    existing_batch.compare_config_json,
+                    (
+                        existing_batch.compare_config_json if same_variant else
+                        json.loads(existing_batch.compare_config_json) | {"hash": ""}
+                    ),
                     existing_batch.expected_behavior,
                     existing_batch.verification_source,
                     existing_batch.bypass_case_result_cache,
@@ -209,7 +213,10 @@ class BatchAdmission:
                     source_hash,
                     compile_config_json,
                     run_config_json,
-                    compare_config_json,
+                    (
+                        compare_config_json if same_variant else
+                        json.loads(compare_config_json) | {"hash": ""}
+                    ),
                     expected_behavior,
                     verification_source,
                     int(bypass_case_result_cache),
