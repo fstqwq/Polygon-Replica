@@ -184,6 +184,9 @@
         />
         Use editable examples template
       </label>
+      {% if not statement_examples_template.enabled and not statement_examples_template.error and ctx.access.can_write %}
+      <button class="linkish-button" type="submit" name="unshaded" value="true">Use unshaded examples</button>
+      {% endif %}
     </form>
   </div>
   {% if statement_examples_template.error %}

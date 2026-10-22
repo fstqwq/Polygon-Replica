@@ -109,6 +109,10 @@
 }
 
 .statement-examples-template-toggle {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
   flex: 0 0 auto;
 }
 
@@ -117,6 +121,17 @@
   align-items: center;
   gap: var(--space-2);
   white-space: nowrap;
+}
+
+.statement-examples-template-toggle input[type="checkbox"] {
+  font: inherit;
+  width: 1em;
+  height: 1em;
+  margin: 0;
+}
+
+.statement-examples-template-toggle button {
+  margin-inline-start: calc(1em + var(--space-2));
 }
 
 .statement-assets-grid {
@@ -186,6 +201,8 @@
 
   .statement-examples-template-head {
     display: grid;
+    max-width: calc(100vw - 2rem);
+    overflow-wrap: anywhere;
   }
 }
 

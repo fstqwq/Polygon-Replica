@@ -148,6 +148,11 @@ is absent. The existing preset endpoint inserts `shadeSamples=false`; Edit chang
 the value and Delete restores the enabled default. An existing value is preserved
 when a stale preset request is rejected.
 
+The Statement page offers **Use unshaded examples** beside the editable-template
+toggle when no custom examples template exists. It creates the default examples
+template with `\StatementSampleShading{false}` prepended. Repeated requests preserve
+an existing template. Disabling the editable template removes this override.
+
 An authored `statement/examples.tex` can override the inherited value with a
 literal top-level command before the sample environment:
 

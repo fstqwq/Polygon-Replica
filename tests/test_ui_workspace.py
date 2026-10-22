@@ -1473,6 +1473,47 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         self.assertEqual(disabled.status_code, 303)
         self.assertFalse(examples_path.exists())
 
+        reader = self.random_id("shadereader")
+        workspace_service.ensure_user(reader)
+        workspace_service.grant_repo_access(problem, reader, "read")
+        reader_workspace = Path(workspace_service.ensure_workspace(problem, reader))
+        reader_token = runtime.auth_service.create_session_for_user(workspace_service.known_user_id(reader))
+        actor_id = workspace_service.known_user_id("alice")
+        token = runtime.auth_service.create_session_for_user(int(actor_id))
+        with TestClient(app, base_url="https://testserver", headers={
+            "cookie": f"{AUTH_COOKIE_NAME}={token}", "origin": "https://testserver",
+        }) as client:
+            endpoint = f"/problems/{problem}/statement/examples-template/toggle"
+            response = client.post(
+                endpoint, data={"unshaded": "true", "page": "statement", "language": "english"},
+                follow_redirects=False,
+            )
+            self.assertEqual(response.status_code, 303)
+            self.assertEqual(response.headers["location"], f"/problems/{problem}/statement?language=english")
+            self.assertEqual(
+                examples_path.read_text(encoding="utf-8"),
+                "\\StatementSampleShading{false}\n" + DEFAULT_STATEMENT_EXAMPLES_TEMPLATE,
+            )
+            examples_path.write_text("custom template\n", encoding="utf-8")
+            client.post(endpoint, data={"unshaded": "true"}, follow_redirects=False)
+            self.assertEqual(examples_path.read_text(encoding="utf-8"), "custom template\n")
+            rejected = client.post(
+                endpoint, data={"unshaded": "true"},
+                headers={"origin": "https://untrusted.example"}, follow_redirects=False,
+            )
+            self.assertEqual(rejected.status_code, 403)
+            self.assertEqual(examples_path.read_text(encoding="utf-8"), "custom template\n")
+            removed = client.post(endpoint, data={"enabled": "false"}, follow_redirects=False)
+            self.assertEqual(removed.status_code, 303)
+            self.assertFalse(examples_path.exists())
+
+            rejected = client.post(
+                endpoint, data={"unshaded": "true"},
+                headers={"cookie": f"{AUTH_COOKIE_NAME}={reader_token}"}, follow_redirects=False,
+            )
+            self.assertEqual(rejected.status_code, 403)
+            self.assertFalse((reader_workspace / "statement/examples.tex").exists())
+
     def test_statement_template_restore_changes_only_the_selected_file(self) -> None:
         problem = f"alice/stmtreset-{uuid.uuid4().hex[:8]}"
         workspace_service.ensure_problem(problem)

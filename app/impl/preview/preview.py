@@ -516,9 +516,11 @@ def statement_examples_template_toggle(
     problem: str,
     user: Annotated[str, Depends(require_session_user)],
     enabled: Annotated[bool, Form()] = False,
+    unshaded: Annotated[bool, Form()] = False,
     page: Annotated[str, Form()] = 'statement',
     language: Annotated[str, Form()] = '',
 ):
+    enabled = enabled or unshaded
     target_page = normalize_statement_target_page(page)
     ctx = page_ctx(
         problem,
@@ -546,7 +548,8 @@ def statement_examples_template_toggle(
                 if not target.exists():
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_text(
-                        DEFAULT_STATEMENT_EXAMPLES_TEMPLATE,
+                        (r'\StatementSampleShading{false}' + '\n' if unshaded else '')
+                        + DEFAULT_STATEMENT_EXAMPLES_TEMPLATE,
                         encoding='utf-8',
                     )
             else:
