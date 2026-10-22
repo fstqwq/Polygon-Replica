@@ -1,4 +1,4 @@
-\begin{problem}{${problem.name}}{${problem.inputFile}}{${problem.outputFile}}{${(problem.timeLimit / 1000)?c} seconds}{${(problem.memoryLimit / 1048576)?c} megabytes}
+\begin{problem}{${problem.name}}{${problem.inputFile}}{${problem.outputFile}}{${(problem.timeLimit / 1000)?c} <#if language?? && language = "chinese">秒<#else>seconds</#if>}{${(problem.memoryLimit / 1048576)?c} <#if language?? && language = "chinese">MB<#else>megabytes</#if>}
 ${problem.legend}
 <#if problem.input?? && (problem.input?length > 0)>
 \InputFile

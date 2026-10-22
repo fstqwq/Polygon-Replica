@@ -20,7 +20,11 @@
 
 \usepackage {amsmath}
 \usepackage {amssymb}
+<#if language?? && language = "chinese">
+\usepackage[chinese]{olymp}
+<#else>
 \usepackage {olymp}
+</#if>
 \usepackage {comment}
 \usepackage {epigraph}
 \usepackage {expdlist}

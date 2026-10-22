@@ -5,6 +5,18 @@ from app.service.statement.ftl.renderer import render_ftl_template
 
 
 class TestCanonicalStatementStyle(unittest.TestCase):
+    def test_statement_template_selects_pdf_language(self) -> None:
+        for language, package in (
+            ("chinese", r"\usepackage[chinese]{olymp}"),
+            ("english", r"\usepackage {olymp}"),
+        ):
+            with self.subTest(language=language):
+                rendered = render_ftl_template(
+                    DEFAULT_STATEMENT_TEMPLATE,
+                    {"language": language, "statements": []},
+                )
+                self.assertIn(package, rendered)
+
     def test_statement_template_projects_blank_page_property(self) -> None:
         context: dict[str, object] = {
             "title": "",

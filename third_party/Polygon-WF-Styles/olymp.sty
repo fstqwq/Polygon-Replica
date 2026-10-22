@@ -43,6 +43,7 @@
 \newif\if@russian\@russianfalse
 \newif\if@ukrainian\@ukrainianfalse
 \newif\if@arabic\@arabicfalse
+\newif\if@chinese\@chinesefalse
 
 \DeclareOption{landscape}{
     \@landscapetrue
@@ -56,6 +57,7 @@
 \DeclareOption{arabic}{
     \@arabictrue
 }
+\DeclareOption{chinese}{\@chinesetrue}
 \ProcessOptions\relax
 
 
@@ -315,6 +317,38 @@
 \def\kw@defaultinputname{test}
 \def\kw@defaultoutputname{answer}
 \fi
+\fi
+
+\def\kw@SampleInput{Sample Input}
+\def\kw@SampleOutput{Sample Output}
+\def\kw@SampleInteraction{Sample Interaction}
+\def\kw@Pass#1{Pass #1}
+\def\kw@Sample{Sample}
+\def\kw@Read{Read}
+\def\kw@Write{Write}
+\if@chinese
+\def\kw@Problem{问题}
+\def\kw@Input{输入}
+\def\kw@Output{输出}
+\def\kw@SampleInput{样例输入}
+\def\kw@SampleOutput{样例输出}
+\def\kw@SampleInteraction{交互样例}
+\def\kw@Pass#1{第 #1 轮}
+\def\kw@Sample{样例}
+\def\kw@Read{读取}
+\def\kw@Write{写入}
+\def\kw@IntentionallyBlankPage{此页留空。}
+\def\kw@TimeLimit{时间限制：}
+\def\kw@MemoryLimit{内存限制：}
+\def\kw@InputFileName{输入文件：}
+\def\kw@OutputFileName{输出文件：}
+\def\kw@stdin{标准输入}
+\def\kw@stdout{标准输出}
+\def\kw@Interaction{交互协议}
+\def\kw@Note{说明}
+\def\kw@Notes{说明}
+\def\kw@Example{样例}
+\def\kw@Examples{样例}
 \fi
 
 \afterproblemhead=5mm
@@ -675,9 +709,9 @@
         \noindent\hspace*{\statement@sample@indent}%
         \begin{minipage}{\statement@sample@tablewidth}
             \hbox to \statement@sample@tablewidth{%
-                {\sffamily\bfseries Sample Input \arabic{exmpnum}}%
+                {\sffamily\bfseries \kw@SampleInput{} \arabic{exmpnum}}%
                 \hfil
-                {\sffamily\bfseries Sample Output \arabic{exmpnum}}%
+                {\sffamily\bfseries \kw@SampleOutput{} \arabic{exmpnum}}%
                 \hfil
             }%
             \par\smallskip
@@ -700,9 +734,9 @@
         \stepcounter{exmpnum}%
         \noindent\hspace*{\statement@sample@indent}%
         \begin{tabular*}{\statement@sample@tablewidth}{@{}l@{\extracolsep{\fill}}c@{\extracolsep{\fill}}r@{}}%
-            \sffamily\bfseries Read &
-            \sffamily\bfseries Sample Interaction \arabic{exmpnum} &
-            \sffamily\bfseries Write
+            \sffamily\bfseries \kw@Read &
+            \sffamily\bfseries \kw@SampleInteraction{} \arabic{exmpnum} &
+            \sffamily\bfseries \kw@Write
         \end{tabular*}%
         \par
         \noindent\hspace*{\statement@sample@indent}%
@@ -826,9 +860,9 @@
 \newcommand{\statement@sample@interactionheading}[1]{%
     \noindent\hspace*{\statement@sample@indent}%
     \begin{tabular*}{\statement@sample@tablewidth}{@{}l@{\extracolsep{\fill}}c@{\extracolsep{\fill}}r@{}}%
-        \sffamily\bfseries Read &
+        \sffamily\bfseries \kw@Read &
         \sffamily\bfseries #1 &
-        \sffamily\bfseries Write
+        \sffamily\bfseries \kw@Write
     \end{tabular*}%
     \par\nopagebreak[4]
 }
@@ -850,8 +884,8 @@
     \ifdefined\NoExamples\else
         \statement@sample@nextentry
         \statement@sample@filepanel
-            {Sample Input #1}{}
-            {Sample Output #1}{#2}{#3}%
+            {\kw@SampleInput{} #1}{}
+            {\kw@SampleOutput{} #1}{#2}{#3}%
     \fi
 }
 
@@ -860,8 +894,8 @@
     \ifdefined\NoExamples\else
         \statement@sample@nextentry
         \statement@sample@filepanel
-            {Sample Input #1}{Pass #2}
-            {Sample Output #1}{#3}{#4}%
+            {\kw@SampleInput{} #1}{\kw@Pass{#2}}
+            {\kw@SampleOutput{} #1}{#3}{#4}%
     \fi
 }
 
@@ -872,9 +906,9 @@
         \statement@sample@nextentry
         \def\statement@sample@pass{#1}%
         \ifx\statement@sample@pass\@empty
-            \statement@sample@interactionheading{Sample Interaction #2}%
+            \statement@sample@interactionheading{\kw@SampleInteraction{} #2}%
         \else
-            \statement@sample@interactionheading{Sample #2, Pass #1}%
+            \statement@sample@interactionheading{\kw@Sample{} #2, \kw@Pass{#1}}%
         \fi
     \fi
 }{%

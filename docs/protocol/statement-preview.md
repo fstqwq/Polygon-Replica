@@ -12,6 +12,15 @@ source snapshot
 
 Statement preview requires problem read access. Workspace source always means the requesting actor's own workspace and renders authored source with sample evidence; it never selects another user's checkout. Native package source reads a current ready package or an explicitly selected available historical package and never builds, rebuilds, or publishes one. Generated examples never modify authored source. The synchronous `statement_previews` flow is the only statement-preview lifecycle: it uses `sp-*` identities and actor-scoped cache payloads. Preview records, IDs, resources, and logs are scoped to the requesting user and remain subject to problem or contest access checks.
 
+## PDF language
+
+The default `statements.ftl` selects the `olymp` Chinese option for the
+`chinese` render language. It localizes problem and section headings, both
+legacy and structured sample headings, interaction directions and blank-page
+text. The default `problem.tex` localizes limit units. English rendering keeps
+its existing wording. Existing authored templates remain unchanged; restore
+`statements.ftl`, `problem.tex` and `olymp.sty` together to adopt these defaults.
+
 ## HTML
 
 ```text
