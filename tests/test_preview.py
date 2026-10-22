@@ -1,5 +1,8 @@
+import io
+import json
 import subprocess
 import sys
+import tarfile
 from dataclasses import replace
 
 from app.service.execution.model import CAPTURE_COMPLETE, ExecutionPassResult, ExecutionUsage, PassArtifacts
@@ -22,6 +25,56 @@ class TestPreview(BackendE2ETestBase):
     def setUp(self) -> None:
         super().setUp()
         override_config_values(self, runtime.config_values, JUDGEHOST_ENABLE=True)
+
+    def test_workspace_preview_shades_authored_output_using_its_checker_evidence(self) -> None:
+        workspace = self._workspace_path()
+        sample_input = b"2\n10\n20\n"
+        authored_output = b"first\nsecond\n"
+        (workspace / "solutions/std.py").write_text("print('one\\ntwo')\n", encoding="utf-8")
+        (workspace / "config/build.json").write_text(
+            dumps_build_config({"generator_sources": [], "accepted_solution_source": "solutions/std.py"}),
+            encoding="utf-8",
+        )
+        (workspace / "tests/manual/001.in").write_bytes(sample_input)
+        (workspace / "tests/spec.json").write_text(json.dumps({"tests": [
+            {"id": "001", "kind": "manual", "sample": True,
+             "sample_output": authored_output.decode("utf-8")},
+        ]}), encoding="utf-8")
+
+        def reply(work: DomjudgeWork) -> JudgehostReply:
+            service = runtime.judgehost_task_service
+            source = service.domjudge_get_source_files(work["submitid"], work["contestid"])[0]
+            if source.filename == "manual_validate.cpp":
+                output = sample_input
+                markup_name = "input.markup"
+                markup = b"MU\xf3\x012\n!c1;10\n!c2;20\n"
+            else:
+                output = subprocess.run(
+                    [sys.executable, "-c", runtime.runtime_blob_store.read(source.payload).decode("utf-8")],
+                    capture_output=True, check=True, timeout=10,
+                ).stdout
+                markup_name = "output.markup"
+                first, second = output.splitlines(keepends=True)
+                markup = b"MU\xf3\x01!c1;" + first + b"!c2;" + second
+            bundle = io.BytesIO()
+            with tarfile.open(fileobj=bundle, mode="w") as archive:
+                for name, content in {
+                    ".polygon-pass-bundle": b"", "final-pass-number": b"1\n",
+                    "passes/1/input": sample_input, "passes/1/teammessage.txt": b"",
+                    "passes/1/" + markup_name: markup,
+                }.items():
+                    info = tarfile.TarInfo(name)
+                    info.size = len(content)
+                    archive.addfile(info, io.BytesIO(content))
+            return JudgehostReply(output=output, team_message=bundle.getvalue())
+
+        with reporting_judgehost(runtime.judgehost_task_service, reply):
+            with runtime.statement_preview_service.prepare_render_tree(
+                self.problem, self.user, source_kind="workspace", language="english",
+            ) as prepared:
+                output = prepared.root / "examples/sample-1/display.ans"
+                self.assertEqual(output.read_bytes(), authored_output)
+                self.assertEqual(output.with_suffix(".ans.shade").read_text(), "1")
 
     def _plan(self, test_name: str, *, custom: bool) -> VerificationTestPlan:
         return VerificationTestPlan(

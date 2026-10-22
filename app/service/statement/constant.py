@@ -30,7 +30,7 @@ WF_STYLE_EXAMPLES_REL = WF_STYLE_DIR / "examples.tex"
 WF_STYLE_OLYMP_REL = WF_STYLE_DIR / "olymp.sty"
 DEFAULT_PROBLEM_TITLE = "Sample Problem"
 
-STATEMENT_RENDERER_SIGNATURE_VERSION = "2026-08-17-statement-examples-legacy-projection"
+STATEMENT_RENDERER_SIGNATURE_VERSION = "2026-10-22-authored-sample-output-markup"
 
 
 def _read_required_text(path: Path, *, label: str, allow_empty: bool = False) -> str:

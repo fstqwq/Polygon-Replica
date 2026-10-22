@@ -15,6 +15,7 @@ class JudgehostReply:
     output: bytes = b""
     runresult: str = "correct"
     compile_success: bool = True
+    team_message: bytes = b""
 
 
 @contextmanager
@@ -50,6 +51,7 @@ def reporting_judgehost(
                                 "runresult": response.runresult,
                                 "runtime": "0.001",
                                 "output_run": response.output,
+                                "team_message": response.team_message,
                                 "metadata": (
                                     b"time-used:cpu-time\ncpu-time:0.001\n"
                                     b"wall-time:0.001\nmemory-bytes:1024\n"

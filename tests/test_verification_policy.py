@@ -226,15 +226,15 @@ class TestVerificationPolicy(VerificationPolicyTestBase):
             Kind.ALL.value,
         )
 
-    def test_non_all_verification_skips_sanity_plan(self) -> None:
+    def test_verification_kind_selects_applicable_sanity_checks(self) -> None:
         from app.service.verification.workflow_policy import sanity_plan_for_verification_kind
         from app.service.verification.types import Kind
 
         test_plans = [self._sanity_test_plan(sample=True, sample_output_text="ok\n")]
 
         checks, status = sanity_plan_for_verification_kind(Kind.SAMPLE.value, test_plans)
-        self.assertEqual(checks, [])
-        self.assertEqual(status, "skipped")
+        self.assertEqual(checks, ["custom_sample_output"])
+        self.assertEqual(status, "pending")
 
         checks, status = sanity_plan_for_verification_kind(Kind.CUSTOM.value, test_plans)
         self.assertEqual(checks, [])

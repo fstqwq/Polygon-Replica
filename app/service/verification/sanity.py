@@ -296,6 +296,7 @@ def run_verification_sanity_checks(
     verification_id: str,
     logs_dir: Path,
     test_plans: list[VerificationTestPlan],
+    check_names: Sequence[str] | None = None,
     accepted_source_label: str = "",
     accepted_source_name: str = "",
     accepted_source_file: PayloadFile | None = None,
@@ -309,7 +310,7 @@ def run_verification_sanity_checks(
     judgehost: Judgehost,
     sample_output_service: VerificationSampleOutputService,
 ) -> VerificationSanityResult:
-    checks = planned_sanity_checks(test_plans)
+    checks = planned_sanity_checks(test_plans) if check_names is None else list(check_names)
     if not checks:
         return VerificationSanityResult(
             status=SANITY_PASSED,
@@ -325,6 +326,8 @@ def run_verification_sanity_checks(
     with ExitStack() as cleanup:
         if probe_plan is not None:
             for probe in _stability_probes():
+                if probe.check_name not in checks:
+                    continue
                 pending = _PendingStabilityProbe(probe)
                 probes.append(pending)
                 try:
@@ -382,36 +385,37 @@ def run_verification_sanity_checks(
                     messages=tuple(runtime_messages),
                 )
             )
-        boundary_result = boundary_coverage_from_feedback(
-            feedback_by_test=dict(generate_feedback_by_test or {}),
-            test_plans=test_plans,
-            validator_configured=validator_configured,
-        )
-        boundary_log = logs_dir / "boundary.log"
-        boundary_log.parent.mkdir(parents=True, exist_ok=True)
-        boundary_messages = tuple(
-            VerificationSanityMessage(
-                severity=SANITY_WARNING,
-                test_name="",
-                message=message,
+        if BOUNDARY_COVERAGE_CHECK in checks:
+            boundary_result = boundary_coverage_from_feedback(
+                feedback_by_test=dict(generate_feedback_by_test or {}),
+                test_plans=test_plans,
+                validator_configured=validator_configured,
             )
-            for message in boundary_result.messages
-        )
-        if boundary_result.status == SANITY_WARNING:
-            boundary_log.write_text(
-                "\n".join(item.message for item in boundary_messages) + "\n",
-                encoding="utf-8",
+            boundary_log = logs_dir / "boundary.log"
+            boundary_log.parent.mkdir(parents=True, exist_ok=True)
+            boundary_messages = tuple(
+                VerificationSanityMessage(
+                    severity=SANITY_WARNING,
+                    test_name="",
+                    message=message,
+                )
+                for message in boundary_result.messages
             )
-        else:
-            boundary_log.write_text("boundary coverage ok\n", encoding="utf-8")
-        check_results.append(
-            VerificationSanityCheckResult(
-                name=BOUNDARY_COVERAGE_CHECK,
-                status=boundary_result.status,
-                checked_count=int(boundary_result.checked_count),
-                messages=boundary_messages,
+            if boundary_result.status == SANITY_WARNING:
+                boundary_log.write_text(
+                    "\n".join(item.message for item in boundary_messages) + "\n",
+                    encoding="utf-8",
+                )
+            else:
+                boundary_log.write_text("boundary coverage ok\n", encoding="utf-8")
+            check_results.append(
+                VerificationSanityCheckResult(
+                    name=BOUNDARY_COVERAGE_CHECK,
+                    status=boundary_result.status,
+                    checked_count=int(boundary_result.checked_count),
+                    messages=boundary_messages,
+                )
             )
-        )
         if CUSTOM_SAMPLE_OUTPUT_CHECK in checks:
             result = sample_output_service.validate(
                 problem=problem,
@@ -483,6 +487,7 @@ class VerificationSanityService:
         verification_id: str,
         logs_dir: Path,
         test_plans: list[VerificationTestPlan],
+        check_names: Sequence[str] | None = None,
         accepted_source_label: str = "",
         accepted_source_name: str = "",
         accepted_source_file: PayloadFile | None = None,
@@ -500,6 +505,7 @@ class VerificationSanityService:
             verification_id=verification_id,
             logs_dir=logs_dir,
             test_plans=test_plans,
+            check_names=check_names,
             accepted_source_label=accepted_source_label,
             accepted_source_name=accepted_source_name,
             accepted_source_file=accepted_source_file,

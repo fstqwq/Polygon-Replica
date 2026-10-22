@@ -764,6 +764,7 @@ def run_workspace_verification_dag(
                 verification_id=verification_id,
                 logs_dir=layout.logs,
                 test_plans=selected_test_plans,
+                check_names=sanity_checks,
                 accepted_source_label=execution_plan.accepted_source_path,
                 accepted_source_name=accepted_source_file.path.name if accepted_source_file is not None else "",
                 accepted_source_file=accepted_source_file,

@@ -128,6 +128,10 @@ unread trailing line whitespace belongs to the preceding case). Odd case numbers
 are shaded, and text before the first case stays plain. Invalid, missing,
 oversized, or mismatched optional markup falls back to an unshaded sample.
 
+Workspace preview sample verification also validates authored `sample_output`
+when its validation is enabled and retains the checker markup for those exact
+displayed bytes. Other sanity checks remain scoped to full verification.
+
 The shared producer creates numeric `.shade` and `.shade.tex` sidecars beside
 sample resources. HTML and PDF consume the same line selection, with colored
 padding on the first and last line. Shaded PDF samples wrap long lines within

@@ -20,7 +20,7 @@ from app.service.verification.lifecycle import (
 )
 from app.service.verification.plan import VerificationTestPlan
 from app.service.verification.result_match import analyze_program_result
-from app.service.verification.sanity import SANITY_PENDING, SANITY_SKIPPED, planned_sanity_checks
+from app.service.verification.sanity import CUSTOM_SAMPLE_OUTPUT_CHECK, SANITY_PENDING, SANITY_SKIPPED, planned_sanity_checks
 from app.service.verification.types import VerificationProgramSummary, VerificationRuntimeColumn, VerificationTaskRow
 from app.service.verification.types import Kind, VerificationStatus, VerificationTaskStatus
 
@@ -433,6 +433,9 @@ def effective_verification_kind(
 
 
 def sanity_plan_for_verification_kind(kind: str, test_plans: list[VerificationTestPlan]) -> tuple[list[str], str]:
+    if kind == Kind.SAMPLE.value:
+        checks = [check for check in planned_sanity_checks(test_plans) if check == CUSTOM_SAMPLE_OUTPUT_CHECK]
+        return (checks, SANITY_PENDING if checks else SANITY_SKIPPED)
     if kind != Kind.ALL.value:
         return ([], SANITY_SKIPPED)
     checks = planned_sanity_checks(test_plans)
