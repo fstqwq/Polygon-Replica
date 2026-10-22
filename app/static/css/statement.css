@@ -43,12 +43,33 @@
 }
 
 .statement-template-reset {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--space-2);
+  position: relative;
   margin-left: auto;
 }
+
+.statement-template-reset > summary {
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.statement-template-reset > form {
+  position: absolute;
+  right: 0;
+  z-index: 10;
+  min-width: 200px;
+  padding: var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: 0 4px 12px #0002;
+}
+
+.statement-template-reset label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  white-space: nowrap;
+}
+
 
 .statement-language-switch-form {
   display: inline-flex;

@@ -23,6 +23,7 @@ from fastapi import HTTPException, UploadFile
 from app.config import CONFIG_REGISTRY
 from app.service.problem.test_spec import normalize_file_manual_input, normalize_manual_input
 from app.service.platform.git_process import run_git
+from app.service.platform.testlib_source import maintained_testlib_header
 from app.service.repository.revision import workspace_revision_info
 from app.service.execution.policy import normalize_execution_result
 from app.service.verification.lifecycle import (
@@ -1483,6 +1484,8 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
         (ws / "statement" / "olymp.sty").write_text("custom olymp style\n", encoding="utf-8")
         examples_path = ws / "statement" / "examples.tex"
         examples_path.write_text("custom examples template\n", encoding="utf-8")
+        header_path = ws / "third_party/testlib/testlib.h"
+        header_path.write_bytes(b"custom header\n")
         legend_path = ws / "statement-sections" / "english" / "legend.tex"
         legend_path.write_text("custom legend section\n", encoding="utf-8")
 
@@ -1507,7 +1510,16 @@ class TestUIWorkspace(UIHelpersMixin, E2ETestBase):
                 for filename, text in expected.items():
                     self.assertEqual((ws / "statement" / filename).read_text(encoding="utf-8"), text)
                 self.assertEqual(legend_path.read_text(encoding="utf-8"), "custom legend section\n")
-            client.post(url, data={"path": "statement/../statement-sections/english/legend.tex", "language": "english"})
+            (ws / "statement/olymp.sty").write_text("custom again", encoding="utf-8")
+            client.post(url, data={"path": ["statement/olymp.sty", "statement/../statement-sections/english/legend.tex"], "language": "english"})
+            self.assertEqual((ws / "statement/olymp.sty").read_text(), "custom again")
+            self.assertEqual(header_path.read_bytes(), b"custom header\n")
+            resp = client.post(url, data={"path": ["statement/olymp.sty", "third_party/testlib/testlib.h"], "language": "english"})
+            self.assertEqual(resp.status_code, 303)
+            self.assertEqual((ws / "statement/olymp.sty").read_text(), DEFAULT_OLYMP_STY)
+            self.assertEqual(header_path.read_bytes(), maintained_testlib_header(repo_root=Path(__file__).resolve().parents[1]).read_bytes())
+            for filename, text in expected.items():
+                self.assertEqual((ws / "statement" / filename).read_text(encoding="utf-8"), text)
             self.assertEqual(legend_path.read_text(encoding="utf-8"), "custom legend section\n")
 
     def test_problems_root_import_slug_hint_uses_filename_and_avoids_duplicates(self) -> None:

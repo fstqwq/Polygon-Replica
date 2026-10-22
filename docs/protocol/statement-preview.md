@@ -164,9 +164,11 @@ of the authored PDF style.
 
 ### Restoring Problem templates
 
-The Statement page offers **Restore templates:** with individual actions for
-`statements.ftl`, `problem.tex`, `olymp.sty`, and `examples.tex`. Each POST to
-`/problems/{problem}/statement/templates/reset` requires an allowlisted `path`
-and restores only that file. Restoring `examples.tex` removes the optional override
-and selects the built-in default. Each action confirms the selected replacement;
-statement sections, attachments, and other templates are preserved.
+The Statement page offers a **Restore defaults** dropdown only when managed
+files differ from their defaults. Its checkboxes list differing `statements.ftl`,
+`problem.tex`, `olymp.sty`, `examples.tex`, and `third_party/testlib/testlib.h`.
+The POST to `/problems/{problem}/statement/templates/reset` accepts repeated
+allowlisted `path` fields and validates all selected paths before writing.
+Restoring `examples.tex` removes the optional override and selects the built-in
+default. Confirmation applies to the selected replacements; unselected files,
+statement sections, and attachments are preserved.

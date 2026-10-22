@@ -211,6 +211,14 @@ function initDraftHistory() {
 }
 
 onReady(() => {
+  const restoreForm = document.querySelector('.statement-template-reset > form');
+  if (restoreForm) {
+    const update = () => {
+      restoreForm.querySelector('button[type="submit"]').disabled = !restoreForm.querySelector('input[name="path"]:checked');
+    };
+    restoreForm.addEventListener('change', update);
+    update();
+  }
   initLanguageSwitch();
   initExamplesTemplateToggle();
   initDraftHistory();

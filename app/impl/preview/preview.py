@@ -34,7 +34,6 @@ from app.service.statement.constant import (
     DEFAULT_STATEMENT_EXAMPLES_TEMPLATE,
     STATEMENT_ASSETS_DIR,
     STATEMENT_DEFAULT_FILES,
-    STATEMENT_DIR,
     STATEMENT_EXAMPLES_REL,
     STATEMENT_PROBLEM_REL,
     STATEMENT_SECTIONS_DIR,
@@ -53,6 +52,7 @@ from app.service.statement.render import (
     statement_title_for_language,
 )
 from app.service.problem.runtime_config import problem_config_limits
+from app.service.platform.testlib_source import maintained_testlib_header
 
 _CONTESTANT_ATTACHMENTS_ROOT = "attachments"
 
@@ -245,12 +245,39 @@ def statement_editor_sections(
 
 
 def _statement_template_target(workspace: Path, rel: Path) -> Path:
-    statement_root = workspace / STATEMENT_DIR
-    if statement_root.is_symlink():
-        raise ValueError(f"{STATEMENT_DIR.as_posix()} must be a regular directory")
-    if statement_root.exists() and not statement_root.is_dir():
-        raise ValueError(f"{STATEMENT_DIR.as_posix()} must be a regular directory")
+    for parent in reversed(rel.parents):
+        directory = workspace / parent
+        if directory.is_symlink() or (directory.exists() and not directory.is_dir()):
+            raise ValueError(f"{parent.as_posix()} must be a regular directory")
     return workspace / rel
+
+
+def _restore_defaults() -> dict[str, bytes]:
+    return {
+        **{path: text.encode('utf-8') for path, text in STATEMENT_DEFAULT_FILES.items()},
+        STATEMENT_EXAMPLES_REL.as_posix(): DEFAULT_STATEMENT_EXAMPLES_TEMPLATE.encode('utf-8'),
+        'third_party/testlib/testlib.h': maintained_testlib_header(
+            repo_root=Path(__file__).resolve().parents[3],
+        ).read_bytes(),
+    }
+
+
+def _statement_restore_paths(workspace: Path) -> list[str]:
+    paths = []
+    for path, content in _restore_defaults().items():
+        try:
+            target = _statement_template_target(workspace, Path(path))
+            if target.is_symlink():
+                paths.append(path)
+            elif path == STATEMENT_EXAMPLES_REL.as_posix() and not target.exists():
+                continue
+            else:
+                with target.open('rb') as source:
+                    if source.read(len(content) + 1) != content:
+                        paths.append(path)
+        except (OSError, ValueError):
+            paths.append(path)
+    return paths
 
 
 def _statement_examples_template_editor(
@@ -333,7 +360,7 @@ def preview_page(request: Request, problem: str, user: Annotated[str, Depends(re
             'statement_template_path': STATEMENT_TEMPLATE_REL.as_posix(),
             'statement_problem_path': STATEMENT_PROBLEM_REL.as_posix(),
             'statement_examples_template': statement_examples_template,
-            'statement_restore_paths': [*STATEMENT_DEFAULT_FILES, STATEMENT_EXAMPLES_REL.as_posix()],
+            'statement_restore_paths': _statement_restore_paths(workspace) if ctx['access']['can_write'] else [],
             'statement_style_path': STATEMENT_STYLE_REL.as_posix(),
             'statement_compile_assets': statement_compile_assets,
             'contestant_attachments': contestant_attachments,
@@ -448,7 +475,7 @@ def preview_save(
 def statement_templates_reset(
     problem: str,
     user: Annotated[str, Depends(require_session_user)],
-    path: Annotated[str, Form()],
+    path: Annotated[list[str], Form()],
     page: Annotated[str, Form()] = 'statement',
     language: Annotated[str, Form()] = '',
 ):
@@ -457,21 +484,25 @@ def statement_templates_reset(
     require_write_access(ctx)
     workspace = Path(ctx['workspace']['path'])
     current_language = resolve_statement_page_language(workspace, language)
-    message = 'default statement template restored'
+    message = 'selected defaults restored'
     try:
-        if path not in STATEMENT_DEFAULT_FILES and path != STATEMENT_EXAMPLES_REL.as_posix():
+        defaults = _restore_defaults()
+        if not path or any(item not in defaults for item in path):
             raise ValueError('default restore is not available for this path')
         with runtime().workspace_service.workspace_lock(workspace):
-            target = _statement_template_target(workspace, Path(path))
-            if target.exists() and not target.is_file() and not target.is_symlink():
-                raise ValueError(f'{path} must be a regular file')
-            if target.is_symlink():
-                target.unlink()
-            if path == STATEMENT_EXAMPLES_REL.as_posix():
-                target.unlink(missing_ok=True)
-            else:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(STATEMENT_DEFAULT_FILES[path], encoding='utf-8')
+            targets = [(item, _statement_template_target(workspace, Path(item)))
+                       for item in dict.fromkeys(path)]
+            for item, target in targets:
+                if target.exists() and not target.is_file() and not target.is_symlink():
+                    raise ValueError(f'{item} must be a regular file')
+            for item, target in targets:
+                if target.is_symlink():
+                    target.unlink()
+                if item == STATEMENT_EXAMPLES_REL.as_posix():
+                    target.unlink(missing_ok=True)
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(defaults[item])
     except (ValueError, OSError, HTTPException) as exc:
         message = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
     return redirect_response(
