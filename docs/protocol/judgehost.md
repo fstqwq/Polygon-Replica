@@ -146,6 +146,11 @@ the variable. Optional export errors retain the execution verdict; the validator
 `--testMarkupFileName` option takes precedence and retains strict error handling.
 
 Successful single-pass capture may include `input.markup` and `output.markup`.
+For requested sample markup, the comparator copies the Judgehost-owned input
+(including its cache symlink) into a bounded temporary file under writable
+feedback. It packages this regular file with the marks without changing the
+cached input or writing to the testcase parent. Other bundle members retain
+regular-file checks, and temporary input copies are removed after capture.
 They use the existing bounded pass bundle and artifact storage. Optional malformed
 members are ignored. The result stores `input_markup_ref` and `output_markup_ref`;
 older persisted results default these fields to empty. Custom sample output

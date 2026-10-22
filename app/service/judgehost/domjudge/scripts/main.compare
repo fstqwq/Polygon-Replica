@@ -15,7 +15,6 @@ if [ -f "$HERE/sample-markup" ]; then
   else
     unset POLYGON_SAMPLE_MARKUP_FILE
   fi
-  "$HERE/pass-capture" prepare "$TESTIN" >/dev/null 2>&1 || true
 fi
 capture_on_exit() {
   RC=$?

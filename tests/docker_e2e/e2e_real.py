@@ -21,6 +21,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 from app.service.platform.maintenance.plan import ARTIFACT_TABLES
 from app.db import SQLValue
+from app.service.statement.sample_markup import sample_shaded_lines
 from e2e_real_contest import (
     CONTEST,
     assert_contest_package_download,
@@ -87,6 +88,7 @@ BASE_FIXTURE_FILES = {
         "{\n"
         '  "accepted_solution_source": "solutions/main.cpp",\n'
         '  "validator_source": "validators/validate.cpp",\n'
+        '  "checker_source": "checkers/check.cpp",\n'
         '  "generator_sources": [\n'
         '    "generators/gen.py"\n'
         "  ]\n"
@@ -158,9 +160,15 @@ BASE_FIXTURE_FILES = {
         "std::cout << (count == 1 ? value * value : 0) << '\\n'; }\n"
     ),
     "solutions/rejected.cpp.desc": "expected: rejected\n",
+    "checkers/check.cpp": (
+        '#include "testlib.h"\n'
+        'int main(int argc, char **argv) { registerTestlibCmd(argc, argv); '
+        'setTestCase(1); long long expected = ans.readLong(); '
+        'long long actual = ouf.readLong(); quitf(expected == actual ? _ok : _wa, "compare"); }\n'
+    ),
     "validators/validate.cpp": (
         '#include "testlib.h"\n'
-        "int main(int argc, char **argv) { registerValidation(argc, argv); "
+        "int main(int argc, char **argv) { registerValidation(argc, argv); setTestCase(1); "
         f'int count = inf.readInt(1, {LARGE_VALUE_COUNT}, "count"); inf.readEoln(); '
         "for (int i = 0; i < count; ++i) { "
         'inf.readInt(1, 7, "value"); '
@@ -1778,6 +1786,20 @@ def _run_statement_preview(
         expected_input=b"1\n7\n42\n",
         expected_answer=b"49\n",
     )
+    for kind, field, content, lines in (
+        ("generate-input", "input_markup_ref", b"1\n7\n42\n", (1, 2, 3)),
+        ("main-correct", "output_markup_ref", b"49\n", (1,)),
+    ):
+        row = connection.execute(
+            "SELECT result_json FROM verification_tasks WHERE verification_id=? AND task_kind=? AND test_name='001.in'",
+            (verification_id, kind),
+        ).fetchone()
+        artifacts = json.loads(row["result_json"])["passes"][0]["artifacts"]
+        if not artifacts.get(field):
+            raise RuntimeError(f"Real Judgehost did not return {field}")
+        markup = _read_blob(artifacts[field])
+        if sample_shaded_lines(markup, content) != lines:
+            raise RuntimeError(f"Real Judgehost returned invalid {field}")
     return verification_id
 
 

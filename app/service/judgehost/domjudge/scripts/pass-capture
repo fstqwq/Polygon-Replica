@@ -54,7 +54,11 @@ load_feedback_layout() {
   RESOLVED_INPUT_PARENT=$(CDPATH= cd -- "$INPUT_PARENT" 2>/dev/null && pwd -P) || return 1
   [ "$RESOLVED_INPUT_PARENT" = "$CURRENT_DIR" ] || return 1
   CURRENT_INPUT="$CURRENT_DIR/testdata.in"
-  [ -f "$CURRENT_INPUT" ] && [ ! -L "$CURRENT_INPUT" ] || return 1
+  [ -f "$CURRENT_INPUT" ] && [ -r "$CURRENT_INPUT" ] || return 1
+  # Single-pass sample inputs are Judgehost-owned links into its testcase cache.
+  if [ "$CURRENT_PASS" -ne 1 ] || [ -z "${POLYGON_SAMPLE_MARKUP_FILE:-}" ]; then
+    [ ! -L "$CURRENT_INPUT" ] || return 1
+  fi
 }
 
 prepare_capture() {
@@ -192,7 +196,15 @@ add_metadata_history() {
 
 add_final_supplement() {
   if [ "$CURRENT_PASS" -eq 1 ]; then
-    add_pass_input 1 || return 1
+    if [ -n "${POLYGON_SAMPLE_MARKUP_FILE:-}" ]; then
+      # Copy only the known input into writable feedback, never chmod/link its cache target.
+      head -c "$((BUNDLE_MAX_BYTES + 1))" -- "$CURRENT_INPUT" >"$CONTROL_DIR/sample-input" || return 1
+      INPUT_SIZE=$(regular_readable_size "$CONTROL_DIR/sample-input") || return 1
+      [ "$INPUT_SIZE" -le "$BUNDLE_MAX_BYTES" ] || return 1
+      add_source_member "$CURRENT_PASS/feedback/${CONTROL_DIR##*/}/sample-input" "passes/1/input" || return 1
+    else
+      add_pass_input 1 || return 1
+    fi
   else
     add_source_member "$CURRENT_PASS/testdata.in" "passes/$CURRENT_PASS/input" || return 1
   fi

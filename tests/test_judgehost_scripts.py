@@ -797,9 +797,15 @@ class TestJudgehostScripts(unittest.TestCase):
                 root = Path(temporary)
                 capture = self._write_pass_capture(root, max_bytes=1024 * 1024)
                 current = self._write_domjudge_pass(root / "testcase", "1")
+                cached_input = root / "cached.in"
+                cached_input.write_bytes((current / "testdata.in").read_bytes())
+                cached_input.chmod(0o444)
+                (current / "testdata.in").unlink()
+                (current / "testdata.in").symlink_to(cached_input)
+                (current.parent).chmod(0o555)
                 markup = b"MU\xf3\x01!c1;output 1\n"
                 (current / "feedback/output.markup").write_bytes(markup)
-                result = self._run_pass_capture(capture, current, status, env={
+                result = self._run_capture_action(capture, "finish", current, exit_status=status, env={
                     **os.environ, "POLYGON_SAMPLE_MARKUP_FILE": str(current / "feedback/output.markup"),
                 })
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -808,7 +814,11 @@ class TestJudgehostScripts(unittest.TestCase):
                     max_bundle_bytes=1024 * 1024, max_member_bytes=1024 * 1024,
                 )
                 self.assertIsNotNone(bundle)
+                self.assertEqual(bundle.pass_files(1)["input"], b"input 1\n")
+                self.assertEqual(cached_input.read_bytes(), b"input 1\n")
+                self.assertEqual(cached_input.stat().st_mode & 0o777, 0o444)
                 self.assertEqual(bundle.pass_files(1).get("output.markup"), markup if status == 42 else None)
+                current.parent.chmod(0o755)
                 captured = CaseArtifactCapture.prepare(CaseArtifactRequest(
                     payload={"team_message": (current / "feedback/teammessage.txt").read_bytes()},
                     task_kind="main-correct", interactive=False, pass_limit=1,
