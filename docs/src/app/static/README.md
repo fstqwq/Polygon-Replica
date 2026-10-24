@@ -43,14 +43,22 @@ the available mark width while its hidden trigger preserves table geometry.
 ## Verification timing preview
 
 The timing preview uses the shared popup and its focus, inert, Escape and close
-lifecycle. The metric selector chooses CPU or wall time. Twenty program rows fit
-common desktop heights; smaller windows and longer program lists use pagination.
+lifecycle. The metric selector chooses CPU or wall time. All programs appear in
+one list, grouped by background (AC, TL, WA, other), then lexically by program
+name and source path. Longer lists use the shared popup's scrolling content.
 The time axis also carries the safety bands and a draggable 500 ms limit. All
-programs influence the bands and recommendation, including those on other pages.
+programs influence the bands and recommendation.
+Hovering or focusing a point highlights the same testcase across all programs.
+The hovered program, testcase and runtime appear beside the popup title. A positive
+runtime multiplier scales observed metrics, warning boundaries, censored wall-time
+bounds and recommendations while keeping the selected limit and recorded data unchanged.
+Highlight updates are coalesced per animation frame and touch only the previous
+and next testcase groups. Point hit areas stay fixed. The cutoff overlay keeps
+points interactive while shading the portion beyond the selected limit.
 Safety bands use exact runtime and warning boundaries, including below 500 ms.
 The selected limit and recommendation use the 500 ms grid and evaluate inclusive
 boundary rules directly. Nonzero task counts appear alongside verification status.
-After completion, the timing entry appears at the right of the status row.
+After completion, the Timing analysis entry appears between status and task counts.
 
 The browser projects completed results using persisted answer correctness and
 required/allowed verdict sets. CPU projection preserves censored TL results.

@@ -1,11 +1,13 @@
 <script type="application/json" id="run-timing-data" data-model-url="{{ static_asset_url('js/run_timing_model.js') }}">{{ timing_preview | tojson }}</script>
 {% set timing_controls %}
+<span class="run-timing-hover muted"></span>
 <select id="run-timing-metric" aria-label="Timing metric">
   <option value="cpu">CPU time</option>
   <option value="wall">Wall time</option>
 </select>
+<label class="run-timing-multiplier">&times; <input id="run-timing-multiplier" type="number" value="1" min="0.1" step="0.1" required aria-label="Runtime multiplier" /></label>
 {% endset %}
-{% call ui_popup('run-timing-popup', 'Timing statistics', dialog_class='run-timing-dialog', header_controls=timing_controls) %}
+{% call ui_popup('run-timing-popup', 'Timing analysis', dialog_class='run-timing-dialog', header_controls=timing_controls) %}
 <div class="run-timing-chart">
   <div class="run-timing-head"><span>Solution</span><div class="run-timing-axis"></div><span>Result</span></div>
   <div class="run-timing-rows"></div>
@@ -14,14 +16,6 @@
     <div class="run-timing-guide" role="slider" tabindex="0" aria-label="Preview time limit" aria-valuemin="500">
       <span class="run-timing-handle"></span>
     </div>
-  </div>
-  <div class="run-timing-foot">
-    <span class="run-timing-picked muted" aria-live="polite"></span>
-    <nav class="run-timing-pages" aria-label="Timing programs" hidden>
-      <button type="button" class="linkish" data-page-step="-1" aria-label="Previous programs">Previous</button>
-      <span class="run-timing-page-label muted"></span>
-      <button type="button" class="linkish" data-page-step="1" aria-label="Next programs">Next</button>
-    </nav>
   </div>
 </div>
 {% endcall %}

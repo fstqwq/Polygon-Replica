@@ -27,11 +27,12 @@
           <span class="verification-task-status-state info">{{ detail_status_display or detail_status }}</span>
           {% endif %}
         {% endif %}
+        {% if timing_preview.programs and not detail_running %}<button type="button" class="verification-timing-action" data-popup-open="run-timing-popup"><span aria-hidden="true">&#128202;</span> Timing analysis</button>{% endif %}
         {% if detail_task_counts %}
         <span class="muted verification-task-counts">{% for state in ['pending', 'queued', 'running', 'done', 'failed', 'cancelled'] if detail_task_counts[state] %}{{ ' &middot; ' | safe if not loop.first }}{{ state }} {{ detail_task_counts[state] }}{% endfor %}</span>
         {% endif %}
       </div>
-      {% if detail_last_updated or cancel_available or (rerun_solution_paths and not detail_running) or (timing_preview.programs and not detail_running) %}
+      {% if detail_last_updated or cancel_available or (rerun_solution_paths and not detail_running) %}
       <div class="verification-task-status-tools">
         {% if detail_last_updated %}
         <div class="muted verification-detail-meta">Last&nbsp;updated:&nbsp;{{ (detail_last_updated | local_time) | replace(' ', '&nbsp;') | safe }}</div>
@@ -57,7 +58,6 @@
           {% endif %}
         </div>
         {% endif %}
-        {% if timing_preview.programs and not detail_running %}<a href="#run-timing-popup" class="linkish" data-popup-open="run-timing-popup">Timing statistics</a>{% endif %}
       </div>
       {% endif %}
     </div>

@@ -176,6 +176,28 @@ section.verification-header-section {
   font-size: var(--font-size-ui-sm);
 }
 
+.verification-timing-action {
+  border: 0;
+  border-radius: 3px;
+  padding: 0 var(--space-2);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.verification-timing-action:hover,
+.verification-timing-action:focus-visible {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.verification-timing-action:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .verification-task-note,
 .verification-task-warn,
 .verification-task-fail {
@@ -862,13 +884,20 @@ body.verification-compact .run-details-page-compact .verification-detail-wrap {
 .run-timing-dialog {
   width: min(1200px, calc(100vw - 32px));
 }
-.run-timing-dialog .ui-popup-content {
-  overflow: hidden;
-}
 #run-timing-metric {
   margin-left: auto;
   width: auto;
 }
+.run-timing-hover {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-ui-sm);
+}
+.run-timing-multiplier { display: inline-flex; align-items: center; gap: var(--space-2); white-space: nowrap; }
+#run-timing-multiplier { width: 64px; }
 .run-timing-chart {
   --timing-name: clamp(100px, 22vw, 190px);
   --timing-result: 100px;
@@ -914,6 +943,10 @@ body.verification-compact .run-details-page-compact .verification-detail-wrap {
   cursor: pointer;
 }
 .run-timing-point[data-correct="false"] { background: var(--danger); }
+.run-timing-point.is-highlighted {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .run-timing-point.run-timing-censored {
   border: 0;
   border-radius: 0;
@@ -927,24 +960,36 @@ body.verification-compact .run-details-page-compact .verification-detail-wrap {
 .run-timing-drag {
   position: absolute;
   top: 5px;
-  bottom: 28px;
+  bottom: 0;
   left: calc(12px + var(--timing-name) + var(--timing-gap));
   right: calc(12px + var(--timing-result) + var(--timing-gap));
   pointer-events: none;
 }
 .run-timing-guide {
+  --guide-color: #737373;
   position: absolute;
   top: 0;
   bottom: 0;
   width: 16px;
+  left: var(--timing-limit);
   transform: translateX(-50%);
   cursor: ew-resize;
   pointer-events: auto;
   touch-action: none;
   z-index: 2;
 }
-.run-timing-guide::before { content: ''; position: absolute; inset: 0 auto 0 7px; width: 2px; background: var(--accent); }
-.run-timing-guide:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+.run-timing-drag::before {
+  content: '';
+  position: absolute;
+  inset: 23px 0 0 var(--timing-limit);
+  background: #737373;
+  opacity: .16;
+}
+.run-timing-guide[data-state="red"] { --guide-color: var(--danger); }
+.run-timing-guide[data-state="yellow"] { --guide-color: var(--warn); }
+.run-timing-guide[data-state="green"] { --guide-color: var(--ok); }
+.run-timing-guide::before { content: ''; position: absolute; inset: 0 auto 0 7px; width: 2px; background: var(--guide-color); }
+.run-timing-guide:focus-visible { outline: 1px solid var(--guide-color); outline-offset: 2px; }
 .run-timing-handle {
   position: absolute;
   top: 0;
@@ -953,7 +998,7 @@ body.verification-compact .run-details-page-compact .verification-detail-wrap {
   padding: 0 5px;
   height: 19px;
   line-height: 19px;
-  background: var(--accent);
+  background: var(--guide-color);
   color: var(--accent-contrast);
   white-space: nowrap;
 }
@@ -964,12 +1009,11 @@ body.verification-compact .run-details-page-compact .verification-detail-wrap {
 .run-timing-band[data-state="green"] { background: var(--tag-ok-border); }
 .run-timing-band[data-state="gray"] { background: var(--tag-neutral-border); }
 .run-timing-suggested { position: absolute; top: 10px; transform: translateX(-50%); font-size: 9px; color: var(--ok); }
-.run-timing-foot { height: 28px; display: flex; align-items: flex-end; gap: 12px; }
-.run-timing-picked { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.run-timing-pages { display: flex; gap: 10px; margin-left: auto; flex-shrink: 0; }
 @media (max-width: 600px) {
   .run-timing-chart { --timing-name: 90px; --timing-result: 85px; --timing-gap: 8px; }
   .run-timing-head, .run-timing-row { padding: 0 6px; }
   .run-timing-drag { left: calc(6px + var(--timing-name) + var(--timing-gap)); right: calc(6px + var(--timing-result) + var(--timing-gap)); }
-  .run-timing-dialog .ui-popup-header { gap: 8px; }
+  .run-timing-dialog .ui-popup-header { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; }
+  .run-timing-hover { grid-column: 2 / 4; }
+  #run-timing-metric { margin-left: 0; justify-self: start; }
 }

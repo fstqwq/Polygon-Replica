@@ -9,18 +9,54 @@ window.PolygonUI.onReady(async () => {
   if (!payload || !overlay) return;
   const { STEP, prepareTiming, evaluateTiming, snapLimit } = await import(payload.dataset.modelUrl);
   const data = JSON.parse(payload.textContent);
+  const group = program => program.allowed.length === 1 && program.allowed[0] === 'AC' ? 'ac'
+    : program.required.includes('TL') ? 'tl' : program.required.includes('WA') ? 'wa' : 'other';
+  const groups = ['ac', 'tl', 'wa', 'other'];
+  const compareText = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+  data.programs.sort((a, b) => groups.indexOf(group(a)) - groups.indexOf(group(b))
+    || compareText(a.name, b.name) || compareText(a.source, b.source));
   const chart = overlay.querySelector('.run-timing-chart');
   const rows = overlay.querySelector('.run-timing-rows');
   const axis = overlay.querySelector('.run-timing-axis');
   const track = overlay.querySelector('.run-timing-track');
   const guide = overlay.querySelector('.run-timing-guide');
   const handle = overlay.querySelector('.run-timing-handle');
-  const picked = overlay.querySelector('.run-timing-picked');
-  const pages = overlay.querySelector('.run-timing-pages');
   const metricSelect = document.getElementById('run-timing-metric');
-  let model = null, metric = 'cpu', limit = data.current_ms || STEP;
-  let page = 0, pageSize = 20, displayed = [];
+  const multiplierInput = document.getElementById('run-timing-multiplier');
+  const hoverInfo = overlay.querySelector('.run-timing-hover');
+  let model = null, metric = 'cpu', limit = data.current_ms || STEP, multiplier = 1;
+  let displayed = [];
   let dragging = null;
+  const pointsByTest = new Map();
+  let highlighted = [], hoveredTest = null, focusedTest = null, activeTest = null;
+  let highlightFrame = null;
+
+  function highlight() {
+    highlightFrame = null;
+    const point = hoveredTest ?? focusedTest;
+    const text = point?.getAttribute('aria-label') || '';
+    if (hoverInfo.textContent !== text) hoverInfo.textContent = text;
+    const next = point?.dataset.test ?? null;
+    if (next === activeTest) return;
+    activeTest = next;
+    for (const point of highlighted) point.classList.remove('is-highlighted');
+    highlighted = pointsByTest.get(next) || [];
+    for (const point of highlighted) point.classList.add('is-highlighted');
+  }
+  function scheduleHighlight() {
+    if (highlightFrame === null) highlightFrame = requestAnimationFrame(highlight);
+  }
+  function clearHighlight() {
+    if (highlightFrame !== null) cancelAnimationFrame(highlightFrame);
+    hoveredTest = focusedTest = null;
+    highlight();
+  }
+  const testAt = target => target instanceof Element && rows.contains(target)
+    ? target.closest('.run-timing-point') : null;
+  rows.addEventListener('pointerover', event => { hoveredTest = testAt(event.target); scheduleHighlight(); });
+  rows.addEventListener('pointerout', event => { hoveredTest = testAt(event.relatedTarget); scheduleHighlight(); });
+  rows.addEventListener('focusin', event => { focusedTest = testAt(event.target); scheduleHighlight(); });
+  rows.addEventListener('focusout', event => { focusedTest = testAt(event.relatedTarget); scheduleHighlight(); });
 
   function element(tag, className, text) {
     const node = document.createElement(tag);
@@ -33,7 +69,8 @@ window.PolygonUI.onReady(async () => {
 
   function update() {
     const result = evaluateTiming(model, limit);
-    guide.style.left = position(limit);
+    guide.dataset.state = result.state;
+    chart.style.setProperty('--timing-limit', position(limit));
     guide.setAttribute('aria-valuemax', model.max);
     guide.setAttribute('aria-valuenow', limit);
     guide.setAttribute('aria-valuetext', `${seconds(limit)}: ${stateText[result.state]}`);
@@ -52,36 +89,34 @@ window.PolygonUI.onReady(async () => {
   }
 
   function layout() {
-    pageSize = Math.max(1, Math.min(20, Math.floor((window.innerHeight - 200) / 22)));
-    page = Math.min(page, Math.max(0, Math.ceil(model.programs.length / pageSize) - 1));
-    const start = page * pageSize;
-    const visible = model.programs.slice(start, start + pageSize);
-    chart.style.setProperty('--timing-count', visible.length || 1);
+    clearHighlight();
+    pointsByTest.clear();
+    chart.style.setProperty('--timing-count', model.programs.length || 1);
     rows.replaceChildren();
-    displayed = visible.map(({ program }, offset) => {
+    displayed = model.programs.map(({ program }, index) => {
       const row = element('div', 'run-timing-row');
-      row.dataset.expected = program.allowed.length === 1 && program.allowed[0] === 'AC' ? 'ac'
-        : program.required.includes('TL') ? 'tl' : program.required.includes('WA') ? 'wa' : 'other';
+      row.dataset.expected = group(program);
       const name = element('span', 'run-timing-source', program.name);
       name.title = `${program.source}\nExpected: ${program.required.join('/') || program.allowed.join('/')}`;
       const plot = element('div', 'run-timing-plot');
       for (const [index, item] of program.cases.entries()) {
-        const time = item[metric];
+        const time = item[metric] === null ? null : item[metric] * multiplier;
         if (time === null) continue;
         const point = element('button', 'run-timing-point' + (item.censored ? ' run-timing-censored' : ''), item.censored ? '\u25b7' : '');
         point.type = 'button';
         point.style.left = position(time);
         point.style.top = `${30 + (index % 3) * 20}%`;
         point.dataset.correct = String(item.correct);
-        point.title = `${program.name} \u00b7 ${item.test} \u00b7 ${seconds(time)}${item.censored ? ' \u00b7 incomplete runtime (lower bound)' : ''}`;
-        point.setAttribute('aria-label', point.title);
-        point.addEventListener('click', () => { picked.textContent = point.title; });
+        point.dataset.test = item.test;
+        point.setAttribute('aria-label', `${program.name} \u00b7 ${item.test} \u00b7 ${seconds(time)}${multiplier !== 1 ? ` (${seconds(item[metric])} \u00d7 ${multiplier})` : ''}${item.censored ? ' \u00b7 incomplete runtime (lower bound)' : ''}`);
+        if (!pointsByTest.has(item.test)) pointsByTest.set(item.test, []);
+        pointsByTest.get(item.test).push(point);
         plot.append(point);
       }
       const output = element('span', 'run-timing-result');
       row.append(name, plot, output);
       rows.append(row);
-      return { index: start + offset, output, plot };
+      return { index, output, plot };
     });
     const tickStep = Math.max(STEP, Math.ceil(model.max / Math.max(1, Math.floor(track.getBoundingClientRect().width / 90)) / STEP) * STEP);
     const ticks = [];
@@ -94,16 +129,12 @@ window.PolygonUI.onReady(async () => {
       return tick;
     }));
     for (const { plot } of displayed) plot.style.backgroundSize = `${tickStep / model.max * 100}% 100%`;
-    pages.hidden = model.programs.length <= pageSize;
-    overlay.querySelector('.run-timing-page-label').textContent = `${start + 1}\u2013${start + visible.length} / ${model.programs.length}`;
-    for (const button of pages.querySelectorAll('button')) {
-      button.disabled = Number(button.dataset.pageStep) < 0 ? page === 0 : start + pageSize >= model.programs.length;
-    }
     update();
   }
 
-  function prepare() {
-    model = prepareTiming(data, metric);
+  function prepare(nextMultiplier = multiplier) {
+    model = prepareTiming({ ...data, current_ms: Math.max(data.current_ms, limit) }, metric, nextMultiplier);
+    multiplier = nextMultiplier;
     limit = snapLimit(limit, model.max);
     track.replaceChildren(...model.bands.map(band => {
       const node = element('span', 'run-timing-band');
@@ -119,7 +150,6 @@ window.PolygonUI.onReady(async () => {
       marker.title = `Suggested TL: ${seconds(model.suggested)}`;
       track.append(marker);
     }
-    picked.textContent = '';
     layout();
   }
 
@@ -154,9 +184,20 @@ window.PolygonUI.onReady(async () => {
     setLimit(keys[event.key]);
   });
   metricSelect.addEventListener('change', () => { metric = metricSelect.value; prepare(); });
-  for (const button of pages.querySelectorAll('button')) {
-    button.addEventListener('click', () => { page += Number(button.dataset.pageStep); layout(); });
-  }
+  multiplierInput.addEventListener('change', () => {
+    const next = multiplierInput.valueAsNumber;
+    multiplierInput.setCustomValidity('');
+    if (!multiplierInput.reportValidity()) return;
+    if (next === multiplier) return;
+    try {
+      prepare(next);
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error;
+      multiplierInput.setCustomValidity(error.message);
+      multiplierInput.reportValidity();
+      return;
+    }
+  });
   document.addEventListener('polygonlike:popup-opened', event => {
     if (event.detail.overlay !== overlay) return;
     if (model === null) prepare();
@@ -166,6 +207,7 @@ window.PolygonUI.onReady(async () => {
     if (event.detail.overlay !== overlay) return;
     if (dragging?.control.hasPointerCapture(dragging.id)) dragging.control.releasePointerCapture(dragging.id);
     dragging = null;
+    clearHighlight();
   });
   window.addEventListener('resize', () => { if (model && !overlay.hidden) layout(); });
   if (!overlay.hidden) prepare();

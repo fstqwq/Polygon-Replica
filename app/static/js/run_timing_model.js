@@ -12,7 +12,8 @@ function upperBound(values, limit) {
   return low;
 }
 
-export function prepareTiming(data, metric) {
+export function prepareTiming(data, metric, multiplier = 1) {
+  if (!Number.isFinite(multiplier) || multiplier <= 0) throw new RangeError('Multiplier must be positive and finite');
   let max = Math.max(STEP, data.current_ms);
   const transitions = new Set([0]);
   const transition = time => transitions.add(time);
@@ -20,7 +21,8 @@ export function prepareTiming(data, metric) {
     const correct = [], wrong = [], censored = [], fixed = {};
     let missing = 0, warningMax = 0, allCorrect = program.cases.length > 0;
     for (const item of program.cases) {
-      const time = item[metric];
+      const time = item[metric] === null ? null : item[metric] * multiplier;
+      if (time !== null && !Number.isFinite(time * 2)) throw new RangeError('Scaled runtime is too large');
       if (time !== null) max = Math.max(max, time);
       allCorrect &&= item.complete && item.correct && !item.censored && time !== null;
       if (time !== null) warningMax = Math.max(warningMax, time);

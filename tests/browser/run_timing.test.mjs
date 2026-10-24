@@ -13,6 +13,27 @@ const accepted = cases => program(['AC'], ['AC'], cases);
 const timedOut = cases => program(['TL'], ['AC', 'TL'], cases);
 const preview = programs => ({ current_ms: 2000, programs });
 
+test('runtime multiplier scales projections and bounds without changing evidence or fixed verdicts', () => {
+  const data = preview([accepted([point(400)]), timedOut([point(3000, 3500, { verdict: 'TL', censored: true, correct: false })])]);
+  const original = JSON.stringify(data);
+  for (const multiplier of [0.5, 1, 2]) {
+    const cpu = prepareTiming(data, 'cpu', multiplier);
+    assert.equal(evaluateTiming(cpu, 500).rows[0].label, multiplier === 2 ? 'TL1' : 'AC');
+    assert.equal(evaluateTiming(cpu, 10000).rows[1].label, 'TL1');
+    assert.equal(cpu.bands[0].to, 400 * multiplier);
+    assert.equal(cpu.suggested, multiplier === 0.5 ? 500 : multiplier === 1 ? 1000 : 2000);
+    const wall = prepareTiming(data, 'wall', multiplier);
+    assert.equal(evaluateTiming(wall, 3500 * multiplier - 1).rows[1].label, 'TL1');
+    assert.equal(evaluateTiming(wall, 3500 * multiplier).rows[1].label, '?1');
+    const missing = prepareTiming(preview([accepted([point(null)])]), 'cpu', multiplier);
+    assert.equal(evaluateTiming(missing, 500).state, 'gray');
+  }
+  assert.equal(JSON.stringify(data), original);
+  for (const multiplier of [0, -1, NaN, Infinity, Number.MAX_VALUE]) {
+    assert.throws(() => prepareTiming(data, 'cpu', multiplier), { name: 'RangeError' });
+  }
+});
+
 test('complete soft TL can become AC; censored CPU remains TL while wall becomes unknown at its bound', () => {
   const data = preview([
     accepted([point(1200, 1800, { verdict: 'TL' })]),
@@ -81,7 +102,7 @@ test('continuous bands retain sub-step failures while recommendations use exact 
   assert.equal(exact.suggested, 1500);
 });
 
-test('all programs and testcases influence safety independently of visible page; each testcase counts once', () => {
+test('all programs and testcases influence safety; each testcase counts once', () => {
   const data = preview(Array.from({ length: 21 }, () => accepted(Array.from({ length: 100 }, () => point(100)))));
   data.programs[20].cases[99] = point(3000);
   const model = prepareTiming(data, 'cpu');
