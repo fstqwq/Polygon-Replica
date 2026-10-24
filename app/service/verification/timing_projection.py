@@ -37,6 +37,11 @@ def build_timing_preview(
     current_ms: int, mode: str,
 ) -> TimingPreview:
     selected = set(program_ids)
+    # DOMjudge's configured "1s|100%" overshoot takes the larger term;
+    # per-run overshoot is zero. Interactive runs are not projected here.
+    run_limit_ms = max(100, current_ms)
+    wall_limit_ms = run_limit_ms + max(1000, run_limit_ms)
+    wall_timeout_threshold_ms = wall_limit_ms - min(current_ms * 0.1, 100)
     programs: dict[str, TimingProgram] = {}
     for task in tasks:
         program_id = task["program_id"]
@@ -65,7 +70,7 @@ def build_timing_preview(
         # Preview-only estimate, anchored to the recorded limit rather than the
         # draggable candidate. Missing wall usage cannot establish completion.
         censored = verdict == "TL" and not correct and (
-            wall is None or wall * 1000 >= current_ms - min(current_ms * 0.1, 100)
+            wall is None or wall * 1000 >= wall_timeout_threshold_ms
         )
         programs[program_id]["cases"].append({
             "test": task["test_name"],

@@ -23,10 +23,10 @@ class TestVerificationDetailReadModel(VerificationServiceTestBase):
         task = next(row for row in model["tasks"] if row["program_id"] == "solution-0")
         original = make_execution_result(verdict="TL", output_ref="blob://output")
         for limit, wall_ms, correct, censored in (
-            (500, 449, False, False), (500, 450, False, True),
-            (2000, 1899, False, False), (2000, 1900, False, True),
-            (2000, 2100, False, True), (3000, 2315, False, False),
-            (2000, None, False, True), (2000, 2100, True, False),
+            (500, 1449, False, False), (500, 1450, False, True),
+            (2000, 3899, False, False), (2000, 3900, False, True),
+            (2000, 4100, False, True), (2000, 2315, False, False),
+            (2000, None, False, True), (2000, 4100, True, False),
         ):
             with self.subTest(limit=limit, wall_ms=wall_ms, correct=correct):
                 item = replace(original.passes[0], answer_correct=correct,

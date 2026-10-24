@@ -97,7 +97,9 @@ aggregate unavailable. Skipped duplicate generation does not add a timing case.
 Expected required/allowed verdict sets accompany the evidence. Incomplete and
 interactive executions remain unavailable for hypothetical-limit projection.
 A TL without a checked correct answer is estimated as censored when wall time
-in milliseconds reaches `TL - min(0.1 * TL, 100)`, using the recorded limit.
+in milliseconds reaches `WallTL - min(0.1 * TL, 100)`, using the recorded limit.
+For ordinary runs, `WallTL = max(100, TL) + max(1000, max(100, TL))`, matching
+DOMjudge's configured `1s|100%` overshoot and zero per-run overshoot.
 Missing wall usage remains censored. Below that threshold, its incorrect answer
 is available for WA projection when the candidate limit permits completion.
 This preview-only estimate leaves stored verdicts and runtime warnings unchanged.
