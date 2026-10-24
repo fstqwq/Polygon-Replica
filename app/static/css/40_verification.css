@@ -138,6 +138,7 @@ section.verification-header-section {
 
 .verification-task-status-title {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: baseline;
   gap: var(--space-3);
   line-height: 1.2;
@@ -171,19 +172,8 @@ section.verification-header-section {
   line-height: inherit;
 }
 
-.verification-task-status-grid {
-  display: grid;
-  gap: var(--space-4);
-}
-
-.verification-task-status-main {
-  min-width: 0;
-  display: grid;
-  gap: var(--space-2);
-}
-
-.verification-task-status-main > p {
-  margin: 0;
+.verification-task-counts {
+  font-size: var(--font-size-ui-sm);
 }
 
 .verification-task-note,

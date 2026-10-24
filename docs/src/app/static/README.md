@@ -47,6 +47,10 @@ lifecycle. The metric selector chooses CPU or wall time. Twenty program rows fit
 common desktop heights; smaller windows and longer program lists use pagination.
 The time axis also carries the safety bands and a draggable 500 ms limit. All
 programs influence the bands and recommendation, including those on other pages.
+Safety bands use exact runtime and warning boundaries, including below 500 ms.
+The selected limit and recommendation use the 500 ms grid and evaluate inclusive
+boundary rules directly. Nonzero task counts appear alongside verification status.
+After completion, the timing entry appears at the right of the status row.
 
 The browser projects completed results using persisted answer correctness and
 required/allowed verdict sets. CPU projection preserves censored TL results.

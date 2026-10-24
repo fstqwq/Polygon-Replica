@@ -53,7 +53,7 @@ test('unexpected precedes unknown; missing metrics, unfinished and empty runs ca
   assert.equal(evaluateTiming(failed, 1000).state, 'red');
 });
 
-test('bands match exact 500ms projections, including inclusive warning boundaries, and suggest first green', () => {
+test('continuous bands retain sub-step failures while recommendations use exact selectable limits', () => {
   const data = preview([accepted([point(600, 1100)]), timedOut([point(3500, 4000)])]);
   const cpu = prepareTiming(data, 'cpu');
   assert.equal(cpu.suggested, 1500);
@@ -61,14 +61,24 @@ test('bands match exact 500ms projections, including inclusive warning boundarie
   assert.equal(evaluateTiming(cpu, 1201).state, 'green');
   for (const metric of ['cpu', 'wall']) {
     const model = prepareTiming(data, metric);
-    for (let value = 500; value <= model.max; value += 500) {
-      const band = model.bands.find(b => value >= b.from && (value < b.to || (b.to === model.max && value === model.max)));
+    for (const band of model.bands) {
+      const value = (band.from + band.to) / 2;
       assert.equal(band.state, evaluateTiming(model, value).state);
     }
   }
   assert.equal(snapLimit(2249, cpu.max), 2000);
   assert.equal(snapLimit(2250, cpu.max), 2500);
   assert.equal(snapLimit(-1, cpu.max), 500);
+  const fast = prepareTiming(preview([accepted([point(400)])]), 'cpu');
+  assert.deepEqual(JSON.parse(JSON.stringify(fast.bands)), [
+    { from: 0, to: 400, state: 'red' },
+    { from: 400, to: 800, state: 'yellow' },
+    { from: 800, to: 2000, state: 'green' },
+  ]);
+  assert.equal(fast.suggested, 1000);
+  const exact = prepareTiming(preview([accepted([point(500)])]), 'cpu');
+  assert.equal(evaluateTiming(exact, 1000).state, 'yellow');
+  assert.equal(exact.suggested, 1500);
 });
 
 test('all programs and testcases influence safety independently of visible page; each testcase counts once', () => {
@@ -80,7 +90,7 @@ test('all programs and testcases influence safety independently of visible page;
   assert.equal(model.suggested, null);
 });
 
-test('sparse safety intervals agree with direct projection at every selectable limit', () => {
+test('sparse safety intervals agree with continuous projection between boundaries', () => {
   for (const metric of ['cpu', 'wall']) {
     for (const time of [0, 499.9, 500, 500.1, 749.9, 750, 1000, 1500.1, 4500]) {
       const data = preview([
@@ -88,10 +98,15 @@ test('sparse safety intervals agree with direct projection at every selectable l
         timedOut([point(6000, 6500, { censored: true, correct: false, verdict: 'TL' })]),
       ]);
       const model = prepareTiming(data, metric);
-      for (let limit = 500; limit <= model.max; limit += 500) {
-        const band = model.bands.find(item => item.from <= limit && (item.to > limit || (item.to === model.max && limit === model.max)));
-        assert.equal(band.state, evaluateTiming(model, limit).state, `${metric} ${time} ${limit}`);
+      for (const band of model.bands) {
+        for (const fraction of [0.001, 0.5, 0.999]) {
+          const limit = band.from + (band.to - band.from) * fraction;
+          assert.equal(band.state, evaluateTiming(model, limit).state, `${metric} ${time} ${limit}`);
+        }
       }
+      const firstGreen = Array.from({ length: model.max / 500 }, (_, i) => (i + 1) * 500)
+        .find(limit => evaluateTiming(model, limit).state === 'green') ?? null;
+      assert.equal(model.suggested, firstGreen);
     }
   }
 });

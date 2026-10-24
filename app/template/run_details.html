@@ -6,9 +6,8 @@
 {% block content %}
 <div class="page-title-inline page-title-inline-status">
   <h1 class="page-title">Verification</h1>
-  {% if timing_preview.programs %}<a href="#run-timing-popup" class="linkish" data-popup-open="run-timing-popup">Timing statistics</a>{% endif %}
 </div>
-{% if timing_preview.programs %}{% include "_run_timing.html" %}{% endif %}
+{% if timing_preview.programs and not detail_running %}{% include "_run_timing.html" %}{% endif %}
 {% include "_flash_message.html" %}
 <div class="run-details-page{% if detail_table_compact %} run-details-page-compact{% endif %}">
 <section class="content-section verification-header-section">
@@ -28,8 +27,11 @@
           <span class="verification-task-status-state info">{{ detail_status_display or detail_status }}</span>
           {% endif %}
         {% endif %}
+        {% if detail_task_counts %}
+        <span class="muted verification-task-counts">{% for state in ['pending', 'queued', 'running', 'done', 'failed', 'cancelled'] if detail_task_counts[state] %}{{ ' &middot; ' | safe if not loop.first }}{{ state }} {{ detail_task_counts[state] }}{% endfor %}</span>
+        {% endif %}
       </div>
-      {% if detail_last_updated or cancel_available or (rerun_solution_paths and not detail_running) %}
+      {% if detail_last_updated or cancel_available or (rerun_solution_paths and not detail_running) or (timing_preview.programs and not detail_running) %}
       <div class="verification-task-status-tools">
         {% if detail_last_updated %}
         <div class="muted verification-detail-meta">Last&nbsp;updated:&nbsp;{{ (detail_last_updated | local_time) | replace(' ', '&nbsp;') | safe }}</div>
@@ -55,28 +57,15 @@
           {% endif %}
         </div>
         {% endif %}
+        {% if timing_preview.programs and not detail_running %}<a href="#run-timing-popup" class="linkish" data-popup-open="run-timing-popup">Timing statistics</a>{% endif %}
       </div>
       {% endif %}
     </div>
-    <div class="verification-task-status-grid">
-      <div class="verification-task-status-main">
         {% if detail_fail_flag and detail_status == "failed" %}
         <p class="verification-task-fail">{{ detail_fail_reason or "Scheduling stopped after a main-correct failure." }}</p>
         {% elif detail_fail_flag and detail_status == "running" %}
         <p class="verification-task-note">{{ detail_fail_reason }}</p>
         {% endif %}
-        {% if detail_task_counts %}
-        <p class="muted">
-          pending {{ detail_task_counts.pending or 0 }},
-          queued {{ detail_task_counts.queued or 0 }},
-          running {{ detail_task_counts.running or 0 }},
-          done {{ detail_task_counts.done or 0 }},
-          failed {{ detail_task_counts.failed or 0 }},
-          cancelled {{ detail_task_counts.cancelled or 0 }}
-        </p>
-        {% endif %}
-      </div>
-    </div>
   </div>
   {% endif %}
 </section>

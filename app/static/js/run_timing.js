@@ -110,7 +110,7 @@ window.PolygonUI.onReady(async () => {
       node.dataset.state = band.state;
       node.style.left = position(band.from);
       node.style.width = position(band.to - band.from);
-      node.title = `${seconds(band.first)}${band.to > band.first ? '\u2013' + seconds(Math.floor(band.to / STEP) * STEP) : ''}: ${stateText[band.state]}`;
+      node.title = `${seconds(band.from)}\u2013${seconds(band.to)}: ${stateText[band.state]}`;
       return node;
     }));
     if (model.suggested !== null) {

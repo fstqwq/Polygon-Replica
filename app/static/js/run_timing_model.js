@@ -14,14 +14,8 @@ function upperBound(values, limit) {
 
 export function prepareTiming(data, metric) {
   let max = Math.max(STEP, data.current_ms);
-  const transitions = new Set([STEP]);
-  const transition = time => {
-    // Verdict and warning boundaries have different inclusive ends. Include
-    // both neighboring selectable limits instead of rounding measured times.
-    const before = Math.max(STEP, Math.floor(time / STEP) * STEP);
-    transitions.add(before);
-    transitions.add(before + STEP);
-  };
+  const transitions = new Set([0]);
+  const transition = time => transitions.add(time);
   const programs = data.programs.map(program => {
     const correct = [], wrong = [], censored = [], fixed = {};
     let missing = 0, warningMax = 0, allCorrect = program.cases.length > 0;
@@ -49,19 +43,28 @@ export function prepareTiming(data, metric) {
   });
   max = Math.ceil(max / STEP) * STEP;
   const model = { programs, max, metric };
+  transitions.add(max);
   const limits = [...transitions].filter(value => value <= max).sort((a, b) => a - b);
   const bands = [];
-  for (let i = 0; i < limits.length; i++) {
-    const value = limits[i];
-    const state = evaluateTiming(model, value).state;
-    const from = value === STEP ? 0 : value - STEP / 2;
-    const to = i + 1 < limits.length ? limits[i + 1] - STEP / 2 : max;
+  for (let i = 0; i + 1 < limits.length; i++) {
+    const from = limits[i], to = limits[i + 1];
+    const state = evaluateTiming(model, (from + to) / 2).state;
     const previous = bands.at(-1);
     if (previous?.state === state) previous.to = to;
-    else bands.push({ from, to, state, first: value });
+    else bands.push({ from, to, state });
   }
   const hasAccepted = data.programs.some(p => p.required.includes('AC') && p.allowed.length === 1);
-  return { ...model, bands, suggested: hasAccepted ? bands.find(b => b.state === 'green')?.first ?? null : null };
+  // Check both sides of each boundary on the selectable grid, including exact
+  // endpoints where the inclusive warning rule can differ from either band.
+  const candidates = new Set([STEP]);
+  for (const value of limits) {
+    const before = Math.floor(value / STEP) * STEP;
+    if (before >= STEP) candidates.add(before);
+    if (before + STEP <= max) candidates.add(before + STEP);
+  }
+  const suggested = hasAccepted ? [...candidates].sort((a, b) => a - b)
+    .find(value => evaluateTiming(model, value).state === 'green') ?? null : null;
+  return { ...model, bands, suggested };
 }
 
 export function evaluateProgram(row, limit) {
