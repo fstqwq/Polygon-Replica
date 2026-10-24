@@ -82,3 +82,10 @@ admitted probe has program cleanup registered for normal and exceptional exit;
 probe admission, result collection, and cleanup failures become check failures.
 
 The [execution protocol](../../../../protocol/execution.md) defines lifecycle, graph, verdict, cache, and evidence semantics.
+
+The result matrix summarizes testcase failures with counts (for example
+`TL3/WA2`) in its existing Result line. Each testcase contributes its aggregate
+verdict once, including cache hits; passes and skipped duplicate generation do
+not add counts. AC, compile errors, infrastructure failures and transient states
+retain their existing labels. Expected-result matching uses verdict codes,
+independently of these display counts.

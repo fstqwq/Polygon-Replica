@@ -54,6 +54,7 @@ class ProgramResultAnalysis:
     completed: bool
     passed: bool
     failed_codes: tuple[str, ...]
+    failure_counts: tuple[tuple[str, int], ...] = ()
 
     @property
     def short(self) -> str:
@@ -65,7 +66,11 @@ class ProgramResultAnalysis:
 
     @property
     def display(self) -> str:
-        return "/".join(self.failed_codes) if self.failed_codes else self.short
+        counts = dict(self.failure_counts)
+        return "/".join(
+            f"{code}{counts[code]}" if code in counts else code
+            for code in self.failed_codes
+        ) if self.failed_codes else self.short
 
     def match(self, expected_behavior: str) -> tuple[bool, bool, bool, str]:
         if self.status in _TRANSIENT_RUN_STATUSES:
@@ -86,6 +91,7 @@ def analyze_program_result(
         return ProgramResultAnalysis(run_status, False, False, ())
     tests = summary.get("tests") if summary is not None else None
     codes: set[str] = set()
+    counts: dict[str, int] = {}
     all_decided = True
     all_passed = isinstance(tests, list)
     if isinstance(tests, list):
@@ -94,6 +100,8 @@ def analyze_program_result(
                 run_verdict_short(str(item.get("verdict") or ""))
                 if isinstance(item, dict) else "FL"
             )
+            if code in {"WA", "TL", "RE"}:
+                counts[code] = counts.get(code, 0) + 1
             all_decided = all_decided and (code in _CANONICAL_DECISION_CODES or code == "SK")
             all_passed = all_passed and code in {"AC", "SK"}
             if code not in {"", "--", "AC", "SK"}:
@@ -117,7 +125,10 @@ def analyze_program_result(
         codes.add("FL")
     priority = {"CE": 0, "TL": 1, "RE": 2, "WA": 3, "FL": 4}
     failed_codes = tuple(sorted(codes, key=lambda code: (priority.get(code, 99), code)))
-    return ProgramResultAnalysis(run_status, completed, completed and all_passed, failed_codes)
+    return ProgramResultAnalysis(
+        run_status, completed, completed and all_passed, failed_codes,
+        tuple((code, counts[code]) for code in failed_codes if code in counts),
+    )
 
 
 def expected_status_rule(

@@ -192,6 +192,18 @@ class TestVerificationAnalysis(unittest.TestCase):
                 self.assertEqual(matched, expected_match)
                 self.assertEqual(completed, expected_complete)
 
+    def test_result_display_counts_testcases_without_changing_expected_matching(self) -> None:
+        summary = {"tests": [
+            {"verdict": "WA", "passes": [{"verdict": "AC"}, {"verdict": "WA"}]},
+            {"verdict": "WA"}, {"verdict": "TL"}, {"verdict": "TL"},
+            {"verdict": "TL"}, {"verdict": "RE"}, {"verdict": "AC"},
+            {"verdict": "SK"},
+        ]}
+        analysis = analyze_program_result("ok", summary)
+        self.assertEqual(analysis.display, "TL3/RE1/WA2")
+        self.assertEqual(analysis.match("rejected"), (True, True, False, ""))
+        self.assertFalse(analysis.match("accepted")[0])
+
     def test_actual_result_uses_terminal_evidence_instead_of_lifecycle_status(self) -> None:
         cases = (
             (
@@ -204,7 +216,7 @@ class TestVerificationAnalysis(unittest.TestCase):
             ),
             (
                 "ok", {"tests": [{"verdict": "WA"}, {"verdict": "TL"}, {"verdict": "RE"}]},
-                "rejected", "TL", "TL/RE/WA", (True, True, False, ""),
+                "rejected", "TL", "TL1/RE1/WA1", (True, True, False, ""),
             ),
             (
                 "ok", {"tests": [{"verdict": "AC"}], "tests_total": 2, "tests_skipped": 1},
@@ -216,7 +228,7 @@ class TestVerificationAnalysis(unittest.TestCase):
             ),
             (
                 "failed", {"tests": [{"verdict": "WA"}], "tests_total": 2},
-                "wrong_answer", "WA", "WA", (False, False, False, ""),
+                "wrong_answer", "WA", "WA1", (False, False, False, ""),
             ),
             (
                 "failed", {"error": "compile_error", "tests": []},
