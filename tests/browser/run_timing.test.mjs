@@ -103,6 +103,18 @@ test('complete soft TL can become AC; censored CPU remains TL while wall becomes
   assert.equal(evaluateTiming(wall, 3500).rows[1].warning, false);
 });
 
+test('uncensored incorrect TL becomes WA when the candidate permits completion', () => {
+  const data = preview([program(['WA'], ['AC', 'WA'], [point(2297, 2315, { verdict: 'TL', correct: false })])]);
+  for (const metric of ['cpu', 'wall']) {
+    const model = prepareTiming(data, metric);
+    assert.equal(evaluateTiming(model, 2000).rows[0].label, 'TL1');
+    const completed = evaluateTiming(model, 2500).rows[0];
+    assert.equal(completed.label, 'WA1');
+    assert.equal(completed.unknown, 0);
+    assert.equal(completed.warning, false);
+  }
+});
+
 test('required and allowed rules retain strict WA, TL-or-AC, TL-or-RE and compile/error behavior', () => {
   const cases = [
     [program(['WA'], ['AC', 'WA'], [point(600, 600, { correct: false, verdict: 'WA' })]), 500, 'red'],

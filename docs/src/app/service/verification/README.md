@@ -96,5 +96,8 @@ and counts an aggregate testcase once; missing pass metrics keep the correspondi
 aggregate unavailable. Skipped duplicate generation does not add a timing case.
 Expected required/allowed verdict sets accompany the evidence. Incomplete and
 interactive executions remain unavailable for hypothetical-limit projection.
-A TL without a checked correct answer supplies censored evidence; the projection
-does not infer its exact termination signal from artifacts.
+A TL without a checked correct answer is estimated as censored when wall time
+in milliseconds reaches `TL - min(0.1 * TL, 100)`, using the recorded limit.
+Missing wall usage remains censored. Below that threshold, its incorrect answer
+is available for WA projection when the candidate limit permits completion.
+This preview-only estimate leaves stored verdicts and runtime warnings unchanged.

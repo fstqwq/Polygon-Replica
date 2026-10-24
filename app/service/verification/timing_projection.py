@@ -62,15 +62,17 @@ def build_timing_preview(
         if any(item.usage.wall_sec is None for item in result.passes):
             wall = None
         correct = verdict == "AC" or result.answer_correct or bool(result.final_pass and result.final_pass.answer_correct)
-        censored = verdict == "TL" and not correct
+        # Preview-only estimate, anchored to the recorded limit rather than the
+        # draggable candidate. Missing wall usage cannot establish completion.
+        censored = verdict == "TL" and not correct and (
+            wall is None or wall * 1000 >= current_ms - min(current_ms * 0.1, 100)
+        )
         programs[program_id]["cases"].append({
             "test": task["test_name"],
             "cpu": None if cpu is None else cpu * 1000,
             "wall": None if wall is None else wall * 1000,
             "verdict": verdict,
             "correct": correct,
-            # A TL without a checked correct answer cannot establish completion;
-            # its exact CPU/wall termination cause need not be inferred from logs.
             "censored": censored,
             "complete": mode == "pass-fail" and task["status"] in {
                 VerificationTaskStatus.DONE, VerificationTaskStatus.FAILED,

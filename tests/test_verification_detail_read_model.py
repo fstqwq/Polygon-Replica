@@ -16,6 +16,34 @@ from tests.verification_service_fixture import VerificationServiceTestBase, make
 
 
 class TestVerificationDetailReadModel(VerificationServiceTestBase):
+    def test_timing_preview_estimates_wall_timeout_without_changing_recorded_result(self):
+        verification_id, _tasks = self._fixture("wall-threshold")
+        model = self.verification_service.verification_detail_read_model(verification_id)
+        assert model is not None
+        task = next(row for row in model["tasks"] if row["program_id"] == "solution-0")
+        original = make_execution_result(verdict="TL", output_ref="blob://output")
+        for limit, wall_ms, correct, censored in (
+            (500, 449, False, False), (500, 450, False, True),
+            (2000, 1899, False, False), (2000, 1900, False, True),
+            (2000, 2100, False, True), (3000, 2315, False, False),
+            (2000, None, False, True), (2000, 2100, True, False),
+        ):
+            with self.subTest(limit=limit, wall_ms=wall_ms, correct=correct):
+                item = replace(original.passes[0], answer_correct=correct,
+                    usage=replace(original.passes[0].usage,
+                        wall_sec=None if wall_ms is None else wall_ms / 1000))
+                result = normalize_execution_result(passes=(item,), verdict="TL", answer_correct=correct)
+                before = execution_result_json(result)
+                timing = build_timing_preview(
+                    [dict(task, result=result, status=VerificationTaskStatus.DONE)],
+                    program_ids=["solution-0"], current_ms=limit, mode="pass-fail",
+                )
+                point = timing["programs"][0]["cases"][0]
+                self.assertEqual(point["censored"], censored)
+                self.assertEqual(point["correct"], correct)
+                self.assertEqual(point["verdict"], "TL")
+                self.assertEqual(execution_result_json(result), before)
+
     def test_timing_projection_preserves_pass_metric_gaps_pending_and_skipped_evidence(self):
         verification_id, tasks = self._fixture("timing")
         selected = [task for task in tasks if task.program_id == "solution-0"]
