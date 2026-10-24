@@ -18,7 +18,8 @@ export function prepareTiming(data, metric, multiplier = 1) {
   const transitions = new Set([0]);
   const transition = time => transitions.add(time);
   const programs = data.programs.map(program => {
-    const correct = [], wrong = [], censored = [], fixed = {};
+    const correct = [], wrong = [], censored = [], cpuCensored = [], fixed = {};
+    let cpuMissing = 0;
     let missing = 0, warningMax = 0, allCorrect = program.cases.length > 0;
     for (const item of program.cases) {
       const time = item[metric] === null ? null : item[metric] * multiplier;
@@ -29,44 +30,48 @@ export function prepareTiming(data, metric, multiplier = 1) {
       if (['CE', 'RE', 'FL'].includes(item.verdict)) {
         fixed[item.verdict] = (fixed[item.verdict] || 0) + 1;
       } else if (!item.complete) missing++;
-      else if (item.censored && metric === 'cpu') fixed.TL = (fixed.TL || 0) + 1;
+      else if (item.censored && metric === 'cpu') {
+        fixed.TL = (fixed.TL || 0) + 1;
+        if (time === null) cpuMissing++;
+        else { cpuCensored.push(time); transition(time); }
+      }
       else if (time === null) missing++;
       else {
         (item.censored ? censored : item.correct ? correct : wrong).push(time);
         transition(time);
       }
     }
-    for (const values of [correct, wrong, censored]) values.sort((a, b) => a - b);
+    for (const values of [correct, wrong, censored, cpuCensored]) values.sort((a, b) => a - b);
     if (allCorrect && warningMax > 0) {
       transition(warningMax * 2 / 3);
       transition(warningMax * 2);
     }
-    return { program, correct, wrong, censored, fixed, missing, warningMax: allCorrect ? warningMax : null };
+    const row = { program, correct, wrong, censored, fixed, missing, warningMax: allCorrect ? warningMax : null };
+    // A fixed CPU TL preserves the verdict projection, but cannot prove an
+    // unlimited upper margin: its complete runtime was never observed.
+    row.slackEvidence = metric === 'cpu' ? { ...row, censored: cpuCensored,
+      missing: missing + cpuMissing, fixed: { ...fixed, TL: 0 } } : { ...row };
+    return row;
   });
   max = Math.ceil(max / STEP) * STEP;
   const model = { programs, max, metric };
   transitions.add(max);
-  const limits = [...transitions].filter(value => value <= max).sort((a, b) => a - b);
-  const bands = [];
-  for (let i = 0; i + 1 < limits.length; i++) {
-    const from = limits[i], to = limits[i + 1];
-    const state = evaluateTiming(model, (from + to) / 2).state;
-    const previous = bands.at(-1);
+  const limits = [...transitions].sort((a, b) => a - b);
+  const intervals = [], slackIntervals = [];
+  for (let i = 0; i < limits.length; i++) {
+    const from = limits[i], to = limits[i + 1] ?? Infinity;
+    const probe = Number.isFinite(to) ? (from + to) / 2 : from + Math.max(1, from / 2);
+    const state = evaluateTiming(model, probe).state;
+    const previous = intervals.at(-1);
     if (previous?.state === state) previous.to = to;
-    else bands.push({ from, to, state });
+    else intervals.push({ from, to, state });
+    const slackState = evidenceState(programs.map(row => evaluateProgram(row.slackEvidence, probe)));
+    const previousSlack = slackIntervals.at(-1);
+    if (previousSlack?.state === slackState) previousSlack.to = to;
+    else slackIntervals.push({ from, to, state: slackState });
   }
-  const hasAccepted = data.programs.some(p => p.required.includes('AC') && p.allowed.length === 1);
-  // Check both sides of each boundary on the selectable grid, including exact
-  // endpoints where the inclusive warning rule can differ from either band.
-  const candidates = new Set([STEP]);
-  for (const value of limits) {
-    const before = Math.floor(value / STEP) * STEP;
-    if (before >= STEP) candidates.add(before);
-    if (before + STEP <= max) candidates.add(before + STEP);
-  }
-  const suggested = hasAccepted ? [...candidates].sort((a, b) => a - b)
-    .find(value => evaluateTiming(model, value).state === 'green') ?? null : null;
-  return { ...model, bands, suggested };
+  const bands = intervals.filter(band => band.from < max).map(band => ({ ...band, to: Math.min(band.to, max) }));
+  return { ...model, bands, slackIntervals };
 }
 
 export function evaluateProgram(row, limit) {
@@ -93,7 +98,35 @@ export function evaluateTiming(model, limit) {
   const rows = model.programs.map(program => evaluateProgram(program, limit));
   const state = ['red', 'gray', 'yellow'].find(value => rows.some(row => row.state === value))
     || (rows.length ? 'green' : 'gray');
-  return { rows, state };
+  let slack = null;
+  if (model.slackIntervals) {
+    const evidence = evidenceState(model.programs.map(row => evaluateProgram(row.slackEvidence, limit)));
+    if (evidence === 'gray') {
+      const index = model.slackIntervals.findIndex(band => band.from <= limit && limit < band.to);
+      const lower = model.slackIntervals[index - 1];
+      // Raising TL past a censored runtime loses the upper bound, not the
+      // known failure boundary below the preceding matching interval.
+      slack = {
+        lower: lower?.state === 'safe' && model.slackIntervals[index - 2]?.state !== 'gray'
+          ? limit - lower.from : null,
+        upper: null,
+      };
+    }
+    else if (evidence === 'safe') {
+      const index = model.slackIntervals.findIndex(band => band.state === 'safe' && band.from <= limit && limit <= band.to);
+      const interval = model.slackIntervals[index];
+      if (interval) slack = {
+        lower: model.slackIntervals[index - 1]?.state === 'gray' ? null : limit - interval.from,
+        upper: model.slackIntervals[index + 1]?.state === 'gray' ? null : interval.to - limit,
+      };
+    }
+  }
+  return { rows, state, slack };
+}
+
+function evidenceState(rows) {
+  return rows.some(row => row.unexpected) ? 'red'
+    : !rows.length || rows.some(row => row.unknown) ? 'gray' : 'safe';
 }
 
 export function snapLimit(value, max) {

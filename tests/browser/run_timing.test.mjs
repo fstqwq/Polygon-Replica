@@ -13,6 +13,61 @@ const accepted = cases => program(['AC'], ['AC'], cases);
 const timedOut = cases => program(['TL'], ['AC', 'TL'], cases);
 const preview = programs => ({ current_ms: 2000, programs });
 
+test('slack crosses warnings and ends at unexpected results, using each program’s last TL case', () => {
+  const data = preview([accepted([point(600)]), timedOut([point(2500), point(3500)]), timedOut([point(4500)])]);
+  const model = prepareTiming(data, 'cpu');
+  assert.equal(evaluateTiming(model, 2000).slack.lower, 1400);
+  assert.equal(evaluateTiming(model, 2000).slack.upper, 1500);
+  assert.equal(evaluateTiming(model, 1200).state, 'yellow');
+  assert.equal(evaluateTiming(model, 1200).slack.lower, 600);
+  assert.equal(evaluateTiming(model, 1200).slack.upper, 2300);
+  assert.equal(evaluateTiming(model, 600).slack.lower, 0);
+  for (const limit of [500, 3500]) assert.equal(evaluateTiming(model, limit).slack, null);
+  const scaled = prepareTiming(data, 'cpu', 2);
+  assert.equal(evaluateTiming(scaled, 4000).slack.lower, 2800);
+  assert.equal(evaluateTiming(scaled, 4000).slack.upper, 3000);
+});
+
+test('complete evidence without an upper constraint has infinite upper slack', () => {
+  for (const row of [accepted([point(400)]), program([], ['AC', 'TL'], [point(400)]),
+    program(['TL', 'RE'], ['AC', 'TL', 'RE'], [point(400), point(null, null, { verdict: 'RE', correct: false })])]) {
+    const model = prepareTiming(preview([row]), 'cpu');
+    assert.equal(evaluateTiming(model, 2000).slack.upper, Infinity);
+  }
+  const model = prepareTiming(preview([accepted([point(400)])]), 'cpu');
+  assert.equal(evaluateTiming(model, model.max).slack.lower, 1600);
+});
+
+test('hard-killed TL evidence leaves the upper margin unknown for either metric', () => {
+  const killed = timedOut([point(3000, 3500, { censored: true, correct: false, verdict: 'TL' })]);
+  for (const metric of ['cpu', 'wall']) {
+    const model = prepareTiming(preview([accepted([point(400)]), killed]), metric);
+    assert.equal(evaluateTiming(model, 2000).slack.lower, 1600);
+    assert.equal(evaluateTiming(model, 2000).slack.upper, null);
+    const bound = killed.cases[0][metric];
+    for (const limit of [bound, bound + 500, bound + 5000]) {
+      assert.equal(evaluateTiming(model, limit).slack.upper, null);
+      assert.equal(evaluateTiming(model, limit).slack.lower, limit - 400);
+    }
+    const scaled = prepareTiming(preview([accepted([point(400)]), killed]), metric, 2);
+    assert.equal(evaluateTiming(scaled, bound * 2 + 500).slack.lower, bound * 2 + 500 - 800);
+    // A definite mismatch before uncertain evidence still supplies a bound.
+    const early = prepareTiming(preview([accepted([point(400)]), killed, timedOut([point(2500)])]), metric);
+    assert.equal(evaluateTiming(early, 2000).slack.upper, 500);
+    const late = prepareTiming(preview([accepted([point(400)]), killed, timedOut([point(5000)])]), metric);
+    assert.equal(evaluateTiming(late, 2000).slack.upper, null);
+    assert.equal(evaluateTiming(late, 5500).slack, null);
+  }
+});
+
+test('missing and empty evidence cannot imply an unlimited margin', () => {
+  for (const programs of [[], [accepted([])], [accepted([point(null)])], [timedOut([point(null, null, { censored: true, correct: false, verdict: 'TL' })])]]) {
+    const result = evaluateTiming(prepareTiming(preview(programs), 'cpu'), 2000);
+    assert.equal(result.slack.lower, null);
+    assert.equal(result.slack.upper, null);
+  }
+});
+
 test('runtime multiplier scales projections and bounds without changing evidence or fixed verdicts', () => {
   const data = preview([accepted([point(400)]), timedOut([point(3000, 3500, { verdict: 'TL', censored: true, correct: false })])]);
   const original = JSON.stringify(data);
@@ -21,7 +76,6 @@ test('runtime multiplier scales projections and bounds without changing evidence
     assert.equal(evaluateTiming(cpu, 500).rows[0].label, multiplier === 2 ? 'TL1' : 'AC');
     assert.equal(evaluateTiming(cpu, 10000).rows[1].label, 'TL1');
     assert.equal(cpu.bands[0].to, 400 * multiplier);
-    assert.equal(cpu.suggested, multiplier === 0.5 ? 500 : multiplier === 1 ? 1000 : 2000);
     const wall = prepareTiming(data, 'wall', multiplier);
     assert.equal(evaluateTiming(wall, 3500 * multiplier - 1).rows[1].label, 'TL1');
     assert.equal(evaluateTiming(wall, 3500 * multiplier).rows[1].label, '?1');
@@ -66,7 +120,6 @@ test('unexpected precedes unknown; missing metrics, unfinished and empty runs ca
   for (const item of cases) {
     const model = prepareTiming(preview([accepted([item])]), 'wall');
     assert.equal(evaluateTiming(model, 1000).state, 'gray');
-    assert.equal(model.suggested, null);
   }
   const empty = prepareTiming(preview([accepted([])]), 'cpu');
   assert.equal(evaluateTiming(empty, 1000).rows[0].label, '?1');
@@ -74,10 +127,9 @@ test('unexpected precedes unknown; missing metrics, unfinished and empty runs ca
   assert.equal(evaluateTiming(failed, 1000).state, 'red');
 });
 
-test('continuous bands retain sub-step failures while recommendations use exact selectable limits', () => {
+test('continuous bands retain sub-step failures and inclusive warning boundaries', () => {
   const data = preview([accepted([point(600, 1100)]), timedOut([point(3500, 4000)])]);
   const cpu = prepareTiming(data, 'cpu');
-  assert.equal(cpu.suggested, 1500);
   assert.equal(evaluateTiming(cpu, 1200).state, 'yellow');
   assert.equal(evaluateTiming(cpu, 1201).state, 'green');
   for (const metric of ['cpu', 'wall']) {
@@ -96,10 +148,8 @@ test('continuous bands retain sub-step failures while recommendations use exact 
     { from: 400, to: 800, state: 'yellow' },
     { from: 800, to: 2000, state: 'green' },
   ]);
-  assert.equal(fast.suggested, 1000);
   const exact = prepareTiming(preview([accepted([point(500)])]), 'cpu');
   assert.equal(evaluateTiming(exact, 1000).state, 'yellow');
-  assert.equal(exact.suggested, 1500);
 });
 
 test('all programs and testcases influence safety; each testcase counts once', () => {
@@ -108,7 +158,6 @@ test('all programs and testcases influence safety; each testcase counts once', (
   const model = prepareTiming(data, 'cpu');
   assert.equal(evaluateTiming(model, 2000).state, 'red');
   assert.equal(evaluateTiming(model, 2000).rows[20].label, 'TL1');
-  assert.equal(model.suggested, null);
 });
 
 test('sparse safety intervals agree with continuous projection between boundaries', () => {
@@ -125,9 +174,6 @@ test('sparse safety intervals agree with continuous projection between boundarie
           assert.equal(band.state, evaluateTiming(model, limit).state, `${metric} ${time} ${limit}`);
         }
       }
-      const firstGreen = Array.from({ length: model.max / 500 }, (_, i) => (i + 1) * 500)
-        .find(limit => evaluateTiming(model, limit).state === 'green') ?? null;
-      assert.equal(model.suggested, firstGreen);
     }
   }
 });

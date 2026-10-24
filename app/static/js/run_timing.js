@@ -21,6 +21,7 @@ window.PolygonUI.onReady(async () => {
   const track = overlay.querySelector('.run-timing-track');
   const guide = overlay.querySelector('.run-timing-guide');
   const handle = overlay.querySelector('.run-timing-handle');
+  const slackLabel = overlay.querySelector('.run-timing-slack');
   const metricSelect = document.getElementById('run-timing-metric');
   const multiplierInput = document.getElementById('run-timing-multiplier');
   const hoverInfo = overlay.querySelector('.run-timing-hover');
@@ -70,6 +71,12 @@ window.PolygonUI.onReady(async () => {
   function update() {
     const result = evaluateTiming(model, limit);
     guide.dataset.state = result.state;
+    slackLabel.textContent = result.slack ? [
+      Number.isFinite(result.slack.lower) ? `+${seconds(result.slack.lower)}` : '',
+      Number.isFinite(result.slack.upper) ? `\u2212${seconds(result.slack.upper)}` : '',
+    ].filter(Boolean).join(' / ') : '';
+    slackLabel.title = slackLabel.textContent
+      ? '+: room to lower TL; \u2212: room to raise TL.' : '';
     chart.style.setProperty('--timing-limit', position(limit));
     guide.setAttribute('aria-valuemax', model.max);
     guide.setAttribute('aria-valuenow', limit);
@@ -144,12 +151,6 @@ window.PolygonUI.onReady(async () => {
       node.title = `${seconds(band.from)}\u2013${seconds(band.to)}: ${stateText[band.state]}`;
       return node;
     }));
-    if (model.suggested !== null) {
-      const marker = element('span', 'run-timing-suggested', '\u25c6');
-      marker.style.left = position(model.suggested);
-      marker.title = `Suggested TL: ${seconds(model.suggested)}`;
-      track.append(marker);
-    }
     layout();
   }
 

@@ -47,16 +47,16 @@ lifecycle. The metric selector chooses CPU or wall time. All programs appear in
 one list, grouped by background (AC, TL, WA, other), then lexically by program
 name and source path. Longer lists use the shared popup's scrolling content.
 The time axis also carries the safety bands and a draggable 500 ms limit. All
-programs influence the bands and recommendation.
+programs influence the bands and slack values.
 Hovering or focusing a point highlights the same testcase across all programs.
 The hovered program, testcase and runtime appear beside the popup title. A positive
 runtime multiplier scales observed metrics, warning boundaries, censored wall-time
-bounds and recommendations while keeping the selected limit and recorded data unchanged.
+bounds and slack while keeping the selected limit and recorded data unchanged.
 Highlight updates are coalesced per animation frame and touch only the previous
 and next testcase groups. Point hit areas stay fixed. The cutoff overlay keeps
 points interactive while shading the portion beyond the selected limit.
 Safety bands use exact runtime and warning boundaries, including below 500 ms.
-The selected limit and recommendation use the 500 ms grid and evaluate inclusive
+The selected limit uses the 500 ms grid and evaluates inclusive
 boundary rules directly. Nonzero task counts appear alongside verification status.
 After completion, the Timing analysis entry appears between status and task counts.
 
@@ -68,9 +68,20 @@ runtime and infrastructure errors retain their verdicts. Complete correct runs
 use the existing inclusive 0.5-1.5 times limit warning band; censored runtimes do
 not establish warning margins. Red means a definite Expected mismatch, gray
 means incomplete evidence, yellow means a runtime warning, and green means
-complete matching results without warnings, in that precedence order. The first
-green 500 ms choice is suggested when an Expected AC solution is present. This
-is a preview of recorded evidence; it does not modify limits or promise the
+complete matching results without warnings, in that precedence order. Above the
+selected limit, plus/minus labels show the margins before an unexpected result:
+plus is room to lower the limit, minus is room to raise it.
+Warnings remain inside the usable range. Required verdicts apply per program,
+so a required TL disappears only after its last timed-out testcase completes.
+Censored measurements bound known runtime; they do not prove an unlimited
+margin, including when the CPU verdict projection retains TL. Only finite
+margins are displayed; unknown or unbounded margins are hidden.
+A current unexpected result hides the margins.
+Beyond a censored runtime, the upper margin remains unknown;
+the lower margin retains the known failure boundary below the preceding
+matching interval. A definite mismatch blocks that continuation.
+The plotted axis endpoint does not impose a bound.
+This is a preview of recorded evidence; it does not modify limits or promise the
 outcome of a rerun with higher execution limits.
 
 Timing modules use versioned static URLs. Data is decoded once, sorted indexes

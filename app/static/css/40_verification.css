@@ -884,6 +884,8 @@ body.verification-compact .run-details-page-compact .verification-detail-wrap {
 .run-timing-dialog {
   width: min(1200px, calc(100vw - 32px));
 }
+.run-timing-dialog .ui-popup-header { padding-block: var(--space-2); }
+.run-timing-dialog .ui-popup-content { padding-block: var(--space-2); }
 #run-timing-metric {
   margin-left: auto;
   width: auto;
@@ -899,6 +901,7 @@ body.verification-compact .run-details-page-compact .verification-detail-wrap {
 .run-timing-multiplier { display: inline-flex; align-items: center; gap: var(--space-2); white-space: nowrap; }
 #run-timing-multiplier { width: 64px; }
 .run-timing-chart {
+  padding-top: 16px;
   --timing-name: clamp(100px, 22vw, 190px);
   --timing-result: 100px;
   --timing-gap: 16px;
@@ -959,11 +962,20 @@ body.verification-compact .run-details-page-compact .verification-detail-wrap {
 }
 .run-timing-drag {
   position: absolute;
-  top: 5px;
+  top: 21px;
   bottom: 0;
   left: calc(12px + var(--timing-name) + var(--timing-gap));
   right: calc(12px + var(--timing-result) + var(--timing-gap));
   pointer-events: none;
+}
+.run-timing-slack {
+  position: absolute;
+  top: -19px;
+  left: clamp(64px, var(--timing-limit), calc(100% - 64px));
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-size: var(--font-size-ui-xs);
+  pointer-events: auto;
 }
 .run-timing-guide {
   --guide-color: #737373;
@@ -1008,7 +1020,6 @@ body.verification-compact .run-details-page-compact .verification-detail-wrap {
 .run-timing-band[data-state="yellow"] { background: var(--warn-line); }
 .run-timing-band[data-state="green"] { background: var(--tag-ok-border); }
 .run-timing-band[data-state="gray"] { background: var(--tag-neutral-border); }
-.run-timing-suggested { position: absolute; top: 10px; transform: translateX(-50%); font-size: 9px; color: var(--ok); }
 @media (max-width: 600px) {
   .run-timing-chart { --timing-name: 90px; --timing-result: 85px; --timing-gap: 8px; }
   .run-timing-head, .run-timing-row { padding: 0 6px; }
