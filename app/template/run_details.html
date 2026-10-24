@@ -1,12 +1,14 @@
 {% extends "base.html" %}
 {% block page_styles %}<link rel="stylesheet" href="{{ static_asset_url('css/40_verification.css') }}" />{% endblock %}
-{% block page_scripts %}<script type="module" src="{{ static_asset_url('js/run.js') }}"></script>{% endblock %}
+{% block page_scripts %}<script type="module" src="{{ static_asset_url('js/run.js') }}"></script><script type="module" src="{{ static_asset_url('js/run_timing.js') }}"></script>{% endblock %}
 {% from "_component_dialogs.html" import ui_popup %}
 {% block body_class %}{% if detail_table_compact %} verification-compact{% endif %}{% endblock %}
 {% block content %}
 <div class="page-title-inline page-title-inline-status">
   <h1 class="page-title">Verification</h1>
+  {% if timing_preview.programs %}<a href="#run-timing-popup" class="linkish" data-popup-open="run-timing-popup">Timing statistics</a>{% endif %}
 </div>
+{% if timing_preview.programs %}{% include "_run_timing.html" %}{% endif %}
 {% include "_flash_message.html" %}
 <div class="run-details-page{% if detail_table_compact %} run-details-page-compact{% endif %}">
 <section class="content-section verification-header-section">

@@ -868,3 +868,118 @@ body.verification-compact .run-details-page-compact .verification-detail-wrap {
   max-height: 360px;
   overflow: auto;
 }
+/* Timing preview uses the shared popup shell, controls and status palette. */
+.run-timing-dialog {
+  width: min(1200px, calc(100vw - 32px));
+}
+.run-timing-dialog .ui-popup-content {
+  overflow: hidden;
+}
+#run-timing-metric {
+  margin-left: auto;
+  width: auto;
+}
+.run-timing-chart {
+  --timing-name: clamp(100px, 22vw, 190px);
+  --timing-result: 100px;
+  --timing-gap: 16px;
+  --timing-row: clamp(22px, calc((100dvh - 200px) / var(--timing-count, 20)), 30px);
+  position: relative;
+  font-size: var(--font-size-ui-sm);
+}
+.run-timing-head, .run-timing-row {
+  display: grid;
+  grid-template-columns: var(--timing-name) minmax(0, 1fr) var(--timing-result);
+  column-gap: var(--timing-gap);
+  align-items: center;
+  padding: 0 12px;
+}
+.run-timing-head { height: 28px; color: var(--muted); }
+.run-timing-axis { position: relative; height: 18px; z-index: 1; pointer-events: none; }
+.run-timing-axis span { position: absolute; transform: translateX(-50%); }
+.run-timing-row { height: var(--timing-row); border-top: 1px solid var(--line); }
+.run-timing-row[data-expected="ac"] { background: var(--surface-success); }
+.run-timing-row[data-expected="tl"] { background: var(--surface-warning); }
+.run-timing-row[data-expected="wa"] { background: var(--surface-danger); }
+.run-timing-source { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-timing-result { font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.run-timing-result[data-state="green"] { color: var(--ok); }
+.run-timing-result[data-state="yellow"] { color: var(--warn); }
+.run-timing-result[data-state="red"] { color: var(--danger); }
+.run-timing-result[data-state="gray"] { color: var(--muted); }
+.run-timing-plot {
+  position: relative;
+  height: calc(var(--timing-row) - 1px);
+  background: linear-gradient(to right, var(--line) 1px, transparent 1px) repeat-x;
+}
+.run-timing-point {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  padding: 0;
+  border: 1px solid var(--surface);
+  border-radius: 50%;
+  background: var(--ok);
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+}
+.run-timing-point[data-correct="false"] { background: var(--danger); }
+.run-timing-point.run-timing-censored {
+  border: 0;
+  border-radius: 0;
+  width: 15px;
+  height: 15px;
+  background: none;
+  color: var(--warn);
+  font-size: 15px;
+  line-height: 15px;
+}
+.run-timing-drag {
+  position: absolute;
+  top: 5px;
+  bottom: 28px;
+  left: calc(12px + var(--timing-name) + var(--timing-gap));
+  right: calc(12px + var(--timing-result) + var(--timing-gap));
+  pointer-events: none;
+}
+.run-timing-guide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 16px;
+  transform: translateX(-50%);
+  cursor: ew-resize;
+  pointer-events: auto;
+  touch-action: none;
+  z-index: 2;
+}
+.run-timing-guide::before { content: ''; position: absolute; inset: 0 auto 0 7px; width: 2px; background: var(--accent); }
+.run-timing-guide:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+.run-timing-handle {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0 5px;
+  height: 19px;
+  line-height: 19px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  white-space: nowrap;
+}
+.run-timing-track { position: absolute; top: 0; height: 18px; left: 0; right: 0; cursor: ew-resize; pointer-events: auto; touch-action: none; }
+.run-timing-band { position: absolute; top: 0; bottom: 0; opacity: .65; }
+.run-timing-band[data-state="red"] { background: var(--tag-fail-border); }
+.run-timing-band[data-state="yellow"] { background: var(--warn-line); }
+.run-timing-band[data-state="green"] { background: var(--tag-ok-border); }
+.run-timing-band[data-state="gray"] { background: var(--tag-neutral-border); }
+.run-timing-suggested { position: absolute; top: 10px; transform: translateX(-50%); font-size: 9px; color: var(--ok); }
+.run-timing-foot { height: 28px; display: flex; align-items: flex-end; gap: 12px; }
+.run-timing-picked { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-timing-pages { display: flex; gap: 10px; margin-left: auto; flex-shrink: 0; }
+@media (max-width: 600px) {
+  .run-timing-chart { --timing-name: 90px; --timing-result: 85px; --timing-gap: 8px; }
+  .run-timing-head, .run-timing-row { padding: 0 6px; }
+  .run-timing-drag { left: calc(6px + var(--timing-name) + var(--timing-gap)); right: calc(6px + var(--timing-result) + var(--timing-gap)); }
+  .run-timing-dialog .ui-popup-header { gap: 8px; }
+}

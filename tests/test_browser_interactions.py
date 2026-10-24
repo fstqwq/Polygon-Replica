@@ -10,7 +10,7 @@ class TestBrowserInteractions(unittest.TestCase):
         self.assertIsNotNone(node, "Node is required for the executor browser harness")
         root = Path(__file__).resolve().parents[1]
         result = subprocess.run(
-            [node, "--experimental-vm-modules", "--test", "tests/browser/run_details.test.mjs"],
+            [node, "--experimental-vm-modules", "--test", *[str(path.relative_to(root)) for path in sorted((root / "tests/browser").glob("*.test.mjs"))]],
             cwd=root, text=True, capture_output=True, timeout=30, check=False,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

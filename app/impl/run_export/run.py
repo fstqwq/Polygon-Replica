@@ -75,6 +75,7 @@ def _render_run_details(
     detail_ctx = build_run_detail_context(
         ctx,
         requested_verification_id=requested_verification_id,
+        include_timing=True,
     )
     cancel_verification_id = requested_verification_id or detail_ctx["verification_id"]
     compact = len(detail_ctx["detail_columns"]) >= 11

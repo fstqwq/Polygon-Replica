@@ -70,6 +70,7 @@ from app.impl.workspace.run_display import (
     run_error_display,
     run_memory_mb_text,
 )
+from app.service.verification.timing_projection import build_timing_preview
 from app.service.verification.runtime_threshold import (
     SUMMARY_RUNTIME_THRESHOLD_CHECK,
     evaluate_summary_runtime_threshold,
@@ -1103,6 +1104,7 @@ def build_run_detail_context(
     ctx: WorkspaceContext,
     *,
     requested_verification_id: str = "",
+    include_timing: bool = False,
     include_row_details: bool = False,
     detail_test_name: str = "",
 ) -> RunDetailContext:
@@ -1721,6 +1723,11 @@ def build_run_detail_context(
         }
 
     return {
+        "timing_preview": build_timing_preview(
+            task_rows, program_ids=[col["id"] for col in columns],
+            current_ms=runtime_threshold_time_limit_ms,
+            mode=str(verification_details.get("mode") or ""),
+        ) if include_timing else {"current_ms": 0, "programs": []},
         "verification_id": verification_id,
         "can_rejudge": verification_access["can_rejudge"],
         "can_cancel": verification_access["can_cancel"],

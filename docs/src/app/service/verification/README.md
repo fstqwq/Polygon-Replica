@@ -89,3 +89,12 @@ verdict once, including cache hits; passes and skipped duplicate generation do
 not add counts. AC, compile errors, infrastructure failures and transient states
 retain their existing labels. Expected-result matching uses verdict codes,
 independently of these display counts.
+
+Timing preview evidence is projected from the authorized full task snapshot,
+before matrix display limits. It preserves missing CPU and wall measurements
+and counts an aggregate testcase once; missing pass metrics keep the corresponding
+aggregate unavailable. Skipped duplicate generation does not add a timing case.
+Expected required/allowed verdict sets accompany the evidence. Incomplete and
+interactive executions remain unavailable for hypothetical-limit projection.
+A TL without a checked correct answer supplies censored evidence; the projection
+does not infer its exact termination signal from artifacts.

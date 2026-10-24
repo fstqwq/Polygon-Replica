@@ -2374,27 +2374,19 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
         output_ref = (runtime.runtime_blob_store.put_bytes(b"6\n").blob_ref or "")
         input_ref = (runtime.runtime_blob_store.put_bytes(b"1 2 3\n").blob_ref or "")
         answer_ref = (runtime.runtime_blob_store.put_bytes(b"6\n").blob_ref or "")
-        task_id = verification_task_id(
-            verification_id,
-            "solution-0",
-            "001.in",
-        )
         self._activate_verification_fixture(
             verification_id,
             tasks=[
                 PlannedTask(
-                    task_id=task_id,
-                    predecessor_task_id=None,
-                    task_kind="solution-run",
-                    source_path="solutions/std.cpp",
-                    program_id="solution-0",
-                    test_name="001.in",
-                    expected_behavior="accepted",
-                )
+                    task_id=verification_task_id(verification_id, "solution-0", test),
+                    predecessor_task_id=None, task_kind="solution-run",
+                    source_path="solutions/std.cpp", program_id="solution-0",
+                    test_name=test, expected_behavior="accepted",
+                ) for test in ("001.in", "002.in")
             ],
             completions=[
                 TaskCompletion(
-                    task_id=task_id,
+                    task_id=verification_task_id(verification_id, "solution-0", test),
                     status=VerificationTaskStatus.DONE,
                     run_id="std.cpp",
                     judgehost_task_id="",
@@ -2408,16 +2400,21 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                     ),
                     input_ref=input_ref,
                     answer_ref=answer_ref,
-                )
+                ) for test in ("001.in", "002.in")
             ],
         )
 
+        override_config_values(self, runtime.config_values, RUN_DETAIL_TEST_LIST_LIMIT=1)
         page = run_details_page(
             _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
-            "alice/sample",
-            "bob",
+            "alice/sample", "bob",
         )
         self.assertEqual(page.status_code, 200)
+        timing = page.context["timing_preview"]
+        timing_cases = next(p for p in timing["programs"] if p["id"] == "solution-0")["cases"]
+        self.assertEqual(len(timing_cases), 2)
+        self.assertEqual(timing_cases[0]["cpu"], 2)
+        self.assertEqual(timing_cases[0]["wall"], 3)
 
         detail = run_details_test_fragment(
             _request("/problems/alice/sample/run/details/test-fragment", f"verification_id={verification_id}&test=001.in&program_id=solution-0"),
@@ -2443,6 +2440,14 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
             headers={"cookie": f"{AUTH_COOKIE_NAME}={token}"},
         )
         self.assertEqual(scoped.status_code, 200)
+        scoped_page = client.get(
+            f"/problems/alice/sample/run/details?verification_id={verification_id}&contest={contest_slug}",
+            headers={"cookie": f"{AUTH_COOKIE_NAME}={token}"},
+        )
+        self.assertEqual(scoped_page.status_code, 200)
+        payload = re.search(r'<script[^>]+id="run-timing-data"[^>]*>(.*?)</script>', scoped_page.text, re.S)
+        self.assertIsNotNone(payload)
+        self.assertEqual(next(p for p in json.loads(payload.group(1))["programs"] if p["id"] == "solution-0")["cases"][0]["wall"], 3)
         links = [unescape(value) for value in re.findall(r'href="([^"]+)"', scoped.text)]
         link = next(value for value in links if "/run/details/sample-json?" in value)
         self.assertEqual(parse_qs(urlparse(link).query)["contest"], [contest_slug])
@@ -2473,6 +2478,12 @@ class TestUIRun(UIHelpersMixin, E2ETestBase):
                 "alice/sample", "charlie",
             )
         self.assertIn(denied.exception.status_code, {403, 404})
+        with self.assertRaises(HTTPException) as denied_page:
+            run_details_page(
+                _request("/problems/alice/sample/run/details", f"verification_id={verification_id}"),
+                "alice/sample", "charlie",
+            )
+        self.assertIn(denied_page.exception.status_code, {403, 404})
 
     def test_package_create_redirects_to_a_retrievable_published_archive(self) -> None:
         from app.main import app

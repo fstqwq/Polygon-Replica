@@ -5,6 +5,7 @@ from typing import Literal, NotRequired, TypedDict
 from app.service.judgehost.callback.runpipe_transcript import RunpipeTranscriptEvent
 from app.service.verification.diagnostic import TaskDiagnosticPayload
 from app.service.verification.read_model import TaskCounts
+from app.service.verification.timing_projection import TimingPreview
 from app.service.verification.types import VerificationSanityMessageRow
 
 
@@ -249,6 +250,7 @@ class RunTestDetailContext(TypedDict):
 
 
 class RunDetailContext(TypedDict):
+    timing_preview: TimingPreview
     verification_id: str
     can_rejudge: bool
     can_cancel: bool

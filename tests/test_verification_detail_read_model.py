@@ -8,6 +8,7 @@ from app.service.execution.codec import execution_result_json
 from app.service.verification.detail_read_model import VerificationTestDetailReadModel
 from app.service.verification.lifecycle import ActivationPlan, PlannedTask, VerificationSnapshotRecord, VerificationTaskKind, verification_task_id
 from app.service.verification.task_completion import TaskCompletion
+from app.service.verification.timing_projection import build_timing_preview
 from app.service.verification.types import VerificationTaskStatus
 from tests.identity_helpers import canonical_test_verification_id
 from tests.isolated_db_helpers import isolated_db_execute
@@ -15,6 +16,32 @@ from tests.verification_service_fixture import VerificationServiceTestBase, make
 
 
 class TestVerificationDetailReadModel(VerificationServiceTestBase):
+    def test_timing_projection_preserves_pass_metric_gaps_pending_and_skipped_evidence(self):
+        verification_id, tasks = self._fixture("timing")
+        selected = [task for task in tasks if task.program_id == "solution-0"]
+        original = multi_pass_result("blob://final")
+        passes = (replace(original.passes[0], usage=replace(original.passes[0].usage, wall_sec=None)), original.passes[1])
+        result = normalize_execution_result(passes=passes, verdict="OK", answer_correct=True)
+        self.verification_task_store.commit_task_completions((
+            TaskCompletion(task_id=selected[0].task_id, status=VerificationTaskStatus.DONE, run_id="", judgehost_task_id="", result=result),
+            TaskCompletion(task_id=selected[1].task_id, status=VerificationTaskStatus.DONE, run_id="", judgehost_task_id="", result=normalize_execution_result(verdict="SK")),
+        ))
+        model = self.verification_service.verification_detail_read_model(verification_id, include_pass_details=False)
+        assert model is not None
+        timing = build_timing_preview(model["tasks"], program_ids=["solution-0"], current_ms=2000, mode="pass-fail")
+        self.assertEqual(timing["current_ms"], 2000)
+        program = timing["programs"][0]
+        self.assertEqual(program["required"], ("AC",))
+        points = {item["test"]: item for item in program["cases"]}
+        self.assertEqual(set(points), {"001.in", "003.in"})
+        self.assertTrue(points["001.in"]["complete"])
+        self.assertEqual(points["001.in"]["cpu"], result.cpu_sec * 1000)
+        self.assertIsNone(points["001.in"]["wall"])
+        self.assertFalse(points["003.in"]["complete"])
+        self.assertIsNone(points["003.in"]["cpu"])
+        interactive = build_timing_preview(model["tasks"], program_ids=["solution-0"], current_ms=2000, mode="interactive")
+        self.assertFalse(any(item["complete"] for item in interactive["programs"][0]["cases"]))
+
     def _fixture(self, suffix: str = "") -> tuple[str, tuple[PlannedTask, ...]]:
         verification_id = canonical_test_verification_id(self.test_id + suffix)
         self._insert_verification_row(verification_id)

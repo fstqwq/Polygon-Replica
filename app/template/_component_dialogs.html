@@ -1,8 +1,9 @@
-{% macro ui_popup(popup_id, title, overlay_class='', dialog_class='', content_id='', title_tag='h2', title_class='ui-popup-title') -%}
+{% macro ui_popup(popup_id, title, overlay_class='', dialog_class='', content_id='', title_tag='h2', title_class='ui-popup-title', header_controls='') -%}
 <div id="{{ popup_id }}" class="ui-popup-overlay{% if overlay_class %} {{ overlay_class }}{% endif %}" data-popup-overlay="1" hidden>
   <div class="ui-popup-dialog{% if dialog_class %} {{ dialog_class }}{% endif %}" role="dialog" aria-modal="true" aria-labelledby="{{ popup_id }}-title">
     <div class="ui-popup-header">
       <{{ title_tag }} id="{{ popup_id }}-title"{% if title_class %} class="{{ title_class }}"{% endif %}>{{ title }}</{{ title_tag }}>
+      {{ header_controls }}
       <a href="#" class="linkish ui-popup-close" data-popup-close>Close</a>
     </div>
     <div class="ui-popup-content"{% if content_id %} id="{{ content_id }}"{% endif %}>
