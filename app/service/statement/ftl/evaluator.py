@@ -210,7 +210,7 @@ class _ExprParser:
                 left = _to_number(left) * _to_number(right)
             elif value == "/":
                 divisor = _to_number(right)
-                left = int(_to_number(left) / divisor) if divisor else 0
+                left = _to_number(left) / divisor if divisor else 0
             else:
                 divisor = _to_number(right)
                 left = (_to_number(left) % divisor) if divisor else 0
