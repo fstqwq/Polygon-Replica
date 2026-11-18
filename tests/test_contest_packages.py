@@ -136,7 +136,7 @@ class TestContestPackageDownload(E2ETestBase):
         config["pass_limit"] = passes
         problem_config.write_text(json.dumps(config))
         plays = [
-            [("interactor", "START"), ("solution", "A\n4"), ("interactor", "END")],
+            [("interactor", "2 1\n2 4\n2\n"), ("solution", "A\n4\n"), ("interactor", "0\n")],
             [("interactor", "GO"), ("solution", "B"), ("interactor", "2"),
              ("solution", "2"), ("interactor", "0")],
         ]
@@ -173,16 +173,25 @@ class TestContestPackageDownload(E2ETestBase):
             self.assertEqual(package.read(source.get("path")), package.read(copy.get("path")))
             self.assertEqual(root.find("judging").attrib["run-count"], str(passes))
             expected = [
-                {"input": "START\n\n\nEND\n", "output": "\nA\n4\n\n"},
+                {"input": "2 1\n2 4\n2\n\n\n0\n", "output": "\n\n\nA\n4\n\n"},
                 {"input": "GO\n\n2\n\n0\n", "output": "\nB\n\n2\n\n"},
             ]
             for lang in ("chinese", "english"):
                 prefix = f"statements/{lang}/"
-                self.assertEqual(json.loads(package.read(prefix + "problem-properties.json"))["sampleTests"], expected)
+                pairs = json.loads(package.read(prefix + "problem-properties.json"))["sampleTests"]
+                self.assertEqual(pairs, expected)
+                self.assertEqual(
+                    list(zip(pairs[0]["input"].splitlines(), pairs[0]["output"].splitlines(), strict=True)),
+                    [("2 1", ""), ("2 4", ""), ("2", ""), ("", "A"), ("", "4"), ("0", "")],
+                )
+                for number, pair in enumerate(pairs, 1):
+                    base = prefix + f"examples/sample-{number}/compat."
+                    self.assertEqual(package.read(base + "in"), pair["input"].encode())
+                    self.assertEqual(package.read(base + "ans"), pair["output"].encode())
                 self.assertTrue(package.read(f"statements/.pdf/{lang}/problem.pdf").startswith(b"%PDF"))
                 tex = package.read(prefix + "examples.tex").decode()
                 for n, actors in enumerate(("isi", "isisi"), 1):
-                    contents = ("START", "A\n4", "END") if n == 1 else ("GO", "B", "2", "2", "0")
+                    contents = ("2 1\n2 4\n2\n", "A\n4\n", "0\n") if n == 1 else ("GO", "B", "2", "2", "0")
                     for phase in range(1, passes + 1):
                         cursor = 0
                         for step, (actor, content) in enumerate(zip(actors, contents, strict=True), 1):
