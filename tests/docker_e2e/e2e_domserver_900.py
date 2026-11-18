@@ -531,6 +531,7 @@ def _convert_with_latest_polygon2domjudge(polygon_archive: Path) -> Path:
         "python3",
         "-m",
         "p2d",
+        "--legacy",  # DOMserver 9.0.0 consumes the legacy package layout.
         "--code",
         "P2D",
         "--color",

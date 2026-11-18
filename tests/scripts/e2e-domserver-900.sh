@@ -69,8 +69,14 @@ collect_logs() {
     printf "%s\n" "=== nginx error log ==="
     cat /var/log/nginx/error.log 2>/dev/null || true
   ' >"$output_root/domserver-nginx-error.log" 2>&1 || true
+  # Agent downloads can be mode 0600 and owned by the container user.
+  # Restore runner ownership before reading ZIP members and uploading diagnostics.
+  if [[ -d "$POLYGON_REPLICA_E2E_OUTPUT_HOST_ROOT" ]] && docker image inspect "$POLYGON_REPLICA_E2E_IMAGE" >/dev/null 2>&1; then
+    docker run --rm --user 0 --entrypoint chown \
+      --volume "$POLYGON_REPLICA_E2E_OUTPUT_HOST_ROOT:/output" \
+      "$POLYGON_REPLICA_E2E_IMAGE" -Rh "$(id -u):$(id -g)" /output
+  fi
   collect_package_members
-  chmod -R a+rX "$output_root" 2>/dev/null || true
 }
 
 cleanup() {

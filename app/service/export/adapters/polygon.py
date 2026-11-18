@@ -6,6 +6,7 @@ import shutil
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import cast
+from urllib.parse import quote
 
 from app.config import ConfigValues
 from app.service.export.adapters.shared import (
@@ -202,6 +203,7 @@ class PolygonLinuxPackageAdapter(PackageAdapterSupport):
         attachments = self._write_attachments(snapshot, target)
         self._write_problem_xml(
             target,
+            problem_url=f"https://polygon-replica.invalid/problems/{quote(canonical_problem_slug, safe='/')}",
             short_name=_safe_short_name(
                 self.problem_slug_leaf(canonical_problem_slug)
             ),
@@ -483,6 +485,7 @@ class PolygonLinuxPackageAdapter(PackageAdapterSupport):
     def _write_problem_xml(
         target: Path,
         *,
+        problem_url: str,
         short_name: str,
         revision_number: int,
         names: dict[str, str],
@@ -498,7 +501,7 @@ class PolygonLinuxPackageAdapter(PackageAdapterSupport):
     ) -> None:
         root = ET.Element(
             "problem",
-            {"revision": str(revision_number), "short-name": short_name},
+            {"revision": str(revision_number), "short-name": short_name, "url": problem_url},
         )
         names_node = ET.SubElement(root, "names")
         for _source_language, folder in language_folders:

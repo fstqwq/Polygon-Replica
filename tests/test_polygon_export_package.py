@@ -57,6 +57,7 @@ class TestPolygonExportPackage(unittest.TestCase):
 
         problem = ET.parse(target / "problem.xml").getroot()
         self.assertEqual(problem.attrib["short-name"], "three-pass")
+        self.assertEqual(problem.attrib["url"], "https://polygon-replica.invalid/problems/owner/three-pass")
         judging = cast(ET.Element, problem.find("judging"))
         self.assertEqual(judging.attrib["run-count"], "3")
         time_limit = cast(
