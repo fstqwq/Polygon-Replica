@@ -5,6 +5,7 @@ Consumers receive a validated package reader and never a workspace, Git handle, 
 verification artifact reference.
 """
 
+import json
 import os
 import shutil
 import stat
@@ -39,6 +40,9 @@ from app.service.problem_package.manifest import (
     NativePackageFileEntry,
     NativePackageManifest,
     NativePackageSolutionEntry,
+    STATEMENT_SAMPLES_VERSION,
+    StatementSamplePaths,
+    statement_sample_resource,
     NativePackageTestEntry,
     describe_file,
     dumps_manifest,
@@ -949,7 +953,7 @@ class ProblemPackageService:
         test_owners: dict[str, VerificationTestOwner],
         tests_spec_max_bytes: int,
         statement_sample_max_bytes: int,
-    ) -> None:
+    ) -> dict[str, StatementSamplePaths]:
         self._copy_source_tree(snapshot, render_source)
         examples_bundle = self._statement_examples_producer.produce(
             render_source,
@@ -962,6 +966,12 @@ class ProblemPackageService:
             statement_sample_max_bytes=statement_sample_max_bytes,
             problem_limits=problem_config_limits(self.db.config_values),
         )
+        display = {
+            test_id: StatementSamplePaths(input=pair["inputFile"], output=pair["outputFile"])
+            for test_id, pair in zip(
+                examples_bundle["sample_source_ids"], examples_bundle["sample_tests"], strict=True
+            )
+        }
         languages = statement_languages(render_source)
         build_root = package_root / STATEMENT_BUILD_DIR
         for language in languages:
@@ -975,6 +985,11 @@ class ProblemPackageService:
                 statement_sample_max_bytes=statement_sample_max_bytes,
                 problem_limits=problem_config_limits(self.db.config_values),
             )
+
+            for test_id, pair in display.items():
+                statement_sample_resource(build_root / language, test_id, pair["input"])
+                statement_sample_resource(build_root / language, test_id, pair["output"])
+        return display
 
     def _build_native_package(
         self,
@@ -1034,8 +1049,8 @@ class ProblemPackageService:
             }
             manifest_path = package_root / TEST_DATA_DIR / "manifest.json"
             manifest_path.parent.mkdir(parents=True, exist_ok=True)
-            manifest_path.write_text(dumps_manifest(manifest), encoding="utf-8", newline="\n")
-            self._materialize_statement_build(
+            manifest["statement_samples_version"] = STATEMENT_SAMPLES_VERSION
+            manifest["statement_samples"] = self._materialize_statement_build(
                 snapshot=snapshot,
                 render_source=render_source,
                 package_root=package_root,
@@ -1045,6 +1060,7 @@ class ProblemPackageService:
                 tests_spec_max_bytes=tests_spec_max_bytes,
                 statement_sample_max_bytes=statement_sample_max_bytes,
             )
+            manifest_path.write_text(dumps_manifest(manifest), encoding="utf-8", newline="\n")
             validate_manifest_files(
                 package_root,
                 manifest,
@@ -1342,10 +1358,17 @@ class ProblemPackageService:
             if existing is not None:
                 if existing["status"] == "available":
                     try:
-                        self._validate_archive_checksum(existing)
+                        archive = self._validate_archive_checksum(existing)
+                        with zipfile.ZipFile(archive) as package:
+                            with package.open(f"{TEST_DATA_DIR}/manifest.json") as stream:
+                                version = json.load(stream).get("statement_samples_version")
                     except Exception as exc:
                         self._invalidate_materialization(existing, str(exc))
                     else:
+                        if version != STATEMENT_SAMPLES_VERSION:
+                            return self._run_materialization_build(
+                                revision, verification_builder, invalidate_exports=True
+                            )
                         if (
                             reuse_unverified
                             or self.native_package_verified(existing)

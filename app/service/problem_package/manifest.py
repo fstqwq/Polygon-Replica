@@ -45,7 +45,17 @@ class NativePackageSolutionEntry(TypedDict):
     expected_behavior: str
 
 
+STATEMENT_SAMPLES_VERSION = 1
+
+
+class StatementSamplePaths(TypedDict):
+    input: str
+    output: str
+
+
 class NativePackageManifest(TypedDict):
+    statement_samples_version: NotRequired[int]
+    statement_samples: NotRequired[dict[str, StatementSamplePaths]]
     source_commit: str
     revision_number: int
     source_digest: str
@@ -128,6 +138,20 @@ def source_digest(source_root: Path) -> str:
             )
     encoded = json.dumps(entries, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def statement_sample_resource(build_root: Path, test_id: str, path: str) -> Path:
+    label = f"statement sample {test_id} ({build_root.name})"
+    try:
+        relative = canonical_rel_path(path)
+        if not relative.startswith("examples/"):
+            raise ValueError("expected a path under examples/")
+        resource = build_root / relative
+        if not resource.resolve().is_relative_to(build_root.resolve()) or not resource.is_file():
+            raise ValueError("resource is missing or outside language directory")
+        return resource
+    except (ValueError, OSError) as exc:
+        raise ValueError(f"{label}: invalid display resource {path}: {exc}") from exc
 
 
 def dumps_manifest(manifest: NativePackageManifest) -> str:
@@ -233,7 +257,7 @@ def load_manifest(path: Path) -> NativePackageManifest:
     tests = raw["tests"]
     if not isinstance(tests, list) or not tests:
         raise ValueError("Polygon Replica package must contain tests")
-    return {
+    manifest: NativePackageManifest = {
         "source_commit": source_commit,
         "revision_number": revision_number,
         "source_digest": digest,
@@ -242,6 +266,20 @@ def load_manifest(path: Path) -> NativePackageManifest:
         "solutions": [_solution_entry(row) for row in solutions],
         "tests": [_test_entry(row) for row in tests],
     }
+    if "statement_samples_version" in raw:
+        if raw["statement_samples_version"] != STATEMENT_SAMPLES_VERSION:
+            raise ValueError("Unsupported statement sample manifest version; rebuild the Native Package")
+        records = raw.get("statement_samples")
+        if not isinstance(records, dict):
+            raise ValueError("Invalid Native Package statement samples")
+        paths: dict[str, StatementSamplePaths] = {}
+        for test_id, record in records.items():
+            if not isinstance(record, dict) or not all(isinstance(record.get(k), str) for k in ("input", "output")):
+                raise ValueError(f"Invalid statement sample resource paths for {test_id}")
+            paths[test_id] = {"input": record["input"], "output": record["output"]}
+        manifest["statement_samples_version"] = STATEMENT_SAMPLES_VERSION
+        manifest["statement_samples"] = paths
+    return manifest
 
 
 def validate_manifest_files(
@@ -304,6 +342,10 @@ def validate_manifest_files(
     ]
     if manifest_shape != spec_shape:
         raise ValueError("Native Package tests do not match tests/spec.json order")
+    if "statement_samples" in manifest and set(manifest["statement_samples"]) != {
+        test["id"] for test in manifest["tests"] if test["sample"]
+    }:
+        raise ValueError("Statement sample IDs differ from the Native Package tests")
     for test in manifest["tests"]:
         test_id = test["id"]
         if manifest["mode"] != "interactive" and "answer" not in test:

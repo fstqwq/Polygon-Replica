@@ -184,7 +184,13 @@ def _interactive_files() -> dict[str, str]:
                 }
             ),
             "tests/spec.json": _json_text(
-                {"tests": [{"id": "001", "kind": "manual"}]}
+                {"tests": [{
+                        "id": "001", "kind": "manual", "sample": True,
+                        "sample_json": {"presentation": "interaction", "passes": [{"events": [
+                            {"source": "interactor", "content": "JudgeDisplaySeven"},
+                            {"source": "solution", "content": "TeamDisplayFourteen"},
+                        ]}]},
+                    }]}
             ),
             "tests/manual/001.in": "7\n",
             "interactors/interactor.cpp": INTERACTOR,
@@ -609,6 +615,15 @@ def _export_polygon_and_convert() -> tuple[Path, Path]:
     output_root = Path(os.environ["POLYGON_REPLICA_E2E_OUTPUT_ROOT"])
     polygon_archive = output_root / "interactive-polygon-linux.zip"
     shutil.copy2(archive, polygon_archive)
+    with zipfile.ZipFile(polygon_archive) as package:
+        pdf = package.read("statements/.pdf/english/problem.pdf")
+        visible = subprocess.run(
+            ["pdftotext", "-layout", "-", "-"], input=pdf, capture_output=True, check=True,
+        ).stdout
+        if not all(word in visible for word in (b"JudgeDisplaySeven", b"TeamDisplayFourteen")):
+            raise RuntimeError("Polygon PDF lost the authored interaction sample")
+        if b"]>:" in visible or b"]<:" in visible:
+            raise RuntimeError("Polygon PDF displays a judge transcript")
     return polygon_archive, _convert_with_latest_polygon2domjudge(
         polygon_archive
     )

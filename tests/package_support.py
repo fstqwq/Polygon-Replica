@@ -148,6 +148,9 @@ def verification_builder(
     solution_verdicts: dict[str, tuple[str, str]] | None = None,
     mode: str = "pass-fail",
     pre_skipped_ordinals: frozenset[int] = frozenset(),
+    inputs_by_id: dict[str, bytes] | None = None,
+    sample_ids: frozenset[str] | None = None,
+    pass_limit: int = 1,
     verification_kind: str = "all",
 ) -> VerificationBuilder:
     def build(
@@ -181,7 +184,8 @@ def verification_builder(
         run_completions: list[TaskCompletion] = []
         for ordinal, test_id in enumerate(test_ids, start=1):
             test_name = f"{ordinal:03d}.in"
-            input_ref = (runtime.runtime_blob_store.put_bytes(input_bytes).blob_ref or "")
+            payload = input_bytes if inputs_by_id is None else inputs_by_id[test_id]
+            input_ref = (runtime.runtime_blob_store.put_bytes(payload).blob_ref or "")
             answer_ref = ""
             if answer_bytes is not None:
                 answer_ref = (runtime.runtime_blob_store.put_bytes(answer_bytes).blob_ref or "")
@@ -305,14 +309,14 @@ def verification_builder(
                 "verification_id": verification_id,
                 "task_graph": True,
                 "mode": mode,
-                "pass_limit": 1,
+                "pass_limit": pass_limit,
                 "tests_meta_rows": [
                     {
                         "index": ordinal,
                         "test_name": f"{ordinal:03d}.in",
                         "kind": "manual",
                         "id": test_id,
-                        "sample": True,
+                        "sample": sample_ids is None or test_id in sample_ids,
                     }
                     for ordinal, test_id in enumerate(test_ids, start=1)
                 ],

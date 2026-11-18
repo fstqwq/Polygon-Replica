@@ -5,6 +5,11 @@ from typing import TypedDict
 from app.db import DB, SQLValue, now_iso
 
 
+# Export IDs are opaque. The prefix versions Polygon artifacts without changing
+# the download filename or requiring a migration of the metadata database.
+POLYGON_EXPORT_PREFIX = "e-polygon2-"
+
+
 class ExportJobRow(TypedDict):
     id: str
     problem_id: int
@@ -104,9 +109,10 @@ class ExportStore:
             """SELECT j.*,e.filename,e.sha256,e.size_bytes
                FROM export_jobs j JOIN exports e ON e.id=j.export_id
                WHERE j.problem_id=? AND j.source_commit=? AND j.export_type=?
+                 AND (e.export_type != 'polygon-linux' OR e.id GLOB ?)
                  AND j.status='succeeded'
                ORDER BY j.finished_at DESC,j.created_at DESC,j.id DESC LIMIT 1""",
-            [int(problem_id), source_commit, export_type],
+            [int(problem_id), source_commit, export_type, POLYGON_EXPORT_PREFIX + "*"],
         )
         return None if row is None else _job_row(row)
 
@@ -149,12 +155,13 @@ class ExportStore:
                 """SELECT id,materialization_id,export_type,filename
                    FROM exports
                    WHERE problem_id=?
+                     AND (export_type != 'polygon-linux' OR id GLOB ?)
                      AND materialization_id IN ("""
                 + materialization_placeholders
                 + ") AND export_type IN ("
                 + self._package_format_placeholders
                 + ") ORDER BY materialization_id,export_type",
-                [int(problem_id), *chunk, *self._package_formats],
+                [int(problem_id), POLYGON_EXPORT_PREFIX + "*", *chunk, *self._package_formats],
             )
             result.extend(
                 {

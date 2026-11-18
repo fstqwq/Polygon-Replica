@@ -114,7 +114,21 @@ class TestPolygonExportPackage(unittest.TestCase):
                 / "problem.pdf"
             ).is_file()
         )
-        self.assertTrue((target / "files" / "interactor.cpp").is_file())
+        source = problem.find("assets/interactor/source")
+        copy = problem.find("assets/interactor/copy")
+        assert source is not None and copy is not None
+        self.assertEqual((target / source.attrib["path"]).read_bytes(), (target / copy.attrib["path"]).read_bytes())
+
+    def test_polygon_rejects_missing_sample_mapping_and_escaping_resource(self) -> None:
+        reader = self._reader(pass_limit=1)
+        adapter = PolygonLinuxPackageAdapter(self.values, self.tex_compile)
+        paths = reader.manifest["statement_samples"].pop("001")
+        with self.assertRaisesRegex(ValueError, "001 .*english.*missing display"):
+            adapter.build(reader, target=self.root / "missing", canonical_problem_slug="owner/test")
+        paths["input"] = "../tests/01"
+        reader.manifest["statement_samples"]["001"] = paths
+        with self.assertRaisesRegex(ValueError, "001 .*english.*invalid display resource"):
+            adapter.build(reader, target=self.root / "escape", canonical_problem_slug="owner/test")
 
     def test_pass_fail_package_materializes_exact_checker_for_both_consumers(
         self,
@@ -264,6 +278,12 @@ class TestPolygonExportPackage(unittest.TestCase):
         display_path = test_root / "sample-input"
         display_path.write_bytes(b"display\n")
 
+        resources = statement_build / "examples"
+        resources.mkdir()
+        (resources / "compat.in").write_bytes(b"display\n")
+        (resources / "compat.ans").write_bytes(b"")
+        display_path.write_bytes(b"[00:01] judge log\n")
+
         materialization: MaterializationRow = {
             "id": "pm-polygon",
             "problem_id": 1,
@@ -283,6 +303,8 @@ class TestPolygonExportPackage(unittest.TestCase):
             "source_commit": materialization["source_commit"],
             "revision_number": materialization["revision_number"],
             "source_digest": materialization["source_digest"],
+            "statement_samples_version": 1,
+            "statement_samples": {"001": {"input": "examples/compat.in", "output": "examples/compat.ans"}},
             "mode": "interactive",
             "pass_limit": pass_limit,
             "solutions": [

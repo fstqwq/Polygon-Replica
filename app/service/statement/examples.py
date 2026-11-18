@@ -62,6 +62,7 @@ class StatementExamplesBundle(TypedDict):
     context: StatementExamplesContext
     resources: list[StatementExampleResource]
     verification_id: str
+    sample_source_ids: NotRequired[list[str]]
     sample_tests: NotRequired[list[dict[str, str]]]
 
 
@@ -717,5 +718,6 @@ class StatementExamplesProducer:
             "context": {"samples": samples},
             "resources": all_resources,
             "verification_id": verification_id,
+            "sample_source_ids": [row["id"] for _ordinal, row in sample_rows],
             "sample_tests": legacy_samples,
         }

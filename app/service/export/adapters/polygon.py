@@ -22,7 +22,9 @@ from app.service.problem.runtime_config import (
 )
 from app.service.problem.standard_checker import detect_standard_checker
 from app.service.problem_package.manifest import (
+    STATEMENT_SAMPLES_VERSION,
     NativePackageSolutionEntry,
+    statement_sample_resource,
     NativePackageTestEntry,
 )
 from app.service.problem_package.service import NativePackageReader
@@ -96,12 +98,6 @@ def _section_text(snapshot: Path, language: str, filename: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _sample_text(path: Path | None) -> str:
-    if path is None:
-        return ""
-    return path.read_bytes().decode("utf-8", errors="replace")
-
-
 class PolygonLinuxPackageAdapter(PackageAdapterSupport):
     """Write a root-level Polygon full package for Linux consumers."""
 
@@ -118,6 +114,8 @@ class PolygonLinuxPackageAdapter(PackageAdapterSupport):
     def plan(self, reader: NativePackageReader) -> PackageAdapterPlan:
         """Validate Polygon metadata without narrowing its positive run count."""
 
+        if reader.manifest.get("statement_samples_version") != STATEMENT_SAMPLES_VERSION:
+            raise ValueError("Rebuild the Native Package for the published revision before exporting Polygon statement samples")
         self._problem_config(reader)
         languages = self._language_folders(reader.root)
         warnings: list[str] = []
@@ -283,9 +281,9 @@ class PolygonLinuxPackageAdapter(PackageAdapterSupport):
         snapshot = reader.root
         self._copy_statement_resources(snapshot, target)
         names: dict[str, str] = {}
-        samples = self._sample_rows(reader)
         for source_language, folder in language_folders:
             build_root = snapshot / "statement-build" / source_language
+            samples = self._sample_rows(reader, build_root)
             entrypoint = build_root / "statements.tex"
             statement_root = target / "statements" / folder
             shutil.copytree(build_root, statement_root)
@@ -365,22 +363,20 @@ class PolygonLinuxPackageAdapter(PackageAdapterSupport):
             shutil.copy2(source, files_root / filename)
 
     @staticmethod
-    def _sample_rows(reader: NativePackageReader) -> list[tuple[int, str, str]]:
+    def _sample_rows(reader: NativePackageReader, build_root: Path) -> list[tuple[int, str, str]]:
+        samples = reader.manifest["statement_samples"]
         rows: list[tuple[int, str, str]] = []
         for index, test in enumerate(reader.manifest["tests"], start=1):
             if not test["sample"]:
                 continue
-            input_path = reader.payload(test, "sample_input") or reader.payload(
-                test,
-                "input",
-            )
-            output_path = reader.payload(test, "sample_output") or reader.payload(
-                test,
-                "answer",
-            )
-            rows.append(
-                (index, _sample_text(input_path), _sample_text(output_path))
-            )
+            test_id = test["id"]
+            label = f"Polygon statement sample {test_id} ({build_root.name})"
+            if test_id not in samples:
+                raise ValueError(f"{label}: missing display resource record")
+            pair = samples[test_id]
+            input_path = statement_sample_resource(build_root, test_id, pair["input"])
+            output_path = statement_sample_resource(build_root, test_id, pair["output"])
+            rows.append((index, input_path.read_bytes().decode("utf-8"), output_path.read_bytes().decode("utf-8")))
         return rows
 
     @staticmethod
@@ -415,6 +411,7 @@ class PolygonLinuxPackageAdapter(PackageAdapterSupport):
         checker_name = ""
         if interactor is not None:
             shutil.copy2(interactor, target / "files" / "interactor.cpp")
+            shutil.copy2(interactor, target / "interactor.cpp")
         else:
             checker_target = target / "files" / "check.cpp"
             if checker is None:

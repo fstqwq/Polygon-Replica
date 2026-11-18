@@ -60,6 +60,8 @@ statement-build/
     ... copied statement assets and sample text files
 ```
 
+Native Packages with statement sample projection version 1 record the input and output display resource paths for each sample test ID. Paths are relative to each language's frozen statement tree. Polygon writes its JSON and example files from these resources, including intentionally empty outputs. Interactive transcripts preserve event order in the statement tree; the two-column representation aligns the speakers from the first pass. The judge input and answer payloads are stored separately. Rebuild an older Native Package at the same published revision before requesting a new Polygon export.
+
 Only applicable members are present. Interactive tests may omit `answer`, and sample display files occur only when they differ from judge input or answer. Each authored statement language has a complete TeX working directory under `statement-build/`, including its rendered samples and required assets. Both derived trees are excluded from the source digest.
 
 The manifest contains `source_commit`, `revision_number`, `source_digest`, `mode`, `pass_limit`, stable authored solution metadata, and the ordered tests. Each test records its identity, source kind, sample flag, and descriptors for its available payloads. A descriptor contains a canonical path, SHA-256, and size. Verification IDs, observed verdicts, and solution verdict summaries are not archive content. Readers require the current shape and ignore unknown fields.
