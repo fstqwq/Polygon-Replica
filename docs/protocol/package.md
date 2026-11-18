@@ -60,7 +60,7 @@ statement-build/
     ... copied statement assets and sample text files
 ```
 
-Native Packages with statement sample projection version 1 record the input and output display resource paths for each sample test ID. Paths are relative to each language's frozen statement tree. Polygon writes its JSON and example files from these resources, including intentionally empty outputs. Interactive transcripts preserve event order in the statement tree; the two-column representation aligns the speakers from the first pass. The judge input and answer payloads are stored separately. Rebuild an older Native Package at the same published revision before requesting a new Polygon export.
+Native Packages record the input and output display resource paths for each sample test ID. Interaction presentations also record ordered speaker and resource references grouped by pass. Paths are relative to the frozen statement tree for each language. Polygon reads the display pair, including intentionally empty outputs. CCPCOJ reads the declared events for a conversation or the declared display files for a pair. Single-pass declarations in the packaged `examples.tex` identify display resources when the corresponding manifest references are absent. Sample order follows the marked tests. Judge payloads are separate from statement display resources.
 
 Only applicable members are present. Interactive tests may omit `answer`, and sample display files occur only when they differ from judge input or answer. Each authored statement language has a complete TeX working directory under `statement-build/`, including its rendered samples and required assets. Both derived trees are excluded from the source digest.
 
@@ -141,6 +141,10 @@ This subset follows the [QOJ problem-data guide](https://qoj.ac/blog/qingyu/blog
 
 ### Nowcoder package
 
+The `ccpcoj` adapter targets CCPCOJ 2.0.315 native problem import. The ZIP root holds `problemlist.json`, the export timezone and numbered `TEST_` and `ATTACH_` directories. The adapter supports single-pass exact, custom-checker and interactive judging with C++ judging programs. Judge inputs, answers and program source are independent of the published display samples. Native interaction samples use chronological turns and preserve each speaker's text. C, C++, Java and Python submissions with a single representable expected verdict are included for optional submission at import.
+
+Each statement language carries its LaTeX sections and interaction instructions. Referenced figures use the HTML preview image converter. PDF references select a page and resolve to PNG attachments. Contestant downloads retain their relative paths inside `player-files.zip`. The stable attachment identifier derives from the canonical problem slug so CCPCOJ can recognize a reimport.
+
 The `nowcoder` adapter emits the Nowcoder testcase archive.
 
 | Area | Contract |
@@ -177,10 +181,10 @@ The download resolves and verifies the selected external package cache for every
 
 | Area | Contract |
 | --- | --- |
-| Children | `packages/<idx>-<problem>.zip`, one per roster problem. |
+| Children | CCPCOJ merges problem records and renumbers test and attachment directories in roster order for a single native import. Other formats use `packages/<idx>-<problem>.zip`, one per roster problem. |
 | Statements | Every statement language shared by all frozen native packages produces one complete contest PDF at `statements.<language-code>.pdf`. An empty language intersection or a failed PDF prevents the bundle. |
 | Placement | Assembly rewrites DOMjudge `short-name` and balloon color in an extracted copy from the contest `idx` and canonical ordinal. ICPC, QOJ, Polygon, and Nowcoder retain their cached archive bytes. Every child is validated for archive paths, entry types, expanded size, and payload integrity before inclusion. |
-| Outer archive | Contains the complete contest statement PDFs and child packages, with no manifest, Git commit, native package identity, or checksum metadata. |
+| Outer archive | Contains the complete contest statement PDFs and the selected target layout. |
 
 Statement compilation retains the established template contract and engine detection. The contest PDF path uses the frozen native package sources and the existing preview cache. External adapters project the first LaTeX `!` diagnostic from the generated log, then fall back to stdout and stderr. Export job and HTTP diagnostics use the configured display-text limit.
 

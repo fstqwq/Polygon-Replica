@@ -15,6 +15,7 @@ from app.service.export.adapters import (
     PackageAdapterRegistry,
     PackageFormat,
 )
+from app.service.export.adapters.ccpcoj import CCPCOJPackageAdapter
 from app.service.export.adapters.domjudge import DOMjudgePackageAdapter
 from app.service.export.adapters.shared import statement_language_code
 from app.service.export.service import CachedExternalPackage
@@ -170,14 +171,13 @@ class ContestPackageService:
                 for relative, info in sorted(archive.entries.items()):
                     if extract_to is not None:
                         destination = extract_to.joinpath(*PurePosixPath(relative).parts)
-                        if info.is_dir():
-                            destination.mkdir(parents=True, exist_ok=True)
-                        else:
+                        if not info.is_dir():
                             archive.zip_file.copy_to(info, destination)
-                    else:
-                        with archive.zip_file.open(info) as member:
-                            while member.read(1024 * 1024):
-                                pass
+                            continue
+                        destination.mkdir(parents=True, exist_ok=True)
+                    with archive.zip_file.open(info) as member:
+                        while member.read(1024 * 1024):
+                            pass
         except (OSError, ValueError, zipfile.BadZipFile) as exc:
             detail = str(exc)
             if detail.startswith("expanded zip payload is too large"):
@@ -226,6 +226,7 @@ class ContestPackageService:
         )
         final_archive = operation_root / staged_archive.name
         package_archives: list[Path] = []
+        ccpcoj_roots: list[Path] = []
         try:
             for item in snapshot.items:
                 cached = external_packages[item.problem_id]
@@ -241,6 +242,11 @@ class ContestPackageService:
                     f"{item.idx}-{token}.zip" if item.idx else f"{token}.zip"
                 )
                 package_archive = packages_dir / filename
+                if snapshot.package_format == "ccpcoj":
+                    package_root = package_roots / str(item.contest_problem_id)
+                    self._read_external_package(cached.path, extract_to=package_root)
+                    ccpcoj_roots.append(package_root)
+                    continue
                 if snapshot.package_format == "domjudge":
                     package_root = package_roots / str(item.contest_problem_id)
                     package_root.mkdir(parents=True, exist_ok=False)
@@ -284,6 +290,8 @@ class ContestPackageService:
             ) as archive:
                 for filename, statement_pdf in language_files:
                     archive.write(statement_pdf, arcname=filename)
+                if ccpcoj_roots:
+                    CCPCOJPackageAdapter.write_contest_archive(archive, ccpcoj_roots)
                 for package_archive in package_archives:
                     archive.write(
                         package_archive,

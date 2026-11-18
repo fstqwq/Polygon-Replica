@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import cast
 
 from app.service.export.adapters.shared import (
+    EXACT_OUTPUT_CHECKER,
     PackageAdapterPlan,
     PackageAdapterSupport,
     PackageFormat,
@@ -33,29 +34,6 @@ _QOJ_SOLUTION_SUFFIXES = {
     ".py": ".py",
 }
 _CPP_SOURCE_SUFFIXES = frozenset({".c++", ".cc", ".cpp", ".cxx"})
-_EXACT_OUTPUT_CHECKER = """#include \"testlib.h\"
-#include <fstream>
-
-int main(int argc, char* argv[]) {
-    registerTestlibCmd(argc, argv);
-    std::ifstream output(argv[2], std::ios::binary);
-    std::ifstream answer(argv[3], std::ios::binary);
-    if (!output || !answer) {
-        quitf(_fail, \"cannot open output or answer\");
-    }
-    while (true) {
-        const int actual = output.get();
-        const int expected = answer.get();
-        if (actual != expected) {
-            quitf(_wa, \"output differs from answer\");
-        }
-        if (actual == std::char_traits<char>::eof()) {
-            break;
-        }
-    }
-    quitf(_ok, \"output matches answer\");
-}
-"""
 
 
 def _time_limit_seconds(time_limit_ms: int) -> str:
@@ -236,7 +214,7 @@ class QOJPackageAdapter(PackageAdapterSupport):
         )
         if checker is None:
             (target / "chk.cpp").write_text(
-                _EXACT_OUTPUT_CHECKER,
+                EXACT_OUTPUT_CHECKER,
                 encoding="utf-8",
                 newline="\n",
             )

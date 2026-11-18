@@ -217,7 +217,7 @@ class StatementHtmlRenderer:
                     source = str(target[0])
                     page = self._image_page(content[0])
                     serial += 1
-                    name = self._copy_image(
+                    name = self.copy_image(
                         source,
                         page=page,
                         serial=serial,
@@ -251,7 +251,7 @@ class StatementHtmlRenderer:
     def _output_limit_bytes(self) -> int:
         return self._config_values.integer("PREVIEW_HTML_OUTPUT_KB") * 1024
 
-    def _copy_image(
+    def copy_image(
         self,
         source: str,
         *,
@@ -260,8 +260,17 @@ class StatementHtmlRenderer:
         source_root: Path,
         resources_root: Path,
     ) -> str:
+        """Materialize one browser-readable statement image in the destination."""
+        if not 1 <= page <= 100:
+            raise ValueError("statement image page is out of range")
         relative = self._safe_relative_resource(source)
         source_path = source_root.joinpath(*relative.parts)
+        if not source_path.suffix:
+            for extension in (".pdf", ".png", ".jpg", ".jpeg", ".svg"):
+                candidate = source_path.with_suffix(extension)
+                if self._safe_file(source_root, candidate):
+                    source_path = candidate
+                    break
         if not self._safe_file(source_root, source_path):
             raise RuntimeError(f"statement image is missing: {source}")
         suffix = source_path.suffix.lower()

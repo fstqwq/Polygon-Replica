@@ -50,7 +50,9 @@ Use the least expensive layer that can observe the contract. Shared domain behav
 
 `tests/scripts/e2e-domserver-900.sh` imports generated DOMjudge packages into DOMserver and lets its judgehost execute the resulting submissions. It also checks out the latest Polygon2DOMjudge revision, converts a product-exported Polygon Linux package, imports that conversion into the real DOMserver, and executes its jury solution. Package structure, ICPC 2025-09, combined interactive/multi-pass, cache behavior, warning propagation, and import round-trip remain focused contract tests rather than DOMserver journey details.
 
-The three Docker journeys run as independent jobs with a 15-minute outer limit. Changes below `tests/docker_e2e/` or to their runner scripts run all three jobs. Fast CI runs the repository pre-push gate on every push, including documentation-only changes. A separate test workflow runs the unit, service, executor, and ordinary E2E resource groups for non-documentation pushes. Documentation-only changes do not start the test or Docker E2E workflows.
+`tests/scripts/e2e-ccpcoj.sh` generates a two-problem native contest bundle with batch and interactive samples, bilingual PDF figures and a contestant download, initializes the upstream CCPCOJ 2.0.315 schema in MySQL, and executes the stock Web image's native importer. It checks persisted turns, localized HTML, judge files and attachment bytes. The official judge image compiles the exported checker and exercises matching output, an incorrect number and excess whitespace. Both CCPCOJ images are pinned by tag and digest.
+
+The four Docker journeys run as independent jobs with a 15-minute outer limit. Changes below `tests/docker_e2e/` or to their runner scripts run all four jobs. Fast CI runs the repository pre-push gate on every push, including documentation-only changes. A separate test workflow runs the unit, service, executor, and ordinary E2E resource groups for non-documentation pushes. Documentation-only changes do not start the test or Docker E2E workflows.
 
 Run the isolated journeys from the repository root:
 
@@ -58,4 +60,5 @@ Run the isolated journeys from the repository root:
 bash tests/scripts/docker-e2e.sh
 bash tests/scripts/e2e-real.sh
 bash tests/scripts/e2e-domserver-900.sh
+bash tests/scripts/e2e-ccpcoj.sh
 ```

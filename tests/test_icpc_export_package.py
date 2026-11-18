@@ -442,6 +442,7 @@ class TestICPCExportPackage(unittest.TestCase):
                 "qoj",
                 "polygon-linux",
                 "nowcoder",
+                "ccpcoj",
             ),
         )
         domjudge_adapter = adapters.require("domjudge")

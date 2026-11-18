@@ -303,7 +303,6 @@ class TestPolygonExportPackage(unittest.TestCase):
             "source_commit": materialization["source_commit"],
             "revision_number": materialization["revision_number"],
             "source_digest": materialization["source_digest"],
-            "statement_samples_version": 1,
             "statement_samples": {"001": {"input": "examples/compat.in", "output": "examples/compat.ans"}},
             "mode": "interactive",
             "pass_limit": pass_limit,

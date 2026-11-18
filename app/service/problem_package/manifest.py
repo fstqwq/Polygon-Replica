@@ -45,16 +45,18 @@ class NativePackageSolutionEntry(TypedDict):
     expected_behavior: str
 
 
-STATEMENT_SAMPLES_VERSION = 1
+class StatementEventPath(TypedDict):
+    source: Literal["interactor", "solution"]
+    path: str
 
 
 class StatementSamplePaths(TypedDict):
+    event_passes: NotRequired[list[list[StatementEventPath]]]
     input: str
     output: str
 
 
 class NativePackageManifest(TypedDict):
-    statement_samples_version: NotRequired[int]
     statement_samples: NotRequired[dict[str, StatementSamplePaths]]
     source_commit: str
     revision_number: int
@@ -266,9 +268,7 @@ def load_manifest(path: Path) -> NativePackageManifest:
         "solutions": [_solution_entry(row) for row in solutions],
         "tests": [_test_entry(row) for row in tests],
     }
-    if "statement_samples_version" in raw:
-        if raw["statement_samples_version"] != STATEMENT_SAMPLES_VERSION:
-            raise ValueError("Unsupported statement sample manifest version; rebuild the Native Package")
+    if "statement_samples" in raw:
         records = raw.get("statement_samples")
         if not isinstance(records, dict):
             raise ValueError("Invalid Native Package statement samples")
@@ -276,8 +276,26 @@ def load_manifest(path: Path) -> NativePackageManifest:
         for test_id, record in records.items():
             if not isinstance(record, dict) or not all(isinstance(record.get(k), str) for k in ("input", "output")):
                 raise ValueError(f"Invalid statement sample resource paths for {test_id}")
-            paths[test_id] = {"input": record["input"], "output": record["output"]}
-        manifest["statement_samples_version"] = STATEMENT_SAMPLES_VERSION
+            pair = StatementSamplePaths(input=record["input"], output=record["output"])
+            if "event_passes" in record:
+                if problem_mode != "interactive":
+                    raise ValueError(f"Unexpected interaction events for ordinary sample {test_id}")
+                passes = record["event_passes"]
+                if not isinstance(passes, list):
+                    raise ValueError(f"Invalid statement event passes for {test_id}")
+                pair["event_passes"] = []
+                for events in passes:
+                    if not isinstance(events, list):
+                        raise ValueError(f"Invalid statement events for {test_id}")
+                    turns: list[StatementEventPath] = []
+                    for event in events:
+                        if (not isinstance(event, dict)
+                                or event.get("source") not in ("interactor", "solution")
+                                or not isinstance(event.get("path"), str)):
+                            raise ValueError(f"Invalid statement event for {test_id}")
+                        turns.append({"source": event["source"], "path": canonical_rel_path(event["path"])})
+                    pair["event_passes"].append(turns)
+            paths[test_id] = pair
         manifest["statement_samples"] = paths
     return manifest
 

@@ -91,6 +91,9 @@ class TestPublicContracts(unittest.TestCase):
         for path in _production_text_files():
             payload = path.read_bytes()
             relative = path.relative_to(ROOT)
+            if relative == Path("app/service/export/adapters/ccpcoj.py"):
+                # The native package displays each language name in its own language.
+                payload = payload.replace('"中文"'.encode("utf-8"), b'""', 1)
             has_non_ascii = any(byte > 0x7F for byte in payload)
             if has_non_ascii and relative not in _INTENTIONALLY_NON_ASCII_TEXT_PATHS:
                 offenders.append(relative.as_posix())

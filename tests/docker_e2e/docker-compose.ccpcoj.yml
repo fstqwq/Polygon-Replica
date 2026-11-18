@@ -1,0 +1,50 @@
+services:
+  db:
+    image: mysql:8.0.32
+    environment:
+      MYSQL_ROOT_PASSWORD: test-local-only
+      MYSQL_ROOT_HOST: "%"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-ptest-local-only"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+  importer:
+    image: ${CCPCOJ_WEB_IMAGE:-csgrandeur/ccpcoj-web2:2.0.315@sha256:3509d3686769b80d3c7a3d13958a6eaabe400b77d0088a3a20fae0a88a3c8477}
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOSTNAME: db
+      DB_DATABASE: csgcpc_synthetic
+      DB_HOSTPORT: "3306"
+      DB_USERNAME: root
+      DB_PASSWORD: test-local-only
+      OJ_NAME: synthetic
+      OJ_STATUS: cpc
+      OJ_MODE: cpcsys
+      PYTHONPATH: /ojweb
+    entrypoint: ["sh", "-ec"]
+    command: ["python3 /ojweb/dbinit.pyc && python3 /fixture/ccpcoj_consumer.py"]
+    volumes:
+      - ./ccpcoj_consumer.py:/fixture/ccpcoj_consumer.py:ro
+      - ${CCPCOJ_FIXTURE_ZIP:?Set the generated fixture path}:/fixture/problem.zip:ro
+  checker:
+    image: ${CCPCOJ_JUDGE_IMAGE:-csgrandeur/ccpcoj-judge2:2.0.315@sha256:123b475bda41ea4aa1b503680c1bb5c0e92b6906f6245ab1f0791a453e34f068}
+    network_mode: none
+    working_dir: /tmp
+    volumes:
+      - ${CCPCOJ_FIXTURE_ZIP:?Set the generated fixture path}:/fixture/problem.zip:ro
+    entrypoint: ["sh", "-ec"]
+    command:
+      - |
+        unzip -j /fixture/problem.zip 'TEST_00001/*'
+        g++ -std=c++17 -I/judge_lib tpj.cc -o checker
+        cp 0001.out actual
+        timeout 5 ./checker 0001.in actual 0001.out
+        for mismatch in number whitespace; do
+          if [ "$$mismatch" = number ]; then printf '9\n' > actual; else cp 0001.out actual; printf '\n' >> actual; fi
+          result=0
+          timeout 5 ./checker 0001.in actual 0001.out || result=$$?
+          test "$$result" -eq 1
+        done

@@ -100,6 +100,9 @@ class TestContestPackageDownload(E2ETestBase):
                     f"format: {snapshot.package_format}\nname: {item.problem_slug}\n",
                 )
                 archive.writestr("tests/1", f"input-{item.problem_id}\n")
+                if snapshot.package_format == "ccpcoj":
+                    archive.writestr("problemlist.json", json.dumps([{"title": item.problem_slug, "problem_new_id": 1}]))
+                    archive.writestr("TEST_00001/0001.in", f"input-{item.problem_id}\n")
                 if snapshot.package_format == "domjudge":
                     archive.writestr(
                         "domjudge-problem.ini",
@@ -164,7 +167,14 @@ class TestContestPackageDownload(E2ETestBase):
 
     def _check_archive(self, package: zipfile.ZipFile, fmt: str, passes: int) -> None:
         answer = b"[00:01] judge-log\n" if passes == 1 else b""
-        if fmt == "polygon-linux":
+        if fmt == "ccpcoj":
+            record, = json.loads(package.read("problemlist.json"))
+            self.assertEqual(record["spj"], "2")
+            samples = json.loads(record["sample_input"])
+            self.assertEqual(samples["view"], "time")
+            self.assertTrue(all(case["turns"] for case in samples["data"]))
+            self.assertEqual(package.read("TEST_00001/0001.out"), answer)
+        elif fmt == "polygon-linux":
             root = ET.fromstring(package.read("problem.xml"))
             self.assertTrue(root.attrib["url"].endswith("/alice/game"))
             source = root.find("assets/interactor/source")
@@ -260,7 +270,12 @@ class TestContestPackageDownload(E2ETestBase):
         self._republish_plain_samples()
         native = self._publish_interaction(passes)
         supported = {"polygon-linux", "qoj", "domjudge", "icpc-2025-09"}
-        self.assertEqual(set(self.registry.formats), supported | {"nowcoder"})
+        self.assertEqual(set(self.registry.formats), supported | {"nowcoder", "ccpcoj"})
+        if passes == 1:
+            supported.add("ccpcoj")
+        else:
+            with self.assertRaisesRegex(ValueError, "single-pass"):
+                runtime.export_service.create_export("alice/game", "ccpcoj", native_package_id=native["id"])
         with patch.object(runtime.tex_compile_service, "sandbox", PdfSandbox()):
             for fmt in sorted(supported):
                 with self.subTest(fmt=fmt, passes=passes):
@@ -270,6 +285,14 @@ class TestContestPackageDownload(E2ETestBase):
                     response = contest_packages_download("example-contest", self.user, fmt)
                     try:
                         with zipfile.ZipFile(response.path) as outer:
+                            if fmt == "ccpcoj":
+                                records = json.loads(outer.read("problemlist.json"))
+                                self.assertEqual([row["problem_new_id"] for row in records], list(range(1, len(records) + 1)))
+                                for index, row in enumerate(records, 1):
+                                    self.assertIn(f"TEST_{index:05}/0001.in", outer.namelist())
+                                    if row["spj"] == "2":
+                                        self.assertEqual(json.loads(row["sample_input"])["view"], "time")
+                                continue
                             ordinary = outer.read("packages/A-alice-alpha.zip")
                             if fmt == "polygon-linux":
                                 with zipfile.ZipFile(io.BytesIO(ordinary)) as plain:
@@ -300,6 +323,29 @@ class TestContestPackageDownload(E2ETestBase):
 
     def test_two_pass_interactive_archive_matrix(self) -> None:
         self._check_download_matrix(2)
+
+    def test_ccpcoj_reads_declared_events_without_a_manifest_index(self) -> None:
+        package = self._publish_interaction(1)
+        adapter = self.registry.require("ccpcoj")
+        with self.packages.open_reader(package["id"]) as reader:
+            del reader.manifest["statement_samples"]
+
+            def build(name: str) -> dict:
+                target = self.root / name
+                adapter.build(reader, target=target, canonical_problem_slug="alice/game")
+                record, = json.loads((target / "problemlist.json").read_bytes())
+                return json.loads(record["sample_input"])
+
+            samples = build("events")["data"]
+            self.assertEqual([len(case["turns"]) for case in samples], [3, 5])
+            self.assertEqual(samples[0]["turns"][1], {"role": "out", "text": "A\n4\n"})
+            for event in reader.root.glob("statement-build/*/examples/sample-2/pass-1/event-1.txt"):
+                event.unlink()
+            with self.assertRaisesRegex(ValueError, r"119 .*event-1\.txt"):
+                build("missing")
+            for test in reader.manifest["tests"]:
+                test["sample"] = False
+            self.assertEqual(build("empty")["data"], [])
 
     def test_polygon_old_archives_rebuild_and_missing_display_resource_retries(self) -> None:
         package = self.native_packages[0]
@@ -332,8 +378,13 @@ class TestContestPackageDownload(E2ETestBase):
                 problem_id=pid, native_package_id=mid, package_format="polygon-linux",
             ))
             old_manifest = dict(manifest)
-            del old_manifest["statement_samples_version"], old_manifest["statement_samples"]
+            del old_manifest["statement_samples"]
+            old_manifest["statement_samples_version"] = 1
             replace_native({**original, manifest_path: json.dumps(old_manifest).encode()})
+            _, archive_path, _ = export.create_export("alice/alpha", "ccpcoj", native_package_id=mid)
+            with zipfile.ZipFile(archive_path) as archive:
+                record, = json.loads(archive.read("problemlist.json"))
+                self.assertEqual(json.loads(record["sample_output"])["data"], ["display output\n"])
             with self.assertRaisesRegex(ValueError, "Rebuild the Native Package"):
                 export.create_export("alice/alpha", "polygon-linux", native_package_id=mid)
             with self.assertRaises(HTTPException) as error:
@@ -341,10 +392,7 @@ class TestContestPackageDownload(E2ETestBase):
             self.assertIn("A alice/alpha [polygon-linux]", str(error.exception.detail))
             self.assertIn("Rebuild the Native Package", str(error.exception.detail))
 
-            repaired = self.packages.ensure_native_package(
-                self.packages.published_revision(pid), verification_builder(pid),
-            )
-            self.assertEqual(repaired["id"], mid)
+            replace_native(original)
             bad = dict(original)
             sample_path = manifest["statement_samples"]["001"]["input"]
             del bad["statement-build/english/" + sample_path]
@@ -420,6 +468,13 @@ class TestContestPackageDownload(E2ETestBase):
                     f"example-contest-{package_format}-packages.zip",
                 )
                 with zipfile.ZipFile(download.path) as archive:
+                    if package_format == "ccpcoj":
+                        records = json.loads(archive.read("problemlist.json"))
+                        self.assertEqual([row["title"] for row in records], [item.problem_slug for item in snapshot.items])
+                        for item in snapshot.items:
+                            self.assertEqual(archive.read(f"TEST_{item.ordinal:05}/0001.in"), f"input-{item.problem_id}\n".encode())
+                        self.assertEqual(archive.read("statements.en.pdf"), b"%PDF-english\n")
+                        continue
                     self.assertEqual(
                         archive.namelist(),
                         [
@@ -558,7 +613,7 @@ class TestContestPackageDownload(E2ETestBase):
 
                 filename = (
                     f"external-{self.problem_ids[0]}.zip"
-                    if package_format == "domjudge"
+                    if package_format in {"domjudge", "ccpcoj"}
                     else "A-alice-alpha.zip"
                 )
                 self.assertEqual(

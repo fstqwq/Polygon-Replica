@@ -4,6 +4,7 @@ from types import MappingProxyType
 from typing import Mapping
 
 from app.config import ConfigValues
+from app.service.export.adapters.ccpcoj import CCPCOJPackageAdapter
 from app.service.export.adapters.domjudge import DOMjudgePackageAdapter
 from app.service.export.adapters.icpc_2025 import ICPC2025PackageAdapter
 from app.service.export.adapters.nowcoder import NowcoderPackageAdapter
@@ -38,7 +39,8 @@ class PackageAdapterRegistry:
             tex_compile_service,
         )
         nowcoder: PackageAdapter = NowcoderPackageAdapter()
-        adapters = (domjudge, icpc_2025, qoj, polygon, nowcoder)
+        ccpcoj: PackageAdapter = CCPCOJPackageAdapter(config_values, tex_compile_service)
+        adapters = (domjudge, icpc_2025, qoj, polygon, nowcoder, ccpcoj)
         by_format = {adapter.format: adapter for adapter in adapters}
         if len(by_format) != len(adapters):
             raise RuntimeError("duplicate package adapter format")

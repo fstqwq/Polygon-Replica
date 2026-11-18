@@ -5,7 +5,6 @@ Consumers receive a validated package reader and never a workspace, Git handle, 
 verification artifact reference.
 """
 
-import json
 import os
 import shutil
 import stat
@@ -40,7 +39,6 @@ from app.service.problem_package.manifest import (
     NativePackageFileEntry,
     NativePackageManifest,
     NativePackageSolutionEntry,
-    STATEMENT_SAMPLES_VERSION,
     StatementSamplePaths,
     statement_sample_resource,
     NativePackageTestEntry,
@@ -966,12 +964,18 @@ class ProblemPackageService:
             statement_sample_max_bytes=statement_sample_max_bytes,
             problem_limits=problem_config_limits(self.db.config_values),
         )
-        display = {
-            test_id: StatementSamplePaths(input=pair["inputFile"], output=pair["outputFile"])
-            for test_id, pair in zip(
-                examples_bundle["sample_source_ids"], examples_bundle["sample_tests"], strict=True
-            )
-        }
+        display: dict[str, StatementSamplePaths] = {}
+        for test_id, pair, sample in zip(
+            examples_bundle["sample_source_ids"], examples_bundle["sample_tests"],
+            examples_bundle["context"]["samples"], strict=True,
+        ):
+            record = StatementSamplePaths(input=pair["inputFile"], output=pair["outputFile"])
+            if sample["presentation"] == "interaction":
+                record["event_passes"] = [
+                    [{"source": event["source"], "path": event["textFile"]} for event in run["events"]]
+                    for run in sample["passes"]
+                ]
+            display[test_id] = record
         languages = statement_languages(render_source)
         build_root = package_root / STATEMENT_BUILD_DIR
         for language in languages:
@@ -986,9 +990,12 @@ class ProblemPackageService:
                 problem_limits=problem_config_limits(self.db.config_values),
             )
 
-            for test_id, pair in display.items():
-                statement_sample_resource(build_root / language, test_id, pair["input"])
-                statement_sample_resource(build_root / language, test_id, pair["output"])
+            for test_id, sample_paths in display.items():
+                statement_sample_resource(build_root / language, test_id, sample_paths["input"])
+                statement_sample_resource(build_root / language, test_id, sample_paths["output"])
+                for events in sample_paths.get("event_passes", []):
+                    for event in events:
+                        statement_sample_resource(build_root / language, test_id, event["path"])
         return display
 
     def _build_native_package(
@@ -1049,7 +1056,6 @@ class ProblemPackageService:
             }
             manifest_path = package_root / TEST_DATA_DIR / "manifest.json"
             manifest_path.parent.mkdir(parents=True, exist_ok=True)
-            manifest["statement_samples_version"] = STATEMENT_SAMPLES_VERSION
             manifest["statement_samples"] = self._materialize_statement_build(
                 snapshot=snapshot,
                 render_source=render_source,
@@ -1358,17 +1364,10 @@ class ProblemPackageService:
             if existing is not None:
                 if existing["status"] == "available":
                     try:
-                        archive = self._validate_archive_checksum(existing)
-                        with zipfile.ZipFile(archive) as package:
-                            with package.open(f"{TEST_DATA_DIR}/manifest.json") as stream:
-                                version = json.load(stream).get("statement_samples_version")
+                        self._validate_archive_checksum(existing)
                     except Exception as exc:
                         self._invalidate_materialization(existing, str(exc))
                     else:
-                        if version != STATEMENT_SAMPLES_VERSION:
-                            return self._run_materialization_build(
-                                revision, verification_builder, invalidate_exports=True
-                            )
                         if (
                             reuse_unverified
                             or self.native_package_verified(existing)

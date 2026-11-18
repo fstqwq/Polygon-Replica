@@ -42,6 +42,34 @@ from app.service.statement.render import (
 from app.service.statement.tex_compile import TexCompileResult, TexCompileService
 
 
+EXACT_OUTPUT_CHECKER = """#include \"testlib.h\"
+#include <fstream>
+
+int main(int argc, char* argv[]) {
+    registerTestlibCmd(argc, argv);
+    std::ifstream output(argv[2], std::ios::binary);
+    std::ifstream answer(argv[3], std::ios::binary);
+    if (!output || !answer) {
+        quitf(_fail, \"cannot open output or answer\");
+    }
+    while (true) {
+        const int actual = output.get();
+        const int expected = answer.get();
+        if (actual != expected) {
+            quitf(_wa, \"output differs from answer\");
+        }
+        if (actual == std::char_traits<char>::eof()) {
+            break;
+        }
+    }
+    // The binary comparison consumed the output using a separate file handle.
+    // Close testlib's unread handle before its automatic trailing-output check.
+    ouf.close();
+    quitf(_ok, \"output matches answer\");
+}
+"""
+
+
 type PackageFormat = str
 
 

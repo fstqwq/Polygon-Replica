@@ -12,7 +12,7 @@ on:
       - "*.md"
       - "**/*.md"
       # Non-Docker tests and CI harnesses. Docker E2E inputs under
-      # tests/docker_e2e/ and the three E2E shell entry points remain tracked.
+      # tests/docker_e2e/ and the E2E shell entry points remain tracked.
       - "tests/*.py"
       - "tests/resource_groups.json"
       - "tests/simulation/**"
@@ -156,3 +156,27 @@ jobs:
         name: e2e-real-domserver-900-logs
         path: .e2e/e2e-domserver-900
         if-no-files-found: warn
+
+  e2e-ccpcoj:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        persist-credentials: false
+    - uses: actions/setup-python@v6
+      with:
+        python-version: "3.14"
+        cache: pip
+    - name: Install export runtime
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y bubblewrap p7zip-full pandoc poppler-utils librsvg2-bin
+        sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        pip install -r requirements.txt
+        git config --global user.name "Polygon Replica CI"
+        git config --global user.email "ci@polygon-replica.local"
+    - name: Import a generated package into CCPCOJ 2.0.315
+      run: bash tests/scripts/e2e-ccpcoj.sh

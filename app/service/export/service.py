@@ -11,7 +11,7 @@ from pathlib import Path
 from app.config import ConfigValues
 from app.db import DB
 from app.service.disk.export_store import (
-    POLYGON_EXPORT_PREFIX,
+    export_prefix,
     ExportArchiveRow,
     ExportJobRow,
     ExportProblemRow,
@@ -119,7 +119,7 @@ class ExportService:
     ) -> Path | None:
         row = self._store.export_archive_row(int(problem_id), export_id)
         if row is None or (
-            row["export_type"] == "polygon-linux" and not export_id.startswith(POLYGON_EXPORT_PREFIX)
+            not export_id.startswith(export_prefix(row["export_type"]))
         ):
             return None
         stored_filename = Path(row["filename"]).name
@@ -284,7 +284,7 @@ class ExportService:
         if not export_id:
             return None
         row = self._store.export_archive_row(problem_id, export_id)
-        if row is not None and (package_format != "polygon-linux" or export_id.startswith(POLYGON_EXPORT_PREFIX)):
+        if row is not None and export_id.startswith(export_prefix(package_format)):
             path = self._verified_archive_row(row)
             if path is not None:
                 return CachedExternalPackage(
@@ -340,7 +340,7 @@ class ExportService:
             or native_package["problem_id"] != problem_row["id"]
         ):
             raise ValueError("Native Package does not belong to the problem")
-        prefix = POLYGON_EXPORT_PREFIX if package_format == "polygon-linux" else "e-"
+        prefix = export_prefix(package_format)
         export_id = f"{prefix}{uuid.uuid4().hex[:10]}"
         public_slug = self._public_problem_slug(problem_row["slug"])
         filename = (

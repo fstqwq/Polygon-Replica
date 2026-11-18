@@ -10,6 +10,7 @@ from urllib.parse import quote
 
 from app.config import ConfigValues
 from app.service.export.adapters.shared import (
+    EXACT_OUTPUT_CHECKER,
     PackageAdapterPlan,
     PackageAdapterSupport,
     PackageFormat,
@@ -22,7 +23,6 @@ from app.service.problem.runtime_config import (
 )
 from app.service.problem.standard_checker import detect_standard_checker
 from app.service.problem_package.manifest import (
-    STATEMENT_SAMPLES_VERSION,
     NativePackageSolutionEntry,
     statement_sample_resource,
     NativePackageTestEntry,
@@ -37,29 +37,6 @@ from app.service.statement.tex_compile import TexCompileService
 
 
 _CPP_TYPE = "cpp.g++17"
-_EXACT_OUTPUT_CHECKER = """#include \"testlib.h\"
-#include <fstream>
-
-int main(int argc, char* argv[]) {
-    registerTestlibCmd(argc, argv);
-    std::ifstream output(argv[2], std::ios::binary);
-    std::ifstream answer(argv[3], std::ios::binary);
-    if (!output || !answer) {
-        quitf(_fail, \"cannot open output or answer\");
-    }
-    while (true) {
-        const int actual = output.get();
-        const int expected = answer.get();
-        if (actual != expected) {
-            quitf(_wa, \"output differs from answer\");
-        }
-        if (actual == std::char_traits<char>::eof()) {
-            break;
-        }
-    }
-    quitf(_ok, \"output matches answer\");
-}
-"""
 
 _SOLUTION_TAGS = {
     "accepted": "accepted",
@@ -114,7 +91,7 @@ class PolygonLinuxPackageAdapter(PackageAdapterSupport):
     def plan(self, reader: NativePackageReader) -> PackageAdapterPlan:
         """Validate Polygon metadata without narrowing its positive run count."""
 
-        if reader.manifest.get("statement_samples_version") != STATEMENT_SAMPLES_VERSION:
+        if "statement_samples" not in reader.manifest:
             raise ValueError("Rebuild the Native Package for the published revision before exporting Polygon statement samples")
         self._problem_config(reader)
         languages = self._language_folders(reader.root)
@@ -416,7 +393,7 @@ class PolygonLinuxPackageAdapter(PackageAdapterSupport):
             checker_target = target / "files" / "check.cpp"
             if checker is None:
                 checker_target.write_text(
-                    _EXACT_OUTPUT_CHECKER,
+                    EXACT_OUTPUT_CHECKER,
                     encoding="utf-8",
                     newline="\n",
                 )
