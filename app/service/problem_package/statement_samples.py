@@ -34,7 +34,7 @@ def hydrate_native_package_statement_samples(
     manifest_by_id = {row["id"]: row for row in native_package.manifest["tests"]}
     changed = False
     for row in rows:
-        if not row["sample"]:
+        if not row["sample"] or row["sample_json"] is not None:
             continue
         materialized = manifest_by_id.get(str(row["id"]))
         if materialized is None:

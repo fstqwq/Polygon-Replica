@@ -393,6 +393,41 @@ class TestICPCExportPackage(unittest.TestCase):
             },
         )
 
+    def test_domjudge_preserves_transcript_and_hydrates_plain_sample_in_same_export(self) -> None:
+        reader = self._adapter_reader(mode="interactive", pass_limit=1)
+        transcript = {
+            "presentation": "interaction",
+            "passes": [{"number": 1, "events": [
+                {"source": "interactor", "content": "query"},
+                {"source": "solution", "content": "reply"},
+                {"source": "interactor", "content": "done"},
+            ]}],
+        }
+        structured = {"id": "001", "kind": "manual", "sample": True, "sample_json": transcript}
+        plain = {"id": "002", "kind": "manual", "sample": True}
+        spec_path = reader.root / "tests/spec.json"
+        spec_path.write_text(json.dumps({"tests": [structured, plain]}), encoding="utf-8")
+        data = reader.root / "test-data/tests/002"
+        data.mkdir()
+        (data / "input").write_bytes(b"plain input\n")
+        (data / "answer").write_bytes(b"plain answer\n")
+        reader.manifest["tests"].append({
+            "id": "002", "kind": "manual", "sample": True,
+            "input": describe_file(data / "input", root=reader.root),
+            "answer": describe_file(data / "answer", root=reader.root),
+        })
+
+        adapter = PackageAdapterRegistry(self._adapter_config_values(), self.tex_compile).require("domjudge")
+        adapter.build(reader, target=self.package, canonical_problem_slug="owner/projected-problem")
+
+        first, second = json.loads(spec_path.read_text(encoding="utf-8"))["tests"]
+        self.assertEqual(first["sample_json"], transcript)
+        self.assertNotIn("sample_input", first)
+        self.assertNotIn("sample_output", first)
+        self.assertEqual(second["sample_input"], "plain input\n")
+        self.assertEqual(second["sample_output"], "plain answer\n")
+        self.assertTrue((self.package / "problem_statement/problem.pdf").is_file())
+
     def test_adapters_publish_disjoint_strict_and_domjudge_layouts(self) -> None:
         reader = self._adapter_reader(mode="interactive", pass_limit=2)
         adapters = PackageAdapterRegistry(self._adapter_config_values(), self.tex_compile)

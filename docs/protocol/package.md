@@ -169,6 +169,8 @@ changes or rejects the Polygon run count.
 
 A contest bundle freezes the canonical problem order and the ready native package for every current published revision. A missing or unavailable native package rejects the request. `Build All Packages` and the single-problem package workflow own native package creation and verification.
 
+Before releasing a contest, download the complete contest bundle in the intended target format and confirm that it contains every roster problem and expected statement PDF. This exercises target-specific packaging after native verification.
+
 The download resolves and verifies the selected external package cache for every frozen native package. It submits every missing external package before waiting, then assembles the contest only from verified cache archives. A failed child prevents the outer archive, while successful child packages remain reusable. Before assembly, the download confirms that the contest, native packages, and caller access still match the frozen state.
 
 | Area | Contract |
