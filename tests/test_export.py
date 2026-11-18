@@ -352,9 +352,15 @@ class TestPublishedRevisionExport(E2ETestBase):
             self.assertNotIn("dirty-only.txt", names)
             self.assertNotIn("statement/examples.tex", names)
             manifest = json.loads(package.read("test-data/manifest.json"))
+            self.assertEqual(manifest["statement_samples_version"], 1)
+            self.assertEqual(manifest["statement_samples"], {
+                "001": {"input": "examples/sample-1/display.in", "output": "examples/sample-1/display.ans"},
+            })
             self.assertEqual(
                 set(manifest),
                 {
+                    "statement_samples_version",
+                    "statement_samples",
                     "mode",
                     "pass_limit",
                     "revision_number",

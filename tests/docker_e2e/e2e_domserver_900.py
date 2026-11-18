@@ -621,6 +621,9 @@ def _export_polygon_and_convert() -> tuple[Path, Path]:
         expected = [{"input": "JudgeDisplaySeven\n\n", "output": "\nTeamDisplayFourteen\n"}]
         if samples != expected:
             raise RuntimeError(f"Polygon JSON lost the two-column interaction layout: {samples!r}")
+        for field, name in (("input", "example.01"), ("output", "example.01.a")):
+            if package.read(prefix + name) != samples[0][field].encode():
+                raise RuntimeError(f"Polygon {name} differs from sampleTests.{field}")
         pdf = package.read("statements/.pdf/english/problem.pdf")
         visible = subprocess.run(
             ["pdftotext", "-layout", "-", "-"], input=pdf, capture_output=True, check=True,
