@@ -11,7 +11,6 @@ from app.service.platform.maintenance.plan import (
     ARTIFACT_TABLES,
     CLEANUP_FILESYSTEM_CLASSES,
     REDUNDANT_DATABASE_INDEXES,
-    ArtifactUsageSnapshot,
     CleanupFilesystemClass,
     MaintenanceResult,
 )
@@ -56,28 +55,6 @@ class ArtifactCleanupService:
         self._judgehost = judgehost_task_service
         self._verification_task_store = verification_task_store
         self._reset_process_job_tracking = reset_process_job_tracking
-
-    def usage_snapshot(self) -> ArtifactUsageSnapshot:
-        roots = self._filesystem.roots(CLEANUP_FILESYSTEM_CLASSES)
-        artifacts_bytes, artifacts_files = self._filesystem.tree_usage(
-            roots["artifacts_root"]
-        )
-        cache_bytes, cache_files = self._filesystem.tree_usage(
-            roots["cache_root"]
-        )
-        table_rows = self._database.table_counts(ARTIFACT_TABLES)
-        artifact_rows = sum(table_rows.values())
-        return {
-            "artifacts_bytes": artifacts_bytes,
-            "artifacts_files": artifacts_files,
-            "cache_bytes": cache_bytes,
-            "cache_files": cache_files,
-            "total_bytes": artifacts_bytes + cache_bytes,
-            "total_files": artifacts_files + cache_files,
-            "artifact_rows": artifact_rows,
-            "removable_rows": artifact_rows,
-            "table_rows": table_rows,
-        }
 
     def run(
         self,

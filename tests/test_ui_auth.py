@@ -1158,6 +1158,10 @@ class TestUIAuth(UIHelpersMixin, E2ETestBase):
         gate = runtime.maintenance_admission_gate
 
         with TestClient(app, base_url="https://testserver") as client:
+            overview = client.get("/admin", headers=headers)
+            self.assertEqual(overview.status_code, 200)
+            self.assertIn("Clear generated artifacts", overview.text)
+            self.assertNotIn("Current estimate:", overview.text)
             self.assertTrue(gate.enter_request())
             try:
                 drained = client.post(

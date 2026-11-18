@@ -14,15 +14,6 @@ class ArtifactCleanupDatabase:
         self._db = db
         self._database_path = database_path
 
-    def table_counts(self, tables: tuple[str, ...]) -> dict[str, int]:
-        expressions = [
-            f"(SELECT COUNT(*) FROM {table}) AS {table}" for table in tables
-        ]
-        row = self._db.fetch_one("SELECT " + ", ".join(expressions))
-        if row is None:
-            raise RuntimeError("artifact usage query returned no row")
-        return {table: int(row[table]) for table in tables}
-
     def reset_tables(
         self,
         tables: tuple[str, ...],

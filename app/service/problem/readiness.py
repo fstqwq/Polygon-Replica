@@ -80,6 +80,7 @@ class PackageReadiness(TypedDict):
     native_package_id: str | None
     published_commit: str
     published_revision_number: int | None
+    archive_size_bytes: int
 
 
 class ProblemReadiness(TypedDict):
@@ -156,6 +157,7 @@ class ProblemReadinessService:
                 "tone": "danger",
                 "reason": "readiness unavailable",
                 "native_package_id": None,
+                "archive_size_bytes": 0,
                 "published_commit": "",
                 "published_revision_number": None,
             },
@@ -184,6 +186,7 @@ class ProblemReadinessService:
                 "tone": "normal",
                 "reason": "",
                 "native_package_id": readiness["native_package_id"],
+                "archive_size_bytes": readiness["archive_size_bytes"],
                 "published_commit": readiness["published_commit"],
                 "published_revision_number": readiness["published_revision_number"],
             }
@@ -195,6 +198,7 @@ class ProblemReadinessService:
                 "tone": "warning",
                 "reason": readiness["missing_reason"],
                 "native_package_id": readiness["native_package_id"],
+                "archive_size_bytes": readiness["archive_size_bytes"],
                 "published_commit": readiness["published_commit"],
                 "published_revision_number": readiness["published_revision_number"],
             }
@@ -206,6 +210,7 @@ class ProblemReadinessService:
                 "tone": "normal",
                 "reason": "",
                 "native_package_id": None,
+                "archive_size_bytes": 0,
                 "published_commit": readiness["published_commit"],
                 "published_revision_number": readiness["published_revision_number"],
             }
@@ -216,6 +221,7 @@ class ProblemReadinessService:
             "tone": "danger",
             "reason": readiness["missing_reason"],
             "native_package_id": None,
+            "archive_size_bytes": 0,
             "published_commit": readiness["published_commit"],
             "published_revision_number": readiness["published_revision_number"],
         }

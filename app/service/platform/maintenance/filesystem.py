@@ -95,25 +95,18 @@ class ArtifactCleanupFilesystem:
         return result
 
     @staticmethod
-    def tree_usage(root: Path) -> tuple[int, int]:
+    def tree_bytes(root: Path) -> int:
         total = 0
-        files = 0
         if not root.exists() or root.is_symlink():
-            return 0, 0
+            return 0
         for directory, _dirnames, filenames in os.walk(root, followlinks=False):
             for filename in filenames:
                 path = Path(directory) / filename
                 try:
                     if not path.is_symlink():
                         total += int(path.stat().st_size)
-                        files += 1
                 except OSError:
                     continue
-        return total, files
-
-    @classmethod
-    def tree_bytes(cls, root: Path) -> int:
-        total, _files = cls.tree_usage(root)
         return total
 
     @classmethod

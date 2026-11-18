@@ -419,6 +419,8 @@ class TestContestAccessActions(ContestActionBase):
         self.assertIn("Contest reader statement.", review_page.body.decode("utf-8"))
         self.assertEqual(review_build.status_code, 303)
         self.assertEqual(pdf_page.status_code, 200)
+        self.assertEqual(pdf_page.headers["cache-control"], "private, max-age=30")
+        self.assertEqual(pdf_page.headers["vary"], "Cookie")
         self.assertEqual(Path(pdf_page.path).read_bytes(), b"%PDF-reader")
         preview = db_fetch_one(
             "SELECT id,status FROM statement_previews WHERE contest_id=? AND actor_user_id=? AND output_kind='html'",

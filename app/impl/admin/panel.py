@@ -80,15 +80,6 @@ class JudgehostView(TypedDict):
     recent_avg_per_case_sec: float | None
 
 
-class ArtifactUsageView(TypedDict):
-    total_size_label: str
-    total_files_label: str
-    artifacts_size_label: str
-    cache_size_label: str
-    verification_count_label: str
-    removable_rows_label: str
-
-
 def _as_bool_form_value(raw: str) -> bool:
     return form_text(raw).strip().lower() in {"1", "true", "yes", "on"}
 
@@ -167,18 +158,6 @@ def _storage_size_label(num_bytes: int) -> str:
         if value < 1024.0 or unit == "TiB":
             return f"{value:.1f} {unit}"
     raise AssertionError("unreachable storage unit")
-
-
-def _artifact_usage_view() -> ArtifactUsageView:
-    usage = runtime().artifact_cleanup_service.usage_snapshot()
-    return {
-        "total_size_label": _storage_size_label(usage["total_bytes"]),
-        "total_files_label": f"{usage['total_files']:,}",
-        "artifacts_size_label": _storage_size_label(usage["artifacts_bytes"]),
-        "cache_size_label": _storage_size_label(usage["cache_bytes"]),
-        "verification_count_label": f"{usage['table_rows']['verifications']:,}",
-        "removable_rows_label": f"{usage['removable_rows']:,}",
-    }
 
 
 def _source_backup_view() -> dict[str, object]:
@@ -309,7 +288,6 @@ def admin_overview_page(
             "maintenance_status": runtime().maintenance_service.snapshot(
                 exclude_current_request=True
             ),
-            "artifact_usage": _artifact_usage_view(),
             "source_backup": _source_backup_view(),
         }
     )

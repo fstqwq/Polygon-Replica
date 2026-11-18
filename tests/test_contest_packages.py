@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.impl.contest.package import _prepare_external_packages
+from app.impl.contest.overview import contest_overview_page
 from app.impl.runtime.dependency import bind_application
 from app.main import app, runtime
 from app.service.contest.package import (
@@ -21,6 +22,8 @@ from app.service.problem_package.store import MaterializationRow
 from tests.common import E2ETestBase
 from tests.db_helpers import db_fetch_all, db_fetch_one
 from tests.package_builders import PdfSandbox
+from tests.ui_support import _request
+from jinja2.filters import do_filesizeformat
 from tests.package_support import (
     blocked_export_queue,
     publish_problem,
@@ -115,6 +118,14 @@ class TestContestPackageDownload(E2ETestBase):
         return result
 
     def test_freeze_requires_ready_packages_and_intersects_languages(self) -> None:
+        overview = contest_overview_page(
+            _request("/contests/example-contest/overview"), "example-contest", self.user,
+        )
+        for package in self.native_packages:
+            self.assertIn(
+                do_filesizeformat(package["archive_size_bytes"], binary=True),
+                overview.body.decode(),
+            )
         snapshot = self._snapshot()
 
         self.assertEqual(snapshot.source_generation, self.contest.contest_context("example-contest")["source_generation"])

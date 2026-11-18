@@ -287,4 +287,5 @@ def contest_statement_pdf_page(
         media_type="application/pdf",
         filename=f"{ctx['contest']['slug']}-{safe_language}-statements.pdf",
         content_disposition_type="inline",
+        headers={"Cache-Control": "private, max-age=30", "Vary": "Cookie"},
     )

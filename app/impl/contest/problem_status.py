@@ -1,5 +1,7 @@
 from typing import Literal, TypedDict
 
+from jinja2.filters import do_filesizeformat
+
 from app.impl.workspace.context_model import workspace_revision_notice
 from app.service.problem.readiness import ProblemReadiness, ReadinessTone
 
@@ -48,6 +50,7 @@ def _package_item(readiness: ProblemReadiness) -> ContestProblemStatusItem:
         return _item(
             "Package",
             "ready" if package["verified"] else "ready (not verified)",
+            note=do_filesizeformat(package["archive_size_bytes"], binary=True),
         )
     if state == "stale":
         return _item(

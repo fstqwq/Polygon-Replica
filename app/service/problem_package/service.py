@@ -232,6 +232,7 @@ class NativePackageReadiness(TypedDict):
     status: NativePackageStatus
     verified: bool
     missing_reason: str
+    archive_size_bytes: int
 
 
 class ProblemPackageService:
@@ -437,6 +438,7 @@ class ProblemPackageService:
                 "published_revision_number": None,
                 "native_package_revision_number": None,
                 "native_package_id": "",
+                "archive_size_bytes": 0,
                 "status": "none",
                 "verified": False,
                 "missing_reason": error or "no published Git revision",
@@ -448,6 +450,7 @@ class ProblemPackageService:
                 "published_revision_number": published.revision_number,
                 "native_package_revision_number": materialization["revision_number"],
                 "native_package_id": materialization["id"],
+                "archive_size_bytes": materialization["archive_size_bytes"],
                 "status": "ready",
                 "verified": verified_by_id.get(materialization["id"], False),
                 "missing_reason": "",
@@ -459,6 +462,7 @@ class ProblemPackageService:
                 "published_revision_number": published.revision_number,
                 "native_package_revision_number": None,
                 "native_package_id": "",
+                "archive_size_bytes": 0,
                 "status": "queued",
                 "verified": False,
                 "missing_reason": "",
@@ -470,6 +474,7 @@ class ProblemPackageService:
                 "published_revision_number": published.revision_number,
                 "native_package_revision_number": previous_materialization["revision_number"],
                 "native_package_id": previous_materialization["id"],
+                "archive_size_bytes": previous_materialization["archive_size_bytes"],
                 "status": "stale",
                 "verified": verified_by_id.get(
                     previous_materialization["id"],
@@ -483,6 +488,7 @@ class ProblemPackageService:
             "published_revision_number": published.revision_number,
             "native_package_revision_number": None,
             "native_package_id": "",
+            "archive_size_bytes": 0,
             "status": "none",
             "verified": False,
             "missing_reason": (

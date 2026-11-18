@@ -406,27 +406,6 @@ class TestArtifactCleanup(unittest.TestCase):
         cache_file.write_bytes(b"cache" * 1024)
         return durable_files
 
-    def test_usage_snapshot_matches_cleanup_scope(self) -> None:
-        self._seed_generated_data()
-
-        usage = self.cleanup.usage_snapshot()
-
-        self.assertEqual(usage["artifacts_bytes"], len(b"artifact" * 1024))
-        self.assertEqual(usage["artifacts_files"], 1)
-        self.assertEqual(usage["cache_bytes"], len(b"cache" * 1024))
-        self.assertEqual(usage["cache_files"], 1)
-        self.assertEqual(
-            usage["total_bytes"],
-            len(b"artifact" * 1024) + len(b"cache" * 1024),
-        )
-        self.assertEqual(usage["total_files"], 2)
-        expected_table_rows = {
-            table: self._count(table) for table in usage["table_rows"]
-        }
-        self.assertEqual(usage["table_rows"], expected_table_rows)
-        self.assertEqual(usage["artifact_rows"], sum(expected_table_rows.values()))
-        self.assertEqual(usage["removable_rows"], usage["artifact_rows"])
-
     def test_cleanup_deletes_derived_epoch_and_preserves_durable_data(self) -> None:
         durable_files = self._seed_generated_data()
         history, accepted, reason = self.worker_queue.submit(name="completed-work", fn=lambda: None)

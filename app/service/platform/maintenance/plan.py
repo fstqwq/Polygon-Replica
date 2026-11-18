@@ -40,18 +40,6 @@ CLEANUP_FILESYSTEM_CLASSES: tuple[CleanupFilesystemClass, ...] = (
 )
 
 
-class ArtifactUsageSnapshot(TypedDict):
-    artifacts_bytes: int
-    artifacts_files: int
-    cache_bytes: int
-    cache_files: int
-    total_bytes: int
-    total_files: int
-    artifact_rows: int
-    removable_rows: int
-    table_rows: dict[str, int]
-
-
 class SourceTreeStats(TypedDict):
     entries: int
     bytes: int
