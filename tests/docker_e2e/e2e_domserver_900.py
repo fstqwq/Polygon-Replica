@@ -616,6 +616,11 @@ def _export_polygon_and_convert() -> tuple[Path, Path]:
     polygon_archive = output_root / "interactive-polygon-linux.zip"
     shutil.copy2(archive, polygon_archive)
     with zipfile.ZipFile(polygon_archive) as package:
+        prefix = "statements/english/"
+        samples = json.loads(package.read(prefix + "problem-properties.json"))["sampleTests"]
+        expected = [{"input": "JudgeDisplaySeven\n\n", "output": "\nTeamDisplayFourteen\n"}]
+        if samples != expected:
+            raise RuntimeError(f"Polygon JSON lost the two-column interaction layout: {samples!r}")
         pdf = package.read("statements/.pdf/english/problem.pdf")
         visible = subprocess.run(
             ["pdftotext", "-layout", "-", "-"], input=pdf, capture_output=True, check=True,
