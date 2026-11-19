@@ -146,8 +146,8 @@ def statement_sample_resource(build_root: Path, test_id: str, path: str) -> Path
     label = f"statement sample {test_id} ({build_root.name})"
     try:
         relative = canonical_rel_path(path)
-        if not relative.startswith("examples/"):
-            raise ValueError("expected a path under examples/")
+        if not relative.startswith("examples/") and relative not in (f"sample.{test_id}.in", f"sample.{test_id}.ans"):
+            raise ValueError("expected a display resource for this sample")
         resource = build_root / relative
         if not resource.resolve().is_relative_to(build_root.resolve()) or not resource.is_file():
             raise ValueError("resource is missing or outside language directory")
@@ -281,7 +281,7 @@ def load_manifest(path: Path) -> NativePackageManifest:
                 if problem_mode != "interactive":
                     raise ValueError(f"Unexpected interaction events for ordinary sample {test_id}")
                 passes = record["event_passes"]
-                if not isinstance(passes, list):
+                if not isinstance(passes, list) or not passes:
                     raise ValueError(f"Invalid statement event passes for {test_id}")
                 pair["event_passes"] = []
                 for events in passes:

@@ -15,6 +15,7 @@ from app.service.problem.test_spec import (
     payload_rel_path_for_test,
     read_statement_sample_text,
 )
+from app.service.statement.sample_columns import aligned_event_columns
 from app.service.statement.sample_markup import sample_shaded_lines
 from app.service.statement.sample_transcript import statement_sample_events_from_transcript
 from app.service.verification.types import VerificationTaskRow
@@ -376,32 +377,6 @@ def _structured_override(
     )
 
 
-def _interaction_compatibility_text(
-    sample: StatementExampleSample,
-    resources_by_path: dict[str, str],
-) -> tuple[str, str]:
-    passes = sample["passes"]
-    if not passes:
-        return "", ""
-    input_parts: list[str] = []
-    output_parts: list[str] = []
-    for event in passes[0].get("events", []):
-        path = event["textFile"]
-        if path not in resources_by_path:
-            raise RuntimeError(f"statement example resource is missing: {path}")
-        content = resources_by_path[path]
-        line_count = max(1, len(content.splitlines()) or 1)
-        aligned = content if content.endswith("\n") else f"{content}\n"
-        blank = "\n" * line_count
-        if event["source"] == "interactor":
-            input_parts.append(aligned)
-            output_parts.append(blank)
-        else:
-            input_parts.append(blank)
-            output_parts.append(aligned)
-    return "".join(input_parts), "".join(output_parts)
-
-
 def _legacy_sample_projection(
     samples: list[StatementExampleSample],
     resources: list[StatementExampleResource],
@@ -423,8 +398,8 @@ def _legacy_sample_projection(
                 )
             legacy.append({"inputFile": input_path, "outputFile": output_path})
             continue
-        input_text, output_text = _interaction_compatibility_text(
-            sample, resources_by_path
+        input_text, output_text = aligned_event_columns(
+            (event["source"], resources_by_path[event["textFile"]]) for event in first_pass.get("events", [])
         )
         input_path = _resource_path(f"sample-{sample['number']}/compat.in")
         output_path = _resource_path(f"sample-{sample['number']}/compat.ans")

@@ -10,6 +10,7 @@ from app.service.export.adapters.polygon import PolygonLinuxPackageAdapter
 from app.service.problem_package.manifest import (
     NativePackageManifest,
     describe_file,
+    load_manifest,
 )
 from app.service.problem_package.service import NativePackageReader
 from app.service.problem_package.store import MaterializationRow
@@ -129,6 +130,31 @@ class TestPolygonExportPackage(unittest.TestCase):
         reader.manifest["statement_samples"]["001"] = paths
         with self.assertRaisesRegex(ValueError, "001 .*english.*invalid display resource"):
             adapter.build(reader, target=self.root / "escape", canonical_problem_slug="owner/test")
+
+    def test_polygon_reads_exmpfile_pairs_in_frozen_templates(self) -> None:
+        reader = self._reader(pass_limit=1)
+        del reader.manifest["statement_samples"]
+        adapter = PolygonLinuxPackageAdapter(self.values, self.tex_compile)
+        build = reader.root / "statement-build/english"
+        (build / "sample.001.in").write_bytes(b"one\r\ntwo\n")
+        (build / "sample.001.ans").write_bytes(b"")
+        for template in ("examples.tex", "problem.tex"):
+            with self.subTest(template=template):
+                (build / "examples.tex").write_text("")
+                (build / template).write_text(r"\exmpfile{sample.001.in}{sample.001.ans}%")
+                target = self.root / template
+                adapter.build(reader, target=target, canonical_problem_slug="owner/test")
+                statement = target / "statements/english"
+                self.assertEqual((statement / "example.01").read_bytes(), b"one\r\ntwo\n")
+                self.assertEqual((statement / "example.01.a").read_bytes(), b"")
+
+    def test_manifest_rejects_explicit_empty_event_passes(self) -> None:
+        reader = self._reader(pass_limit=1)
+        reader.manifest["statement_samples"]["001"]["event_passes"] = []
+        path = self.root / "manifest.json"
+        path.write_text(json.dumps(reader.manifest))
+        with self.assertRaisesRegex(ValueError, "event passes for 001"):
+            load_manifest(path)
 
     def test_pass_fail_package_materializes_exact_checker_for_both_consumers(
         self,

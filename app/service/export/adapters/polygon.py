@@ -22,9 +22,9 @@ from app.service.problem.runtime_config import (
     problem_config_limits,
 )
 from app.service.problem.standard_checker import detect_standard_checker
+from app.service.problem_package.display_samples import frozen_display_samples
 from app.service.problem_package.manifest import (
     NativePackageSolutionEntry,
-    statement_sample_resource,
     NativePackageTestEntry,
 )
 from app.service.problem_package.service import NativePackageReader
@@ -91,8 +91,6 @@ class PolygonLinuxPackageAdapter(PackageAdapterSupport):
     def plan(self, reader: NativePackageReader) -> PackageAdapterPlan:
         """Validate Polygon metadata without narrowing its positive run count."""
 
-        if "statement_samples" not in reader.manifest:
-            raise ValueError("Rebuild the Native Package for the published revision before exporting Polygon statement samples")
         self._problem_config(reader)
         languages = self._language_folders(reader.root)
         warnings: list[str] = []
@@ -260,7 +258,8 @@ class PolygonLinuxPackageAdapter(PackageAdapterSupport):
         names: dict[str, str] = {}
         for source_language, folder in language_folders:
             build_root = snapshot / "statement-build" / source_language
-            samples = self._sample_rows(reader, build_root)
+            samples = [(sample.test_index, *sample.columns())
+                       for sample in frozen_display_samples(reader.manifest, build_root)]
             entrypoint = build_root / "statements.tex"
             statement_root = target / "statements" / folder
             shutil.copytree(build_root, statement_root)
@@ -338,23 +337,6 @@ class PolygonLinuxPackageAdapter(PackageAdapterSupport):
             if filename == "examples.tex" and not source.is_file():
                 continue
             shutil.copy2(source, files_root / filename)
-
-    @staticmethod
-    def _sample_rows(reader: NativePackageReader, build_root: Path) -> list[tuple[int, str, str]]:
-        samples = reader.manifest["statement_samples"]
-        rows: list[tuple[int, str, str]] = []
-        for index, test in enumerate(reader.manifest["tests"], start=1):
-            if not test["sample"]:
-                continue
-            test_id = test["id"]
-            label = f"Polygon statement sample {test_id} ({build_root.name})"
-            if test_id not in samples:
-                raise ValueError(f"{label}: missing display resource record")
-            pair = samples[test_id]
-            input_path = statement_sample_resource(build_root, test_id, pair["input"])
-            output_path = statement_sample_resource(build_root, test_id, pair["output"])
-            rows.append((index, input_path.read_bytes().decode("utf-8"), output_path.read_bytes().decode("utf-8")))
-        return rows
 
     @staticmethod
     def _write_tests(reader: NativePackageReader, target: Path) -> None:

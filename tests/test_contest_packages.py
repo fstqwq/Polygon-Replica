@@ -25,6 +25,7 @@ from app.service.contest.package import (
     ContestPackageSnapshot,
 )
 from app.service.export.service import CachedExternalPackage
+from app.service.platform.zip_process import create_zip_archive
 from app.service.problem_package.store import MaterializationRow
 from tests.common import E2ETestBase
 from tests.db_helpers import db_execute, db_fetch_all, db_fetch_one
@@ -347,6 +348,23 @@ class TestContestPackageDownload(E2ETestBase):
                 test["sample"] = False
             self.assertEqual(build("empty")["data"], [])
 
+    def test_polygon_reads_multiple_passes_without_a_sample_index(self) -> None:
+        package = self._publish_interaction(2)
+        target = self.root / "polygon"
+        with self.packages.open_reader(package["id"]) as reader:
+            del reader.manifest["statement_samples"]
+            with patch.object(runtime.tex_compile_service, "sandbox", PdfSandbox()):
+                self.registry.require("polygon-linux").build(reader, target=target, canonical_problem_slug="alice/game")
+                (reader.root / "statement-build/chinese/examples/sample-2/pass-2/event-1.txt").unlink()
+                with self.assertRaisesRegex(ValueError, "119 .*chinese.*pass-2/event-1"):
+                    self.registry.require("polygon-linux").build(
+                        reader, target=self.root / "missing-event", canonical_problem_slug="alice/game"
+                    )
+        archive = self.root / "polygon.zip"
+        create_zip_archive(target, archive)
+        with zipfile.ZipFile(archive) as result:
+            self._check_archive(result, "polygon-linux", 2)
+
     def test_polygon_old_archives_rebuild_and_missing_display_resource_retries(self) -> None:
         package = self.native_packages[0]
         pid, mid = package["problem_id"], package["id"]
@@ -385,14 +403,6 @@ class TestContestPackageDownload(E2ETestBase):
             with zipfile.ZipFile(archive_path) as archive:
                 record, = json.loads(archive.read("problemlist.json"))
                 self.assertEqual(json.loads(record["sample_output"])["data"], ["display output\n"])
-            with self.assertRaisesRegex(ValueError, "Rebuild the Native Package"):
-                export.create_export("alice/alpha", "polygon-linux", native_package_id=mid)
-            with self.assertRaises(HTTPException) as error:
-                contest_packages_download("example-contest", self.user, "polygon-linux")
-            self.assertIn("A alice/alpha [polygon-linux]", str(error.exception.detail))
-            self.assertIn("Rebuild the Native Package", str(error.exception.detail))
-
-            replace_native(original)
             bad = dict(original)
             sample_path = manifest["statement_samples"]["001"]["input"]
             del bad["statement-build/english/" + sample_path]
@@ -402,7 +412,11 @@ class TestContestPackageDownload(E2ETestBase):
             self.assertIsNone(export.cached_external_package(
                 problem_id=pid, native_package_id=mid, package_format="polygon-linux",
             ))
-            replace_native(original)
+            with self.assertRaises(HTTPException) as error:
+                contest_packages_download("example-contest", self.user, "polygon-linux")
+            self.assertIn("A alice/alpha [polygon-linux]", str(error.exception.detail))
+            self.assertIn(sample_path, str(error.exception.detail))
+            replace_native({**original, manifest_path: json.dumps(old_manifest).encode()})
             response = contest_packages_download("example-contest", self.user, "polygon-linux")
             try:
                 with zipfile.ZipFile(response.path) as outer:

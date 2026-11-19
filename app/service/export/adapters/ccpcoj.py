@@ -16,11 +16,7 @@ from app.service.export.adapters.shared import (
     PackageFormat,
 )
 from app.service.problem_package.layout import STATEMENT_BUILD_DIR
-from app.service.problem_package.manifest import (
-    StatementEventPath,
-    StatementSamplePaths,
-    statement_sample_resource,
-)
+from app.service.problem_package.display_samples import frozen_display_samples
 from app.service.problem_package.service import NativePackageReader
 from app.service.statement.context import statement_languages
 from app.service.statement.html_render import StatementHtmlRenderer
@@ -41,89 +37,26 @@ _RESULTS = {
 }
 
 
-_PAIR = re.compile(r"\\StatementSampleFile\{(\d+)\}\{([^{}]+)\}\{([^{}]+)\}")
-_INTERACTION = re.compile(r"\\begin\{StatementSampleInteraction\}\{(\d+)\}")
-_EVENT = re.compile(r"\\StatementSampleEventFile\{(interactor|solution)\}\{([^{}]+)\}")
-
-
-_SampleDeclaration = StatementSamplePaths | list[StatementEventPath]
-
-
-def _declared_samples(build: Path, test_ids: list[str]) -> dict[str, _SampleDeclaration]:
-    """Read explicit single-pass references in the packaged statement."""
-    template = build / "examples.tex"
-    if not template.is_file():
-        return {}
-    lines = iter(template.read_text(encoding="utf-8").splitlines())
-    records: dict[str, _SampleDeclaration] = {}
-    for line in lines:
-        pair = _PAIR.fullmatch(line.strip())
-        interaction = _INTERACTION.fullmatch(line.strip())
-        match = pair or interaction
-        if not match:
-            continue
-        number = int(match[1])
-        if not 1 <= number <= len(test_ids):
-            raise ValueError(f"Unexpected sample number {number} in {template}")
-        test_id = test_ids[number - 1]
-        if test_id in records:
-            raise ValueError(f"Duplicate sample {test_id} in {template}")
-        if pair:
-            records[test_id] = {"input": pair[2], "output": pair[3]}
-            continue
-        events: list[StatementEventPath] = []
-        for body in lines:
-            if body.strip() == r"\end{StatementSampleInteraction}":
-                break
-            event = _EVENT.fullmatch(body.strip())
-            if not event:
-                raise ValueError(f"Invalid event declaration for sample {test_id} in {template}")
-            events.append({"source": "interactor" if event[1] == "interactor" else "solution", "path": event[2]})
-        else:
-            raise ValueError(f"Unclosed interaction for sample {test_id} in {template}")
-        records[test_id] = events
-    return records
-
-
 def _sample_fields(reader: NativePackageReader, build: Path) -> tuple[str, str]:
     inputs: list[str] = []
     outputs: list[str] = []
     cases: list[dict[str, list[dict[str, str]]]] = []
-    interactive = reader.manifest["mode"] == "interactive"
-    test_ids = [test["id"] for test in reader.manifest["tests"] if test["sample"]]
-    indexed = reader.manifest.get("statement_samples", {})
-    declared = {}
-    if any(t not in indexed or (interactive and "event_passes" not in indexed[t]) for t in test_ids):
-        declared = _declared_samples(build, test_ids)
-    for test_id in test_ids:
-        sample = indexed.get(test_id)
-        declaration = declared.get(test_id)
-        if sample is None and isinstance(declaration, dict):
-            sample = declaration
-
-        def read(path: str) -> str:
-            return statement_sample_resource(build, test_id, path).read_bytes().decode("utf-8")
-
-        passes = sample.get("event_passes") if sample is not None else None
-        if passes is None and isinstance(declaration, list):
-            passes = [declaration]
-        if passes is not None:
-            if not interactive or len(passes) != 1 or not passes[0]:
-                raise ValueError(
-                    f"CCPCOJ cannot represent the event passes for sample {test_id}"
-                )
+    for sample in frozen_display_samples(reader.manifest, build, include_events=True):
+        passes = sample.event_passes
+        if passes:
+            if len(passes) != 1 or not passes[0]:
+                raise ValueError(f"CCPCOJ cannot represent the event passes for sample {sample.test_id}")
             turns = [
                 {
                     "role": "in" if event["source"] == "interactor" else "out",
-                    "text": read(event["path"]),
+                    "text": sample.read(event["path"]),
                 }
                 for event in passes[0]
             ]
         else:
-            if sample is None:
-                raise ValueError(f"Missing statement sample {test_id} ({build.name}): no resource references in manifest or examples.tex")
-            inputs.append(read(sample["input"]))
-            outputs.append(read(sample["output"]))
+            input_text, output_text = sample.columns()
+            inputs.append(input_text)
+            outputs.append(output_text)
             continue
         cases.append({"turns": turns})
     if cases and inputs:
